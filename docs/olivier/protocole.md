@@ -70,30 +70,34 @@ secret persistant (*forward secrecy*).
 
 ## 5. Format d'une trame
 
-Deux natures de trames en v1 :
+> **La disposition exacte des octets est spécifiée dans `format-trame.md`**
+> (document qui fait foi). Cette section n'en donne que le principe.
 
-- **DONNÉES** : transporte un message (ou un fragment de message).
+Trois natures de PDU en v1 :
+
+- **DONNÉES** : transporte un message (ou, après découpage, un fragment).
 - **ACCUSÉ** : remonte une confirmation vers l'expéditeur.
+- **INVENTAIRE** : liste d'identifiants échangée entre voisins qui se
+  rencontrent (section 9).
 
 ### En-tête commun (en clair, lisible par les relais)
 
-| Champ | Taille indicative | Rôle |
-|-------|-------------------|------|
-| Version | 1 octet | Version du protocole. |
-| Type | 1 octet | DONNÉES ou ACCUSÉ. |
-| Identifiant de message | 16 octets | Unique par message ; sert à la déduplication et à corréler l'accusé. |
-| Empreinte expéditeur | 16 octets | Qui a créé le message. |
-| Empreinte destinataire | 16 octets | À qui il est destiné. |
-| Sauts restants (*TTL*) | 1 octet | Décrémenté à chaque relais ; à 0, on ne relaie plus. Valeur de départ : **7** (aligné sur Meshtastic — voir `etude-stack.md` §5). |
-| Horodatage d'envoi | 8 octets | Heure indiquée par l'expéditeur. **Best-effort** : sert à l'affichage et à l'expiration, pas de garantie. |
-| Index / nombre de fragments | 2 + 2 octets | Pour le réassemblage (section 8). |
+| Champ | Rôle |
+|-------|------|
+| Version du protocole | Compatibilité. |
+| Type de PDU | DONNÉES / ACCUSÉ / INVENTAIRE. |
+| Identifiant de message (16 octets) | Unique et **stable sur tout le réseau** ; déduplication et corrélation de l'accusé. |
+| Empreinte expéditeur / destinataire (16 octets chacune) | Adressage (inversé pour un ACCUSÉ — voir `format-trame.md` §3). |
+| Sauts restants (*TTL*) | Départ **7** ; −1 par relais ; à 0 on ne relaie plus. |
+| Horodatage d'envoi | *Best-effort* : affichage et expiration (~24 h). |
+| Index / nombre de fragments | Réassemblage (section 8). |
 
 ### Charge utile
 
-- Pour une trame **DONNÉES** : le **contenu chiffré** du message + une **étiquette
-  d'authenticité** (prouve que ça vient bien de l'expéditeur et que rien n'a été
-  modifié).
-- Pour une trame **ACCUSÉ** : voir section 7.
+- **DONNÉES** : `nonce` + `étiquette d'authenticité` + `contenu chiffré`
+  (illisible **et** non modifiable par un relais).
+- **ACCUSÉ** : voir section 7 (chiffré pour l'auteur d'origine).
+- **INVENTAIRE** : liste d'identifiants en clair (aucun contenu).
 
 ## 6. Circulation des messages (cœur du protocole)
 

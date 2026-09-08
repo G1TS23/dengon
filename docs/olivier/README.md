@@ -8,7 +8,8 @@ Espace de travail personnel en attendant la mise en commun avec Paul et Tanguy.
 | [`CONTEXT.md`](CONTEXT.md) | Concept, besoins métier, statuts des messages (réflexion d'équipe) | Référence |
 | [`analyse-besoins.md`](analyse-besoins.md) | Besoins, questions ouvertes et risques ; compléments à `CONTEXT.md` | v0.1 |
 | [`decisions-v1.md`](decisions-v1.md) | Décisions de cadrage v1, avis d'Olivier sur les points d'équipe, planning jusqu'au 29/09/2026 | v0.1 |
-| [`protocole.md`](protocole.md) | Spécification du protocole (format de trame, circulation des messages, accusés, store-and-forward, sécurité) | v0.3 |
+| [`protocole.md`](protocole.md) | Spécification du protocole — comportement (circulation des messages, accusés, store-and-forward, sécurité) | v0.3 |
+| [`format-trame.md`](format-trame.md) | Format binaire des trames octet par octet — **fait foi** pour les deux implémentations | v0.1 |
 | [`architecture.md`](architecture.md) | Éléments du système (mobile / ESP32 / dashboard), couches, chemin d'un message | v0.1 |
 | [`dashboard.md`](dashboard.md) | Sous-système de suivi : événements anonymisés, serveur, écrans, replis | v0.2 |
 | [`etude-stack.md`](etude-stack.md) | Étude comparative de la stack technique (BLE mobile, ESP32, moteur partagé, crypto, serveur) + recommandations | v0.1 |
