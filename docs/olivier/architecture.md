@@ -87,7 +87,7 @@ Alice (app)        : saisit le texte
 
 ESP32 relais       :
   Transport BLE    : reçoit la trame
-  → Moteur         : pas destinataire, « déjà vu » ? non ; TTL 8→7 ;
+  → Moteur         : pas destinataire, « déjà vu » ? non ; TTL 7→6 ;
                      met en file ; réémet aux voisins
 
 Bob (app)          :
@@ -136,6 +136,8 @@ ACCUSÉ : remonte Bob → ESP32 → Alice (même mécanisme).
 
 - **Un seul moteur ou deux ?** Réimplémenter la logique dengon deux fois
   (téléphone + ESP32) ou trouver un noyau partageable entre les deux.
+  → Analyse et recommandation dans `etude-stack.md` §3 (reco v1 : deux
+  implémentations encadrées par une spec de trame stricte).
 - Comment un nœud obtient son **code anonyme stable** pour le dashboard.
 - **Authentification** des envois vers le serveur dashboard (empêcher un faux
   reporting qui polluerait l'affichage).

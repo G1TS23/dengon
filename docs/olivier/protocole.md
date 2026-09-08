@@ -1,8 +1,10 @@
-# Spécification du protocole — dengon (brouillon v0.1)
+# Spécification du protocole — dengon (brouillon v0.2)
 
-> Premier jet, rédigé le 2026-09-08. À relire et compléter avec Paul et Tanguy.
-> S'appuie sur `CONTEXT.md`, `analyse-besoins.md` et `decisions-v1.md`.
-> Les choix marqués « (ouvert) » ne sont pas tranchés.
+> Premier jet le 2026-09-08. v0.2 : alignement sur Meshtastic (limite de sauts
+> à 7, « écouter avant de rediffuser ») suite à `etude-stack.md`.
+> À relire et compléter avec Paul et Tanguy.
+> S'appuie sur `CONTEXT.md`, `analyse-besoins.md`, `decisions-v1.md` et
+> `etude-stack.md`. Les choix marqués « (ouvert) » ne sont pas tranchés.
 
 ---
 
@@ -78,7 +80,7 @@ Deux natures de trames en v1 :
 | Identifiant de message | 16 octets | Unique par message ; sert à la déduplication et à corréler l'accusé. |
 | Empreinte expéditeur | 16 octets | Qui a créé le message. |
 | Empreinte destinataire | 16 octets | À qui il est destiné. |
-| Sauts restants (*TTL*) | 1 octet | Décrémenté à chaque relais ; à 0, on ne relaie plus. Valeur de départ : **8 (ouvert)**. |
+| Sauts restants (*TTL*) | 1 octet | Décrémenté à chaque relais ; à 0, on ne relaie plus. Valeur de départ : **7** (aligné sur Meshtastic — voir `etude-stack.md` §5). |
 | Horodatage d'envoi | 8 octets | Heure indiquée par l'expéditeur. **Best-effort** : sert à l'affichage et à l'expiration, pas de garantie. |
 | Index / nombre de fragments | 2 + 2 octets | Pour le réassemblage (section 8). |
 
@@ -111,6 +113,10 @@ bornée par le TTL et la déduplication. Pas de table de routage en v1.
    - sinon → on décrémente `sauts restants`, on **place le message dans la file
      de retransmission**, et on le **réémet vers tous les voisins**, sauf celui
      qui vient de nous l'envoyer.
+   - **Écouter avant de rediffuser** : avant de réémettre, attendre un court
+     délai aléatoire ; si on entend un voisin rediffuser **déjà** ce même
+     message, **s'abstenir**. Réduit les tempêtes de rediffusion quand beaucoup
+     de nœuds sont à portée (idée reprise de Meshtastic — `etude-stack.md` §5).
 6. On note l'identifiant dans la table « déjà vu » (avec l'heure, pour pouvoir
    l'oublier après ~24 h).
 
@@ -209,7 +215,7 @@ Alice veut écrire à Bob. Bob n'est pas à portée directe. Carole est entre le
 
 1. Alice  : crée le message, le chiffre pour Bob, statut « En attente ».
 2. Alice→Carole : Carole reçoit la trame. Elle n'est pas destinataire,
-                  sauts restants 8→7, elle met en file et rediffuse.
+                  sauts restants 7→6, elle met en file et rediffuse.
                   Alice a transmis à un voisin → statut « Parti ».
 3. Carole→Bob   : Bob reçoit, déchiffre, affiche. Bob émet un ACCUSÉ
                   (signé, chiffré pour Alice).
@@ -220,8 +226,8 @@ Alice veut écrire à Bob. Bob n'est pas à portée directe. Carole est entre le
 
 ## 12. Points ouverts (à trancher)
 
-- Valeur de départ du TTL (proposé : 8).
-- Service / caractéristiques BLE exacts.
+- Durée du délai aléatoire « écouter avant de rediffuser ».
+- Service / caractéristiques BLE exacts (voir `etude-stack.md` §1).
 - Délai maximum d'attente pour le réassemblage.
 - Taille maximale et politique d'éviction de la file de retransmission
   (lié au budget mémoire ESP32 — voir `decisions-v1.md`).
