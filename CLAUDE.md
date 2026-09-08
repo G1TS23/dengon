@@ -5,9 +5,14 @@ d'observabilité** (VPS). Voir [`docs/powl/`](docs/powl/) pour la conception com
 
 ## Documents de référence
 
-- **Conception (cible)** : [`docs/powl/`](docs/powl/) — commencer par
-  [`docs/powl/README.md`](docs/powl/README.md). Sources de vérité : le format de
-  paquet (`03`), le catalogue d'événements (`08`), les schémas de données (`09`).
+- **Contexte global** : [`docs/synthese/00-contexte-global.md`](docs/synthese/00-contexte-global.md)
+  — point d'entrée unique regroupant toute la recherche et la conception
+  (`docs/powl/` + `docs/oswin/` + `docs/olivier/`) ; sujets non tranchés dans
+  [`docs/synthese/01-sujets-a-trancher.md`](docs/synthese/01-sujets-a-trancher.md).
+- **Conception (cible, source de vérité)** : [`docs/powl/`](docs/powl/) —
+  commencer par [`docs/powl/README.md`](docs/powl/README.md). Sources de vérité :
+  le format de paquet (`03`), le catalogue d'événements (`08`), les schémas de
+  données (`09`).
 - **Suivi (réel)** : [`docs/suivi/`](docs/suivi/) — ce qui est réellement codé.
 
 ## Règle : tenir le suivi technique à jour
