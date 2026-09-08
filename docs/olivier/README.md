@@ -13,6 +13,7 @@ Espace de travail personnel en attendant la mise en commun avec Paul et Tanguy.
 | [`architecture.md`](architecture.md) | Éléments du système (mobile / ESP32 / dashboard), couches, chemin d'un message | v0.1 |
 | [`dashboard.md`](dashboard.md) | Sous-système de suivi : événements anonymisés, serveur, écrans, replis | v0.2 |
 | [`etude-stack.md`](etude-stack.md) | Étude comparative de la stack technique (BLE mobile, ESP32, moteur partagé, crypto, serveur) + recommandations | v0.1 |
+| [`mise-en-commun.md`](mise-en-commun.md) | Proposition de structure du dépôt commun + liste des points à valider / trancher en réunion d'équipe | v0.1 |
 
 ## Rappels
 
