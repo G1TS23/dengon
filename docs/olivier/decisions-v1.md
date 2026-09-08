@@ -93,11 +93,35 @@ Découpage retenu par Olivier (à valider à trois) :
 | Démo | ~1,5 semaine | Développement de la démo réduite + dashboard minimal, en commun. |
 | Rendu | ~0,5 semaine | Finalisation des documents, du rapport et des slides ; répétition de la soutenance. |
 
+## Points ouverts tranchés depuis (avis d'Olivier)
+
+Reportés dans `protocole.md` v0.3 et `dashboard.md` v0.2 :
+
+- **Ordre d'affichage** des messages reçus dans le désordre → **par ordre
+  d'arrivée** (pas de retri par horodatage).
+- **Taille de la file de retransmission** → **~50 sur ESP32, ~300 sur
+  téléphone** (à calibrer) ; éviction du **plus ancien** quand c'est plein.
+- **Échange d'inventaire** entre voisins (« quels messages as-tu ? ») →
+  **inclus en v1**.
+- **Anti-inondation** → **protection simple en v1** (~20 messages/min/voisin,
+  à calibrer).
+- **Code anonyme du dashboard** → **un code différent par message** (on suit un
+  message, pas un appareil).
+- **Rétention des données du dashboard** → **effacées après chaque session de
+  démo**.
+- **Compteurs globaux du dashboard** → **inclus** (sauf « nombre d'appareils
+  actifs », qui demande un signal séparé — à décider).
+- **Mode démo** (rejeu d'un scénario enregistré) → **seulement s'il reste du
+  temps**.
+
 ## Encore à trancher
 
-- **Place mémoire** allouée aux messages en attente, surtout sur ESP32.
-- Ordre d'affichage des messages reçus dans le désordre (par date d'envoi
-  indiquée, ou par ordre d'arrivée).
+- Valeurs numériques à calibrer sur le terrain (délais, seuils, tailles de
+  file).
+- Authentification des nœuds auprès de l'API du dashboard.
+- Technologies précises (app mobile après le prototype semaine 1, serveur
+  dashboard).
+- Primitives cryptographiques exactes (doc sécurité).
 
 ## Impact du délai (soutenance 29/09/2026)
 

@@ -1,6 +1,10 @@
-# Sous-système de suivi (dashboard) — dengon (brouillon v0.1)
+# Sous-système de suivi (dashboard) — dengon (brouillon v0.2)
 
-> Premier jet, rédigé le 2026-09-08. À relire et compléter avec Paul et Tanguy.
+> Premier jet le 2026-09-08.
+> v0.2 : arbitrage des points ouverts avec Olivier (code anonyme par message,
+> rétention = durée de la démo, compteurs globaux inclus, mode démo si le temps
+> le permet).
+> À relire et compléter avec Paul et Tanguy.
 > S'appuie sur `decisions-v1.md`, `architecture.md`, `protocole.md`.
 > Les choix marqués « (ouvert) » ne sont pas tranchés.
 
@@ -16,8 +20,10 @@ et comment les données y parviennent.
 - **Bonus non bloquant** : la messagerie fonctionne entièrement sans le dashboard.
 - **Alimenté opportunément** : seuls les nœuds qui ont du **Wi-Fi** à un moment
   donné envoient des informations au serveur.
-- **Anonymisé** : jamais le contenu, jamais les identités réelles. Chaque nœud
-  se désigne par un **code stable** sans lien avec sa clé.
+- **Anonymisé** : jamais le contenu, jamais les identités réelles. Un nœud se
+  désigne par un **code anonyme différent pour chaque message** qu'il traite
+  (voir section 6) — on peut donc reconstituer le parcours d'**un** message,
+  mais pas relier entre eux les messages passés par un même appareil.
 - **Mise à jour automatique** : la page se rafraîchit toute seule (choix v1).
 - **Hébergement** : VPS Debian de l'équipe.
 
@@ -27,10 +33,14 @@ et comment les données y parviennent.
   création, heure de dernière activité.
 - **Détail d'un message** : son **parcours** (suite de nœuds désignés par leurs
   codes), l'horodatage de chaque étape, le statut.
-- **Compteurs globaux** (option) : messages en circulation, taux de distribution,
-  nombre de nœuds actifs récemment.
-- **Liste des nœuds actifs récemment** par code — **(ouvert)** : en v1 ou non.
-  Pas de carte géographique en v1.
+- **Compteurs globaux** (inclus en v1) : nombre de messages en circulation,
+  nombre distribués / expirés, taux de distribution.
+- **Nombre d'appareils actifs récemment** : souhaité, mais **impossible à
+  déduire** des événements puisque le code d'un nœud change à chaque message
+  (section 6). Deux options **(ouvert)** : soit on ajoute un **battement
+  anonyme** séparé (un nœud connecté signale « je suis actif » avec un code qui
+  tourne, ex. chaque jour), soit on **retire ce compteur** de la v1.
+- Pas de carte géographique, pas de **liste** nominative de nœuds en v1.
 
 ## 4. Ce que le dashboard ne montre JAMAIS
 
@@ -52,23 +62,26 @@ Quand un nœud a du Wi-Fi, il envoie au serveur des **événements**. Aucun
 
 | Événement | Émis par | Contenu |
 |-----------|----------|---------|
-| `message-créé` | l'expéditeur | id raccourci, code du nœud, horodatage |
-| `message-relayé` | un relais | id raccourci, code du nœud, sauts restants, horodatage |
-| `message-distribué` | le destinataire | id raccourci, code du nœud, horodatage |
-| `message-expiré` | tout nœud qui purge le message | id raccourci, code du nœud, horodatage |
+| `message-créé` | l'expéditeur | id raccourci, code **pour ce message**, horodatage |
+| `message-relayé` | un relais | id raccourci, code **pour ce message**, sauts restants, horodatage |
+| `message-distribué` | le destinataire | id raccourci, code **pour ce message**, horodatage |
+| `message-expiré` | tout nœud qui purge le message | id raccourci, code **pour ce message**, horodatage |
 
 Le serveur doit être **tolérant** : les événements peuvent arriver en retard,
 dans le désordre, en double, ou jamais (un nœud sans Wi-Fi ne rapporte rien).
 
 ## 6. Le code anonyme d'un nœud
 
-- Chaque nœud tire un **identifiant aléatoire** à sa première utilisation, sans
-  aucun lien avec sa clé ni son pseudo.
-- Il l'utilise pour se désigner dans **tous** ses événements, ce qui permet de
-  reconstituer un parcours.
-- **(ouvert)** : faut-il faire **tourner** ce code de temps en temps ?
-  Compromis : un code stable permet de suivre un trajet complet ; un code qui
-  change limite le pistage d'un nœud dans la durée.
+- Un nœud génère un **code anonyme distinct pour chaque message** qu'il traite
+  (par ex. dérivé de l'identifiant du message + un secret local, de façon à être
+  stable pour *ce* message mais imprévisible d'un message à l'autre).
+- **Ce que ça permet** : reconstituer le parcours d'**un** message (les
+  événements portant le même id se recollent).
+- **Ce que ça empêche** : relier entre eux les messages passés par le même
+  appareil → on ne peut pas suivre un appareil dans la durée depuis le
+  dashboard. C'est le choix retenu (confidentialité).
+- Conséquence : pas de « nombre d'appareils actifs » directement calculable
+  (voir section 3).
 
 ## 7. Côté serveur (VPS Debian)
 
@@ -79,9 +92,11 @@ dans le désordre, en double, ou jamais (un nœud sans Wi-Fi ne rapporte rien).
 - **Stockage** : les événements bruts + un **état reconstruit par message**.
 - **Reconstruction du parcours** : pour un message donné, ordonner ses événements
   par horodatage, retirer les doublons, en déduire le **statut courant**.
-- **Canal temps réel** vers la page (pour la mise à jour automatique).
+- **Canal temps réel** vers la page (pour la mise à jour automatique) — piste :
+  SSE (voir `etude-stack.md` §6).
 - **Page web** servie par le même serveur.
-- **Rétention** — **(ouvert)** : purge des messages de plus de ~7 jours ?
+- **Rétention** : les données sont **effacées après chaque session de démo**
+  (pas d'historique long conservé). Une remise à zéro manuelle suffit en v1.
 
 ## 8. Statut courant d'un message (déduit par le serveur)
 
@@ -122,14 +137,22 @@ Détail du message 7f3a… :
 1. Page **rafraîchie à la main** (on abandonne le canal temps réel).
 2. **Maquette statique** avec des données d'exemple, juste pour illustrer le
    principe à la soutenance.
-3. Éventuel **mode démo** qui rejoue un scénario enregistré (utile si le réseau
-   réel est capricieux le jour J).
+3. **Mode démo** qui rejoue un scénario enregistré (utile si le réseau réel est
+   capricieux le jour J) — **à faire seulement s'il reste du temps** en fin de
+   projet.
 
 ## 11. Points ouverts
 
-- Authentification des nœuds auprès de l'API.
-- Rotation ou non du code anonyme des nœuds.
-- Rétention des données côté serveur.
-- Liste des nœuds actifs / compteurs globaux en v1 ou non.
-- Technologies du serveur et de la page (décision de qui prend le dashboard).
-- Mode démo rejouant un scénario enregistré pour sécuriser la soutenance.
+**Tranchés en v0.2 :** code anonyme = un par message · rétention = effacée
+après chaque session de démo · compteurs globaux inclus · mode démo = si le
+temps le permet.
+
+**Encore ouverts :**
+
+- **Authentification des nœuds auprès de l'API** (jeton partagé ?) — pour
+  empêcher l'injection de faux événements.
+- **Nombre d'appareils actifs** : ajouter un battement anonyme séparé, ou
+  retirer ce compteur (voir section 3).
+- Technologies précises du serveur et de la page (décision d'Olivier —
+  pistes dans `etude-stack.md` §6).
+- Format exact des événements et de l'identifiant raccourci de message.

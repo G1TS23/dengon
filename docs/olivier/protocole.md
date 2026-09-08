@@ -1,10 +1,14 @@
-# Spécification du protocole — dengon (brouillon v0.2)
+# Spécification du protocole — dengon (brouillon v0.3)
 
-> Premier jet le 2026-09-08. v0.2 : alignement sur Meshtastic (limite de sauts
-> à 7, « écouter avant de rediffuser ») suite à `etude-stack.md`.
+> Premier jet le 2026-09-08.
+> v0.2 : alignement sur Meshtastic (limite de sauts à 7, « écouter avant de
+> rediffuser ») suite à `etude-stack.md`.
+> v0.3 : arbitrage des points ouverts avec Olivier (ordre d'affichage, taille
+> de file, échange d'inventaire, anti-inondation, délais par défaut).
 > À relire et compléter avec Paul et Tanguy.
 > S'appuie sur `CONTEXT.md`, `analyse-besoins.md`, `decisions-v1.md` et
-> `etude-stack.md`. Les choix marqués « (ouvert) » ne sont pas tranchés.
+> `etude-stack.md`. Les choix marqués « (ouvert) » ne sont pas tranchés ;
+> les valeurs chiffrées « (à calibrer) » sont des points de départ.
 
 ---
 
@@ -102,6 +106,10 @@ bornée par le TTL et la déduplication. Pas de table de routage en v1.
    on ignore la trame.
 2. **Message expiré ?** Si `maintenant − horodatage` dépasse **~24 h** → on
    ignore et on purge d'éventuels fragments gardés.
+2 bis. **Limite anti-inondation** : si ce voisin nous a déjà envoyé **plus de
+   ~20 nouveaux messages sur la dernière minute** (**valeur à calibrer**), on
+   ignore les suivants venant de lui jusqu'à ce que le débit retombe. Protège
+   contre un nœud qui tente de saturer le réseau (voir section 10).
 3. **Réassemblage** : si le message est fragmenté, on met le fragment de côté ;
    tant que tous les fragments ne sont pas là, on s'arrête ici.
 4. **Suis-je le destinataire ?**
@@ -114,9 +122,10 @@ bornée par le TTL et la déduplication. Pas de table de routage en v1.
      de retransmission**, et on le **réémet vers tous les voisins**, sauf celui
      qui vient de nous l'envoyer.
    - **Écouter avant de rediffuser** : avant de réémettre, attendre un court
-     délai aléatoire ; si on entend un voisin rediffuser **déjà** ce même
-     message, **s'abstenir**. Réduit les tempêtes de rediffusion quand beaucoup
-     de nœuds sont à portée (idée reprise de Meshtastic — `etude-stack.md` §5).
+     délai aléatoire (**~50 à ~500 ms, à calibrer**) ; si on entend un voisin
+     rediffuser **déjà** ce même message, **s'abstenir**. Réduit les tempêtes de
+     rediffusion quand beaucoup de nœuds sont à portée (idée reprise de
+     Meshtastic — `etude-stack.md` §5).
 6. On note l'identifiant dans la table « déjà vu » (avec l'heure, pour pouvoir
    l'oublier après ~24 h).
 
@@ -154,6 +163,15 @@ bornée par le TTL et la déduplication. Pas de table de routage en v1.
 | **Échec** | Plus de ~24 h sans ACCUSÉ. |
 | **Lu** | *v2* : un 2ᵉ type d'accusé, émis quand l'utilisateur ouvre le message. |
 
+### Ordre d'affichage dans une conversation
+
+Les messages d'une même conversation peuvent arriver **dans le désordre** (voies
+différentes, store-and-forward). En v1, on les affiche **dans l'ordre où le
+téléphone les reçoit** (pas de retri par horodatage). Simple et sans surprise
+sur les horloges ; un message très en retard apparaît donc en bas de la
+conversation. *(Un tri par horodatage d'envoi avec tolérance est noté comme
+évolution possible.)*
+
 ## 8. Découpage et réassemblage
 
 - Un message chiffré peut dépasser ce qu'une trame BLE transporte → on le
@@ -161,8 +179,8 @@ bornée par le TTL et la déduplication. Pas de table de routage en v1.
 - Chaque fragment porte : l'identifiant du message, son **index** et le **nombre
   total** de fragments.
 - Le récepteur **rassemble** les fragments par identifiant de message, avec un
-  **délai maximum d'attente (ouvert)** ; passé ce délai, fragments incomplets
-  jetés.
+  **délai maximum d'attente de ~30 s (à calibrer)** ; passé ce délai, fragments
+  incomplets jetés.
 - En v1, un nœud **rassemble le message complet avant de le relayer** (plus
   simple pour vérifier le destinataire et dédupliquer). Coût : il faut avoir reçu
   tous les fragments pour retransmettre. Acceptable pour du texte court.
@@ -176,15 +194,17 @@ en **2 à 6 fragments** selon la liaison.
 
 - La **file de retransmission** garde les messages pas encore connus comme
   distribués.
-- **Quand un nouveau voisin apparaît**, on lui repropose le contenu de la file.
-  - v1 : on **pousse tout** (le plus simple).
-  - Optimisation : d'abord échanger « quels identifiants as-tu déjà ? » pour ne
-    renvoyer que le manquant. **(ouvert)**
-- **Taille maximale de la file (ouvert)** : ordre d'idée ~50 sur ESP32,
-  ~200-500 sur téléphone. Politique d'éviction quand c'est plein **(ouvert)** :
-  le plus vieux ? le plus retransmis ? le plus proche de l'expiration ?
+- **Quand un nouveau voisin apparaît**, les deux nœuds **échangent d'abord la
+  liste des identifiants de messages qu'ils détiennent** (« inventaire »), puis
+  chacun n'envoie que ce qui **manque** à l'autre. Évite de renvoyer en boucle
+  des messages déjà connus. *(choix v1 — l'alternative « pousser toute la file »
+  reste le repli si l'inventaire pose problème à l'implémentation.)*
+- **Taille maximale de la file** : **~50 messages sur ESP32**, **~300 sur
+  téléphone** (**à calibrer** selon la mémoire réelle). Quand la file est
+  pleine, on **retire le message le plus ancien** (le plus proche de son
+  expiration).
 - Un message **sort de la file** quand : un ACCUSÉ le concernant passe par le
-  nœud, **ou** il expire (~24 h).
+  nœud, **ou** il expire (~24 h), **ou** il est évincé (file pleine).
 
 ## 10. Sécurité — ce que le protocole garantit et ne garantit pas
 
@@ -204,8 +224,10 @@ en **2 à 6 fragments** selon la liaison.
 - **Pas de secret persistant** : si une clé privée est volée, les anciens
   messages capturés deviennent lisibles.
 - **Horodatages non vérifiables** par les relais, et horloges parfois fausses.
-- **Inondation malveillante** : un nœud hostile peut saturer le réseau —
-  limitation de débit **(ouvert)**.
+- **Inondation malveillante** : atténuée en v1 par la **limite anti-inondation**
+  (section 6, étape 2 bis) — un voisin trop bavard est temporairement ignoré.
+  Cela ne bloque pas un attaquant qui change d'identité ; protection plus forte
+  = évolution.
 - **Analyse de trafic** (observer les flux radio) reste possible.
 
 ## 11. Exemple (scénario campus)
@@ -226,14 +248,18 @@ Alice veut écrire à Bob. Bob n'est pas à portée directe. Carole est entre le
 
 ## 12. Points ouverts (à trancher)
 
-- Durée du délai aléatoire « écouter avant de rediffuser ».
-- Service / caractéristiques BLE exacts (voir `etude-stack.md` §1).
-- Délai maximum d'attente pour le réassemblage.
-- Taille maximale et politique d'éviction de la file de retransmission
-  (lié au budget mémoire ESP32 — voir `decisions-v1.md`).
-- Échange « quels identifiants as-tu ? » entre voisins : v1 ou plus tard.
-- Limitation de débit contre l'inondation malveillante.
-- Ordre d'affichage des messages reçus dans le désordre (par horodatage
-  d'envoi, ou par ordre d'arrivée).
+**Tranchés en v0.3 :** ordre d'affichage (= ordre d'arrivée) · taille de file
+(~50 ESP32 / ~300 téléphone, éviction du plus ancien) · échange d'inventaire
+entre voisins (= v1) · limite anti-inondation (= v1, ~20 msg/min/voisin).
+
+**Encore ouverts :**
+
+- Valeurs à calibrer sur le terrain : délai « écouter avant de rediffuser »
+  (~50-500 ms), délai de réassemblage (~30 s), seuil anti-inondation
+  (~20 msg/min/voisin), tailles de file.
+- Service / caractéristiques BLE exacts (voir `etude-stack.md` §1) — décision
+  d'implémentation.
+- Format de l'échange d'inventaire (comment lister les identifiants de façon
+  compacte).
 - Choix précis des primitives cryptographiques (à détailler dans la doc
-  sécurité).
+  sécurité) — piste : libsodium `crypto_box`, voir `etude-stack.md` §4.
