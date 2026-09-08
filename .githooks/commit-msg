@@ -1,0 +1,47 @@
+#!/bin/sh
+# ---------------------------------------------------------------------------
+# Hook commit-msg : vérifie que le message respecte Conventional Commits
+# https://www.conventionalcommits.org/
+#
+# Format attendu :
+#   <type>(<scope optionnel>)<! optionnel>: <description>
+#
+# Exemples valides :
+#   feat: ajoute l'authentification
+#   fix(api): corrige le calcul de la pagination
+#   docs: met à jour le README
+#   refactor(core)!: renomme la config (BREAKING CHANGE)
+# ---------------------------------------------------------------------------
+
+msg_file="$1"
+
+# Première ligne non vide et non commentée
+header=$(grep -v '^#' "$msg_file" | sed '/^[[:space:]]*$/d' | head -n1)
+
+# Laisser passer les commits techniques générés par git
+case "$header" in
+    "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*)
+        exit 0
+        ;;
+esac
+
+types='feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert'
+pattern="^(${types})(\([a-z0-9._/-]+\))?(!)?: .+"
+
+if printf '%s' "$header" | grep -Eq "$pattern"; then
+    # Longueur de la description conseillée <= 72 caractères
+    if [ "${#header}" -gt 72 ]; then
+        printf '\033[33m⚠  En-tête de commit > 72 caractères (%s). Pense à raccourcir.\033[0m\n' "${#header}"
+    fi
+    exit 0
+fi
+
+printf '\n\033[31m✖ Message de commit non conforme à Conventional Commits.\033[0m\n\n' >&2
+printf '  Reçu   : %s\n' "$header" >&2
+printf '  Attendu: <type>(<scope>)?(!): <description>\n' >&2
+printf '  Types  : feat, fix, docs, style, refactor, perf, test, build, ci, chore, revert\n\n' >&2
+printf '  Exemples :\n' >&2
+printf '    feat: ajoute la page de connexion\n' >&2
+printf '    fix(auth): gère le token expiré\n' >&2
+printf '    chore(deps): met à jour les dépendances\n\n' >&2
+exit 1
