@@ -14,6 +14,7 @@ Espace de travail personnel en attendant la mise en commun avec Paul et Tanguy.
 | [`dashboard.md`](dashboard.md) | Sous-système de suivi : événements anonymisés, serveur, écrans, replis | v0.2 |
 | [`etude-stack.md`](etude-stack.md) | Étude comparative de la stack technique (BLE mobile, ESP32, moteur partagé, crypto, serveur) + recommandations | v0.1 |
 | [`mise-en-commun.md`](mise-en-commun.md) | Proposition de structure du dépôt commun + liste des points à valider / trancher en réunion d'équipe | v0.1 |
+| [`proposition-organisation-github.md`](proposition-organisation-github.md) | Organisation GitHub : monorepo, milestones/sprints, DoR/DoD, backlog de 55 US, dépendances, répartition | v0.1 |
 
 ## Rappels
 
