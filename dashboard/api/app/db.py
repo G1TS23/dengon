@@ -1,18 +1,17 @@
 """Connexion SQLite et exécution des migrations.
 
-Système de migration volontairement minimal : un fichier ``NNNN_nom.sql`` par
-migration dans ``migrations/``, appliqué dans l'ordre du numéro, tracé dans la
-table ``schema_migrations``. Pas d'Alembic — surdimensionné pour un squelette.
+Système volontairement minimal : les migrations sont des littéraux SQL déclarés
+dans ``app/migrations.py`` (``MIGRATIONS``), appliqués dans l'ordre de version
+et tracés dans la table ``schema_migrations``. Pas d'Alembic — surdimensionné
+pour un squelette.
 """
 
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 
 from .config import db_path
-
-MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "migrations"
+from .migrations import MIGRATIONS
 
 
 def connect() -> sqlite3.Connection:
@@ -40,14 +39,13 @@ def run_migrations(conn: sqlite3.Connection) -> list[int]:
     applied = _applied_versions(conn)
     newly_applied: list[int] = []
 
-    for sql_file in sorted(MIGRATIONS_DIR.glob("*.sql")):
-        version = int(sql_file.name.split("_", 1)[0])
+    for version, name, sql in sorted(MIGRATIONS, key=lambda m: m[0]):
         if version in applied:
             continue
-        conn.executescript(sql_file.read_text(encoding="utf-8"))
+        conn.executescript(sql)
         conn.execute(
             "INSERT INTO schema_migrations (version, name) VALUES (?, ?)",
-            (version, sql_file.name),
+            (version, name),
         )
         conn.commit()
         newly_applied.append(version)

@@ -29,16 +29,16 @@ dashboard ne doit pas l'attendre pour démarrer — cf. proposition d'organisati
 
 ```
 dashboard/api/
-  pyproject.toml       — deps (fastapi, uvicorn) + dev (pytest, httpx, ruff) + config ruff/pytest
+  pyproject.toml         — deps (fastapi, uvicorn) + dev (pytest, httpx, ruff) + config ruff/pytest
+  requirements-dev.txt   — versions épinglées installées par la CI
   app/
-    config.py          — db_path() : lit DENGON_DASHBOARD_DB (défaut dashboard.db)
-    db.py              — connect() ; run_migrations() : applique migrations/*.sql, trace dans schema_migrations
-    main.py            — app FastAPI ; lifespan → migrations ; routes /healthz et /ingest/batch
-  migrations/
-    0001_initial.sql   — table raw_batches (+ index) et rien d'autre
+    config.py            — db_path() : lit DENGON_DASHBOARD_DB (défaut dashboard.db)
+    migrations.py        — MIGRATIONS : liste (version, nom, sql) ; le SQL est un littéral du module
+    db.py               — connect() ; run_migrations() : applique MIGRATIONS, trace dans schema_migrations
+    main.py             — app FastAPI ; lifespan → migrations ; routes /healthz et /ingest/batch
   tests/
-    conftest.py        — fixture `client` : base SQLite jetable par test, migrée par le lifespan
-    test_api.py        — 6 tests (voir plus bas)
+    conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan
+    test_api.py          — 6 tests (voir plus bas)
 ```
 
 ## Concepts / types importants
@@ -46,8 +46,9 @@ dashboard/api/
 | Élément | Fichier:ligne | Ce que ça fait |
 |---|---|---|
 | `db_path()` | `app/config.py:19` | chemin du fichier SQLite, lu depuis l'env à chaque appel (pas de cache → tests simples) |
-| `connect()` | `app/db.py:22` | connexion SQLite, `row_factory = Row`, `WAL`, `foreign_keys = ON` |
-| `run_migrations(conn)` | `app/db.py:41` | applique les `migrations/NNNN_*.sql` manquants dans l'ordre, insère dans `schema_migrations`, renvoie les versions appliquées ; idempotent |
+| `MIGRATIONS` | `app/migrations.py:38` | liste `(version, nom, sql)` ; le SQL est un **littéral du module** (pas un fichier lu), donc versionné, embarqué dans le paquet, sans I/O disque |
+| `connect()` | `app/db.py:19` | connexion SQLite, `row_factory = Row`, `WAL`, `foreign_keys = ON` |
+| `run_migrations(conn)` | `app/db.py:38` | applique les migrations manquantes dans l'ordre de version, insère dans `schema_migrations`, renvoie les versions appliquées ; idempotent |
 | `lifespan` | `app/main.py:31` | au démarrage de l'app : ouvre une connexion, migre, ferme |
 | `GET /healthz` | `app/main.py:47` | renvoie `{"status": "ok"}` |
 | `_guess_event_count()` | `app/main.py:52` | devine le nombre d'événements (`[...]` ou `{"events": [...]}`) sans imposer de schéma ; `None` sinon, jamais de rejet |
@@ -82,8 +83,14 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
 
 ## Décisions d'implémentation
 
-- **Migrations maison** (`NNNN_*.sql` + table `schema_migrations`) plutôt
+- **Migrations maison** (`MIGRATIONS` + table `schema_migrations`) plutôt
   qu'Alembic : surdimensionné ici, une dépendance de moins.
+- **SQL de migration en littéral de module**, pas en fichier `.sql` lu à
+  l'exécution : versionné dans git de la même façon, mais embarqué dans le
+  paquet (rien à copier au déploiement) et sans chemin de *taint*
+  fichier→`executescript` (l'analyse de sécurité de SonarCloud flaggait la
+  version « lecture de fichier »). Si le nombre de migrations grossit, repasser
+  à des fichiers est un refactor propre.
 - **`db_path()` relit l'env à chaque appel** au lieu d'un singleton : chaque
   test a sa base (`tmp_path`) sans recharger de module.
 - **`202 Accepted`** et non `200` : l'ingestion est un dépôt asynchrone, pas une

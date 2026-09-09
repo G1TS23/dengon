@@ -55,8 +55,11 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
   ajout du déclencheur `pull_request` et du lint).
 
 ### Écarts vs conception
-- Aucun. Le squelette est un sous-ensemble strict de
-  `docs/synthese/09` §3 et §11.2 ; rien n'y contredit la cible.
+- Le squelette est un sous-ensemble strict de `docs/synthese/09` §3 et §11.2 ;
+  rien n'y contredit la cible fonctionnelle.
+- **Un écart de forme** consigné dans `03-ecarts-conception.md` (2026-09-09) :
+  migrations en littéral Python au lieu de fichiers `.sql`, suite au retour de
+  SonarCloud. Voir « Suite » ci-dessous.
 - Correction annexe dans `01-etat-du-code.md` : la ligne « Dashboard `api` »
   disait encore « Axum + Postgres/Timescale » (stack `powl` d'origine,
   écartée par A-5) → remplacée par « FastAPI + SQLite + SSE ».
@@ -87,6 +90,39 @@ $ pytest
   (ignoré par git de toute façon).
 - La CI `dashboard` elle-même n'a pas encore tourné : elle le fera à
   l'ouverture de la PR.
+
+### Suite (même session) — retour de la CI sur la PR #59
+
+Le job `dashboard` (ruff + pytest) est **vert**. GitGuardian vert. **SonarCloud
+a rejeté la PR** : « Security Rating E sur le nouveau code », sur 5 findings.
+Traitement :
+
+- **BLOCKER `pythonsecurity:S3649`** (`db.py` : SQL construit depuis une donnée
+  « contrôlée par l'utilisateur ») — l'analyseur suivait le chemin
+  `Path.read_text()` → `executescript()`. La donnée n'était pas de l'entrée
+  requête mais nos propres fichiers `migrations/*.sql` versionnés. **Corrigé à
+  la racine** plutôt que suppression : le SQL de migration devient un littéral
+  de `app/migrations.py` (`MIGRATIONS`), `migrations/0001_initial.sql` supprimé.
+  Bénéfice réel : plus d'I/O disque au déploiement. Reporté dans
+  `03-ecarts-conception.md`.
+- **`githubactions:S8541` / `S8544`** (`dashboard.yml` : `pip install` sans
+  `--only-binary`, versions non figées) — CI passée en deux étapes :
+  `pip install --only-binary=:all: -r requirements-dev.txt` (versions épinglées,
+  wheels seulement, aucun script de build de dépendance) puis
+  `pip install --no-deps -e .` pour le projet local. Ajout de
+  `dashboard/api/requirements-dev.txt`.
+- **`text:S8565`** (pas de `uv.lock` / `poetry.lock` / `pdm.lock` /
+  `pylock.toml`) — **non traité dans cette PR** : adopter un gestionnaire de
+  lock Python couvrant les dépendances transitives est une décision d'équipe,
+  pas un choix de squelette. Signalé dans la PR et à mettre à l'ordre du jour
+  de la réunion de ratification.
+
+Re-vérifié en local avec la méthode de la CI :
+```
+$ pip install --only-binary=:all: -r requirements-dev.txt && pip install --no-deps -e .
+$ ruff check .   → All checks passed!
+$ pytest         → 6 passed
+```
 
 ---
 
