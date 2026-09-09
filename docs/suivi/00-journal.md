@@ -10,6 +10,109 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-09 — US-109 : corrections SonarQube Cloud, round 2 (PR #56)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/build.gradle.kts`, `android/app/build.gradle.kts`,
+`android/gradle/libs.versions.toml` (nouveau), `android/gradle/verification-metadata.xml`
+(nouveau), `android/settings-gradle.lockfile` (nouveau)
+**Lot :** US-109 (suite), Sprint 1
+
+### Fait
+- Nouveau scan SonarCloud sur la PR #56 après le round 1 : 5 issues
+  restantes (relevées via l'API `/api/issues/search?...pullRequest=56`) :
+  1. `text:S8569` (MAJOR, VULNERABILITY) **toujours ouverte**, mais
+     maintenant sur `android/build.gradle.kts` (le fichier racine, pas
+     `app/`) : le `gradle.lockfile` ajouté au round 1 ne couvre que les
+     configurations de dépendances de `:app` — il ne verrouille pas la
+     résolution des **plugins** déclarés dans le `plugins{}` du build
+     racine (`com.android.application`, `org.jetbrains.kotlin.android`),
+     qui passe par un mécanisme de résolution différent (classpath de
+     plugin, avant l'application des blocs `subprojects{}`).
+  2. `kotlin:S6624` × 4 (MAJOR, CODE_SMELL) : numéros de version en dur
+     dans `app/build.gradle.kts` lignes 64-66 et 75 (`core-ktx:1.13.1`,
+     `lifecycle-runtime-ktx:2.8.4`, `activity-compose:1.9.1`,
+     `junit:4.13.2`).
+- Corrections :
+  1. **Version catalog** `android/gradle/libs.versions.toml` : centralise
+     toutes les versions (plugins + dépendances). `android/build.gradle.kts`
+     et `app/build.gradle.kts` référencent désormais `libs.plugins.*` /
+     `libs.*` au lieu de chaînes `"groupe:artefact:version"` — corrige les
+     4 `kotlin:S6624`.
+  2. **`gradle/verification-metadata.xml`** généré via `./gradlew
+     --write-verification-metadata sha256 clean assembleDebug
+     testDebugUnitTest assembleRelease` : contrairement au
+     `gradle.lockfile` par sous-projet, la vérification de dépendances
+     s'accroche au moteur de résolution lui-même et couvre **aussi** la
+     résolution des plugins du build racine (vérifié : les entrées
+     `com.android.application.gradle.plugin` / `org.jetbrains.kotlin.android
+     .gradle.plugin` sont bien présentes dans le fichier généré) — corrige
+     `text:S8569` sur `android/build.gradle.kts`.
+  3. `app/gradle.lockfile` conservé (toujours valide, régénéré avec les
+     mêmes coordonnées après le passage au catalogue) ; nouveau
+     `settings-gradle.lockfile` produit en même temps par Gradle (verrou de
+     l'import du catalogue lui-même, quasi vide, gardé par cohérence).
+- Reconfirmé : `./gradlew clean assembleDebug testDebugUnitTest` avec la
+  vérification de dépendances **active** (elle est appliquée à chaque build
+  une fois `gradle/verification-metadata.xml` présent, pas seulement à la
+  génération) → toujours vert.
+
+### Pourquoi / décisions
+- **Deux mécanismes de verrou gardés ensemble** (dependency locking pour
+  `:app` + dependency verification pour tout le build, racine incluse)
+  plutôt que de choisir l'un ou l'autre : la vérification est plus complète
+  (couvre les plugins) mais son but premier est l'intégrité (checksums), pas
+  la reproductibilité de résolution ; le locking reste utile si un jour une
+  dépendance est déclarée avec une version dynamique. Peu de coût à garder
+  les deux ici (peu de dépendances, projet naissant).
+- **Version catalog plutôt que corriger ligne par ligne** : `kotlin:S6624`
+  ne visait que 4 lignes sur les 9 dépendances versionnées du module, mais
+  toutes auraient fini par être flaguées une à une ; centraliser une bonne
+  fois dans `libs.versions.toml` (pratique standard Gradle/Android
+  actuelle) règle la classe de problème plutôt que les symptômes.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Le `gradle.lockfile` de dependency locking (`configurations.all {
+  resolutionStrategy.activateDependencyLocking() }`) ne verrouille que les
+  **configurations de dépendances** d'un projet Gradle ; il ne touche pas à
+  la résolution du **classpath de plugin** (`plugins{}` / `pluginManagement`
+  en settings), qui se produit avant même l'évaluation des blocs
+  `subprojects{}`/`allprojects{}`. Pour verrouiller/vérifier aussi les
+  plugins, il faut la **dependency verification** de Gradle
+  (`gradle/verification-metadata.xml`, `--write-verification-metadata`).
+  Ajouté à `04-apprentissages.md`.
+
+### État après cette session
+- Les 5 issues du round 2 devraient disparaître au prochain scan de la
+  PR #56 (non re-vérifié : nécessite un push + re-run CI).
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+- 01-etat-du-code.md mis à jour : non (durcissement de build, pas de
+  changement d'avancement fonctionnel)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew assembleDebug testDebugUnitTest assembleRelease --console=plain
+BUILD SUCCESSFUL in 1m 14s — 86 actionable tasks: 86 executed
+(après passage au version catalog)
+
+$ ./gradlew --write-verification-metadata sha256 clean assembleDebug testDebugUnitTest assembleRelease --console=plain
+BUILD SUCCESSFUL in 46s — 87 actionable tasks: 84 executed, 3 up-to-date
+→ gradle/verification-metadata.xml généré (2635 lignes)
+
+$ grep -m5 "com.android.application\|org.jetbrains.kotlin.android" gradle/verification-metadata.xml
+→ confirme la présence des artefacts de plugin
+
+$ ./gradlew clean assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL in 9s — 42 actionable tasks: 41 executed, 1 up-to-date
+(build propre avec la vérification de dépendances active)
+```
+- **Non vérifié** : le nouveau scan SonarCloud (nécessite un push + re-run CI).
+
+---
+
 ## 2026-09-09 — US-109 : corrections SonarQube Cloud (PR #56, Security Rating C)
 
 **Auteur :** Claude (Sonnet 5)

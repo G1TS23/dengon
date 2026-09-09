@@ -1,7 +1,9 @@
 // Build racine du module Android. Le vrai code applicatif est dans `app/`.
+// Versions centralisées dans gradle/libs.versions.toml (Sonar kotlin:S6624 :
+// pas de numéro de version en dur dans les scripts).
 plugins {
-    id("com.android.application") version "8.5.2" apply false
-    id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+    alias(libs.plugins.android.application) apply false
+    alias(libs.plugins.kotlin.android) apply false
 }
 
 // Verrouille les versions résolues des dépendances (Sonar text:S8569) :

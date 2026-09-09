@@ -311,3 +311,29 @@ demandent une revue humaine plutôt qu'un vrai fix de code.
 `isMinifyEnabled`), `android/app/src/main/AndroidManifest.xml`
 (`usesCleartextTraffic`), `android/build.gradle.kts` (dependency locking).
 **Pour aller plus loin :** `https://sonarcloud.io/api/issues/search?componentKeys=<projet>&pullRequest=<n>&types=VULNERABILITY`.
+
+### Gradle : dependency locking vs dependency verification
+
+**C'est quoi :** deux mécanismes Gradle différents, souvent confondus.
+**Dependency locking** (`gradle.lockfile`, `resolutionStrategy
+.activateDependencyLocking()`) fige les versions **résolues** d'un
+sous-projet pour la reproductibilité (utile surtout avec des versions
+dynamiques, `1.+`). **Dependency verification**
+(`gradle/verification-metadata.xml`, `--write-verification-metadata`)
+enregistre des **checksums** de tout ce que Gradle télécharge, pour
+l'intégrité (détecter un artefact corrompu/remplacé) — et ça couvre aussi
+la résolution des **plugins**, que le locking ne touche pas.
+**Pourquoi dans dengon :** le `gradle.lockfile` de `:app` ne suffisait pas
+à faire disparaître `text:S8569` (Sonar) sur `android/build.gradle.kts` —
+c'est le fichier racine où sont déclarés les plugins (AGP, Kotlin), résolus
+*avant* que les blocs `subprojects{}` (et donc le locking) s'appliquent.
+**Piège / surprise :** les deux mécanismes ont des fichiers différents mais
+tous deux qualifiés de « lock file » en langage courant — la doc Sonar
+elle-même les traite comme équivalents (« gradle.lockfile **or**
+verification-metadata.xml ») alors qu'ils ne couvrent pas le même
+périmètre de résolution.
+**Où c'est utilisé :** `android/app/gradle.lockfile` (locking),
+`android/gradle/verification-metadata.xml` (verification, régénéré via
+`./gradlew --write-verification-metadata sha256 <tasks>`).
+**Pour aller plus loin :** doc Gradle « Verifying dependencies » et
+« Locking dependency versions ».

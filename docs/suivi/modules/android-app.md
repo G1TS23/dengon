@@ -25,8 +25,12 @@ permanente obligatoire).
 ```
 android/
   settings.gradle.kts        — déclare le module `app`
-  build.gradle.kts           — plugins AGP/Kotlin (root)
+  build.gradle.kts           — plugins AGP/Kotlin (root, via version catalog)
+  gradle/
+    libs.versions.toml       — toutes les versions (plugins + dépendances) centralisées
+    verification-metadata.xml — checksums de tout ce qui est résolu (plugins inclus)
   app/
+    gradle.lockfile          — verrouillage des dépendances résolues de :app
     build.gradle.kts         — applicationId com.dengon.app, minSdk 26, target/compileSdk 34, Compose
     src/main/AndroidManifest.xml
     src/main/java/com/dengon/app/
@@ -84,9 +88,22 @@ android/
 - **Dependency locking activé** (`android/build.gradle.kts`,
   `resolutionStrategy.activateDependencyLocking()` sur tous les
   sous-projets) + `app/gradle.lockfile` versionné : corrige `text:S8569`
-  (versions de dépendances non verrouillées). Régénérer avec
-  `./gradlew :app:dependencies --write-locks` après tout changement de
-  dépendance dans `app/build.gradle.kts`.
+  (versions de dépendances non verrouillées) pour les dépendances de
+  `:app`. Régénérer avec `./gradlew :app:dependencies --write-locks` après
+  tout changement de dépendance dans `app/build.gradle.kts`.
+- **`text:S8569` réapparu ensuite sur `android/build.gradle.kts` (le
+  fichier racine)** : le locking ci-dessus ne couvre pas la résolution des
+  **plugins** (`plugins{}` du build racine), mécanisme séparé des
+  configurations de dépendances d'un sous-projet. Fixé avec la
+  **dependency verification** de Gradle : `gradle/verification-metadata.xml`
+  généré via `./gradlew --write-verification-metadata sha256 <tasks>`, qui
+  couvre tout ce qui est résolu, plugins compris. Régénérer après tout
+  changement de version dans `gradle/libs.versions.toml` (sinon le build
+  échoue : entrée manquante dans les checksums).
+- **Version catalog** (`gradle/libs.versions.toml`) : corrige `kotlin:S6624`
+  (« Do not hardcode version numbers ») en centralisant toutes les versions
+  (AGP, Kotlin, Compose, dépendances) à un seul endroit, référencées via
+  `libs.xxx` / `libs.plugins.xxx` dans les scripts Gradle.
 - **`applicationId`/`namespace` = `com.dengon.app`, `minSdk=26`,
   `compileSdk`/`targetSdk=34`** : non fixés par `docs/synthese/` → choisis
   ici (voir journal du 2026-09-09). À valider en équipe si un autre nom de
