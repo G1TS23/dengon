@@ -1,0 +1,16 @@
+[package]
+name        = "dengon-ble"
+description = "Trait Transport et implémentation btleplug (desktop) pour dengon"
+
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+repository.workspace   = true
+authors.workspace      = true
+publish.workspace      = true
+
+[dependencies]
+dengon-core = { workspace = true }
+
+[lints]
+workspace = true
