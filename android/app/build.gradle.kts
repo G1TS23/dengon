@@ -23,7 +23,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // Obfuscation/shrinking en release (Sonar kotlin:S7204) : rend la
+            // rétro-ingénierie de l'APK plus coûteuse. Les règles consumer-proguard
+            // fournies par AndroidX/Compose couvrent les dépendances utilisées ici.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }

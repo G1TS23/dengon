@@ -10,6 +10,83 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-09 — US-109 : corrections SonarQube Cloud (PR #56, Security Rating C)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/build.gradle.kts`, `android/app/build.gradle.kts`,
+`android/app/src/main/AndroidManifest.xml`, `android/app/gradle.lockfile` (nouveau)
+**Lot :** US-109 (suite), Sprint 1
+
+### Fait
+- PR #56 (squelette Android) bloquée par le Quality Gate SonarCloud :
+  `Security Rating on New Code` = C (requis ≥ A). Trois vulnérabilités
+  relevées via l'API SonarCloud (`/api/issues/search?...pullRequest=56`) :
+  1. `kotlin:S7204` (MAJOR) — obfuscation désactivée en release
+     (`app/build.gradle.kts:26`, `isMinifyEnabled = false`).
+  2. `xml:S5332` (MINOR) — `usesCleartextTraffic` implicitement activé sur
+     les anciennes versions d'Android (`AndroidManifest.xml:31`, pas
+     d'attribut explicite).
+  3. `text:S8569` (MAJOR) — pas de fichier de verrouillage des versions de
+     dépendances (`android/build.gradle.kts`).
+- Corrections :
+  1. `isMinifyEnabled = true` + `isShrinkResources = true` sur le
+     `buildType release`.
+  2. `android:usesCleartextTraffic="false"` explicite sur `<application>`
+     (l'app ne fait aucun appel HTTP dans ce squelette — BLE uniquement).
+  3. `subprojects { configurations.all { resolutionStrategy
+     .activateDependencyLocking() } }` dans `android/build.gradle.kts` +
+     génération de `android/app/gradle.lockfile` via
+     `./gradlew :app:dependencies --write-locks`.
+- Revérifié après coup : `./gradlew assembleDebug testDebugUnitTest` et
+  `./gradlew assembleRelease` (le release n'était pas testé avant — c'est
+  justement le variant touché par le fix R8/minify) → tous verts.
+
+### Pourquoi / décisions
+- Fix ciblé sur les 3 findings réels plutôt qu'un durcissement générique :
+  on corrige ce que Sonar a effectivement détecté, pas un audit de sécurité
+  complet hors périmètre de l'US.
+- `assembleRelease` n'était pas dans la vérification initiale de l'US-109
+  (seul `assembleDebug` est un critère d'acceptation explicite) — ajouté ici
+  car l'activation de R8/minify est justement le genre de changement qui
+  peut casser silencieusement un build release (règles proguard manquantes
+  pour Compose/reflection). Résultat : ça passe tel quel avec les consumer
+  proguard rules d'AndroidX/Compose, aucune règle custom nécessaire pour
+  l'instant.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- SonarCloud distingue `Security Rating` (vulnérabilités réelles, bloquant
+  ce Quality Gate) de `Security Hotspots Reviewed` (hotspots à trier, gate
+  séparée) — utile à savoir pour ne pas chercher au mauvais endroit la
+  prochaine fois. Ajouté à `04-apprentissages.md`.
+
+### État après cette session
+- Les 3 findings devraient disparaître au prochain scan de la PR #56 (non
+  re-vérifié ici : le nouveau scan tourne côté CI GitHub Actions, pas
+  localement).
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+- 01-etat-du-code.md mis à jour : non (pas de changement d'avancement, juste
+  un durcissement du squelette existant)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew :app:dependencies --write-locks --console=plain
+BUILD SUCCESSFUL — gradle.lockfile écrit pour :app et le buildscript racine
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL in 7s — 41 actionable tasks: 10 executed, 31 up-to-date
+
+$ ./gradlew assembleRelease --console=plain
+BUILD SUCCESSFUL in 45s — 46 actionable tasks: 46 executed
+(minifyReleaseWithR8, shrinkReleaseRes exécutés sans erreur)
+```
+- **Non vérifié** : le nouveau scan SonarCloud sur la PR (nécessite un push
+  + re-run CI, pas fait depuis cet environnement).
+
+---
+
 ## 2026-09-09 — US-109 : squelette Android (Compose + service de fond BLE)
 
 **Auteur :** Claude (Sonnet 5)

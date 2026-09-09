@@ -290,3 +290,24 @@ Sujets probables (d'après la conception) — à traiter quand on les rencontre 
 - UniFFI : comment un cœur Rust est appelé depuis Kotlin.
 - TimescaleDB : hypertable, rétention, agrégats continus.
 - MQTT : QoS, topics, mTLS.
+
+### SonarCloud : Security Rating vs Security Hotspots Reviewed
+
+**C'est quoi :** deux conditions de Quality Gate distinctes. `Security
+Rating` = pire sévérité parmi les issues de type **Vulnerability**
+(bugs de sécurité avérés, ex. obfuscation désactivée, cleartext traffic
+ambigu, dépendances non verrouillées). `Security Hotspots Reviewed` = %
+de **Security Hotspots** (code sensible à trier manuellement, ex. usage de
+crypto, permissions) qui ont été revus — gate séparée.
+**Pourquoi dans dengon :** la PR #56 (squelette Android, US-109) a été
+bloquée par `Security Rating on New Code = C`. Chercher dans les
+Hotspots aurait été une perte de temps : il fallait l'onglet
+`Vulnerabilities` / filtre `types=VULNERABILITY` de l'API
+`/api/issues/search`.
+**Piège / surprise :** le nom de la gate ne dit pas explicitement
+« Vulnerabilities » — facile de confondre avec les Hotspots qui, eux,
+demandent une revue humaine plutôt qu'un vrai fix de code.
+**Où c'est utilisé :** `android/app/build.gradle.kts` (release
+`isMinifyEnabled`), `android/app/src/main/AndroidManifest.xml`
+(`usesCleartextTraffic`), `android/build.gradle.kts` (dependency locking).
+**Pour aller plus loin :** `https://sonarcloud.io/api/issues/search?componentKeys=<projet>&pullRequest=<n>&types=VULNERABILITY`.

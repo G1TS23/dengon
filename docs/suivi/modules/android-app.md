@@ -74,6 +74,19 @@ android/
 
 ## Décisions d'implémentation
 
+- **Release obfuscée + shrinkée** (`isMinifyEnabled = true`, `isShrinkResources
+  = true` dans `app/build.gradle.kts`) et **`usesCleartextTraffic="false"`**
+  explicite dans le manifest : corrections suite au Quality Gate SonarCloud
+  de la PR #56 (`Security Rating on New Code` = C, règles `kotlin:S7204` et
+  `xml:S5332`). Vérifié : `./gradlew assembleRelease` passe avec R8 activé,
+  aucune règle proguard custom nécessaire (consumer rules AndroidX/Compose
+  suffisent). Voir `docs/suivi/00-journal.md`, entrée du 2026-09-09.
+- **Dependency locking activé** (`android/build.gradle.kts`,
+  `resolutionStrategy.activateDependencyLocking()` sur tous les
+  sous-projets) + `app/gradle.lockfile` versionné : corrige `text:S8569`
+  (versions de dépendances non verrouillées). Régénérer avec
+  `./gradlew :app:dependencies --write-locks` après tout changement de
+  dépendance dans `app/build.gradle.kts`.
 - **`applicationId`/`namespace` = `com.dengon.app`, `minSdk=26`,
   `compileSdk`/`targetSdk=34`** : non fixés par `docs/synthese/` → choisis
   ici (voir journal du 2026-09-09). À valider en équipe si un autre nom de
