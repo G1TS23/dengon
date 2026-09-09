@@ -1,0 +1,182 @@
+# ---------------------------------------------------------------------------
+# Workflow `core` — qualité du workspace Rust.
+# Référence : docs/synthese/10-benchmarks-mvp-tests.md §4.7.
+#
+# ⚠ DEUX RÈGLES À NE PAS CASSER
+#
+# 1. Le check exigé par la protection de `main` est le nom du JOB (`core`), pas
+#    le nom du workflow. Donc : pas de `strategy.matrix` sur ce job (le check
+#    deviendrait « core (ubuntu-latest) ») et pas de workflow réutilisable (il
+#    deviendrait « appelant / appelé »). Ne pas renommer le job.
+#
+# 2. Le filtrage par chemin est fait DANS le job, pas via `on.pull_request.paths`.
+#    Avec un filtre au niveau du déclencheur, GitHub ne démarre pas du tout le
+#    workflow sur une PR qui ne touche que `docs/` : aucun check `core` n'est
+#    créé, et la PR reste bloquée sur « Expected — Waiting for status to be
+#    reported » dès que la protection de branche sera active (US-113). Or la
+#    plupart des PR de ce projet ne touchent que `docs/`.
+#    Écart assumé et consigné : docs/suivi/03-ecarts-conception.md.
+# ---------------------------------------------------------------------------
+name: core
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-${{ github.ref }}
+  # On n'annule jamais un run sur main : il fait foi pour l'historique.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  core:
+    name: core
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v7
+        with:
+          # Nécessaire au filtre de chemins sur les événements push.
+          fetch-depth: 0
+
+      - name: Détecter les changements Rust
+        id: filtre
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+            rust:
+              # crates/** couvre aussi crates/rustfmt.toml et crates/clippy.toml.
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/core.yml'
+
+      - name: Aucun changement Rust
+        if: steps.filtre.outputs.rust != 'true'
+        run: |
+          {
+            echo '### core — ignoré'
+            echo
+            echo "Aucun fichier Rust modifié : les étapes cargo sont sautées."
+            echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # La toolchain a UNE seule source de vérité : rust-toolchain.toml.
+      # On lit son `channel` plutôt que de le dupliquer ici.
+      - name: Lire la toolchain figée
+        if: steps.filtre.outputs.rust == 'true'
+        id: toolchain
+        run: |
+          canal=$(grep -oP '(?<=^channel\s=\s")[^"]+' rust-toolchain.toml)
+          if [ -z "$canal" ]; then
+            echo "Impossible de lire 'channel' dans rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "canal=$canal" >> "$GITHUB_OUTPUT"
+          echo "Toolchain : $canal"
+
+      - name: Installer Rust
+        if: steps.filtre.outputs.rust == 'true'
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.toolchain.outputs.canal }}
+          components: rustfmt, clippy, llvm-tools
+
+      - name: Cache cargo
+        if: steps.filtre.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: core
+          # N'écrire le cache que depuis main, pour qu'une PR ne le pollue pas.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Installer cargo-nextest et cargo-llvm-cov
+        if: steps.filtre.outputs.rust == 'true'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov
+
+      # --- 1. Format -------------------------------------------------------
+      - name: Format
+        if: steps.filtre.outputs.rust == 'true'
+        run: cargo fmt --all -- --check
+
+      # --- 2. Compilation --------------------------------------------------
+      # --locked échoue si Cargo.lock n'est pas à jour : garde-fou contre un
+      # Cargo.toml modifié sans régénérer le lock.
+      - name: Build
+        if: steps.filtre.outputs.rust == 'true'
+        run: cargo build --workspace --all-targets --locked
+
+      # --- 3. Lints --------------------------------------------------------
+      # --all-targets couvre aussi les tests, les benches et les exemples.
+      - name: Clippy
+        if: steps.filtre.outputs.rust == 'true'
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      # --- 4. Frontière no_std ---------------------------------------------
+      # docs/synthese/04-architecture.md §2 : protocol, sync et ledger doivent
+      # rester compilables en no_std + alloc pour l'ESP32. Sur cible hôte,
+      # `#![no_std]` est actif dès que la feature `std` est retirée : tout
+      # usage involontaire de std est détecté ici, sans installer de cible bare
+      # metal. La vraie cible xtensa relève de l'US-101 (Spike A).
+      - name: dengon-core compile en no_std
+        if: steps.filtre.outputs.rust == 'true'
+        run: cargo check -p dengon-core --no-default-features --locked
+
+      # --- 5. Tests et couverture ------------------------------------------
+      # `--no-report` conserve les données de profilage brutes ; les deux
+      # `report` en tirent ensuite lcov et le résumé sans recompiler ni
+      # réexécuter la suite.
+      - name: Tests (nextest sous instrumentation de couverture)
+        if: steps.filtre.outputs.rust == 'true'
+        run: cargo llvm-cov --no-report nextest --workspace --all-features --locked
+
+      # nextest n'exécute pas les doctests : étape séparée. La couverture des
+      # doctests exigerait nightly, on ne la mesure donc pas.
+      - name: Doctests
+        if: steps.filtre.outputs.rust == 'true'
+        run: cargo test --workspace --all-features --locked --doc
+
+      - name: Rapport de couverture (lcov)
+        if: steps.filtre.outputs.rust == 'true'
+        run: cargo llvm-cov report --lcov --output-path lcov.info
+
+      # Pas de seuil bloquant pour l'instant : sur des crates squelettes le
+      # chiffre n'a aucun sens, et --fail-under-lines s'applique au rapport
+      # entier alors que l'objectif de 85 % ne vise que dengon-core
+      # (docs/synthese/10-benchmarks-mvp-tests.md §4.2). Le seuil scopé
+      # arrivera avec le premier vrai module (US-108).
+      - name: Couverture dans le résumé du job
+        if: steps.filtre.outputs.rust == 'true'
+        run: |
+          {
+            echo '### Couverture (cargo llvm-cov)'
+            echo
+            echo '```'
+            cargo llvm-cov report --summary-only
+            echo '```'
+            echo
+            echo "_Objectif à terme : ≥ 85 % sur \`dengon-core\`"
+            echo "(docs/synthese/10-benchmarks-mvp-tests.md §4.2). Pas encore bloquant._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publier le rapport lcov
+        if: steps.filtre.outputs.rust == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: couverture-lcov
+          path: lcov.info
+          retention-days: 14
+          if-no-files-found: error
