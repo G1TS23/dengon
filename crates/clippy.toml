@@ -1,0 +1,35 @@
+# ---------------------------------------------------------------------------
+# clippy.toml — CONFIGURE des lints, il n'en ACTIVE aucun.
+#
+# L'activation se fait dans [workspace.lints.clippy] du Cargo.toml racine.
+#
+# Ce fichier vit dans crates/ et non à la racine : clippy le cherche en
+# REMONTANT depuis le manifeste de la crate analysée, donc crates/ suffit à
+# couvrir les six. Ça garde la racine du dépôt lisible, qui devra bientôt
+# accueillir android/, firmware/ et dashboard/.
+# Aucun `clippy::unwrap_used = "deny"` n'est possible ici : ce fichier ne sait
+# que régler les paramètres des lints déjà activés ailleurs. Les deux fichiers
+# sont donc complémentaires, pas alternatifs.
+#
+# ⚠ Une clé inconnue fait ÉCHOUER clippy (« unknown field »), contrairement à
+# rustfmt.toml qui se contente d'un avertissement. N'ajouter ici que ce qui a
+# été vérifié en local.
+#
+# `msrv` n'est pas déclaré : clippy lit `rust-version` du Cargo.toml.
+# ---------------------------------------------------------------------------
+
+# Sans ces exceptions, clippy::unwrap_used et clippy::expect_used (activés
+# dans [workspace.lints.clippy]) rendraient l'écriture des tests pénible.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+
+# Le projet n'a pas d'API publiée : clippy peut proposer des changements
+# cassants (par ex. prendre &self plutôt que self).
+avoid-breaking-exported-api = false
+
+# À activer quand `protocol` et `sync` existeront, pour garantir le
+# déterminisme du cœur (les horloges passeront par un trait injecté, exigence
+# de rejouabilité de dengon-sim — docs/synthese/10-benchmarks-mvp-tests.md §4.3) :
+# disallowed-methods = [
+#   { path = "std::time::SystemTime::now", reason = "utiliser l'horloge injectée" },
+# ]
