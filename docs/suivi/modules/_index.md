@@ -12,10 +12,10 @@ retrouver vite le bon fichier si elle veut y plonger.
 
 ## Index
 
-Le code applicatif n'a pas commencé. La seule fiche existante décrit
-l'**outillage de processus** — elle sert aussi de note d'onboarding de l'area
-`process` (§10.3 point 3).
-
 | Module | Fiche | Dernière mise à jour |
 |---|---|---|
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | 2026-09-09 |
+| `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | 2026-09-09 |
+
+Chaque fiche sert aussi de **note d'onboarding** de son area (proposition
+d'organisation §10.3 point 3).

@@ -10,9 +10,11 @@
 suivi, un `.gitignore`, des hooks git (`.githooks/`) et, depuis le 09/09,
 l'**outillage de processus** dans `.github/` (US-113).
 
-Deux PR sont en vol et ne sont pas comptées ci-dessous, puisqu'elles ne sont pas
+Des PR sont en vol et ne sont pas comptées ci-dessous, puisqu'elles ne sont pas
 encore sur `main` : **#57** (US-104 — workspace Cargo, six crates squelettes, CI
-`core`) et **#56** (US-109 — squelette Android).
+`core`), **#56** (US-109 — squelette Android) et la branche
+`chore/US-110-squelette-dashboard-api` (US-110 — squelette du dashboard `api`,
+décrite dans [`modules/dashboard-api.md`](modules/dashboard-api.md)).
 
 ## Avancement par composant
 
@@ -25,9 +27,9 @@ encore sur `main` : **#57** (US-104 — workspace Cargo, six crates squelettes, 
 | `dengon-ffi` | bindings UniFFI | — | 0 % | — |
 | App Android | Kotlin + Compose | — | 0 % | — |
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
-| Dashboard `api` | Axum + Postgres/Timescale | — | 0 % | — |
-| Dashboard `web` | React + TS | — | 0 % | — |
-| Déploiement VPS | docker-compose + Caddy + Mosquitto | — | 0 % | — |
+| Dashboard `api` | FastAPI + SQLite + SSE (A-5) | squelette permissif hors `main` (US-110) | ~10 % | [dashboard-api.md](modules/dashboard-api.md) |
+| Dashboard `web` | page légère + SSE | — | 0 % | — |
+| Déploiement VPS | Caddy/nginx + uvicorn (A-5, A-6) | — | 0 % | — |
 
 ## Outillage et processus
 

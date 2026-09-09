@@ -12,6 +12,84 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-09 — Squelette du dashboard `api` : ingestion permissive (US-110)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/` (nouveau), `.github/workflows/dashboard.yml`,
+`docs/suivi/modules/dashboard-api.md` (créée), `modules/_index.md`,
+`01-etat-du-code.md`.
+**Lot :** Lot 0 — Fondations (issue #10, US-110). Branche
+`chore/US-110-squelette-dashboard-api`.
+
+### Fait
+- `dashboard/api/` : appli FastAPI (`app/main.py`) avec deux routes —
+  `GET /healthz` → `{"status":"ok"}` ; `POST /ingest/batch` qui accepte
+  n'importe quel JSON bien formé, en devine le nombre d'événements sans
+  imposer de schéma, et l'écrit **verbatim** dans `raw_batches`.
+- `app/db.py` : `connect()` (SQLite, WAL, FK) + `run_migrations()` — système
+  maison `migrations/NNNN_*.sql` tracé dans `schema_migrations`, idempotent,
+  lancé par le `lifespan` FastAPI.
+- `migrations/0001_initial.sql` : la seule table `raw_batches` (+ index).
+- `tests/` : fixture `client` sur une base jetable par test ; 6 tests
+  (`test_api.py`).
+- `.github/workflows/dashboard.yml` : `ruff check` + `pytest`, sur
+  `pull_request` et `push` filtrés `paths: dashboard/**`, working-dir
+  `dashboard/api`, Python 3.11.
+- `dashboard/README.md`, `dashboard/api/pyproject.toml` (deps + config
+  ruff/pytest), `dashboard/api/.gitignore`.
+- Fiche module `docs/suivi/modules/dashboard-api.md` (= note d'onboarding de
+  l'area `dashboard-api`).
+
+### Pourquoi / décisions
+- **Ingestion permissive assumée** (critères de l'issue) : le format
+  d'événement est figé par US-108, pas encore mergée. Le squelette ne doit
+  pas l'attendre — proposition d'organisation §3.3. La validation, la
+  signature Ed25519 et les projections sont US-216 / US-217 (S2).
+- **`sqlite3` stdlib + migrations maison**, pas d'ORM ni d'Alembic :
+  squelette, faible volume, base effacée par session (B-4).
+- **`db_path()` relit l'env à chaque appel** → un `tmp_path` par test sans
+  rechargement de module.
+- **`202 Accepted`** plutôt que `200` : dépôt asynchrone, prépare US-216.
+- Repris le brouillon `dashboard.yml` déjà présent sur la branche (filtre
+  élargi de `dashboard/api/**` à `dashboard/**` comme demandé par l'issue,
+  ajout du déclencheur `pull_request` et du lint).
+
+### Écarts vs conception
+- Aucun. Le squelette est un sous-ensemble strict de
+  `docs/synthese/09` §3 et §11.2 ; rien n'y contredit la cible.
+- Correction annexe dans `01-etat-du-code.md` : la ligne « Dashboard `api` »
+  disait encore « Axum + Postgres/Timescale » (stack `powl` d'origine,
+  écartée par A-5) → remplacée par « FastAPI + SQLite + SSE ».
+
+### Appris
+- `TestClient(app)` comme **context manager** (`with`) déclenche le
+  cycle `lifespan` de Starlette — c'est ce qui fait tourner les migrations
+  avant les tests. Sans le `with`, le lifespan ne s'exécute pas.
+
+### État après cette session
+- `dashboard/api` : `/healthz` et `/ingest/batch` fonctionnent, base migrée
+  au démarrage. Manque tout le reste (sécurité, projections, SSE, REST de
+  lecture, déploiement) — c'est le périmètre S2/S3.
+- Fiche module créée ; `_index.md` mis à jour ; `01-etat-du-code.md` mis à
+  jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && python3 -m venv .venv && . .venv/bin/activate
+$ pip install -e '.[dev]'
+$ ruff check .
+  All checks passed!
+$ pytest
+  6 passed, 2 warnings in 0.27s
+```
+- 2 `DeprecationWarning` (`httpx`/`anyio`) sous Python **3.14** en local ;
+  absents en 3.11, version de la CI. Le venv a été supprimé après coup
+  (ignoré par git de toute façon).
+- La CI `dashboard` elle-même n'a pas encore tourné : elle le fera à
+  l'ouverture de la PR.
+
+---
+
 ## 2026-09-09 — La protection de `main` est active, et ma vérification était creuse (US-113)
 
 **Auteur :** Claude (Opus 5)
