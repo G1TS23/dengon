@@ -12,10 +12,20 @@ retrouver vite le bon fichier si elle veut y plonger.
 
 ## Index
 
-Le code applicatif n'a pas commencé. La seule fiche existante décrit
-l'**outillage de processus** — elle sert aussi de note d'onboarding de l'area
-`process` (§10.3 point 3).
+Les six crates Rust sont à l'état **esquisse** : elles compilent et sont
+testées, mais aucune n'implémente encore de logique métier (US-104, socle du
+sprint 2). La fiche `process` décrit l'**outillage** et sert aussi de note
+d'onboarding de l'area `process` (§10.3 point 3).
 
-| Module | Fiche | Dernière mise à jour |
-|---|---|---|
-| `process` (`.github/`) | [processus-github.md](processus-github.md) | 2026-09-09 |
+| Module | Fiche | État | Dernière mise à jour |
+|---|---|---|---|
+| `dengon-core` | [dengon-core.md](dengon-core.md) | esquisse | 2026-09-09 |
+| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |
+| `dengon-node` | [dengon-node.md](dengon-node.md) | esquisse | 2026-09-09 |
+| `dengon-sim` | [dengon-sim.md](dengon-sim.md) | esquisse | 2026-09-09 |
+| `dengon-verify` | [dengon-verify.md](dengon-verify.md) | esquisse | 2026-09-09 |
+| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | esquisse | 2026-09-09 |
+| `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
+
+Pas encore de fiche (le composant n'existe pas) : application Android, firmware
+`dengon-relay`, dashboard `api` et `web`.

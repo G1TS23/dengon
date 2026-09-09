@@ -70,3 +70,75 @@ _(aucun écart pour l'instant)_
   `good-first-issue` d'une autre area ») s'applique inchangée.
 - **Doc de conception mise à jour ?** non — coquille de nommage, sans effet sur
   l'organisation décrite.
+
+---
+
+### 2026-09-09 — Filtrage par chemin du workflow `core` : dans le job, pas dans le déclencheur
+
+- **Prévu :** l'issue #4 (US-104) demande littéralement « le workflow est filtré
+  par chemin (`paths: crates/**`) », c'est-à-dire un filtre au niveau de
+  `on.pull_request.paths`. Même formulation dans
+  [`docs/olivier/proposition-organisation-github.md`](../olivier/proposition-organisation-github.md) §4.3.
+- **Réel :** `.github/workflows/core.yml` n'a **aucun** `paths:` sur ses
+  déclencheurs. Le filtrage se fait à la première étape du job, via
+  `dorny/paths-filter`, et chaque étape lourde porte un
+  `if: steps.filtre.outputs.rust == 'true'`.
+- **Raison :** avec un `paths:` sur le déclencheur, GitHub **ne démarre pas du
+  tout** le workflow quand aucun fichier ne correspond. Aucun *check run* nommé
+  `core` n'est alors créé. Or la protection de `main` (US-113) exigera un check
+  `core` : toute PR ne touchant que `docs/` resterait bloquée indéfiniment sur
+  « Expected — Waiting for status to be reported », même approuvée. Et sur ce
+  projet, **la majorité des PR ne touchent que `docs/`** (trois dossiers de
+  conception, plus la règle de mise à jour du suivi imposée par `CLAUDE.md`).
+  La parade « officielle » — un workflow jumeau en `paths-ignore` avec un job
+  homonyme — est pire : `paths` et `paths-ignore` ne sont pas complémentaires,
+  une PR touchant `docs/` **et** `crates/` déclencherait les deux et créerait
+  deux checks `core` concurrents.
+- **Conséquences :** l'intention du critère est préservée — aucune commande
+  `cargo` ne tourne sur une PR qui ne touche pas Rust. Le coût est d'environ
+  15 s de runner sur ces PR, contre 0 s avec un filtre au déclencheur. En
+  échange, le check `core` est **toujours** rapporté et peut être rendu
+  obligatoire sans piéger l'équipe. **Le même patron devra être appliqué à
+  `sim`, `audit` et `cross-vectors`** quand ils seront écrits.
+- **Doc de conception mise à jour ?** non — le point est trop fin pour
+  `docs/synthese/`. Il est signalé dans le corps de la PR de l'US-104 et en
+  commentaire en tête de `.github/workflows/core.yml`.
+
+---
+
+### 2026-09-09 — `Cargo.lock` versionné
+
+- **Prévu :** le `.gitignore` d'origine (ligne 186, commit `c0e2a9b`, écrit
+  quand la stack n'était pas encore choisie) ignorait `Cargo.lock`.
+- **Réel :** la ligne a été retirée ; `Cargo.lock` est versionné.
+- **Raison :** la recommandation Rust est de committer le lock dès qu'un dépôt
+  produit un exécutable — ici il y en a trois (`dengon-node`, `dengon-sim`,
+  `dengon-verify`). Trois raisons propres au projet s'ajoutent : (a) la CI lance
+  `clippy -D warnings`, donc une version patch d'une dépendance transitive
+  publiée n'importe quel jour pourrait faire virer `main` au rouge sans qu'une
+  ligne du dépôt ait changé ; (b) `cargo audit` et `cargo deny` du futur job
+  `audit` lisent le lock — sans lui, un rapport de vulnérabilité ne correspond
+  à ce que personne n'a construit ; (c) le job `cross-vectors` suppose une
+  reproductibilité entre core, firmware et dashboard.
+- **Conséquences :** la CI passe `--locked` partout, ce qui devient un
+  garde-fou : une PR qui modifie `Cargo.toml` sans régénérer le lock échoue
+  immédiatement avec un message clair. Contrepartie : les montées de version de
+  dépendances deviennent des diffs explicites à relire.
+- **Doc de conception mise à jour ?** sans objet (le `.gitignore` n'est pas un
+  document de conception) ; la raison est écrite en commentaire dans le fichier
+  lui-même.
+
+---
+
+### Pièges de `.gitignore` repérés mais **non corrigés** (dette assumée)
+
+Repérés en passant, laissés en l'état parce qu'ils ne gênent pas encore et que
+les corriger à l'aveugle serait hors périmètre de l'US-104 :
+
+- Ligne `bin/` (section .NET, non ancrée) → ignorerait `crates/*/src/bin/` le
+  jour où une crate aura des binaires secondaires.
+- Lignes `*.pem` et `*.key` → ignoreront **silencieusement** les fixtures de
+  clés de test de `crypto` et `ledger` (P1.5, P1.7). À neutraliser par un
+  `!crates/**/tests/fixtures/**` à ce moment-là. C'est le plus dangereux des
+  trois : l'oubli se manifesterait par des tests qui passent en local et
+  échouent en CI.
