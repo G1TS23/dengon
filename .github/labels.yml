@@ -1,0 +1,156 @@
+# ---------------------------------------------------------------------------
+# Taxonomie des labels — source de vérité versionnée.
+# Référence : docs/olivier/proposition-organisation-github.md §5.3.
+#
+# POURQUOI CE FICHIER EXISTE
+# Les 31 labels ci-dessous ont été créés à la main sur GitHub le 09/09 et sont
+# posés sur les 55 issues. Tant qu'ils n'existaient que là, rien ne rattrapait
+# un renommage : un `area:core-rust` devenu `area:core` casse silencieusement
+# les filtres du board et les `labels:` des formulaires d'issue. Ce fichier est
+# l'état attendu ; le workflow `labels` (workflow_dispatch) le compare au réel.
+#
+# Il DÉCRIT L'EXISTANT : couleurs et descriptions sont recopiées telles quelles
+# depuis `gh label list`. Un premier sync ne doit donc rien modifier.
+#
+# VÉRIFIER SANS RIEN CHANGER
+#   gh label list --limit 100 --json name,color,description
+# et comparer. Le workflow fait la même chose en `dry_run` (son mode par défaut).
+#
+# AJOUTER UN LABEL : l'ajouter ici d'abord, puis lancer le workflow. Pas
+# l'inverse — sinon le fichier ment et le prochain sync avec `supprimer: true`
+# efface le label créé à la main.
+#
+# CE QUI N'EST PAS ICI : les 9 labels par défaut de GitHub non utilisés par la
+# taxonomie (`bug`, `documentation`, `enhancement`, `question`, `duplicate`,
+# `invalid`, `wontfix`, `help wanted`, `accessibility`). Ils survivent au sync
+# tant que `supprimer` reste à `false` — son défaut. Les lancer avec
+# `supprimer: true` les effacerait : c'est voulu, mais il faut le savoir.
+#
+# Format attendu par EndBug/label-sync : liste de { name, color, description },
+# couleur en hexadécimal SANS le `#`.
+# ---------------------------------------------------------------------------
+
+# --- area: ---------------------------------------------------------------
+# Où le travail se fait. Une US ne porte qu'un seul `area:` (anti-critère §6),
+# et c'est ce qui définit la revue croisée : le relecteur vient d'un autre.
+- name: "area:core-rust"
+  color: "B7410E"
+  description: "Cœur Rust (crates/dengon-core, -sim, -verify, -node)"
+- name: "area:contract"
+  color: "5319E7"
+  description: "Contrat d'interface figé en sprint 1"
+- name: "area:android"
+  color: "3DDC84"
+  description: "Application Android (Kotlin + Compose)"
+- name: "area:firmware"
+  color: "E36209"
+  description: "Firmware ESP32 (ESP-IDF + NimBLE)"
+- name: "area:dashboard-api"
+  color: "0E8A16"
+  description: "API du dashboard (FastAPI)"
+- name: "area:dashboard-web"
+  color: "1D76DB"
+  description: "Front du dashboard"
+- name: "area:docs"
+  color: "0075CA"
+  description: "Documentation, rapport, slides"
+- name: "area:process"
+  color: "5D6D7E"
+  description: "CI, outillage, recette, organisation"
+
+# --- type: ---------------------------------------------------------------
+# Nature du travail. Détermine la DoD spécifique appliquée (§7.2) et le
+# formulaire d'issue utilisé.
+- name: "type:us"
+  color: "C2E0C6"
+  description: "User story"
+- name: "type:spike"
+  color: "FBCA04"
+  description: "Spike : timeboxé, livrable = une décision écrite"
+- name: "type:bug"
+  color: "D73A4A"
+  description: "Anomalie"
+- name: "type:chore"
+  color: "EDEDED"
+  description: "Tâche technique sans valeur utilisateur directe"
+- name: "type:ci"
+  color: "BFD4F2"
+  description: "Intégration continue"
+
+# --- sprint: -------------------------------------------------------------
+# Invariant §5.2 : zéro dépendance intra-sprint en S1 et S2.
+- name: "sprint:s1"
+  color: "C5DEF5"
+  description: "S1 — 08 au 14/09 : contrats, spikes, squelettes"
+- name: "sprint:s2"
+  color: "BFDADC"
+  description: "S2 — 15 au 21/09 : construire en parallèle sur bouchons"
+- name: "sprint:s3"
+  color: "D4C5F9"
+  description: "S3 — 22 au 28/09 : intégrer, démontrer, rédiger"
+
+# --- moscow: -------------------------------------------------------------
+# §10.5 : on est au-dessus de la capacité. Ces labels servent à décider
+# maintenant ce qu'on ne fera pas, pas à le découvrir le 26/09.
+- name: "moscow:must"
+  color: "B60205"
+  description: "Périmètre engagé"
+- name: "moscow:should"
+  color: "FBCA04"
+  description: "Hors périmètre engagé — bonus"
+- name: "moscow:could"
+  color: "C2E0C6"
+  description: "Optionnel"
+
+# --- skill: --------------------------------------------------------------
+# Compétence demandée, pas personne assignée. Sert la rotation (§10.3) :
+# `skill:rust-débutant` = prenable après la note d'onboarding de l'area.
+- name: "skill:rust-avancé"
+  color: "A0522D"
+  description: "Demande une montée en compétence Rust réelle"
+- name: "skill:rust-débutant"
+  color: "DEB887"
+  description: "Rust accessible après la note d'onboarding"
+- name: "skill:kotlin"
+  color: "7F52FF"
+  description: "Kotlin / Android"
+- name: "skill:c-embarqué"
+  color: "555555"
+  description: "C / ESP-IDF / FreeRTOS"
+- name: "skill:python"
+  color: "3572A5"
+  description: "Python / FastAPI"
+- name: "skill:web"
+  color: "E34C26"
+  description: "HTML / CSS / JS"
+- name: "skill:rédaction"
+  color: "8E44AD"
+  description: "Rédaction, spec, support"
+
+# --- needs: --------------------------------------------------------------
+# Contraintes DURES (§10.2). Elles ne disent pas « c'est difficile », elles
+# disent « untel ne peut PHYSIQUEMENT pas prendre cette US ».
+- name: "needs:materiel-esp32"
+  color: "D93F0B"
+  description: "Contrainte dure : nécessite une carte ESP32"
+- name: "needs:materiel-android"
+  color: "D93F0B"
+  description: "Contrainte dure : nécessite un téléphone Android"
+- name: "needs:vps"
+  color: "D93F0B"
+  description: "Contrainte dure : nécessite un accès au VPS"
+
+# --- transverses ---------------------------------------------------------
+- name: "blocked"
+  color: "000000"
+  description: "Bloquée par une dépendance ouverte"
+- name: "contract"
+  color: "6F42C1"
+  description: "Gèle une couture — ne se modifie qu'en réunion"
+# §5.3 écrit ce label `good-first-issue`. Le label réel est celui de GitHub,
+# avec des espaces, et il est déjà posé sur des issues : on garde le nom réel
+# pour ne pas casser les filtres du board. Écart consigné dans
+# docs/suivi/03-ecarts-conception.md.
+- name: "good first issue"
+  color: "7057ff"
+  description: "Good for newcomers"

@@ -1,0 +1,80 @@
+# ---------------------------------------------------------------------------
+# Workflow `labels` — synchronise les labels du dépôt avec .github/labels.yml.
+# Référence : docs/olivier/proposition-organisation-github.md §5.3.
+#
+# DÉCLENCHEMENT MANUEL UNIQUEMENT, et en simulation par défaut.
+# Une synchro automatique sur push serait un mauvais échange : les labels de ce
+# dépôt sont posés sur 55 issues et servent de filtres au board Projects. Un
+# `delete-other-labels` mal relu dans une PR les effacerait d'un coup, sans
+# revue possible du résultat. Ici, il faut trois gestes délibérés pour détruire
+# quelque chose : lancer le workflow, décocher `dry_run`, cocher `supprimer`.
+#
+# Les actions tierces sont épinglées sur un SHA de commit complet, pas sur un
+# tag — un tag est mutable, son propriétaire peut le repointer. Même règle que
+# core.yml. Le commentaire à droite donne la version lisible.
+#
+# ⚠ `workflow_dispatch` n'est proposé que si le fichier est présent sur la
+#    BRANCHE PAR DÉFAUT. Ce workflow n'est donc pas lançable tant que la PR de
+#    l'US-113 n'est pas mergée.
+#
+# Le job s'appelle `labels`, surtout pas `core` : il ne doit jamais être
+# confondu avec un check requis par la protection de `main`.
+# ---------------------------------------------------------------------------
+name: labels
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Simulation : afficher les changements sans les appliquer"
+        type: boolean
+        default: true
+      supprimer:
+        description: "Supprimer les labels absents de labels.yml (destructif)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: labels
+  cancel-in-progress: false
+
+jobs:
+  labels:
+    name: labels
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # ⚠ Un bloc `permissions` de JOB REMPLACE celui du workflow, il ne s'y
+      # ajoute pas. `contents: read` doit donc être répété ici, sinon
+      # actions/checkout échoue.
+      contents: read
+      # Les labels relèvent de l'API « issues ». Rien d'autre n'est nécessaire :
+      # ce job n'écrit ni code, ni release, ni package.
+      issues: write
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rappeler le mode choisi
+        run: |
+          {
+            echo '### Synchronisation des labels'
+            echo
+            echo '- Simulation (`dry_run`) : **${{ inputs.dry_run }}**'
+            echo '- Suppression des labels hors fichier : **${{ inputs.supprimer }}**'
+            echo
+            if [ "${{ inputs.dry_run }}" = "false" ] && [ "${{ inputs.supprimer }}" = "true" ]; then
+              echo "> ⚠ Mode destructif : tout label absent de \`.github/labels.yml\`"
+              echo "> est supprimé du dépôt, y compris sur les issues qui le portent."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Synchroniser
+        uses: EndBug/label-sync@52074158190acb45f3077f9099fea818aa43f97a # v2.3.3
+        with:
+          config-file: .github/labels.yml
+          dry-run: ${{ inputs.dry_run }}
+          delete-other-labels: ${{ inputs.supprimer }}

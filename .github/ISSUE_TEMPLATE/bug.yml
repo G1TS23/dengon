@@ -1,0 +1,96 @@
+# ---------------------------------------------------------------------------
+# Formulaire d'issue « Bug ».
+# Référence : docs/olivier/proposition-organisation-github.md §5.3 (labels).
+#
+# Sur ce projet, « où ça se produit » compte plus que d'habitude : le même code
+# tourne en simulation, sur téléphone et sur ESP32, et un bug qui n'apparaît
+# que sur cible réelle ne se diagnostique pas comme un bug du simulateur.
+# ---------------------------------------------------------------------------
+name: Bug
+description: Une anomalie constatée — comportement observé différent du comportement attendu.
+title: "bug: "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: observe
+    attributes:
+      label: Comportement observé
+      description: Ce qui se passe réellement. Faits, pas interprétation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: attendu
+    attributes:
+      label: Comportement attendu
+      description: >-
+        Et **d'après quoi** : la section de `docs/synthese/` ou le critère
+        d'acceptation de l'US qui dit le contraire.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Étapes de reproduction
+      description: >-
+        Numérotées. Préciser la **seed** si c'est un scénario `dengon-sim` :
+        sans elle, le scénario n'est pas rejouable.
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environnement
+    attributes:
+      label: Où
+      options:
+        - "Simulateur dengon-sim"
+        - "Téléphone Android réel"
+        - "Carte ESP32"
+        - "Dashboard (API ou web)"
+        - "CI GitHub Actions"
+        - "Poste de développement"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area concernée
+      description: Au mieux de ce qu'on sait — se corrige après diagnostic.
+      options:
+        - core-rust
+        - contract
+        - android
+        - firmware
+        - dashboard-api
+        - dashboard-web
+        - docs
+        - process
+    validations:
+      required: true
+
+  - type: dropdown
+    id: gravite
+    attributes:
+      label: Gravité
+      options:
+        - "Bloquante — un critère du DoD MVP ne passe plus"
+        - "Majeure — fonctionne, mais faux résultat ou perte de message"
+        - "Mineure — gêne, contournable"
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, trace, capture
+      description: >-
+        Coller la sortie brute. **Aucun contenu de message en clair, aucune clé,
+        aucun identifiant** — c'est un dépôt public et le projet chiffre de bout
+        en bout : rédiger ce qui doit l'être.
+      render: text

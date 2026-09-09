@@ -1,0 +1,54 @@
+# ---------------------------------------------------------------------------
+# CODEOWNERS — revue croisée obligatoire.
+# Référence : docs/olivier/proposition-organisation-github.md §10.3 (le
+# dispositif), §7.1 point 4 (la DoD), §13 (la correspondance des comptes).
+#
+# Correspondance : POWLAIR = Paul · OswinFreyr = Tanguy · G1TS23 = Olivier.
+# Les trois ont le droit d'écriture sur le dépôt — condition nécessaire, un
+# compte sans accès en écriture est ignoré silencieusement comme code owner.
+#
+# DEUX RÈGLES À CONNAÎTRE AVANT DE TOUCHER À CE FICHIER
+#
+# 1. La DERNIÈRE ligne qui correspond gagne. La syntaxe des motifs est celle de
+#    .gitignore, mais la priorité est inversée : dans .gitignore la dernière
+#    règle l'emporte aussi, ici c'est pareil — donc le filet `*` se met EN
+#    PREMIER et les chemins précis ENSUITE. Une ligne `*` placée en bas
+#    annulerait tout le reste.
+#
+# 2. L'auteur d'une PR ne peut jamais s'auto-approuver au titre de CODEOWNERS.
+#    C'est ce qui produit mécaniquement la revue croisée : sur /crates/, une PR
+#    de Paul ne peut être validée que par Tanguy. Deux noms par chemin, c'est
+#    donc « le responsable et sa doublure », et jamais un droit d'auto-merge.
+#
+# ⚠ Ce fichier ne BLOQUE rien tout seul. Il ne fait que demander la revue.
+#    C'est `require_code_owner_reviews: true` dans la protection de `main` qui
+#    la rend obligatoire — voir docs/suivi/modules/processus-github.md.
+#
+# Les chemins /crates/, /android/, /firmware/ et /dashboard/ n'existent pas
+# encore sur `main` : c'est sans effet, CODEOWNERS n'exige pas qu'un chemin
+# existe. Les lignes sont posées d'avance pour que la première PR de chaque
+# area soit déjà couverte.
+# ---------------------------------------------------------------------------
+
+# Filet par défaut : n'importe lequel des trois, sauf l'auteur.
+*               @G1TS23 @POWLAIR @OswinFreyr
+
+# Cœur Rust — Paul écrit, Tanguy relit : il consommera ces types depuis
+# AndroidTransport en S2 (règle de doublure, §13).
+/crates/        @POWLAIR @OswinFreyr
+
+# Android — Tanguy écrit, Olivier relit.
+/android/       @OswinFreyr @G1TS23
+
+# Firmware ESP32 — Paul écrit, Olivier relit.
+/firmware/      @POWLAIR @G1TS23
+
+# Dashboard (api + web) — Olivier écrit, Tanguy relit.
+/dashboard/     @G1TS23 @OswinFreyr
+
+# Documentation — conception, synthèse et suivi.
+/docs/          @G1TS23 @POWLAIR
+
+# Outillage de processus : CI, templates, protection de branche. Toucher à ce
+# dossier change les règles du jeu pour tout le monde — d'où une revue exigée.
+/.github/       @G1TS23 @POWLAIR
