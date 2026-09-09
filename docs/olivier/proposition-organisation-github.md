@@ -282,7 +282,7 @@ les DoD ci-dessus sont les paliers qui y mènent.
 Notation : **Deps** = US bloquantes · **Pts** = estimation ·
 **M** = MoSCoW · **Dure** = contrainte matérielle.
 
-### 8.1 Sprint 1 — Contrats, spikes, squelettes (14 US · 30 pts)
+### 8.1 Sprint 1 — Contrats, spikes, squelettes (14 US · 36 pts)
 
 **Toutes démarrables immédiatement. Aucune dépendance.**
 
@@ -303,7 +303,7 @@ Notation : **Deps** = US bloquantes · **Pts** = estimation ·
 | US-113 | `.github/` : templates issue/PR, labels, CODEOWNERS, protection de `main` | process | — | 2 | Must | — |
 | US-114 | Squelette `firmware/dengon-relay` : ESP-IDF + NimBLE, advertise le service `dengon` | firmware | — | 3 | Should | esp32 |
 
-### 8.2 Sprint 2 — Construire en parallèle (24 US · 62 pts)
+### 8.2 Sprint 2 — Construire en parallèle (24 US · 80 pts)
 
 **Toutes ne dépendent que de S1. Aucune dépendance intra-sprint.**
 
@@ -334,7 +334,7 @@ Notation : **Deps** = US bloquantes · **Pts** = estimation ·
 | US-223 | **Rapport écrit** : plan détaillé + sections problème / état de l'art / conception | docs | 112 | 3 | Must | — |
 | US-224 | Déploiement VPS : reverse-proxy TLS + `uvicorn` + script de purge par session | dashboard-api | 110 | 3 | Must | vps |
 
-### 8.3 Sprint 3 — Intégrer, démontrer, rédiger (17 US · 63 pts)
+### 8.3 Sprint 3 — Intégrer, démontrer, rédiger (17 US · 72 pts)
 
 **Sprint de convergence : l'adhérence y est irréductible et assumée.**
 
@@ -486,13 +486,21 @@ départ**, pas comme frontières.
 
 - **Capacité** : 3 personnes × 14 jours ouvrés ≈ 42 jours-personne, moins
   cours/réunions/soutenances ≈ **~32 jours-personne effectifs**.
-- **Charge** : 155 points. À ~5 points/jour-personne (optimiste pour une équipe
-  qui découvre Rust et ESP-IDF) → **~31 jours-personne**.
+- **Charge** : **188 points** (S1 36 + S2 80 + S3 72). À ~5 points/jour-personne
+  (optimiste pour une équipe qui découvre Rust et ESP-IDF) → **~37,5 jours-personne**.
 
-**C'est à 100 % de la capacité, sans aucune marge.** Recommandation :
-sortir immédiatement les 5 US `Should` du périmètre engagé (US-102, 114, 303,
-313, 317 = 13 pts) et les traiter en bonus. On retombe à ~142 pts ≈ 28,5 j·p,
-soit **~11 % de marge** — le strict minimum pour absorber un imprévu.
+**C'est à ~117 % de la capacité : le périmètre ne rentre pas.** Sortir les 5 US
+`Should` (US-102, 114, 303, 313, 317 = 13 pts) ne suffit pas — on retombe à
+175 pts ≈ 35 j·p, soit encore **~109 %**. Il faut donc, en plus :
+
+- soit **couper dans les `Must`** en appliquant l'ordre de repli ci-dessous ;
+- soit **assumer une vélocité supérieure à 5 pts/j·p**, ce qui n'est pas
+  réaliste sur une stack découverte ;
+- soit **réduire le périmètre du sprint 3** (72 pts pour ~10 j·p : c'est là que
+  la rupture se produira en premier).
+
+À trancher en réunion de ratification : c'est **la** décision de périmètre du
+projet, et elle ne peut pas être repoussée.
 
 L'**ordre de repli** de `plan-mvp.md` §7 reste la soupape : hors-ligne + relais
 d'abord, sécurité ensuite, dashboard en dernier.
@@ -506,7 +514,7 @@ d'abord, sécurité ensuite, dashboard en dernier.
 | Les contrats S1 sont **bâclés** → il faut les rouvrir en S2, et tout le backlog S2 vacille | moyenne | Label `contract` + gel formel en réunion + revue à 3 obligatoire sur les 4 contrats |
 | Les **bouchons deviennent la réalité** : l'app marche sur le bouchon, le vrai FFI arrive trop tard | **haute** | US-302 planifiée **au premier jour de S3**, pas au milieu. Répétition E2E dès qu'elle est verte. |
 | **Sur-processus** : 55 issues, DoR à 8 points, revue croisée — pour 3 personnes sur 3 semaines | moyenne | La DoR/DoD s'applique aux US `Must` ; les `chore` et `docs` passent en mode allégé. Le board ne doit pas coûter plus de 10 min/jour à tenir. |
-| S3 sous-dimensionné (63 pts sur ~10 j·p) | **haute** | C'est le vrai point de rupture. Avancer US-301/302 en fin de S2 si le cœur est prêt. |
+| S3 sous-dimensionné (72 pts sur ~10 j·p) | **haute** | C'est le vrai point de rupture. Avancer US-301/302 en fin de S2 si le cœur est prêt. |
 | La rotation ralentit l'équipe à court terme | certaine | Assumé : le coût est en S1-S2, le bénéfice en S3 (quand il faut que tout le monde puisse débugger). |
 
 ---
