@@ -250,8 +250,6 @@ racine `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`.
 
 ---
 
----
-
 ### Épingler les actions GitHub sur un SHA, pas sur un tag
 
 **C'est quoi :** dans un workflow, `uses: dorny/paths-filter@v4` désigne un tag
@@ -274,8 +272,6 @@ version en commentaire à droite du SHA, pour rester lisible.
 **Où c'est utilisé :** `.github/workflows/core.yml`, les six `uses:`.
 **Pour aller plus loin :** règle S7637 sur rules.sonarsource.com, et la
 documentation GitHub « Using third-party actions ».
-
----
 
 ---
 

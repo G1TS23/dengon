@@ -2,6 +2,13 @@
 # Workflow `core` — qualité du workspace Rust.
 # Référence : docs/synthese/10-benchmarks-mvp-tests.md §4.7.
 #
+# Les actions tierces sont épinglées sur un SHA de commit complet, pas sur un
+# tag : un tag (et a fortiori une branche comme dtolnay/rust-toolchain@master)
+# est mutable, son propriétaire peut le repointer vers n'importe quel code, qui
+# s'exécuterait alors dans notre CI. Le commentaire à droite donne la version
+# lisible. Pour mettre à jour : relire le diff de l'action, puis changer SHA et
+# commentaire ensemble.
+#
 # ⚠ DEUX RÈGLES À NE PAS CASSER
 #
 # 1. Le check exigé par la protection de `main` est le nom du JOB (`core`), pas
@@ -44,14 +51,14 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Récupérer le dépôt
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Nécessaire au filtre de chemins sur les événements push.
           fetch-depth: 0
 
       - name: Détecter les changements Rust
         id: filtre
-        uses: dorny/paths-filter@v4
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             rust:
@@ -88,14 +95,14 @@ jobs:
 
       - name: Installer Rust
         if: steps.filtre.outputs.rust == 'true'
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master au 2026-09-03
         with:
           toolchain: ${{ steps.toolchain.outputs.canal }}
           components: rustfmt, clippy, llvm-tools
 
       - name: Cache cargo
         if: steps.filtre.outputs.rust == 'true'
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           shared-key: core
           # N'écrire le cache que depuis main, pour qu'une PR ne le pollue pas.
@@ -103,7 +110,7 @@ jobs:
 
       - name: Installer cargo-nextest et cargo-llvm-cov
         if: steps.filtre.outputs.rust == 'true'
-        uses: taiki-e/install-action@v2
+        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
         with:
           tool: cargo-nextest,cargo-llvm-cov
 
@@ -174,7 +181,7 @@ jobs:
 
       - name: Publier le rapport lcov
         if: steps.filtre.outputs.rust == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: couverture-lcov
           path: lcov.info
