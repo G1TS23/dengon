@@ -64,10 +64,25 @@ résolution.
   (Android `BluetoothGattServer` + scan en foreground service, 2 appareils
   échangent 20 o) = exactement le « hello mesh » de `olivier`. Le résultat du
   spike tranche.
-- **Statut** : `à confirmer`. `powl` a tranché **Kotlin natif** ; `olivier` et
-  `oswin` recommandent d'attendre le prototype. Note : `oswin/07 §1` indique que
-  l'app Android (.apk) et Flutter sont « décidés par l'équipe » — à reconfirmer
-  au vu de `powl`.
+- **Orientation proposée** (2026-09-08, à valider en réunion) : **Kotlin natif +
+  Jetpack Compose pour le MVP Android** ; shell **Swift + SwiftUI** ajouté plus
+  tard pour iOS ; les deux au-dessus du **même cœur Rust `dengon-core`** via
+  UniFFI (bindings Kotlin *et* Swift générés d'une seule source). **Flutter /
+  React Native écartés** : un framework d'UI multiplateforme ne mutualise que les
+  écrans (≈ 8-10 écrans simples pour une messagerie), **pas** la couche radio
+  BLE — le double rôle central + périphérique en arrière-plan reste spécifique à
+  chaque OS quel que soit le framework. `bluetooth_low_energy` (seul plugin
+  Flutter couvrant les deux rôles) est peu éprouvé sur ce point précis ; en
+  pratique il faut quand même écrire un *platform channel* Kotlin (puis Swift)
+  pour le rôle périphérique fiable → Flutter fusionne la partie facile, pas la
+  partie difficile. React Native est pire (composant d'annonce BLE non maintenu
+  depuis ~4 ans, `olivier/etude-stack §1.2`). L'ouverture iOS est préservée par
+  le **cœur Rust + le `trait Transport`**, pas par le framework d'UI. Le
+  **Spike C** reste le go/no-go.
+- **Statut** : `à confirmer`. `powl` a tranché **Kotlin natif** ; l'orientation
+  proposée ci-dessus le confirme et écarte Flutter/RN, sous réserve du Spike C et
+  d'une validation en réunion. Note : `oswin/07 §1` indique que l'app Android
+  (.apk) et Flutter sont « décidés par l'équipe » — à reconfirmer au vu de `powl`.
 
 ### A-2. Un seul moteur `dengon-core` ou deux implémentations ?
 
@@ -99,9 +114,19 @@ résolution.
   cœur. Si non partiellement → trait `Crypto` + lib C côté firmware, le reste en
   Rust partagé. Décision d'équipe sur l'ambition (Rust + UniFFI vs deux implés)
   au vu du délai réel.
+- **Orientation proposée** (2026-09-08, à valider en réunion) : **adopter le cœur
+  Rust unique `dengon-core`**. C'est le seul choix cohérent avec une ouverture
+  iOS peu coûteuse — deux implémentations en imposeraient une **troisième** pour
+  iOS et tripleraient l'audit crypto. Repli si le **Spike A** échoue : isoler la
+  crypto derrière un `trait Crypto` implémenté en C (mbedTLS, déjà dans l'ESP-IDF)
+  **côté firmware seulement** ; `protocol`, `sync`, `store` et `ledger` restent
+  partagés en Rust. L'outillage (UniFFI, cross-compilation xtensa, `cbindgen`)
+  est assumé comme investissement de semaine 1, dérisqué par les Spikes A et C.
 - **Statut** : `à confirmer`. `powl` a tranché **un cœur Rust** ; `olivier`
-  recommande **deux implés** pour la v1 et le cœur Rust en v2. C'est la
-  divergence la plus structurante entre les deux conceptions.
+  recommande **deux implés** pour la v1 et le cœur Rust en v2. L'orientation
+  proposée ci-dessus suit `powl` (cœur Rust unique, repli C limité au firmware),
+  à valider en réunion. C'est la divergence la plus structurante entre les deux
+  conceptions.
 
 ### A-3. Modèle cryptographique
 
@@ -138,10 +163,51 @@ résolution.
   par `protocole.md` et `format-trame.md`, non encore rédigée — voir C-11) +
   **Spike A** (crypto Rust sur xtensa). La doc sécurité fige les primitives, les
   tailles, l'ordre des octets, la disposition `nonce`/`tag`/`ciphertext`.
+- **Orientation proposée** (2026-09-08, à valider en réunion + Spike A) :
+  **option 1 — Noise `XX` (session live) + Noise `X` (enveloppes scellées) +
+  Ed25519 (signatures)**, implémentée **une seule fois** dans
+  `dengon-core::crypto` (crates `snow` + `ed25519-dalek` + `x25519-dalek` +
+  `chacha20poly1305` + `sha2`). Motifs :
+  - **cohérence avec A-2** : un cœur Rust unique impose une implémentation crypto
+    unique et un seul audit. L'option 2 (`crypto_box` côté téléphone + mbedTLS
+    côté ESP32) code la crypto **deux fois** dans deux bibliothèques → dérive de
+    format + surface d'erreur doublée (leçon Bridgefy), et contredit A-2 ;
+  - **répond à l'attendu structurant** (destinataire hors-ligne, cf. réponse à
+    « la convergence couvre-t-elle les attendus ») : les enveloppes Noise `X`
+    one-shot **sont** le mécanisme store-and-forward ; `crypto_box` le fait aussi
+    mais sans cadre pour le chemin live ni forward secrecy ;
+  - **forward secrecy gratuite** sur la session live via Noise `XX` (attendu noté
+    « bonus v1 » par l'énoncé) ;
+  - **cadre spécifié, pas maison** : `Noise_XX_25519_ChaChaPoly_SHA256` est un
+    standard → une implé Rust et une implé C conformes **interopèrent par
+    construction** ; `recipient_tag` tournant + `PAD_BUCKETS` (métadonnées) déjà
+    spécifiés dans `powl/04` ;
+  - **primitives = exactement la convergence** (X25519, ChaCha20-Poly1305,
+    Ed25519, SHA-256), crates pures Rust éprouvées.
+
+  **Repli si le Spike A montre que `snow` ne cross-compile pas pour xtensa** :
+  - `sha2` + `ed25519-dalek` restent en Rust **partout** (petits crates `no_std`,
+    cross-compilation attendue sans souci) → couvrent `msgID`/dédup + vérif et
+    signature de paquets + `LOG_ATTEST` du relais ;
+  - le **handshake Noise `XX` + l'AEAD de lien BLE** sont isolés derrière un
+    `trait Crypto`, implémenté côté ESP32 avec **mbedTLS** (déjà dans l'ESP-IDF :
+    X25519, ChaCha20-Poly1305, HKDF-SHA256), au format de fil Noise `XX` à
+    l'octet près (figé dans la doc sécurité) ;
+  - repli plus radical pour le MVP démo : rendre le Noise `XX` **de lien**
+    optionnel (les relais transfèrent les paquets déjà scellés/signés en clair
+    sur le saut BLE ; Noise `XX` réservé au chemin live téléphone↔téléphone) →
+    l'ESP32 n'a alors besoin que de `sha2` + `ed25519-dalek`.
+
+  **Livrable** : prendre `powl/04-security.md` comme doc sécurité de référence et
+  ne rédiger que le delta manquant (voir C-11). Le **Spike A** doit trancher :
+  `snow` + `ed25519-dalek` + `sha2` sur `xtensa-esp32-none-elf` (`no_std`) →
+  complet / partiel / KO.
 - **Statut** : `à confirmer`. `powl` a tranché **Noise XX/X + Ed25519** ;
   `olivier` note « piste : libsodium `crypto_box` » comme choix par défaut à
-  détailler en doc sécurité. Convergence sur : X25519 + AEAD moderne + Ed25519,
-  jamais de crypto maison.
+  détailler en doc sécurité. L'orientation proposée ci-dessus suit `powl`
+  (option 1, une implé Rust ; repli `trait Crypto` + mbedTLS limité au lien BLE
+  sur ESP32), à valider en réunion et conditionnée au Spike A. Convergence
+  acquise sur : X25519 + AEAD moderne + Ed25519, jamais de crypto maison.
 
 ### A-4. Carte ESP32 : WROVER ou WROOM ?
 
@@ -166,7 +232,20 @@ résolution.
   pragmatique : **prototyper sur les WROOM Freenove existantes** avec les
   quotas réduits de `powl` (`ENVELOPE_STORE_MAX = 64`), acheter 1–2 WROVER
   seulement si les tests de charge montrent une saturation.
-- **Statut** : `ouvert`. `powl` retient WROVER ; le matériel réel est WROOM.
+- **Orientation proposée** (2026-09-08, à valider en réunion) : **ESP32-WROOM-32E
+  (cartes Freenove déjà en possession)**. Motifs : zéro achat, zéro délai ; le
+  périmètre démo réel (2 téléphones + 1-2 relais, ~5-8 appareils, file ~50
+  messages sur ESP32) tient dans les 520 Ko de SRAM avec les quotas réduits de
+  `powl` (`ENVELOPE_STORE_MAX = 64`, caches divisés par ~8) ; `powl/01 §4.3`
+  qualifie lui-même la WROOM d'« acceptable » pour un prototype. Conséquences à
+  acter dans la spec : buffers dimensionnés pour la SRAM (pas de PSRAM), éviction
+  LRU stricte, coexistence BLE + Wi-Fi en temps partagé (le relais bascule Wi-Fi
+  pour flush MQTT puis revient en BLE). Réévaluer une WROVER seulement si un test
+  de charge terrain montre une saturation mémoire ou un débit BLE+Wi-Fi
+  insuffisant.
+- **Statut** : `à confirmer`. `powl` retient WROVER ; le matériel réel est WROOM.
+  L'orientation proposée retient **WROOM** (matériel existant + quotas réduits
+  `powl`), à valider en réunion.
 
 ### A-5. Stack du dashboard
 
@@ -198,8 +277,39 @@ résolution.
   choix `powl` n'a de sens que si le cœur Rust (A-2) est retenu. Repli
   raisonnable pour la démo : `olivier` (FastAPI/Express + SSE + SQLite) ou une
   maquette (`dashboard.md §10`).
-- **Statut** : `ouvert`. Trois positions distinctes ; `powl` a figé la stack
-  Rust/Timescale ; `olivier` et `oswin` visent plus simple.
+- **Orientation proposée** (2026-09-08, à valider en réunion) : **option 2
+  (`olivier`) — petit backend + SSE + SQLite + page web légère**, malgré le choix
+  du cœur Rust (A-2). Raisonnement au vu des choix précédents :
+  - le cœur Rust rend l'option `powl` *possible* (réutilisation de
+    `ledger::verify_chain` et des structs d'événements `serde`), mais ne la rend
+    pas *raisonnable* : Axum + PostgreSQL/TimescaleDB + Mosquitto + Caddy + React
+    en Docker Compose = beaucoup d'infra pour une équipe débutante sur ~3 semaines,
+    alors que le dashboard est un **bonus explicitement non bloquant**
+    (`CONTEXT.md`) pour une démo de 5-8 appareils dont les données sont effacées
+    après chaque session (`olivier/dashboard`) ;
+  - SQLite suffit largement à ce volume ; SSE suffit au temps réel ; le langage
+    du backend = **au choix de la personne qui prend le dashboard** (Olivier) —
+    Python/FastAPI ou Node/Fastify ;
+  - **point de vigilance** hérité d'A-7 : si le journal chaîné signé est retenu,
+    la vérification (marche de hash-chain + `Ed25519 verify`) doit exister côté
+    serveur. Deux façons de ne pas la réimplémenter à l'identique : (a) ~100
+    lignes dans le langage du backend avec une lib Ed25519 standard, ou (b)
+    **déléguer à un petit binaire Rust `dengon-verify`** issu du workspace (mêmes
+    règles que le cœur), appelé en sous-processus par le backend. Option (b)
+    préférée : une seule source de vérité pour la vérif, sans backend Rust
+    complet ;
+  - conséquence sur **A-6** : cette orientation tire vers **HTTPS POST par batch**
+    (pas de broker Mosquitto à opérer) ; l'ESP32 poste quand il a du Wi-Fi.
+  - **ThingsBoard / Node-RED écartés** (déjà argumenté : inadaptés à la vérif de
+    journal chaîné et à la reconstruction de parcours par événements partiels).
+
+  Bascule vers l'option `powl` (Axum + Timescale) **seulement si** la personne
+  dashboard est déjà à l'aise en Rust côté serveur et veut l'exercice.
+- **Statut** : `tranché` (Paul, 2026-09-08, à ratifier en réunion) → **option 2
+  (`olivier`)** : **backend FastAPI (Python)** + SSE + SQLite + page web légère ;
+  vérif du journal chaîné déléguée à un binaire Rust `dengon-verify` issu du
+  workspace. ThingsBoard/Node-RED et la stack Axum/Timescale de `powl` sont
+  écartés pour le MVP. Détail (framework de page) : voir C-8.
 
 ### A-6. Transport des logs nœud → dashboard
 
@@ -218,7 +328,10 @@ résolution.
 - **Piste de résolution** : aligné dès qu'A-5 est tranché. MQTT si stack `powl` ;
   HTTPS POST possible si stack `olivier`. Les deux conceptions gardent HTTPS
   batch comme canal des **clients opt-in**.
-- **Statut** : `à confirmer` (dépend d'A-5).
+- **Statut** : `tranché` (conséquence d'A-5, 2026-09-08, à ratifier en réunion) →
+  **HTTPS POST par batch** (signé), pas de broker MQTT à opérer. L'ESP32 et les
+  clients opt-in postent leurs événements par lots quand ils ont du Wi-Fi ;
+  buffer local (ring littlefs sur ESP32) + flush FIFO à la reconnexion.
 
 ### A-7. Anti-triche du suivi (intégrité des journaux)
 
@@ -246,8 +359,16 @@ résolution.
   `powl` et un argument de soutenance (le « blockchain-like » défendable).
   À conserver si le cœur Rust est retenu (le `ledger` y vit). Sinon, repli sur
   le jeton partagé + une chaîne de hash minimale côté relais.
-- **Statut** : `à confirmer`. `powl` a tranché le journal chaîné signé ;
-  `olivier` laisse l'authentification « (ouvert) ».
+- **Statut** : `tranché` par transitivité (2026-09-08, à ratifier en réunion) →
+  **option 1 — journal chaîné signé + `LOG_ATTEST` + recoupement multi-relais**.
+  Découle de : **A-2** (cœur Rust retenu → `ledger` y vit) ; **A-3** repli
+  (`sha2` + `ed25519-dalek` cross-compilent en `no_std` pour xtensa = exactement
+  ce dont `ledger` a besoin, le « contre ESP32 » est levé) ; **A-5** (binaire
+  Rust `dengon-verify` fait la vérif de chaîne côté serveur) ; **A-15** (déjà
+  `tranché` : journal chaîné signé, pas de consensus). Le « jeton partagé » de
+  l'option 2 n'est pas abandonné : il sert d'**auth de transport** (qui a le
+  droit de POST des événements) — voir B-2 / C-5, distinct de l'intégrité du
+  journal.
 
 ### A-8. Identifiant de nœud
 
@@ -269,7 +390,9 @@ résolution.
 - **Piste de résolution** : à figer dans la spec de trame unifiée (voir A-12).
   Recommandation implicite : suivre `powl` (8 o) pour la compacité BLE, sauf
   argument de sécurité contraire dans la doc sécurité.
-- **Statut** : `ouvert` (dépend d'A-12).
+- **Statut** : `tranché` par transitivité (via A-12 → `powl/03` fait foi) →
+  **`peerID` = `SHA-256(pub_static)[0..8]`, 8 octets**. La doc sécurité peut
+  encore justifier 128 bits, mais la charge de la preuve incombe à cet argument.
 
 ### A-9. Identifiant de message
 
@@ -294,7 +417,10 @@ résolution.
   doc sécurité. Le double identifiant de `powl` répond à un vrai besoin (re-
   scellage d'enveloppe) qui n'existe que si les enveloppes scellées Noise X sont
   retenues (A-3).
-- **Statut** : `ouvert` (dépend d'A-3 et A-12).
+- **Statut** : `tranché` par transitivité (via A-3 → enveloppes Noise `X`
+  retenues, et A-12 → `powl/03` fait foi) → **`msgID` 32 o (hash contenu) +
+  `msg_uuid` 16 o (UUIDv4 stable de bout en bout)**. Le re-scellage d'enveloppe
+  (qui change le `msgID` L3) rend le second identifiant nécessaire.
 
 ### A-10. Statut « Lu » dans le périmètre v1 ?
 
@@ -315,7 +441,14 @@ résolution.
 - **Piste de résolution** : décision d'équipe au regard du délai (soutenance
   29/09/2026). Le format `olivier/format-trame §5` **réserve déjà** `statut = 4`
   (LU) pour la v2 → compatible avec les deux options.
-- **Statut** : `à confirmer`. `powl` inclut « lu » ; `olivier` le reporte.
+- **Statut** : `tranché` (Paul, 2026-09-08, à ratifier en réunion) → **option
+  `olivier` : « Lu » reporté en v2**. La v1 s'arrête à *En attente → Parti →
+  Distribué*. Le type de paquet `READ` / `ReadRcpt` et le statut `4 = LU` restent
+  **réservés** dans `powl/03` et `olivier/format-trame` (pas d'émission ni de
+  traitement en v1) → aucune rupture de format à prévoir pour l'ajouter plus
+  tard. Conséquence : `powl/05` (machine à états) est amputé de l'état `READ`
+  pour le MVP ; à refléter dans `00-contexte-global.md` §9 lors de la
+  ratification.
 
 ### A-11. iOS
 
@@ -340,8 +473,14 @@ résolution.
   on fait ou non une preuve de faisabilité iOS anticipée (`olivier` la
   recommande). L'architecture `powl` (cœur Rust) est celle qui préserve le mieux
   l'option iOS future.
-- **Statut** : `tranché` sur « hors v1 » (`decisions-v1 §2`, `powl/00 §5`) ;
-  `ouvert` sur la preuve de faisabilité anticipée.
+- **Statut** : `tranché` (Paul, 2026-09-08, à ratifier en réunion) → **iOS
+  reporté en v2, sans preuve de faisabilité anticipée**. Le MVP est Android +
+  ESP32 uniquement (`decisions-v1 §2`, `powl/00 §5`). L'ouverture iOS reste
+  garantie par l'architecture : cœur Rust `dengon-core` + `trait Transport` +
+  bindings Swift via UniFFI (A-1, A-2) → un futur shell SwiftUI + transport
+  CoreBluetooth suffira, sans retoucher le cœur. La contrainte système iOS
+  (*overflow area* en arrière-plan, `etude-stack §1.4`) est documentée comme
+  risque connu à lever en v2, pas maintenant.
 
 ### A-12. Format binaire de trame : deux specs à unifier
 
@@ -383,7 +522,15 @@ résolution.
   « chantier fondateur à figer en premier » (`oswin/08 §3`). Le choix dépend
   d'A-2 (un cœur → `powl/03` naturellement) et d'A-3 (Noise → `powl/03` ;
   `crypto_box` → `olivier`).
-- **Statut** : `ouvert`. Deux specs « fait foi » concurrentes.
+- **Statut** : `tranché` par transitivité (2026-09-08, à ratifier en réunion) →
+  **`powl/03` fait foi comme spec de trame unique** (découle d'A-2 : un cœur Rust
+  → `powl/03` ; et d'A-3 : Noise retenu → `powl/03`). `olivier/format-trame.md`
+  n'est plus une spec concurrente : il reste utile comme support pédagogique et
+  source de vecteurs de test. **Sous-ensemble MVP à définir dans la doc** : les
+  types `ANNOUNCE`, `NOISE_HS`, `NOISE_MSG`, `SEALED_ENVELOPE`, `ACK`, `FRAGMENT`,
+  `LOG_ATTEST`, `ENVELOPE_OFFER/REQUEST` sont le cœur ; les `GOSSIP_*` peuvent
+  être remplacés au MVP par l'échange d'inventaire d'`olivier` (voir A-13) sans
+  changer le format des autres paquets.
 
 ### A-13. Détails de routage : ajouts `powl` vs ajouts `olivier`
 
@@ -413,7 +560,23 @@ résolution.
   mais plus complexe à coder ; l'échange d'inventaire est un bon repli MVP.
   L'anti-inondation `olivier` (~20 msg/min/voisin) et les quotas `powl` sont
   complémentaires et peuvent coexister.
-- **Statut** : `ouvert` (dépend d'A-12).
+- **Statut** : `tranché` par transitivité (via A-12 → `powl/03 §7` fait foi,
+  2026-09-08, à ratifier en réunion). Découpage explicite point par point :
+
+  | Mécanisme | Décision | MVP / cible |
+  | --- | --- | --- |
+  | Socle : flood + TTL 7 + seen-set + jitter + « pas vers la source » + arrêts (TTL, déjà-vu, expiration, ACK vu) | **retenu** (jamais divergent) | MVP |
+  | Clamp de densité (`ttl' = min(ttl-1, 5)` si ≥ 6 voisins) | **retenu** (`powl`) — coût quasi nul | MVP |
+  | Fenêtre `timestamp_ms` ±2 h | **retenu** (`powl`) — attendu anti-rejeu | MVP |
+  | Quotas paquets/s par `peerID` et par lien | **retenu** (`powl`) — attendu anti-DoS | MVP |
+  | RSSI-gating | **retenu** (`powl`) mais **optionnel au MVP** (calibrage terrain) | cible |
+  | Anti-inondation ~20 nouveaux `id_message`/min/voisin | **retenu** (`olivier`) — complémentaire des quotas | MVP |
+  | Réconciliation voisin↔voisin | **échange d'inventaire brut d'`id_message`** (`olivier`) au MVP ; **GCS `GOSSIP_*`** (`powl`, `p = 1/64`) en optimisation | MVP = inventaire, cible = GCS |
+  | Budget de copies / Spray-and-Wait pour enveloppes scellées | **retenu** (`powl`) — c'est le cœur du store-carry-forward (A-3) ; repli MVP possible : flood d'enveloppes borné par `MSG_TTL_S` + dédup si l'implé Spray-and-Wait déborde | cible (repli MVP acceptable) |
+  | Réassemblage **avant** relais | **retenu** (`olivier`) — messages < 1 Ko = 2-3 fragments, permet vérif de signature + dédup sur le paquet entier ; le relais fragment-par-fragment de `powl` reste une évolution pour gros payloads | MVP |
+
+  Le GCS et le budget de copies sont les deux seuls points « cible » : ils
+  s'ajoutent plus tard **sans changer le format des autres paquets** (A-12).
 
 ### A-14. Structure du dépôt
 
@@ -434,7 +597,13 @@ résolution.
   n'existent.
 - **Piste de résolution** : découle d'A-2. À figer lors de la mise en commun
   (fin phase conception, ~fin semaine 1 selon `olivier`).
-- **Statut** : `ouvert` (dépend d'A-2).
+- **Statut** : `tranché` par transitivité (via A-2 → cœur Rust unique) →
+  **découpage `crates/` de `powl/02`** : `crates/{dengon-core, dengon-ble,
+  dengon-node, dengon-sim, dengon-ffi}` + `crates/dengon-verify` (binaire de
+  vérif de journal appelé par le dashboard, cf. A-5), `android/`,
+  `firmware/dengon-relay/`, workspace Rust. **Ajustement** : `dashboard/` contient
+  l'app Python/Node d'`olivier` (A-5), pas un crate Rust `dashboard/api`. Les
+  brouillons perso restent sous `docs/{powl,oswin,olivier}/`.
 
 ### A-15. « Blockchain » : quelle interprétation retenir ?
 
@@ -464,8 +633,15 @@ résolution.
   (le `docs/suivi/06-support-oral.md` prévoit déjà « ce qu'on a gardé et
   rejeté »). Si un enseignant exige littéralement « une blockchain », basculer
   sur le vocabulaire du repli `oswin/04 §6` sans changer le code.
-- **Statut** : `tranché` sur le principe (journal chaîné signé, pas de
-  consensus). `ouvert` : formulation exacte dans le rapport / la soutenance.
+- **Statut** : `tranché` (Paul, 2026-09-08, à ratifier en réunion) → **option 1 :
+  journal chaîné signé par appareil, agrégé et audité par le dashboard, sans
+  consensus** (arbre de Merkle optionnel pour les accusés groupés / l'intégrité
+  des fragments). Cohérent avec A-7 (même mécanisme) et A-2 (le `ledger` vit dans
+  `dengon-core`). Reste `ouvert` uniquement : la **formulation** dans le rapport
+  et la soutenance (assumer « ce n'est pas une blockchain au sens strict, et
+  voici pourquoi le consensus serait nuisible ici ») ; repli lexical `oswin/04
+  §6` si un enseignant exige littéralement le mot « blockchain », **sans changer
+  le code**.
 
 ---
 
@@ -481,7 +657,12 @@ résolution.
   (déjà présent) ou libsodium (port ESP-IDF)**.
 - **Piste de résolution** : **Spike A** obligatoire au Lot 0. Livrable : rapport
   de décision.
-- **Statut** : `ouvert` — « décision finale au spike ».
+- **Statut** : `tranché` sur l'approche (= A-3, 2026-09-08, à ratifier en
+  réunion) → **tout en Rust si le Spike A le permet ; sinon `trait Crypto` +
+  mbedTLS côté firmware, limité au handshake Noise `XX` de lien BLE**, `sha2` +
+  `ed25519-dalek` restant en Rust partout. Le seul point qui dépend encore du
+  **Spike A** est le curseur exact Rust/C (complet vs partiel), pas la stratégie.
+  Voir A-3.
 
 ### B-2. Authentification des relais auprès du VPS : mTLS ou JWT signé ?
 
@@ -491,7 +672,13 @@ résolution.
 - **Piste de résolution** : décision d'implémentation lors du Lot 5 (firmware) /
   Lot 6 (dashboard). mTLS demande une CA MQTT + génération de certs
   (`deploy/mosquitto/gen-certs.sh`).
-- **Statut** : `ouvert` (mTLS privilégié).
+- **Statut** : `tranché` par transitivité (via A-5 + A-6 → HTTPS POST, plus de
+  broker MQTT ; 2026-09-08, à ratifier en réunion) → **jeton/JWT court par nœud
+  (liste blanche côté serveur) + signature Ed25519 des batchs d'événements** sur
+  l'endpoint HTTPS. mTLS abandonné (sa justification était les certs client
+  MQTT). Le jeton authentifie le transport (qui a le droit de POST) ;
+  l'intégrité du contenu vient du journal chaîné (A-7). Format exact du jeton =
+  détail d'implémentation au Lot 5/6. Recoupe C-5.
 
 ### B-3. Chiffrement de la base locale : SQLCipher ou champ-par-champ XChaCha20 ?
 
@@ -501,7 +688,17 @@ résolution.
   plus fin, pas de dépendance native supplémentaire.
 - **Piste de résolution** : décision d'implémentation au Lot 2 (`store`). Test
   `store` : « chiffrement au repos actif ».
-- **Statut** : `ouvert`.
+- **Statut** : `tranché` par transitivité (2026-09-08, à ratifier en réunion) →
+  **XChaCha20-Poly1305 champ par champ** sur les colonnes sensibles (contenu des
+  messages ; clés privées de préférence dans Keystore/Keychain). Raisons héritées
+  des choix précédents : le crate `chacha20poly1305` est **déjà** dans l'arbre de
+  dépendances (A-3) et fournit `XChaCha20Poly1305` ; **pas de dépendance native
+  en plus** dans le build (A-2 gère déjà UniFFI + cross-compile xtensa +
+  `cbindgen`, SQLCipher ajouterait une lib C à cross-compiler pour chaque ABI
+  Android) ; **même primitive réutilisable pour la NVS de l'ESP32** (A-4). Les
+  métadonnées locales (horodatage, `peerID`, statut) restent en clair dans la
+  base — le modèle de menace local est le vol d'appareil, ciblé sur le contenu
+  et les clés.
 
 ### B-4. Rétention des événements du dashboard
 
@@ -513,7 +710,13 @@ résolution.
   choix produit distinct pour la v1 minimale).
 - **Piste de résolution** : paramètre de config ; valeur par défaut à fixer au
   Lot 6.
-- **Statut** : `ouvert` (défaut 90 j).
+- **Statut** : `tranché` par transitivité (via A-5 → stack `olivier` / SQLite,
+  2026-09-08, à ratifier en réunion) → **base du dashboard effacée après chaque
+  session de démo** (`olivier/dashboard`) ; script de purge simple, pas de
+  politique de rétention automatique. La rétention Timescale 90 j de `powl/09`
+  n'a plus d'objet (plus de TimescaleDB). Une rétention glissante configurable
+  est renvoyée en post-MVP. Cohérent avec la confidentialité stricte visée
+  (métadonnées sensibles : qui/quand/où).
 
 ### B-5. Backend du dashboard : Rust/Axum ou Node/Fastify ?
 
@@ -524,7 +727,10 @@ résolution.
   chaîne / parsing).
 - **Piste de résolution** : décision d'équipe selon l'aisance en Rust côté
   serveur ; recoupe A-5.
-- **Statut** : `ouvert` (Axum privilégié).
+- **Statut** : `tranché` par transitivité (via A-5) → **pas de backend Rust
+  complet**. Backend Python/FastAPI ou Node/Fastify (au choix de qui prend le
+  dashboard) ; la seule brique Rust est le binaire `dengon-verify` appelé en
+  sous-processus pour la vérif de journal. Détail du langage = C-8.
 
 ---
 
@@ -551,7 +757,26 @@ résolution.
   `MSG_TTL_S = 86_400`, `SEEN_SET_CAP = 1024`, `SEEN_TTL_S = 300`).
 - **Piste de résolution** : tests terrain (checklist de recette `powl/11 §6`,
   scénario densité 8-10 appareils) ; consigner les vraies valeurs dans la spec.
-- **Statut** : `ouvert` (valeurs de départ posées).
+- **Statut** : `tranché` par transitivité (2026-09-08, à ratifier en réunion).
+  Toutes les valeurs de la spec sont **fixées** par les choix déjà faits ; il ne
+  reste que du réglage fin sans enjeu de conception :
+
+  | Paramètre | Valeur figée | Source |
+  | --- | --- | --- |
+  | Jitter « écouter avant de rediffuser » | `10..=220 ms` (`RELAY_JITTER_MS`) | `powl/03 §2` (A-12) |
+  | Timeout de réassemblage | `30 s` (`FRAG_TIMEOUT_S`) | `powl/03 §2` (A-12) |
+  | Fenêtre anti-inondation | `20` nouveaux `id_message` / min / voisin | A-13 (retenu MVP) |
+  | Seen-set | `SEEN_SET_CAP = 1024`, `SEEN_TTL_S = 300` | `powl/03 §2` (A-12) |
+  | Taille de fragment L2 | `FRAG_SIZE = 440` | `powl/03 §2` (A-12) |
+  | Caps de file (ESP32) | réduits WROOM : `ENVELOPE_STORE_MAX = 64` etc. | A-4 |
+  | Expiration message | `MSG_TTL_S = 86 400` (24 h) | `powl/03 §2`, aligné |
+  | TTL initial | `7` | `powl/03 §2`, aligné |
+
+  **Seuls vrais inconnus, non bloquants** : (1) la charge utile réelle par
+  écriture BLE = f(MTU négocié) — **mesurée au Spike C** sur les appareils de
+  l'équipe ; (2) ajustement éventuel du jitter / des quotas si les tests de
+  densité (`powl/11 §6`) montrent des collisions — la valeur de spec est livrée
+  telle quelle en attendant.
 
 ### C-2. Service et caractéristiques BLE exacts (UUID)
 
@@ -566,7 +791,10 @@ résolution.
   (notify). `oswin` propose une 3ᵉ caractéristique dédiée `ACK`.
 - **Piste de résolution** : adopter les UUID `powl/03 §2` dans la spec unifiée
   (A-12) sauf raison contraire.
-- **Statut** : `ouvert` côté `olivier` ; `tranché` côté `powl`.
+- **Statut** : `tranché` par transitivité (via A-12 → `powl/03` fait foi) →
+  `SERVICE_UUID = 6d656e67-2d64-656e-676f-6e2d76310000`, `CHAR_RX` (…0001,
+  write-w/o-response), `CHAR_TX` (…0002, notify). Pas de 3ᵉ caractéristique `ACK`
+  dédiée (l'ACK est un type de paquet, pas une caractéristique).
 
 ### C-3. Format de l'échange d'inventaire (listing compact des identifiants)
 
@@ -577,7 +805,11 @@ résolution.
   Golomb-Coded Set, ~20–30 % plus compact qu'un Bloom).
 - **Piste de résolution** : v1 = listing brut (simple) ou GCS si le cœur Rust
   fournit déjà l'implé ; Bloom / GCS comme optimisation sinon. Recoupe A-13.
-- **Statut** : `ouvert`.
+- **Statut** : `tranché` — **doublon d'A-13** (lui-même tranché). **MVP = listing
+  brut d'`id_message`** (simple, débogable) ; **GCS `GOSSIP_*`** (`powl`,
+  `p = 1/64`) comme optimisation ajoutée sans changer le format des autres
+  paquets. Pas de filtre de Bloom (le GCS le remplace, ~20-30 % plus compact).
+  Voir A-13.
 
 ### C-4. Compteur « nombre d'appareils actifs » du dashboard
 
@@ -594,7 +826,16 @@ résolution.
   la confidentialité).
 - **Piste de résolution** : décision produit. Si on garde le code-par-message
   (`olivier`), choisir (a) ou (b).
-- **Statut** : `ouvert`.
+- **Statut** : `tranché` par transitivité (via A-7 + A-12/`powl/08`,
+  2026-09-08, à ratifier en réunion). A-7 (journal chaîné signé **par appareil**)
+  impose une **identité de nœud stable** dans les événements `LOG_ATTEST` — on ne
+  peut pas vérifier une hash-chain par nœud si l'identité tourne. Donc le modèle
+  d'événements est celui de `powl/08` : `node_id` = empreinte pseudonyme stable
+  (un hash, non rattachable à une personne). **Le compteur d'appareils actifs se
+  dérive naturellement** des événements `peer.*` / `relay.health` (`powl/07`) —
+  ni battement séparé ni suppression du compteur. La confidentialité est assurée
+  autrement : `node_id` haché, base effacée par session (B-4), aucune rétention
+  de métadonnées.
 
 ### C-5. Authentification des nœuds auprès de l'API du dashboard
 
@@ -603,7 +844,9 @@ résolution.
 - **Sujet** : « jeton partagé entre les nœuds et le serveur ? » — but : empêcher
   un tiers d'injecter de faux événements. Recoupe **A-7** et **B-2** (`powl` :
   mTLS ou JWT + liste blanche + signature Ed25519 des batchs).
-- **Statut** : `ouvert` côté `olivier` ; `powl` a une réponse plus complète.
+- **Statut** : `tranché` — **doublon de B-2** (lui-même tranché) → jeton/JWT
+  court par nœud (liste blanche côté serveur) + signature Ed25519 des batchs sur
+  l'endpoint HTTPS. Voir B-2.
 
 ### C-6. Somme de contrôle par fragment, ou repos sur le CRC BLE ?
 
@@ -612,7 +855,10 @@ résolution.
   suffit-il ? `powl` ne met pas de checksum par fragment (la signature est dans
   le paquet reconstruit).
 - **Piste de résolution** : doc sécurité / spec de trame unifiée.
-- **Statut** : `ouvert`.
+- **Statut** : `tranché` par transitivité (via A-12 → `powl/03` fait foi) →
+  **pas de checksum par fragment**. On s'appuie sur le CRC BLE de la couche
+  liaison + la signature du paquet reconstruit ; un fragment corrompu fait
+  échouer la vérif de signature, le message est redemandé.
 
 ### C-7. Compteur anti-rejeu explicite par expéditeur ?
 
@@ -623,7 +869,10 @@ résolution.
   par conversation) + `msgID` + seen-set + fenêtre timestamp ±2 h.
 - **Piste de résolution** : doc sécurité. Le `conv_seq` de `powl/03 §4.1` répond
   au besoin.
-- **Statut** : `ouvert` côté `olivier`.
+- **Statut** : `tranché` par transitivité (via A-12 → `powl/03` fait foi) →
+  **`conv_seq`** (compteur par conversation, dans l'`AppFrame` chiffré), combiné
+  au `msgID`, au seen-set et à la fenêtre timestamp ±2 h. Pas de compteur global
+  par expéditeur en clair dans l'en-tête.
 
 ### C-8. Techno serveur / page du dashboard
 
@@ -631,7 +880,11 @@ résolution.
   `olivier/architecture §8`.
 - **Sujet** : « décision d'Olivier » — pistes : FastAPI ou Express + SSE +
   SQLite ; page légère (vanilla ou petit framework). Recoupe **A-5**.
-- **Statut** : `ouvert`.
+- **Statut** : `tranché` (Paul, 2026-09-08, à ratifier en réunion) → **backend
+  FastAPI (Python)** + SSE + SQLite ; vérif de journal via le binaire Rust
+  `dengon-verify` appelé en sous-processus. ThingsBoard/Node-RED et Axum/Timescale
+  écartés (A-5). Framework de la page web laissé libre à qui prend le dashboard
+  (vanilla ou petit framework), sans enjeu de conception.
 
 ### C-9. Réduction du périmètre de la démo ; ESP32 = PoC seulement ?
 
@@ -647,7 +900,14 @@ résolution.
   l'ambition `powl` et le pragmatisme `olivier` au regard du délai
   (soutenance 29/09/2026). Ordre de repli `olivier` : (1) hors-ligne + relais,
   (2) sécurité, (3) dashboard.
-- **Statut** : `ouvert` — arbitrage d'équipe majeur.
+- **Statut** : `tranché` (Paul, 2026-09-08, à ratifier en réunion) → **le relais
+  ESP32 fait partie du MVP** (livrable complet, pas une simple preuve de concept).
+  Le MVP cible reste celui de `powl/10` : 2 Android + relais ESP32 (WROOM, A-4) +
+  dashboard FastAPI (A-5) + détection d'altération (A-7). Les allègements déjà
+  actés (« Lu » v2 en A-10, iOS v2 en A-11, dashboard léger en A-5, caps mémoire
+  réduits en A-4) restent la marge de manœuvre ; l'ordre de repli d'`olivier`
+  — (1) hors-ligne + relais, (2) sécurité, (3) dashboard — s'applique **si** le
+  délai dérape, mais le relais ESP32 n'est pas dans ce qu'on sacrifie en premier.
 
 ### C-10. Réutiliser du code Meshtastic / Bridgefy, ou seulement leurs idées ?
 
@@ -660,7 +920,12 @@ résolution.
 - **Piste de résolution** : vérifier les licences (Bitchat, Meshtastic,
   Bridgefy SDK) ; décision d'équipe. `powl` part d'une implémentation propre en
   Rust inspirée des idées.
-- **Statut** : `ouvert`.
+- **Statut** : `tranché` par transitivité (via A-2 → cœur Rust propre) →
+  **on s'inspire des idées** (managed flood routing de Meshtastic, TTL, cache et
+  format de paquet de Bitchat), **on ne reprend pas de code** (langages
+  différents : Bitchat = Swift, Meshtastic = C++). Vérifier les licences reste
+  une tâche si on cite/adapte un extrait précis dans le rapport, pas une décision
+  ouverte.
 
 ### C-11. Doc sécurité (`securite.md`) non encore rédigée
 
@@ -674,7 +939,11 @@ résolution.
 - **Piste de résolution** : à écrire (Paul ou Tanguy selon
   `mise-en-commun §5`) — ou considérer `powl/04-security.md` comme la doc
   sécurité de référence et ne rédiger qu'un delta.
-- **Statut** : `ouvert` (bloquant pour la crypto côté `olivier`).
+- **Statut** : `tranché` sur l'approche (via A-3) → **`powl/04-security.md` est la
+  doc sécurité de référence**. Ne reste qu'un **delta à rédiger** (tâche, pas
+  décision) : résultat du Spike A, formules `conv_seq` / `recipient_tag` figées
+  (D-2), incohérences D-1/D-4/D-5 réconciliées, mapping des colonnes chiffrées
+  (B-3). Plus une rédaction from scratch.
 
 ### C-12. Méthode d'échange de clés initiale
 
@@ -690,7 +959,13 @@ résolution.
   60 chiffres = safety number Signal ; `olivier` : « code court ») et si TOFU est
   autorisé (`powl` oui, `olivier` implicitement non pour la v1 « en présentiel
   uniquement »).
-- **Statut** : `à confirmer` (convergence de principe, détails à figer).
+- **Statut** : `tranché` par transitivité (via C-11 → `powl/04` est la doc
+  sécurité de référence ; A-3 → crypto `powl` retenue) → **QR scanné en
+  présentiel + code de vérification 60 chiffres (safety number, style Signal) +
+  TOFU** (confiance à la première clé vue, alerte visible si la clé change).
+  « En présentiel » et « QR » sont compatibles avec la position d'`olivier` ; le
+  code court d'`olivier` était lié à une crypto non retenue. Longueur ajustable
+  plus tard, mais 60 chiffres est la valeur par défaut figée.
 
 ---
 
@@ -698,7 +973,9 @@ résolution.
 
 Ces points sont des **incohérences de rédaction** entre documents `powl`, pas des
 choix de conception. À corriger dans les docs `powl` lors d'une passe de
-cohérence.
+cohérence. **A-12 rend `powl/03` (et `powl/04`/`09` pour la crypto et les
+schémas) spec de référence** → ces réconciliations deviennent obligatoires, pas
+optionnelles, et alimentent le delta de doc sécurité (C-11).
 
 ### D-1. Entrée du code de vérification : clés brutes ou empreintes ?
 
@@ -728,7 +1005,9 @@ cohérence.
   `powl/03 §3.2` (autoritatif : `SHA-256( sender_id ‖ timestamp_ms ‖ type ‖
   payload )`).
 - **Recommandation** : `03 §3.2` fait foi (inclut `type`).
-- **Statut** : `à réconcilier` (mineur).
+- **Statut** : `tranché` par transitivité (via A-12 → `powl/03` fait foi) →
+  `msgID = SHA-256( sender_id ‖ timestamp_ms ‖ type ‖ payload )`. Reste à
+  corriger la formulation informelle de `01 §1.2`.
 
 ### D-4. Enum `EVENTS.integrity`
 
@@ -760,7 +1039,7 @@ formellement validés ensemble.
 | --- | --- | --- | --- |
 | Scénario d'usage à privilégier | **Campus / bâtiment** (zone moyenne, téléphones + quelques relais fixes) | `powl/00 §1` : mêmes cas d'usage génériques (zone blanche, manif, festival). Le scénario campus est un bon terrain de test. | à valider |
 | Durée de conservation d'un message non délivré | **≈ 24 h** | `powl` : `MSG_TTL_S = 86 400` (24 h). **Aligné.** | à valider (aligné) |
-| Techno de l'app mobile | **Multiplateforme (Flutter ou React Native)** | `powl` : Kotlin natif. Voir **A-1**. | ouvert (voir A-1) |
+| Techno de l'app mobile | **Multiplateforme (Flutter ou React Native)** | `powl` + orientation proposée (**A-1**) : Kotlin natif + cœur Rust partagé, Flutter/RN écartés (le multiplateforme ne mutualise pas la couche BLE). | à confirmer (voir A-1) |
 | Hébergement du dashboard | **VPS Debian de l'équipe** | `powl` : VPS (déjà possédé), Docker Compose. **Aligné.** | à valider (aligné) |
 | Répartition du travail | **Par composant** (un mobile, un ESP32, un dashboard), conception commune | `oswin/08 §6` : mêmes rôles. **Aligné.** | à valider |
 | Taille de la démo finale | **5-8 appareils** | `powl/11 §6` : scénario densité 8-10 appareils. Cohérent. | à valider |
@@ -777,7 +1056,7 @@ formellement validés ensemble.
 | Message expiré (~24 h sans livraison) | Statut **« Échec »** dans la conversation, sans notification | `powl/05 §1` : `EXPIRED` (« Échec »), UI « non remis » + bouton renvoyer. **Aligné.** | à valider (aligné) |
 | Relance d'un message non parti | **Bouton « Renvoyer »** déclenché par l'utilisateur | `powl/05 §7` : « UI non remis + bouton renvoyer ». **Aligné.** | à valider (aligné) |
 | Blocage d'un contact indésirable | **Reporté** après la v1 | `powl/09 §1` : colonne `contacts.blocked` prévue (schéma prêt, UI reportée). | à valider |
-| Dashboard : rafraîchissement | **Mise à jour automatique** (statuts en direct) | `powl/07` : WebSocket temps réel ; `olivier/dashboard` : SSE. Principe **aligné**, techno = A-5/C-8. | à valider (aligné) |
-| Simulateur de réseau | **Léger** : quelques scripts de test, pas un vrai simulateur | `powl` : `dengon-sim` (vrai simulateur multi-nœuds, scénarios `.ron`). **Divergence d'ambition.** | ouvert |
+| Dashboard : rafraîchissement | **Mise à jour automatique** (statuts en direct) | Tranché via A-5 → **SSE** (pas de WebSocket). Principe aligné. | à valider (aligné) |
+| Simulateur de réseau | **Léger** : quelques scripts de test, pas un vrai simulateur | A-2 (cœur Rust) rend `dengon-sim` peu coûteux : il pilote le même `dengon-core` sans radio → tests rejouables des scénarios routage/dédup/partition. Recommandé plutôt que des scripts jetables. | à confirmer (lean `dengon-sim`) |
 | Livrables | Spec protocole, doc sécurité, doc architecture, **+ rapport écrit + support de présentation** | `docs/suivi/06-support-oral.md` prévoit déjà le support de soutenance. | à valider |
 | Rythme de mise en commun | **Fusion après la phase de conception (~fin semaine 1)**, puis travail commun ; points 2-3×/semaine | `docs/suivi/` existe déjà comme dépôt commun de suivi. | à valider |
