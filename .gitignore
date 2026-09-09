@@ -183,8 +183,15 @@ go.work.sum
 
 # ===== Rust =====
 /target/
-Cargo.lock
 **/*.rs.bk
+
+# Cargo.lock EST versionné (US-104) : le workspace produit trois binaires
+# (dengon-node, dengon-sim, dengon-verify), les jobs CI `audit` (cargo audit,
+# cargo deny) et `cross-vectors` exigent des builds reproductibles, et la CI
+# lance cargo avec --locked. Ne pas réintroduire de ligne « Cargo.lock » ici.
+
+# Rapport de couverture produit par cargo llvm-cov.
+lcov.info
 
 # ===== PHP =====
 /vendor/
