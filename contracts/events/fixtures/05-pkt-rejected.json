@@ -1,0 +1,20 @@
+{
+  "batch_id": "c67cfa58e5ae630eab7868e15f1503213b981d56d7ff8aa460d3baf53f3bd447",
+  "node_id": "relay-3f2a9c",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "6d950a761328832adb93245adb96a110da1156fdcb51d8b0ca369d82087036ae",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1006,
+      "ts_ms": 1725800000060,
+      "name": "pkt.rejected",
+      "payload": {
+        "from_peer": "0f1e2d3c4b5a6978",
+        "reason": "bad_sig"
+      }
+    }
+  ],
+  "sig": "sp7yjAFFTZpRFq8zADvLlGp2Ir/S4BqGec3Q8LYx7eB1iqUUV13sNnEFxZ1Izin8I+Hu/yCg0xQWPWcqqvA4CQ=="
+}

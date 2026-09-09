@@ -1,0 +1,1086 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dengon.local/contracts/events/payloads.schema.json",
+  "title": "Contraintes de payload par nom d'événement (périmètre MVP)",
+  "description": "Généré depuis contracts/tools/catalogue.py — ne pas éditer à la main.",
+  "type": "object",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "ack.observed"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              }
+            },
+            "required": [
+              "msg_log_id"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "attest.emitted"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "root": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "root",
+              "height"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "attest.observed"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "subject_node": {
+                "type": "string",
+                "pattern": "^(relay|client)-[0-9a-f]{6,}$"
+              },
+              "root": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "height": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "subject_node",
+              "root",
+              "height"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "client.summary"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msgs_sent": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "msgs_recv": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "peers_seen": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "app_version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "msgs_sent",
+              "msgs_recv",
+              "peers_seen",
+              "app_version"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "envelope.delivered"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "recipient_tag": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              "to_peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "recipient_tag",
+              "to_peer"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "envelope.expired"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "recipient_tag": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              "reason": {
+                "enum": [
+                  "ttl",
+                  "budget_zero",
+                  "store_full"
+                ]
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "recipient_tag",
+              "reason"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "envelope.handoff"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "recipient_tag": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              "to_peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "budget_after": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "recipient_tag",
+              "to_peer",
+              "budget_after"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "envelope.offered"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "to_peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              }
+            },
+            "required": [
+              "count",
+              "to_peer"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "envelope.stored"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "recipient_tag": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{32}$"
+              },
+              "epoch_day": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "copy_budget": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "recipient_tag",
+              "epoch_day",
+              "copy_budget"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "msg.delivered"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "latency_ms": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "latency_ms"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "msg.expired"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              }
+            },
+            "required": [
+              "msg_log_id"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "msg.handed_off"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "to_peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "via": {
+                "enum": [
+                  "session",
+                  "envelope"
+                ]
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "to_peer",
+              "via"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "msg.queued"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "conv_hash": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "conv_hash"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "msg.received"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "via": {
+                "enum": [
+                  "session",
+                  "envelope"
+                ]
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "via"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "peer.announce_seen"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "pseudo": {
+                "type": "string",
+                "maxLength": 32
+              },
+              "ledger_height": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "caps": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "peer",
+              "ledger_height",
+              "caps"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "peer.connected"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "rssi": {
+                "type": "integer",
+                "minimum": -120,
+                "maximum": 0
+              },
+              "role": {
+                "enum": [
+                  "central",
+                  "peripheral"
+                ]
+              }
+            },
+            "required": [
+              "peer",
+              "rssi",
+              "role"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "peer.disconnected"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "duration_s": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "pkt_exchanged": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "peer",
+              "duration_s",
+              "pkt_exchanged"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "pkt.delivered_local"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "type": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 13
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "type"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "pkt.dropped"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "reason": {
+                "enum": [
+                  "ttl_zero",
+                  "relay_not_ok",
+                  "queue_full",
+                  "quota",
+                  "too_old"
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "pkt.duplicate"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "from_peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "from_peer"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "pkt.rejected"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "from_peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "reason": {
+                "enum": [
+                  "bad_sig",
+                  "bad_version",
+                  "malformed",
+                  "peerid_mismatch"
+                ]
+              }
+            },
+            "required": [
+              "from_peer",
+              "reason"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "pkt.relayed"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "type": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 13
+              },
+              "ttl_in": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ttl_out": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "fanout": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "from_peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "type",
+              "ttl_in",
+              "ttl_out",
+              "fanout",
+              "from_peer"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "pkt.seen"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "msg_log_id": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "type": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 13
+              },
+              "ttl_in": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "size_bucket": {
+                "enum": [
+                  256,
+                  512,
+                  1024,
+                  2048
+                ]
+              },
+              "from_peer": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{16}$"
+              },
+              "rssi": {
+                "type": "integer",
+                "minimum": -120,
+                "maximum": 0
+              }
+            },
+            "required": [
+              "msg_log_id",
+              "type",
+              "ttl_in",
+              "size_bucket",
+              "from_peer"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "relay.boot"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "fw_version": {
+                "type": "string"
+              },
+              "reset_reason": {
+                "type": "string"
+              },
+              "secure_boot": {
+                "type": "boolean"
+              },
+              "flash_enc": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "fw_version",
+              "reset_reason",
+              "secure_boot",
+              "flash_enc"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "relay.health"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "uptime_s": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "rssi_avg": {
+                "type": "integer",
+                "minimum": -120,
+                "maximum": 0
+              },
+              "peers": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cache_size": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "envelope_store": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "log_buffer_pct": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "logs_dropped": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "heap_free": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "uptime_s",
+              "rssi_avg",
+              "peers",
+              "cache_size",
+              "envelope_store",
+              "log_buffer_pct",
+              "logs_dropped",
+              "heap_free"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "relay.overloaded"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "subsystem": {
+                "type": "string"
+              },
+              "action": {
+                "enum": [
+                  "drop_pkt",
+                  "refuse_envelope",
+                  "evict_cache"
+                ]
+              }
+            },
+            "required": [
+              "subsystem",
+              "action"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "relay.wifi_down"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "ssid": {
+                "type": "string"
+              },
+              "duration_s": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "name": {
+            "const": "relay.wifi_up"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "type": "object",
+            "properties": {
+              "ssid": {
+                "type": "string"
+              },
+              "duration_s": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

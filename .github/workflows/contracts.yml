@@ -1,0 +1,35 @@
+name: contracts
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/contracts.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'contracts/**'
+      - '.github/workflows/contracts.yml'
+
+jobs:
+  events:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contracts
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.25"
+          enable-cache: true
+      - name: Installer depuis le lock
+        run: uv sync --frozen --no-build
+      - name: Lint (ruff)
+        run: uv run --no-sync --no-build ruff check .
+      - name: Fixtures régénérées à l'identique
+        run: |
+          uv run --no-sync --no-build python tools/build_fixtures.py
+          git diff --exit-code -- events/
+      - name: Valider fixtures + schémas + signatures + redaction
+        run: uv run --no-sync --no-build python tools/validate.py

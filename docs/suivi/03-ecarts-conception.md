@@ -55,6 +55,45 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-09 — Dossier `contracts/` ajouté au layout du dépôt (US-107)
+
+- **Prévu :** `docs/synthese/04` §5 dessine le dépôt sans dossier pour les
+  artefacts de contrat inter-langages ; les « vecteurs de conformité » y sont
+  seulement évoqués (`synthese/10` §4.7, job `cross-vectors`).
+- **Réel :** un dossier **`contracts/`** à la racine, contenant `events/`
+  (schémas JSON + `CANONICAL.md` + 20 fixtures signées) et `tools/` (générateur
+  + validateur, outillés `uv`).
+- **Raison :** ces artefacts sont **neutres en langage** et consommés par trois
+  composants (`dashboard/` Python, `crates/` Rust, `firmware/` C). Les mettre
+  sous l'un d'eux créerait une dépendance de build inversée ; sous `docs/` ils
+  ne seraient pas exécutables par la CI.
+- **Conséquences :** un `paths: contracts/**` de plus en CI
+  (`.github/workflows/contracts.yml`). Le job `cross-vectors` de `synthese/10`
+  §4.7, quand il existera, consommera `contracts/events/fixtures/`.
+- **Doc de conception mise à jour ?** non (layout indicatif). À mentionner au
+  prochain rafraîchissement de `synthese/04` §5.
+
+---
+
+### 2026-09-09 — `msg_log_id` : 8 octets / 16 hex (contradiction des docs tranchée, US-107)
+
+- **Prévu :** trois formulations incohérentes — `docs/powl/08` §1.3
+  `hex(SHA-256(msgID)[0..16])`, `docs/synthese/04` §7 `SHA-256(msgID)[:16]`,
+  `docs/synthese/09` §11.2 commente « hex 16 o ». « 16 » = octets ou caractères ?
+- **Réel :** le contrat US-107 retient **8 octets → 16 caractères hex**
+  (`^[0-9a-f]{16}$`), imposé aux fixtures et à `payloads.schema.json`.
+- **Raison :** le **seul exemple concret** du corpus (`docs/synthese/09` §9 :
+  `"4d5e6f7a8b9c0d1e"`) fait 16 hex. Et pour de l'observabilité, plus court =
+  moins corrélable, tout en gardant de quoi dédupliquer.
+- **Conséquences :** `docs/powl/08`, `docs/synthese/04` §7 et `docs/synthese/09`
+  §11.2 doivent être alignés sur « 8 octets / 16 hex » (colonne
+  `messages.msg_log_id` du schéma dashboard : `TEXT` de 16 caractères).
+  `dengon-core` (US-208) et l'ingest (US-216) doivent tronquer à 8 octets.
+- **Doc de conception mise à jour ?** pas encore — à répercuter dans
+  `docs/powl/` et `docs/synthese/`. Noté dans `contracts/events/CANONICAL.md` §3.
+
+---
+
 ### 2026-09-09 — Le label est `good first issue`, pas `good-first-issue`
 
 - **Prévu :** §5.3 liste le label `good-first-issue`, avec des traits d'union.

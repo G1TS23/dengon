@@ -1,0 +1,19 @@
+{
+  "batch_id": "13601024cf87d1bc7f7e840ef0d3c9140685c58f13e8a0661480a83cf15daeaf",
+  "node_id": "relay-3f2a9c",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "28cb45c8aeee7606c83e9eb294f80810624e445473f9ac13b75e075ff6f5dbb2",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1011,
+      "ts_ms": 1725800001010,
+      "name": "ack.observed",
+      "payload": {
+        "msg_log_id": "1122334455667788"
+      }
+    }
+  ],
+  "sig": "HcaXHdJcKfK0V97TlX+uE0bTMiafckJxApSbQ36xVaBl8pvPBc+K7zE/zj7Mpy56WMbipmvsP129LWE3f/PQDQ=="
+}

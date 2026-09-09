@@ -10,9 +10,12 @@
 suivi, un `.gitignore`, des hooks git (`.githooks/`) et, depuis le 09/09,
 l'**outillage de processus** dans `.github/` (US-113).
 
-Deux PR sont en vol et ne sont pas comptées ci-dessous, puisqu'elles ne sont pas
+Des PR sont en vol et ne sont pas comptées ci-dessous, puisqu'elles ne sont pas
 encore sur `main` : **#57** (US-104 — workspace Cargo, six crates squelettes, CI
-`core`) et **#56** (US-109 — squelette Android).
+`core`), **#56** (US-109 — squelette Android), **#59** (US-110 — squelette
+dashboard `api`), et la branche `contract/US-107-enveloppe-evenement` (US-107 —
+contrat des événements + 20 fixtures golden, décrit dans
+[`modules/contracts-events.md`](modules/contracts-events.md)).
 
 ## Avancement par composant
 

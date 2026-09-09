@@ -12,6 +12,94 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-09 — Contrat des événements d'observabilité + 20 fixtures golden (US-107)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/` (nouveau), `.github/workflows/contracts.yml`,
+`docs/suivi/modules/contracts-events.md` (créée), `_index.md`,
+`01-etat-du-code.md`, `03-ecarts-conception.md`.
+**Lot :** Lot 0 — Fondations (issue #7, US-107). Branche
+`contract/US-107-enveloppe-evenement`, prise « en attendant les review » de la
+PR #59 (US-110).
+
+### Fait
+- **`contracts/events/`** :
+  - `envelope.schema.json`, `batch.schema.json` — JSON Schema draft 2020-12,
+    **stricts** (`additionalProperties: false`) pour l'enveloppe et le batch
+    `POST /ingest/batch`.
+  - `payloads.schema.json` — contraintes de `payload` par nom d'événement,
+    **généré** depuis `tools/catalogue.py` (un `allOf` de `if name==X then …`).
+  - `CANONICAL.md` — **fait foi** : forme canonique du JSON signé (clés triées,
+    séparateurs compacts, UTF-8) + procédure de signature Ed25519 d'un batch.
+  - `test-signing-key.json` — clé Ed25519 de test (graine déterministe,
+    publique, jamais de prod).
+  - `fixtures/*.json` — **20 batches** valides et signés, couvrant **28 noms
+    d'événements** (tout le périmètre MVP : `msg.read` / `read.observed` et les
+    `integrity.*` / `node.clock_skew` dérivés sont explicitement exclus).
+- **`contracts/tools/`** : `catalogue.py` (source lisible + helpers
+  `canonical_json` / `event_id`), `build_fixtures.py` (génère fixtures +
+  `payloads.schema.json`), `validate.py` (schéma + payload vs catalogue +
+  cohérence `event_id`/`node_id` + **signature Ed25519** + **redaction** +
+  fraîcheur du schéma généré + couverture du catalogue).
+- **`contracts/pyproject.toml` + `uv.lock`** : outillage `uv` (jsonschema,
+  pynacl, referencing ; ruff en dev), cohérent avec `dashboard/api`.
+- **`.github/workflows/contracts.yml`** : `ruff` + « fixtures régénérées à
+  l'identique » (`git diff --exit-code`) + `validate.py`, filtré
+  `paths: contracts/**`, actions épinglées au SHA, `uv --no-build`.
+
+### Pourquoi / décisions
+- **`contracts/` en dossier top-level** : artefact neutre en langage, consommé
+  par `dashboard/` (Python) **et** `crates/` (Rust) **et** le firmware (C).
+  Écart mineur au layout de `docs/synthese/04` §5 — consigné.
+- **Un seul `sig` par batch** (et non par événement) : c'est ce que montre
+  l'exemple de `docs/synthese/09` §9 ; l'intégrité fine vient du journal chaîné
+  (`seq` + `prev_hash`), `event_id` fait la déduplication.
+- **`msg_log_id` = 16 hex (8 octets)** : les docs se contredisent (`[0..16]`
+  vs « 16 o » vs `[:16]`), le seul exemple concret fait 16 hex. Réconciliation
+  consignée dans `03-ecarts-conception.md`.
+- **Fixtures générées puis committées** (pas régénérées en CI) : un diff montre
+  toute dérive ; la CI vérifie que la régénération ne bouge rien.
+- **Catalogue en module Python** (`catalogue.py`) comme source, `.schema.json`
+  dérivé : évite de maintenir un gros JSON Schema à la main, garde une source
+  unique.
+
+### Écarts vs conception
+- `contracts/` ajouté au layout du dépôt — `03-ecarts-conception.md`.
+- Longueur de `msg_log_id` tranchée à 8 octets — `03-ecarts-conception.md`.
+- Rien d'autre : les schémas transcrivent `docs/powl/08` et `docs/synthese/09`
+  §9 sans les contredire.
+
+### Appris
+- **JSON Schema `$ref` relatif + `jsonschema` Python** : depuis la 4.18, la
+  résolution passe par un `referencing.Registry` qu'il faut peupler à la main
+  (`Resource.from_contents`) — l'ancien `RefResolver` est déprécié. Enregistrer
+  la ressource **et** sous son `$id` **et** sous son nom de fichier.
+- **Ed25519 = 64 octets de signature → 88 caractères base64** terminés par
+  `==` (pattern de schéma `^[A-Za-z0-9+/]{86}==$`).
+
+### État après cette session
+- `contracts/events/` : contrat complet, `validate.py` vert, 20 fixtures
+  prêtes à être consommées par US-208 (core) et US-217 (dashboard).
+- Fiche `modules/contracts-events.md` créée ; `_index.md` et
+  `01-etat-du-code.md` à jour.
+- **Contrat à annoncer « gelé »** au point d'équipe (DoD §7.2, type contrat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv sync
+$ uv run python tools/build_fixtures.py
+  20 fixtures écrites, 28 noms d'événements couverts.
+$ uv run python tools/validate.py
+  ✓ 20 fixtures valides — 28 noms d'événements couverts.
+$ uv run ruff check .
+  All checks passed!
+$ uv run python tools/build_fixtures.py && git diff --stat -- events/
+  (aucun diff — régénération stable)
+```
+- La CI `contracts` n'a pas encore tourné : à l'ouverture de la PR.
+
+---
+
 ## 2026-09-09 — La protection de `main` est active, et ma vérification était creuse (US-113)
 
 **Auteur :** Claude (Opus 5)

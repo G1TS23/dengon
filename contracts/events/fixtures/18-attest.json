@@ -1,0 +1,33 @@
+{
+  "batch_id": "181728eaa45c762c8c7a8b222460ae43042cfbba1d227919bb45aa05bc7840d4",
+  "node_id": "relay-3f2a9c",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "e355afb48c074a606eb5bd308e4f117f754a116a9f3eef4946661f64a81cc84f",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1015,
+      "ts_ms": 1725800001300,
+      "name": "attest.emitted",
+      "payload": {
+        "root": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f",
+        "height": 1015
+      }
+    },
+    {
+      "event_id": "c0e1619a7565ae2cd29004d2d824e9b970caa86c1ca7997861ab6d0140d7cbf6",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1016,
+      "ts_ms": 1725800001305,
+      "name": "attest.observed",
+      "payload": {
+        "subject_node": "client-9c1d84",
+        "root": "1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a",
+        "height": 5000
+      }
+    }
+  ],
+  "sig": "RDBdOoKJYW3Kj5AAe21ZA4Td97ztU6+QJmHbcoWB0sbZ7+R7mGB0oAQ/6iRI55R2CL9n/qf87ktYfbiH/GmSBg=="
+}
