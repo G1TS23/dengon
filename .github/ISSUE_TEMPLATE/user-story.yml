@@ -1,0 +1,200 @@
+# ---------------------------------------------------------------------------
+# Formulaire d'issue « User story ».
+# Référence : docs/olivier/proposition-organisation-github.md §4.3 (contenu),
+# §5.3 (labels), §6 (Definition of Ready), §7 (Definition of Done).
+#
+# Ce fichier est un *issue form* (YAML), pas un template Markdown. GitHub en
+# tire un vrai formulaire : les champs `required` ne peuvent pas être laissés
+# vides, ce qui rend la DoR mécanique au lieu de déclarative. Un template
+# Markdown, lui, se soumet vide.
+#
+# ⚠ GitHub ne lit les formulaires que depuis la BRANCHE PAR DÉFAUT : tant que
+# ce fichier n'est pas sur `main`, /issues/new/choose ne le propose pas.
+# ---------------------------------------------------------------------------
+name: User story
+description: Une US du backlog — livrable nommé, critères vérifiables, DoR en 8 points.
+title: "US-XXX — "
+labels: ["type:us"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de remplir les champs marqués `*`. Ils correspondent aux points de
+        la **Definition of Ready** (§6) : une issue qui ne les renseigne pas
+        n'entre pas dans un sprint.
+
+  - type: input
+    id: identifiant
+    attributes:
+      label: Identifiant de l'US
+      description: Le numéro du backlog (§8), sans le titre.
+      placeholder: US-207
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Une seule. Une US qui mélange deux `area:` n'est pas prête (anti-critère §6).
+      options:
+        - core-rust
+        - contract
+        - android
+        - firmware
+        - dashboard-api
+        - dashboard-web
+        - docs
+        - process
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sprint
+    attributes:
+      label: Sprint
+      options:
+        - "S1 — 08 au 14/09 : contrats, spikes, squelettes"
+        - "S2 — 15 au 21/09 : construire en parallèle sur bouchons"
+        - "S3 — 22 au 28/09 : intégrer, démontrer, rédiger"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: jalon
+    attributes:
+      label: Jalon (milestone)
+      description: §5.1.
+      options:
+        - "J0 — Go/No-Go (14/09)"
+        - "J1 — Cœur en simulation (18/09)"
+        - "J2 — Deux téléphones parlent (21/09)"
+        - "J3 — Dashboard en ligne (21/09)"
+        - "J4 — MVP matériel (25/09)"
+        - "J5 — Prêt soutenance (28/09)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: estimation
+    attributes:
+      label: Estimation (points)
+      description: "DoR n°6 : au-delà de 5 points, l'US doit être scindée, pas estimée plus haut."
+      options:
+        - "1"
+        - "2"
+        - "3"
+        - "5"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: moscow
+    attributes:
+      label: Priorité MoSCoW
+      options:
+        - "Must — périmètre engagé"
+        - "Should — hors périmètre engagé, bonus"
+        - "Could — optionnel"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contrainte
+    attributes:
+      label: Contrainte dure
+      description: "DoR n°8 : dit qui peut *physiquement* prendre l'US (§10.2)."
+      options:
+        - "aucune"
+        - "materiel-esp32 — nécessite une carte ESP32"
+        - "materiel-android — nécessite un téléphone Android"
+        - "vps — nécessite un accès au VPS"
+    validations:
+      required: true
+
+  - type: textarea
+    id: contexte
+    attributes:
+      label: Contexte
+      description: Pourquoi cette US existe et ce qu'elle débloque. Deux à cinq lignes.
+    validations:
+      required: true
+
+  - type: textarea
+    id: criteres
+    attributes:
+      label: Critères d'acceptation
+      description: >-
+        DoR n°2 — chacun doit être **vérifiable**. « ça marche » n'est pas un
+        critère ; « `cargo test -p dengon-core` passe » en est un. C'est cette
+        liste que la revue coche.
+      value: |
+        - [ ] 
+        - [ ] 
+        - [ ] 
+    validations:
+      required: true
+
+  - type: textarea
+    id: dependances
+    attributes:
+      label: Dépendances
+      description: >-
+        DoR n°4 — par numéro d'issue (`#12`), et **toutes fermées** au moment
+        d'entrer en sprint (règle d'or §3.2). Répondre « Aucune » si c'est le
+        cas : c'est une réponse valide, et la plus fréquente.
+      placeholder: "Aucune. Démarrable immédiatement."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reference
+    attributes:
+      label: Référence documentaire
+      description: >-
+        DoR n°3 — lien vers la **section** de `docs/synthese/` qui fait foi.
+        Sans elle, l'implémentation réinvente la spec.
+      placeholder: "docs/synthese/05-protocole-et-trame.md §3.2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: test
+    attributes:
+      label: Stratégie de test
+      description: >-
+        DoR n°7 — quel test, à quel **niveau** (unitaire / property / sim /
+        e2e), d'après `docs/synthese/10-benchmarks-mvp-tests.md` §4.
+      placeholder: "Property test sur la sérialisation (proptest), + un vecteur golden."
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: dor
+    attributes:
+      label: Definition of Ready (§6)
+      description: >-
+        Les 8 points. Non bloquants à l'ouverture — une issue peut naître
+        incomplète. C'est **l'entrée en sprint** qui exige les 8 cochés.
+      options:
+        - label: "1. Livrable nommé sans ambiguïté (ou titre en forme d'US)"
+        - label: "2. Critères d'acceptation listés et vérifiables"
+        - label: "3. Référence documentaire fournie"
+        - label: "4. Dépendances déclarées et toutes fermées"
+        - label: "5. Contrat d'interface ou bouchon disponible"
+        - label: "6. Estimation en points (1/2/3/5)"
+        - label: "7. Stratégie de test nommée"
+        - label: "8. Contrainte dure identifiée, ou explicitement « aucune »"
+
+  - type: markdown
+    attributes:
+      value: |
+        ---
+        **Definition of Done globale (§7.1)** — rappel, à vérifier dans la PR :
+        critères tous démontrés · tests verts au niveau annoncé · CI verte ·
+        **revue par une personne d'une autre `area:`** · `docs/suivi/` à jour
+        (journal + état du code + fiche module) · écart consigné dans
+        `03-ecarts-conception.md` · Conventional Commits et PR squashée ·
+        aucun TODO bloquant.
+
+        Ajouts spécifiques au type d'US : voir **§7.2**.

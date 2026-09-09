@@ -43,3 +43,15 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **TimescaleDB** | Extension PostgreSQL optimisée pour les données horodatées (le flux d'événements). |
 | **ESP-IDF / NimBLE** | ESP-IDF = SDK officiel de l'ESP32. NimBLE = pile Bluetooth légère utilisée dans le firmware. |
 | **PSRAM** | Mémoire vive supplémentaire de certains ESP32 (WROVER) ; nécessaire pour nos tampons. |
+| **DoR** (*Definition of Ready*) | Les 8 conditions pour qu'une issue entre dans un sprint (§6) : livrable nommé, critères vérifiables, référence documentaire, dépendances fermées, contrat disponible, estimation, stratégie de test, contrainte dure. |
+| **DoD** (*Definition of Done*) | Les 8 conditions pour qu'une PR soit fusionnable (§7.1), plus des ajouts par type d'US (§7.2). |
+| **Issue form** | Formulaire d'issue GitHub décrit en YAML (champs typés, certains obligatoires), par opposition au template Markdown qu'on peut soumettre vide. |
+| **`CODEOWNERS`** | Fichier qui associe des chemins à des relecteurs. Sollicite automatiquement la bonne personne, et interdit à l'auteur d'approuver sa propre PR — c'est ce qui rend la revue croisée mécanique. |
+| **Revue croisée** | Règle du projet : le relecteur d'une PR n'est jamais de la même `area:` que l'auteur (§10.3). Sert autant l'apprentissage que la qualité. |
+| **Doublure** | Deuxième personne nommée sur une US : celle qui **consommera son artefact au sprint suivant**, donc celle à qui la relecture sert vraiment (§13). |
+| **Protection de branche** | Réglage GitHub qui interdit de pousser directement sur `main` : PR obligatoire, approbations, checks verts, historique linéaire. |
+| **Check requis** (*required status check*) | Job de CI dont le succès conditionne le merge. Piège : un check jamais rapporté bloque la PR indéfiniment, il n'échoue pas. |
+| **Historique linéaire** | Interdiction des commits de fusion sur `main` : chaque PR y entre comme un seul commit (squash), l'historique se lit comme une liste. |
+| **Ruleset** | Forme moderne de la protection de branche chez GitHub, cumulable et applicable à plusieurs branches. Non utilisée ici : la protection classique suffit à trois. |
+| **`workflow_dispatch`** | Déclencheur manuel d'un workflow GitHub Actions. N'apparaît que si le fichier est présent sur la branche par défaut. |
+| **Épinglage par SHA** | Référencer une action tierce par le hash complet de son commit plutôt que par un tag. Un tag est mutable : son auteur peut le repointer vers du code arbitraire, qui s'exécuterait dans notre CI. |

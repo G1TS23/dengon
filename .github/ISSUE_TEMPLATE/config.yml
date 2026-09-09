@@ -1,0 +1,22 @@
+# ---------------------------------------------------------------------------
+# Configuration du sélecteur d'issues (/issues/new/choose).
+# Référence : docs/olivier/proposition-organisation-github.md §4.3, §6.
+# ---------------------------------------------------------------------------
+
+# Une issue ouverte hors formulaire contourne la Definition of Ready : elle
+# arrive sans critères vérifiables, sans référence documentaire et sans
+# stratégie de test. On ferme donc la porte de l'issue vierge.
+blank_issues_enabled: false
+
+contact_links:
+  - name: ▶ Démarrables maintenant
+    url: https://github.com/users/G1TS23/projects/2/views/3
+    about: Les US prêtes, sans dépendance ouverte. À regarder AVANT d'en créer une nouvelle.
+
+  - name: Conception figée
+    url: https://github.com/G1TS23/dengon/tree/main/docs/synthese
+    about: La spec qui fait foi. Un désaccord avec elle se règle dans 01-sujets-a-trancher.md, pas dans une issue.
+
+  - name: Suivi technique
+    url: https://github.com/G1TS23/dengon/tree/main/docs/suivi
+    about: Ce qui est réellement codé — journal, état du code, fiches modules.

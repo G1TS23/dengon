@@ -1,0 +1,106 @@
+# ---------------------------------------------------------------------------
+# Formulaire d'issue « Spike ».
+# Référence : docs/olivier/proposition-organisation-github.md §7.2 (ligne Spike).
+#
+# Un spike n'est pas une petite US : son livrable est **une décision écrite**,
+# pas du code. Les champs ci-dessous sont conçus pour rendre ça impossible à
+# oublier — question fermée, timebox, critère d'arrêt.
+# ---------------------------------------------------------------------------
+name: Spike
+description: Une question technique timeboxée. Livrable = une décision écrite, pas du code.
+title: "US-XXX — Spike X : "
+labels: ["type:spike"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Un spike **répond par oui ou par non** à une question posée d'avance. Si
+        la question ne peut pas se formuler ainsi, ce n'est pas un spike : c'est
+        une US.
+
+  - type: input
+    id: identifiant
+    attributes:
+      label: Identifiant de l'US
+      placeholder: US-101
+    validations:
+      required: true
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Question posée
+      description: >-
+        Une seule question, **fermée**. C'est elle qui sera recopiée dans la
+        décision finale.
+      placeholder: "Peut-on cross-compiler `dengon-core` en no_std pour la cible xtensa de l'ESP32 ?"
+    validations:
+      required: true
+
+  - type: input
+    id: timebox
+    attributes:
+      label: Timebox
+      description: >-
+        En heures. Dépassée, le spike s'arrête et **répond quand même** — « non,
+        pas dans le temps imparti » est une réponse recevable et utile.
+      placeholder: "4 h"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - core-rust
+        - contract
+        - android
+        - firmware
+        - dashboard-api
+        - dashboard-web
+        - docs
+        - process
+    validations:
+      required: true
+
+  - type: dropdown
+    id: contrainte
+    attributes:
+      label: Contrainte dure
+      options:
+        - "aucune"
+        - "materiel-esp32 — nécessite une carte ESP32"
+        - "materiel-android — nécessite un téléphone Android"
+        - "vps — nécessite un accès au VPS"
+    validations:
+      required: true
+
+  - type: textarea
+    id: critere_arret
+    attributes:
+      label: Critère d'arrêt
+      description: >-
+        À quoi reconnaît-on que la question est tranchée ? Un fait observable,
+        pas un sentiment.
+      placeholder: "Un binaire produit par `cargo build --target xtensa-esp32-none-elf` démarre sur la carte et journalise une ligne."
+    validations:
+      required: true
+
+  - type: textarea
+    id: ce_qui_debloque
+    attributes:
+      label: Ce que la réponse débloque
+      description: Quelles US attendent ce oui/non, par numéro d'issue.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: livrable
+    attributes:
+      label: Livrable attendu (DoD §7.2 — ligne Spike)
+      options:
+        - label: "Réponse oui/non explicite, écrite dans une entrée de `docs/suivi/00-journal.md`"
+        - label: "Décision reportée dans `docs/synthese/01-sujets-a-trancher.md`"
+        - label: "Timebox respectée (ou dépassement assumé et noté)"
+        - label: "Le code jetable a été **jeté** — un spike ne laisse pas de branche vivante"
