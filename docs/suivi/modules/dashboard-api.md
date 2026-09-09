@@ -29,8 +29,8 @@ dashboard ne doit pas l'attendre pour démarrer — cf. proposition d'organisati
 
 ```
 dashboard/api/
-  pyproject.toml         — deps (fastapi, uvicorn) + dev (pytest, httpx, ruff) + config ruff/pytest
-  requirements-dev.txt   — versions épinglées installées par la CI
+  pyproject.toml         — deps (fastapi, uvicorn) + extra `dev` (pytest, httpx, ruff) + config ruff/pytest
+  uv.lock                — lock des deps (transitives + hash) ; géré par uv, fait foi en CI
   app/
     config.py            — db_path() : lit DENGON_DASHBOARD_DB (défaut dashboard.db)
     migrations.py        — MIGRATIONS : liste (version, nom, sql) ; le SQL est un littéral du module
@@ -77,7 +77,8 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
 - **Internes :** aucune pour l'instant. À terme : le binaire Rust `dengon-verify`
   (vérif de journal chaîné), appelé en sous-processus.
 - **Externes :** `fastapi` (routes + lifespan), `uvicorn` (serveur ASGI local),
-  `httpx` (client de test via `TestClient`), `pytest`, `ruff`. Base :
+  `httpx` (client de test via `TestClient`), `pytest`, `ruff`. Gérées par
+  **`uv`** (`uv.lock` = lock transitif + hash, fait foi en CI). Base :
   `sqlite3` de la stdlib — pas d'ORM, cohérent avec un squelette et avec le
   faible volume (démo de 5-8 appareils, base effacée par session, B-4).
 
@@ -104,9 +105,9 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
 - `tests/test_api.py` — 6 tests : `/healthz` ; objet arbitraire accepté (202,
   `event_count` = 3) ; tableau nu accepté ; corps stocké **verbatim** en base ;
   non-JSON → 400 ; migrations appliquées une seule fois (`[1]`).
-- Commande : depuis `dashboard/api/`, `pip install -e '.[dev]'` puis `ruff check .`
-  et `pytest` → **6 passed** (vérifié le 2026-09-09, Python 3.14 en local ;
-  la CI tourne en 3.11).
+- Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
+  `uv run ruff check .` et `uv run pytest` → **6 passed** (vérifié le
+  2026-09-09).
 
 ## Limites connues / TODO
 

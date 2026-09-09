@@ -16,12 +16,14 @@ en sous-processus par `api/` — pas encore branché (US-305 / US-310).
 
 ## Lancer l'API en local
 
+Dépendances gérées par [`uv`](https://docs.astral.sh/uv/) ; le lock
+(`api/uv.lock`) fait foi.
+
 ```bash
 cd api
-python -m venv .venv && . .venv/bin/activate
-pip install -e '.[dev]'
+uv sync --extra dev
 
-uvicorn app.main:app --reload         # http://127.0.0.1:8000
+uv run uvicorn app.main:app --reload    # http://127.0.0.1:8000
 curl -s localhost:8000/healthz                                  # {"status":"ok"}
 curl -s -XPOST localhost:8000/ingest/batch -d '{"events":[{"x":1}]}'
 ```
@@ -33,9 +35,9 @@ La base SQLite est créée et migrée au démarrage. Chemin réglable par
 
 ```bash
 cd api
-pip install -e '.[dev]'
-ruff check .
-pytest
+uv sync --extra dev
+uv run ruff check .
+uv run pytest
 ```
 
 `pytest` utilise une base SQLite jetable par test (aucun état partagé).

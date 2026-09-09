@@ -111,17 +111,21 @@ Traitement :
   wheels seulement, aucun script de build de dépendance) puis
   `pip install --no-deps -e .` pour le projet local. Ajout de
   `dashboard/api/requirements-dev.txt`.
-- **`text:S8565`** (pas de `uv.lock` / `poetry.lock` / `pdm.lock` /
-  `pylock.toml`) — **non traité dans cette PR** : adopter un gestionnaire de
-  lock Python couvrant les dépendances transitives est une décision d'équipe,
-  pas un choix de squelette. Signalé dans la PR et à mettre à l'ordre du jour
-  de la réunion de ratification.
+- **`githubactions:S8544` / `text:S8565`** (dépendances non lockées, pas de
+  `uv.lock` / `poetry.lock` / …) — le premier correctif (pin `==` dans un
+  `requirements-dev.txt`) n'a **pas** suffi : SonarCloud exige un lock
+  **transitif avec hash**. Comme le dashboard est le **seul Python** du projet
+  (Rust / Kotlin / C ailleurs) et que `uv.lock` est exactement le fichier
+  demandé, **adopté `uv`** pour `dashboard/api/` : `uv.lock` committé,
+  `requirements-dev.txt` supprimé, CI passée à `astral-sh/setup-uv` +
+  `uv sync --frozen --extra dev` + `uv run …`. Choix trivialement réversible,
+  à confirmer d'un mot en réunion.
 
-Re-vérifié en local avec la méthode de la CI :
+Re-vérifié en local :
 ```
-$ pip install --only-binary=:all: -r requirements-dev.txt && pip install --no-deps -e .
-$ ruff check .   → All checks passed!
-$ pytest         → 6 passed
+$ cd dashboard/api && uv sync --frozen --extra dev
+$ uv run ruff check .   → All checks passed!
+$ uv run pytest         → 6 passed
 ```
 
 ---
