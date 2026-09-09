@@ -12,6 +12,86 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-09 — `docs/suivi/` : fin des conflits de merge (US-115)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `.gitattributes` (nouveau), `docs/suivi/02-avancement.md`
+(nouveau), `docs/suivi/01-etat-du-code.md`, `docs/suivi/README.md`, `CLAUDE.md`.
+**Lot :** Lot 0 — Fondations (issue #61, US-115). Branche
+`chore/US-115-suivi-merge-union`.
+
+### Fait
+- **`.gitattributes` racine** : `merge=union` sur les 6 fichiers de suivi
+  « append » (`00-journal`, `02-avancement`, `03-ecarts-conception`,
+  `04-apprentissages`, `05-glossaire`, `modules/_index`). Git garde **les deux
+  côtés** au lieu de lever un conflit. Committé → rien à installer côté
+  collègues.
+- **`02-avancement.md`** (nouveau) : les tableaux « Avancement par composant »
+  et « Outillage et processus » sortent de `01`. Consigne : **édité en place**,
+  on ne touche que sa/ses ligne(s). Corrigé au passage `Dashboard api` (« Axum +
+  Postgres » → « FastAPI + SQLite + SSE », A-5), `Dashboard web` et
+  `Déploiement VPS` de la même façon ; ajouté les lignes `contracts/` et
+  `.gitattributes`.
+- **`01-etat-du-code.md`** : réduit à un tableau de **pointeurs** (où lire
+  quoi) + un résumé d'une ligne + les commandes utiles. Plus de liste des PR en
+  vol (c'est le rôle du board / `gh pr list`). Ne bouge quasiment plus → pas
+  de conflit, donc **pas** en `merge=union`.
+- **`README.md` du dossier** : nouvelle section « Fusion » (ce que fait / ne
+  fait pas `union`, comment garder le journal lisible) ; règle « `---` + ligne
+  vide avant chaque entrée » ; l'étape 2 des règles de mise à jour vise
+  `02-avancement.md`.
+- **`CLAUDE.md`** : l'étape « Rafraîchir `01-etat-du-code.md` » devient
+  « Mettre à jour sa ligne dans `02-avancement.md` ».
+
+### Pourquoi / décisions
+- **`union` plutôt qu'un fichier par entrée** (option C de la discussion) :
+  coût ~0, aucun changement de workflow, aucune migration. Si `union` produit
+  trop de désordre à l'usage, on escaladera vers un fichier par entrée.
+- **`01` hors `union`** : c'est une réécriture, pas un ajout — `union` y
+  dupliquerait des paragraphes. On le vide de tout ce qui est volatil à la
+  place.
+- **Ne plus lister les PR en vol dans le markdown** : ça se périme à chaque
+  merge, le board est toujours juste.
+
+### Écarts vs conception
+- Aucun vs `docs/powl/` / `docs/synthese/` (qui ne prescrivent pas la
+  mécanique du dossier de suivi). Changement interne à la convention
+  `docs/suivi/`, documenté dans son `README.md`.
+
+### Appris
+- **`merge=union` est un pilote intégré à git** (aucune config `merge.*.driver`
+  à poser). `.gitattributes` versionné = actif pour tout le monde sans geste.
+- Il **concatène sans trier** : après fusion de deux `append` au même ancrage,
+  les deux blocs peuvent se coller sans ligne vide → relecture rapide du haut
+  du journal. Noté dans `04-apprentissages.md`.
+
+### État après cette session
+- `git check-attr merge` renvoie `union` sur les 6 fichiers, `unspecified` sur
+  `01`.
+- Test concret : deux branches ajoutent chacune une entrée en tête de
+  `00-journal.md` → `git merge` **sans conflit**, les deux entrées présentes
+  (une ligne vide à remettre à la main entre les deux — cosmétique).
+- `02-avancement.md` à jour : oui. Pas de fiche module (chantier `process`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ git check-attr merge -- docs/suivi/00-journal.md
+  docs/suivi/00-journal.md: merge: union
+$ git check-attr merge -- docs/suivi/01-etat-du-code.md
+  docs/suivi/01-etat-du-code.md: merge: unspecified
+
+# deux append concurrents sur 00-journal.md, puis merge
+$ git merge --no-edit tmp/union-test-A
+  Auto-merging docs/suivi/00-journal.md
+  Merge made by the 'ort' strategy.
+$ grep -c '^<<<<<<<' docs/suivi/00-journal.md
+  0   (aucun marqueur de conflit — les entrées A et B sont toutes deux là)
+```
+- Reste à confirmer sur la **première PR concurrente réelle** que GitHub
+  n'affiche plus `DIRTY` pour un simple ajout d'entrée de suivi.
+
+---
+
 ## 2026-09-09 — La protection de `main` est active, et ma vérification était creuse (US-113)
 
 **Auteur :** Claude (Opus 5)

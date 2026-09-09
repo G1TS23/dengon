@@ -25,6 +25,23 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ## Notes
 
+### `merge=union` — fusionner des fichiers « append » sans conflit
+
+**C'est quoi :** un pilote de fusion **intégré à git**. Sur un fichier marqué
+`merge=union` dans `.gitattributes`, quand deux branches modifient la même zone,
+git **prend les deux versions** au lieu d'écrire des marqueurs `<<<<<<<`.
+**Pourquoi dans dengon :** `docs/suivi/00-journal.md` & co. reçoivent une entrée
+par PR, toujours au même endroit → conflit systématique (US-115).
+**Piège / surprise :** `union` **ne trie pas**. Il concatène les deux côtés dans
+un ordre non garanti, sans forcément remettre de ligne vide. Après la fusion, on
+relit le haut du journal et on remet l'ordre anti-chronologique si besoin. À ne
+**pas** mettre sur un fichier qu'on *réécrit* (il dupliquerait des paragraphes) —
+d'où `01-etat-du-code.md` laissé hors `union` et vidé de son contenu volatil.
+**Où c'est utilisé :** `.gitattributes` racine ; règle expliquée dans
+`docs/suivi/README.md` § Fusion.
+**Pour aller plus loin :** `man gitattributes` (section « Merging branches with
+differing checkin/checkout attributes »), `git help merge`.
+
 ### Formulaire d'issue (*issue form*) vs template Markdown
 
 **C'est quoi :** deux façons de pré-remplir une issue GitHub. Le template
