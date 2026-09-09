@@ -29,6 +29,6 @@ jobs:
         # (voir tests/conftest.py), inutile de construire le paquet local.
         run: uv sync --frozen --extra dev --no-install-project --no-build
       - name: Lint (ruff)
-        run: uv run --no-sync ruff check .
+        run: uv run --no-sync --no-build ruff check .
       - name: Tests (pytest)
-        run: uv run --no-sync pytest
+        run: uv run --no-sync --no-build pytest
