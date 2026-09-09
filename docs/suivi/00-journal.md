@@ -12,6 +12,87 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-09 — Vérification après push : deux affirmations rectifiées (US-113)
+
+**Auteur :** Claude (Opus 5)
+**Périmètre :** `docs/suivi/modules/processus-github.md`, `01-etat-du-code.md`,
+corps de la PR #58. Aucun fichier `.github/` modifié.
+**Lot :** Lot 0 — Fondations (issue #13, US-113).
+
+> Entrée **rectificative** de celle du même jour ci-dessous : le journal est
+> append-only, on ne réécrit pas une entrée passée.
+
+### Fait
+
+- Rejoué toute la vérification une fois la branche poussée, y compris les
+  contrôles qui n'étaient pas faisables avant.
+- **`CODEOWNERS` validé par GitHub** :
+  `gh api "repos/G1TS23/dengon/codeowners/errors?ref=chore/US-113-github-setup"`
+  → `{"errors":[]}`. L'entrée précédente le listait comme non vérifié : ce
+  n'est plus le cas.
+- Corrigé la fiche `modules/processus-github.md` et `01-etat-du-code.md` sur
+  les deux points ci-dessous, et le corps de la PR #58 en conséquence.
+
+### Ce qui était faux dans l'entrée précédente
+
+1. **« Aucun check ne tournera sur cette PR ».** Faux. Deux applications GitHub
+   sont installées sur le dépôt et rapportent un statut sur chaque PR :
+   **GitGuardian Security Checks** et **SonarCloud Code Analysis**. Les deux
+   étaient `SUCCESS` sur la PR #58. Elles sont candidates à devenir des checks
+   requis en plus de `core` — mais la DoD §7.1 ne les nomme pas, donc c'est une
+   décision d'équipe, pas une évidence.
+2. **Les assignations des issues #4 et #13.** J'avais repris l'affirmation
+   qu'elles étaient sur `G1TS23`. Vérifié : **les deux sont assignées à
+   `POWLAIR`**. #4 est donc conforme à §13 ; #13 y est attribuée à Olivier mais
+   portée par Paul dans les faits — sans conséquence, §13 se dit « indicative,
+   à ajuster en réunion ».
+
+### Découvert au passage
+
+- **Le squash-only et la suppression automatique des branches étaient DÉJÀ
+  actifs** avant l'US-113 : `gh api repos/G1TS23/dengon` →
+  `squash: true, merge_commit: false, rebase: false, suppr_branche: true`.
+  Deux des six réglages du 5ᵉ critère d'acceptation sont donc acquis sans rien
+  faire, et la seconde commande admin de la fiche est un no-op. Elle y reste :
+  un réglage de dépôt se change d'un clic sans laisser de trace, la commande
+  sert alors à le remettre.
+- **`CODEOWNERS` se lit depuis la branche de BASE, pas depuis celle de la PR.**
+  `gh pr view 58 --json reviewRequests` renvoyait `[]` alors que le fichier
+  existait sur la branche. Tant qu'il n'est pas sur `main`, il ne gouverne
+  rien : la PR qui installe la revue croisée est mécaniquement la seule à ne
+  pas en bénéficier. Relecteur demandé à la main (`@G1TS23`).
+
+### État après cette session
+
+- L'issue #13 reste ouverte : **4 critères sur 5**. Le 5ᵉ se décompose en six
+  réglages, dont deux (squash, suppression auto) sont acquis et quatre (PR
+  obligatoire, 1 approbation, checks requis, historique linéaire) demandent la
+  commande admin.
+- PR #58 : `MERGEABLE`, deux checks verts, revue demandée à `@G1TS23`.
+- `01-etat-du-code.md` mis à jour : oui. Fiche module mise à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ gh api "repos/G1TS23/dengon/codeowners/errors?ref=chore/US-113-github-setup"
+{"errors":[]}
+
+$ gh api repos/G1TS23/dengon --jq '{squash,merge_commit,rebase,suppr_branche}'
+squash true · merge_commit false · rebase false · suppr_branche true
+
+$ gh pr view 58 --json statusCheckRollup
+GitGuardian Security Checks  SUCCESS
+SonarCloud Code Analysis     SUCCESS
+
+$ gh issue view 4 / 13 --json assignees
+#4 → POWLAIR   #13 → POWLAIR
+
+$ gh api repos/G1TS23/dengon/branches/main/protection   → 404 (inchangé)
+$ gh api repos/G1TS23/dengon/rulesets                   → []  (inchangé)
+```
+
+---
+
 ## 2026-09-09 — Outillage GitHub : formulaires, CODEOWNERS, labels versionnés (US-113)
 
 **Auteur :** Claude (Opus 5)

@@ -42,7 +42,7 @@ refuse le merge sans son approbation.
 ## Fichiers importants
 
 | Fichier | Ce que ça fait |
-|---|---|
+| --- | --- |
 | `ISSUE_TEMPLATE/user-story.yml` | Formulaire GitHub (*issue form*). Les champs `required` — dépendances, référence documentaire, stratégie de test — ne peuvent pas rester vides : c'est la DoR n°3, 4 et 7 rendues obligatoires à la saisie. |
 | `ISSUE_TEMPLATE/config.yml` | `blank_issues_enabled: false`. Sans ça, « Open a blank issue » contourne tout le formulaire. |
 | `PULL_REQUEST_TEMPLATE.md` | Les 8 points de la DoD §7.1 en cases à cocher, la DoD §7.2 par type d'US en repli, et un champ « ce que la revue doit regarder en priorité ». |
@@ -136,10 +136,12 @@ Quatre points à ne pas survoler :
    [`03-ecarts-conception.md`](../03-ecarts-conception.md). Élargir ensuite,
    un check à la fois, à mesure que chaque workflow arrive — en **répétant la
    liste complète**, l'API remplace le tableau, elle ne l'ajoute pas :
+
    ```bash
    gh api -X PATCH repos/G1TS23/dengon/branches/main/protection/required_status_checks \
      -F 'contexts[]=core' -F 'contexts[]=sim'
    ```
+
 3. **`require_code_owner_reviews: true` est la seule ligne qui compte** pour la
    revue croisée. Sans elle, `CODEOWNERS` ne fait que suggérer un relecteur, et
    la DoD §7.1 point 4 reste déclarative.
@@ -161,11 +163,25 @@ gh api repos/G1TS23/dengon/branches/main/protection --jq \
 ## Vérification
 
 | Quoi | Commande | Résultat |
-|---|---|---|
+| --- | --- | --- |
 | YAML valide (6 fichiers) | `python3 -c "import yaml,glob;[yaml.safe_load(open(f)) for f in glob.glob('.github/**/*.yml',recursive=True)]"` | OK |
 | Schéma des formulaires | script jetable : `id` unique, `options` présentes sur chaque `dropdown`/`checkboxes`, `required` bien sous `validations` | OK |
 | `labels.yml` ≡ GitHub | diff avec `gh label list --limit 100 --json name,color,description` | **0 écart** sur les 32 labels déclarés |
-| `CODEOWNERS` | `gh api repos/G1TS23/dengon/codeowners/errors?ref=<branche>` | à lancer une fois la branche poussée |
+| `CODEOWNERS` | `gh api repos/G1TS23/dengon/codeowners/errors?ref=chore/US-113-github-setup` | **`{"errors":[]}`** — les 6 règles sont valides et les 3 comptes reconnus avec droit d'écriture |
+
+> **CODEOWNERS se lit depuis la branche de BASE, pas depuis celle de la PR.**
+> Constaté sur la PR #58 : `gh pr view 58 --json reviewRequests` renvoyait `[]`
+> alors que le fichier existait sur la branche. Tant qu'il n'est pas sur `main`,
+> il ne gouverne rien. La PR qui met en place la revue croisée est donc la seule
+> qui n'en bénéficie pas — le relecteur a dû être demandé à la main.
+
+### Checks déjà présents sur les PR
+
+Deux applications GitHub sont installées sur le dépôt et rapportent un statut
+sur chaque PR, indépendamment de nos workflows : **GitGuardian Security Checks**
+(fuite de secrets) et **SonarCloud Code Analysis**. Les deux étaient vertes sur
+la PR #58. Elles sont donc candidates à devenir des checks requis, en plus de
+`core` — décision à prendre en équipe, elles ne figurent pas dans la DoD §7.1.
 
 ## Limites connues / TODO
 

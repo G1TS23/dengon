@@ -39,7 +39,9 @@ encore sur `main` : **#57** (US-104 — workspace Cargo, six crates squelettes, 
 | `labels.yml` — 32 labels versionnés | présent, 0 écart avec GitHub | idem |
 | Workflow `labels` (synchro manuelle) | présent, lançable après merge | idem |
 | **Protection de `main`** | **absente** — `branches/main/protection` → 404, `rulesets` → `[]`. Demande un droit admin. | idem |
+| Squash-only + suppression auto des branches | **déjà actifs** au niveau du dépôt, avant l'US-113 | idem |
 | Workflow `core` (fmt, clippy, nextest, couverture) | dans la PR #57, pas sur `main` | — |
+| GitGuardian + SonarCloud | applications GitHub installées, rapportent un statut sur chaque PR (vertes sur #58) | — |
 | Hook Conventional Commits | actif (`.githooks/commit-msg`) | — |
 
 ## Ce qui tourne / commandes utiles
