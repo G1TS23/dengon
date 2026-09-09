@@ -25,8 +25,10 @@ d'observabilité** (VPS). Voir [`docs/powl/`](docs/powl/) pour la conception com
 [`docs/suivi/`](docs/suivi/) en suivant [`docs/suivi/README.md`](docs/suivi/README.md#règles-de-mise-à-jour) :
 
 1. Ajouter une entrée dans [`docs/suivi/00-journal.md`](docs/suivi/00-journal.md)
-   (en haut, append-only, modèle dans `templates/entree-journal.md`).
-2. Rafraîchir [`docs/suivi/01-etat-du-code.md`](docs/suivi/01-etat-du-code.md).
+   (en haut, append-only, `---` + ligne vide avant l'entrée, modèle dans
+   `templates/entree-journal.md`).
+2. Mettre à jour **sa ligne** dans [`docs/suivi/02-avancement.md`](docs/suivi/02-avancement.md)
+   (édition en place, ne pas réécrire le fichier).
 3. Créer / mettre à jour la fiche du module dans
    [`docs/suivi/modules/`](docs/suivi/modules/) (modèle `templates/module.md`) +
    la ligne d'index dans `modules/_index.md`.

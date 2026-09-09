@@ -1,0 +1,17 @@
+# Fichiers de suivi « append-only » : deux PR concurrentes ajoutent chacune
+# une entrée au même endroit → conflit systématique. Le pilote de fusion
+# `union` (intégré à git) garde LES DEUX côtés au lieu de lever un conflit.
+#
+# Portée : uniquement les fichiers où l'on *ajoute* (jamais où l'on réécrit).
+# `01-etat-du-code.md` n'y est PAS : il ne contient que des pointeurs, il change
+# rarement, et un `union` y dupliquerait des paragraphes.
+#
+# Après une fusion `union`, jeter un œil à l'ordre du journal : `union`
+# concatène, il ne trie pas. Voir docs/suivi/README.md § Fusion.
+
+docs/suivi/00-journal.md            merge=union
+docs/suivi/02-avancement.md         merge=union
+docs/suivi/03-ecarts-conception.md  merge=union
+docs/suivi/04-apprentissages.md     merge=union
+docs/suivi/05-glossaire.md          merge=union
+docs/suivi/modules/_index.md        merge=union
