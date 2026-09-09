@@ -12,6 +12,91 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-09 — La protection de `main` est active, et ma vérification était creuse (US-113)
+
+**Auteur :** Claude (Opus 5)
+**Périmètre :** `docs/suivi/modules/processus-github.md`, `01-etat-du-code.md`,
+`04-apprentissages.md`. Aucun fichier `.github/` modifié.
+**Lot :** Lot 0 — Fondations (issue #13, US-113).
+
+> Deuxième entrée **rectificative** du jour. Journal append-only : on rectifie
+> en ajoutant, on ne réécrit pas.
+
+### Ce qui s'est passé
+
+`G1TS23` a activé la protection de `main` le 09/09 à **15:18** — « Review
+required » (1 approbation) et **`core` en check requis**. Le 5ᵉ critère
+d'acceptation de l'issue #13 est donc atteint. Mais elle a été activée **avant**
+le merge de la PR #57, exactement le cas que la fiche demandait d'éviter.
+
+Effet immédiat, constaté : **#56 et #58 sont `BLOCKED`** sur un check `core` que
+rien ne peut rapporter — `core.yml` n'existe ni sur `main`, ni sur leurs
+branches. GitHub ne les fait pas échouer, il les **attend**. #57, elle, est
+verte : son *head* porte `core.yml`, donc le workflow tourne sur son *merge
+ref*.
+
+Sortie, dans cet ordre : merger #57 → fusionner `main` dans les branches de #56
+et #58 pour que leur *merge ref* contienne le workflow → `core` se met enfin à
+rapporter. Et il rapportera **même sur ces PR sans une ligne de Rust**, grâce à
+l'écart de l'US-104 (filtrage dans le job, pas sur le déclencheur). Sans cet
+écart, ces deux PR seraient définitivement bloquées : c'est la démonstration
+grandeur nature de l'écart.
+
+### Mon erreur de méthode
+
+J'ai écrit à plusieurs reprises « `branches/main/protection` → 404 → aucune
+protection ». **Ce raisonnement est faux.** Cet endpoint renvoie 404 à un compte
+**non admin**, que la protection existe ou non — et on est authentifié en
+`POWLAIR`. La conclusion se trouvait être vraie à l'instant où je l'écrivais,
+mais la preuve ne valait rien : la même commande renvoie toujours 404
+aujourd'hui, alors que la protection est bien là.
+
+Vérification fiable pour un non-admin : l'effet observable sur une PR,
+`gh pr view <n> --json mergeStateStatus,statusCheckRollup`. Note ajoutée à
+`04-apprentissages.md` sous le titre « Un 404 d'API GitHub peut vouloir dire
+"tu n'as pas le droit de savoir" ».
+
+### Aussi constaté
+
+- La revue de `G1TS23` (15:18:13) est passée en `DISMISSED` à 15:22:16, au
+  moment précis de mon push : `dismiss_stale_reviews` est actif et fonctionne.
+  Toute nouvelle poussée invalide l'approbation — il faut donc pousser d'abord,
+  demander la revue ensuite.
+- `gh api repos/G1TS23/dengon/rulesets` → `[]` et `rules/branches/main` → `[]` :
+  la protection est **classique**, pas un ruleset. Ces endpoints n'auraient de
+  toute façon rien montré à un non-admin.
+
+### État après cette session
+
+- Issue #13 : les 5 critères sont désormais **couverts**, le dernier par une
+  action de `G1TS23` et non par cette PR. Reste la preuve par l'usage (DoR n°7)
+  — elle est en train de se faire toute seule : #58 est visiblement bloquée
+  faute d'approbation.
+- PR #58 : `BLOCKED`, GitGuardian et SonarCloud verts, `core` en attente
+  perpétuelle jusqu'au merge de #57.
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ gh pr view 57 --json mergeStateStatus,statusCheckRollup
+core SUCCESS · GitGuardian SUCCESS · SonarCloud SUCCESS · statut BLOCKED
+
+$ gh pr view 56 --json mergeStateStatus   → BLOCKED
+$ gh pr view 58 --json mergeStateStatus   → BLOCKED
+
+$ git ls-tree origin/main -- .github/workflows/core.yml                    → ABSENT
+$ git ls-tree HEAD -- .github/workflows/core.yml                           → ABSENT
+$ git ls-tree origin/build/US-104-workspace-cargo -- .github/workflows/core.yml → présent
+
+$ gh api repos/G1TS23/dengon/pulls/58/reviews
+G1TS23 · DISMISSED · 2026-09-09T15:18:13Z
+
+$ gh api repos/G1TS23/dengon/branches/main/protection
+404 — et ce 404 ne prouve toujours rien (compte non admin)
+```
+
+---
+
 ## 2026-09-09 — Vérification après push : deux affirmations rectifiées (US-113)
 
 **Auteur :** Claude (Opus 5)

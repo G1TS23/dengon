@@ -65,6 +65,29 @@ d'optionnelle.
    `gh api repos/OWNER/REPO/codeowners/errors?ref=BRANCHE`.
 **Où c'est utilisé :** `.github/CODEOWNERS`.
 
+### Un 404 d'API GitHub peut vouloir dire « tu n'as pas le droit de savoir »
+
+**C'est quoi :** `GET /repos/{owner}/{repo}/branches/{branch}/protection` renvoie
+**404** à un compte qui n'est pas admin du dépôt — que la protection existe ou
+non. Pas 403 : 404, exactement comme si l'objet n'existait pas. GitHub masque
+l'existence de la ressource plutôt que d'en révéler la présence.
+**Pourquoi dans dengon :** on est authentifié en `POWLAIR`, non admin. Le 404 a
+été lu comme « aucune protection » et écrit tel quel plusieurs fois dans le
+suivi et dans une PR. Le fait était vrai au moment où on l'écrivait, mais la
+**preuve ne prouvait rien** : la même commande renvoie toujours 404 après
+l'activation de la protection, le 09/09 à 15:18. Le genre d'erreur qui survit à
+la relecture, puisque la conclusion était juste — seul le raisonnement était
+creux.
+**Piège / surprise :** `gh api repos/OWNER/REPO/rulesets` renvoie `[]` de la même
+façon, et `rules/branches/main` ne liste que les *rulesets*, jamais la
+protection classique. Aucun des trois ne permet à un non-admin de conclure.
+**À utiliser à la place :** l'effet observable sur une PR —
+`gh pr view <n> --json mergeStateStatus,statusCheckRollup`. `CLEAN` = rien ne
+bloque ; `BLOCKED` = une règle s'applique, et le rollup dit laquelle.
+**Règle générale :** ne pas déduire une absence d'un code d'erreur sans savoir
+ce que ce code signifie pour le niveau de droits dont on dispose. Vérifier un
+**effet**, pas une **permission**.
+
 ### Un check requis inexistant fige un dépôt
 
 **C'est quoi :** dans la protection de branche, `required_status_checks.contexts`

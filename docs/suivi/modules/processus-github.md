@@ -6,7 +6,9 @@
 §4.3 (contenu de `.github/`), §5.3 (labels), §6 (DoR), §7 (DoD), §10.3 (revue croisée).
 **Dernière mise à jour :** 2026-09-09
 **État :** partiel — les quatre livrables versionnés existent ; **la protection
-de `main` n'est pas activée** (droit admin manquant, voir *Limites connues*).
+de `main` a été activée par `G1TS23` le 09/09 à 15:18**, avec `core` en check
+requis et une approbation exigée. Voir *Limites connues* : elle a été posée
+**avant** le merge de la PR #57, ce qui bloque toutes les PR en cours.
 
 Cette fiche tient aussi lieu de **note d'onboarding de l'area `process`**
 (§10.3 point 3) : comment le dépôt est réglé, et les trois pièges.
@@ -130,6 +132,11 @@ Quatre points à ne pas survoler :
 1. **N'exécuter qu'après le merge de la PR #57.** C'est elle qui crée le
    workflow `core`. Exiger un check qui n'a jamais tourné met toutes les PR en
    « Expected — Waiting for status to be reported », indéfiniment.
+   **C'est arrivé** : la protection a été posée le 09/09 à 15:18, avant le
+   merge de #57. Effet immédiat — #56 et #58 sont `BLOCKED` sur un `core` que
+   rien ne peut rapporter, tandis que #57 est verte, son *head* portant
+   `core.yml`. Sortie : merger #57 d'abord, puis fusionner `main` dans les
+   autres branches pour que leur *merge ref* contienne le workflow.
 2. **Un seul check requis pour l'instant.** `sim`, `audit` et `cross-vectors`
    sont nommés par la DoD §7.1 point 3 mais **n'existent pas encore** : les
    déclarer ici figerait le dépôt. Écart consigné dans
@@ -169,6 +176,14 @@ gh api repos/G1TS23/dengon/branches/main/protection --jq \
 | `labels.yml` ≡ GitHub | diff avec `gh label list --limit 100 --json name,color,description` | **0 écart** sur les 32 labels déclarés |
 | `CODEOWNERS` | `gh api repos/G1TS23/dengon/codeowners/errors?ref=chore/US-113-github-setup` | **`{"errors":[]}`** — les 6 règles sont valides et les 3 comptes reconnus avec droit d'écriture |
 
+> **Le 404 de `branches/main/protection` ne prouve RIEN.** Cet endpoint renvoie
+> 404 aux comptes **non admin**, que la protection existe ou non. Plusieurs
+> affirmations « → aucune protection » ont été écrites sur cette base : le
+> raisonnement était creux, même si le fait était vrai à ce moment-là. Le
+> contrôle fiable depuis un compte sans droit admin est le `mergeStateStatus`
+> d'une PR — `CLEAN` contre `BLOCKED` :
+> `gh pr view <n> --json mergeStateStatus,statusCheckRollup`.
+
 > **CODEOWNERS se lit depuis la branche de BASE, pas depuis celle de la PR.**
 > Constaté sur la PR #58 : `gh pr view 58 --json reviewRequests` renvoyait `[]`
 > alors que le fichier existait sur la branche. Tant qu'il n'est pas sur `main`,
@@ -185,9 +200,12 @@ la PR #58. Elles sont donc candidates à devenir des checks requis, en plus de
 
 ## Limites connues / TODO
 
-- **La protection de `main` n'est pas appliquée.** C'est le 5ᵉ critère
-  d'acceptation de l'issue #13 et il manque le droit admin. L'issue reste
-  ouverte tant que les commandes ci-dessus n'ont pas été lancées par `G1TS23`.
+- **La protection de `main` est active depuis le 09/09 15:18**, posée par
+  `G1TS23` : « Review required » + `core` en check requis + invalidation des
+  approbations à chaque push. Le 5ᵉ critère d'acceptation est donc atteint —
+  mais elle a été posée **avant** le merge de #57, donc `core` n'a aucun
+  workflow pour le rapporter et **#56 et #58 sont bloquées**. Ce n'est pas un
+  mauvais réglage, c'est un problème d'ordre : merger #57 en premier le résout.
 - **La preuve par l'usage exigée par la DoR n°7 de l'issue** — « une PR de test
   est bloquée tant que les checks ne sont pas verts » — n'a pas pu être faite,
   pour la même raison. Mode opératoire : après activation, ouvrir une PR

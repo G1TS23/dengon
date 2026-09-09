@@ -38,7 +38,7 @@ encore sur `main` : **#57** (US-104 — workspace Cargo, six crates squelettes, 
 | `CODEOWNERS` — revue croisée | présent ; **suggère** un relecteur, ne le **bloque** pas encore | idem |
 | `labels.yml` — 32 labels versionnés | présent, 0 écart avec GitHub | idem |
 | Workflow `labels` (synchro manuelle) | présent, lançable après merge | idem |
-| **Protection de `main`** | **absente** — `branches/main/protection` → 404, `rulesets` → `[]`. Demande un droit admin. | idem |
+| **Protection de `main`** | **active depuis le 09/09 15:18** (posée par `G1TS23`) : 1 approbation, `core` en check requis, approbations invalidées à chaque push. Posée avant le merge de #57 : #56 et #58 sont bloquées sur un `core` que rien ne rapporte. | idem |
 | Squash-only + suppression auto des branches | **déjà actifs** au niveau du dépôt, avant l'US-113 | idem |
 | Workflow `core` (fmt, clippy, nextest, couverture) | dans la PR #57, pas sur `main` | — |
 | GitGuardian + SonarCloud | applications GitHub installées, rapportent un statut sur chaque PR (vertes sur #58) | — |
@@ -55,7 +55,12 @@ En attendant, la vérification de l'outillage :
 gh label list --limit 100 --json name,color,description
 
 # Où en est la protection de main ?
+# ⚠ Depuis un compte NON ADMIN, cet endpoint renvoie 404 que la protection
+#   existe ou non : son 404 ne prouve rien.
 gh api repos/G1TS23/dengon/branches/main/protection
+
+# Contrôle fiable sans droit admin : l'état de fusion d'une PR.
+gh pr view <n> --json mergeStateStatus,statusCheckRollup
 ```
 
 ## Prochaines étapes
