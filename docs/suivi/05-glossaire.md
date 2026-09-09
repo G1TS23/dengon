@@ -72,3 +72,5 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **`cargo-llvm-cov`** | Mesure de la couverture de tests : quel pourcentage des lignes de code est réellement exécuté par la suite de tests. |
 | **`Cargo.lock`** | Fichier qui fige la version exacte de chaque dépendance. Versionné ici, pour que tout le monde et la CI compilent strictement la même chose. |
 | **Doctest** | Exemple de code écrit dans un commentaire de documentation, et exécuté comme un test. Garantit que la doc ne ment pas. |
+| **Foreground service (Android)** | Service Android « premier plan » : doit afficher une notification permanente et déclarer un `foregroundServiceType` (ex. `connectedDevice`) pour survivre écran éteint sans être tué par le système. |
+| **`START_STICKY`** | Valeur de retour d'`onStartCommand` qui demande à Android de relancer le service (sans son intent d'origine) s'il a dû être tué. |

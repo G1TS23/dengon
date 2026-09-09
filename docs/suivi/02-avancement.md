@@ -18,7 +18,7 @@
 | `dengon-sim` | simulateur multi-nœuds | squelette : lib + bin, graine fixe déclarée | 3 % | [dengon-sim](modules/dengon-sim.md) |
 | `dengon-verify` | binaire de vérif de journal chaîné (A-5 / B-5) | squelette : enum `Verdict` (Ok/Broken/Fork/Gap) | 3 % | [dengon-verify](modules/dengon-verify.md) |
 | `dengon-ffi` | bindings UniFFI | squelette : `lib` + `cdylib`, `version()` | 3 % | [dengon-ffi](modules/dengon-ffi.md) |
-| App Android | Kotlin + Compose | — | 0 % | — |
+| App Android | Kotlin + Compose | squelette : Compose + `MeshForegroundService` (`foregroundServiceType="connectedDevice"`) + permissions BLE à l'exécution + notification permanente. Pas de vraie logique BLE (GATT). | 15 % (US-109 fait ; US-213/214/215 restent) | [android-app](modules/android-app.md) |
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
 | Dashboard `api` | FastAPI + SQLite + SSE (A-5) | — | 0 % | — |
 | Dashboard `web` | page légère + SSE (A-5) | — | 0 % | — |

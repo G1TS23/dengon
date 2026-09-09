@@ -10,6 +10,95 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-09 — US-109 : squelette Android (Compose + service de fond BLE)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/` (nouveau module Gradle), `.gitignore`
+**Lot :** US-109, Sprint 1 (`docs/olivier/proposition-organisation-github.md` §8.1)
+
+### Fait
+- Création du module Gradle `android/` (Kotlin DSL, AGP 8.5.2, Gradle 8.9,
+  Kotlin 1.9.24, Jetpack Compose via BOM 2024.06.00). `applicationId` /
+  `namespace` = `com.dengon.app` (non fixé par la conception — choisi ici,
+  voir « Décisions » ci-dessous).
+- `AndroidManifest.xml` : permissions BLE d'exécution `BLUETOOTH_SCAN`
+  (`neverForLocation`), `BLUETOOTH_CONNECT`, `BLUETOOTH_ADVERTISE` (API 31+) ;
+  `BLUETOOTH`/`BLUETOOTH_ADMIN`/`ACCESS_FINE_LOCATION` en repli (`maxSdkVersion=30`) ;
+  `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_CONNECTED_DEVICE` ;
+  `POST_NOTIFICATIONS` (API 33+).
+- `ble/MeshForegroundService.kt` : service `foregroundServiceType="connectedDevice"`,
+  notification permanente (canal `IMPORTANCE_LOW`), `START_STICKY`. Squelette
+  seulement — pas encore de vraie logique GATT (arrive avec `AndroidTransport`,
+  US-213).
+- `ble/BlePermissions.kt` : liste les permissions à demander selon
+  `Build.VERSION.SDK_INT` + vérifie si elles sont déjà accordées.
+- `MainActivity.kt` (Compose) : demande les permissions à l'exécution
+  (`ActivityResultContracts.RequestMultiplePermissions`), démarre/arrête le
+  service, affiche l'état.
+- Test unitaire minimal `BlePermissionsTest` (JVM pur, sans Robolectric).
+- Correction `.gitignore` : `!gradle/wrapper/gradle-wrapper.jar` n'était
+  ancré qu'à la racine → ajout de `!**/gradle/wrapper/gradle-wrapper.jar`
+  pour que le wrapper d'un module non-racine (ici `android/`) soit versionné.
+- SDK Android installé localement pour la vérification (cmdline-tools,
+  `platform-tools`, `platforms;android-34`, `build-tools;34.0.0`) — pas encore
+  dans le dépôt (outillage machine, pas du code).
+
+### Pourquoi / décisions
+- **Package / SDK versions non fixés par `docs/synthese/`** : choisis
+  `com.dengon.app`, `minSdk=26` (API BLE peripheral stables sur la majorité
+  des OEM), `compileSdk`/`targetSdk=34` (Android 14, la version qui impose
+  `foregroundServiceType="connectedDevice"` d'après
+  `docs/synthese/10-benchmarks-mvp-tests.md` §2.7). À reconfirmer en réunion
+  si l'équipe veut une autre convention de nommage.
+- **`neverForLocation` sur `BLUETOOTH_SCAN`** : le scan sert uniquement à
+  détecter le service GATT `dengon`, jamais à dériver une position → évite
+  de demander la localisation sur Android 12+.
+- **`START_STICKY`** : le relais doit rester joignable ; si l'OS tue le
+  service pour libérer de la mémoire, il doit redémarrer seul.
+- Pas de logique BLE réelle dans le service : US-109 ne livre que le
+  squelette (Compose + déclaration + permissions + notification), conforme
+  au périmètre de l'US. La suite (GATT server/scanner/advertiser) est US-213.
+
+### Écarts vs conception
+- Aucun écart vs `docs/synthese/` : le choix de package/SDK versions est un
+  **détail d'implémentation non spécifié**, pas une divergence — pas
+  d'entrée dans `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau ajouté à `04-apprentissages.md` cette session (mise en
+  place d'outillage plus que découverte conceptuelle).
+
+### État après cette session
+- `./gradlew assembleDebug` et `./gradlew testDebugUnitTest` passent
+  localement (voir vérification ci-dessous).
+- **Non vérifié** : le critère d'acceptation « le service tourne encore
+  après ≥ 5 min écran éteint sur au moins un appareil réel » — nécessite un
+  vrai téléphone Android, indisponible dans cet environnement d'exécution.
+  **À faire avant de clore l'US** : installer l'APK sur un appareil réel,
+  couper l'écran 5 min, vérifier (notification toujours affichée + `adb
+  shell dumpsys activity services` montre le service actif), consigner le
+  résultat ici en append.
+- Pas de CI (`android.yml`) : hors périmètre US-109 (relève de US-113/US-222,
+  pas encore faites). Le dépôt n'a donc **aucune CI verte** au sens de la DoD
+  globale §7.1 pt.3 — attendu à ce stade du projet (premier code applicatif).
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md) (créée)
+- 01-etat-du-code.md mis à jour : oui
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew.bat assembleDebug --console=plain
+BUILD SUCCESSFUL in 1m 10s — 35 actionable tasks: 35 executed
+APK généré : android/app/build/outputs/apk/debug/app-debug.apk
+
+$ ./gradlew.bat testDebugUnitTest --console=plain
+BUILD SUCCESSFUL in 5s — 23 actionable tasks: 7 executed, 16 up-to-date
+```
+- Manifeste fusionné inspecté (`app/build/intermediates/.../AndroidManifest.xml`) :
+  présence confirmée de `foregroundServiceType="connectedDevice"` sur le
+  service, des permissions BLE et notification.
+- **Non exécuté** : test manuel des 5 minutes écran éteint sur appareil réel
+  (pas de matériel Android dans cet environnement).
+
 ---
 
 ## 2026-09-09 — `docs/suivi/` : fin des conflits de merge (US-115)

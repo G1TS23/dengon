@@ -29,3 +29,6 @@ d'onboarding de l'area `process` (§10.3 point 3).
 
 Pas encore de fiche (le composant n'existe pas) : application Android, firmware
 `dengon-relay`, dashboard `api` et `web`.
+| Module | Fiche | Dernière mise à jour |
+|---|---|---|
+| `android-app` (`android/`) | [android-app.md](android-app.md) | 2026-09-09 |
