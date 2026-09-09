@@ -18,14 +18,17 @@ jobs:
       run:
         working-directory: dashboard/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "0.9.25"
           enable-cache: true
       - name: Installer depuis le lock (échoue si uv.lock est périmé)
-        run: uv sync --frozen --extra dev
+        # --no-build : wheels seulement, aucun script de build de dépendance.
+        # --no-install-project : les tests importent `app` depuis les sources
+        # (voir tests/conftest.py), inutile de construire le paquet local.
+        run: uv sync --frozen --extra dev --no-install-project --no-build
       - name: Lint (ruff)
-        run: uv run ruff check .
+        run: uv run --no-sync ruff check .
       - name: Tests (pytest)
-        run: uv run pytest
+        run: uv run --no-sync pytest
