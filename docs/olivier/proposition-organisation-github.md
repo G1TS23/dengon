@@ -282,7 +282,7 @@ les DoD ci-dessus sont les paliers qui y mènent.
 Notation : **Deps** = US bloquantes · **Pts** = estimation ·
 **M** = MoSCoW · **Dure** = contrainte matérielle.
 
-### 8.1 Sprint 1 — Contrats, spikes, squelettes (14 US · 30 pts)
+### 8.1 Sprint 1 — Contrats, spikes, squelettes (14 US · 36 pts)
 
 **Toutes démarrables immédiatement. Aucune dépendance.**
 
@@ -303,7 +303,7 @@ Notation : **Deps** = US bloquantes · **Pts** = estimation ·
 | US-113 | `.github/` : templates issue/PR, labels, CODEOWNERS, protection de `main` | process | — | 2 | Must | — |
 | US-114 | Squelette `firmware/dengon-relay` : ESP-IDF + NimBLE, advertise le service `dengon` | firmware | — | 3 | Should | esp32 |
 
-### 8.2 Sprint 2 — Construire en parallèle (24 US · 62 pts)
+### 8.2 Sprint 2 — Construire en parallèle (24 US · 80 pts)
 
 **Toutes ne dépendent que de S1. Aucune dépendance intra-sprint.**
 
@@ -334,7 +334,7 @@ Notation : **Deps** = US bloquantes · **Pts** = estimation ·
 | US-223 | **Rapport écrit** : plan détaillé + sections problème / état de l'art / conception | docs | 112 | 3 | Must | — |
 | US-224 | Déploiement VPS : reverse-proxy TLS + `uvicorn` + script de purge par session | dashboard-api | 110 | 3 | Must | vps |
 
-### 8.3 Sprint 3 — Intégrer, démontrer, rédiger (17 US · 63 pts)
+### 8.3 Sprint 3 — Intégrer, démontrer, rédiger (17 US · 72 pts)
 
 **Sprint de convergence : l'adhérence y est irréductible et assumée.**
 
@@ -484,18 +484,35 @@ départ**, pas comme frontières.
 
 ### 10.5 Capacité vs charge — le point qui fâche
 
+> **Correction du 09/09 (après création du board).** La première version de ce
+> document annonçait 155 points (30 / 62 / 63). C'était une **erreur d'addition
+> de ma part** : les estimations US par US, agrégées depuis les 55 issues
+> réellement créées, donnent **188 points**. La conclusion en est nettement
+> aggravée — voir ci-dessous.
+
 - **Capacité** : 3 personnes × 14 jours ouvrés ≈ 42 jours-personne, moins
-  cours/réunions/soutenances ≈ **~32 jours-personne effectifs**.
-- **Charge** : 155 points. À ~5 points/jour-personne (optimiste pour une équipe
-  qui découvre Rust et ESP-IDF) → **~31 jours-personne**.
+  cours / réunions / autres soutenances ≈ **~32 jours-personne effectifs**.
+- **Charge** : **188 points** (S1 36 · S2 80 · S3 72). À ~5 points/jour-personne
+  — optimiste pour une équipe qui découvre Rust et ESP-IDF — → **~37,6
+  jours-personne**.
 
-**C'est à 100 % de la capacité, sans aucune marge.** Recommandation :
-sortir immédiatement les 5 US `Should` du périmètre engagé (US-102, 114, 303,
-313, 317 = 13 pts) et les traiter en bonus. On retombe à ~142 pts ≈ 28,5 j·p,
-soit **~11 % de marge** — le strict minimum pour absorber un imprévu.
+**On est à ~118 % de la capacité.** Sortir les 5 US `Should` (US-102, US-114,
+US-303, US-313, US-317 = 13 pts) ramène à **175 pts ≈ 35 j·p ≈ 109 %** :
+**toujours au-dessus**. Retirer les `Should` ne suffit donc plus.
 
-L'**ordre de repli** de `plan-mvp.md` §7 reste la soupape : hors-ligne + relais
-d'abord, sécurité ensuite, dashboard en dernier.
+Trois leviers, à trancher en réunion — il en faut au moins un :
+
+| Levier | Effet | Coût |
+| --- | --- | --- |
+| **Réduire le dashboard dès maintenant** (et non « en dernier recours ») : US-311 carte + alerting (5), US-310 intégrité (3), US-218 SSE (2) → version dégradée | −10 pts → **165 pts ≈ 33 j·p ≈ 103 %** | Le scénario 4 du DoD passe en mode minimal |
+| **Sortir `dengon-node` et le simulateur complet** : US-303 (3, déjà `Should`), US-304 réduit à 3 scénarios au lieu de 5 (−2) | −5 pts | Moins de filet de sécurité en test |
+| **Assumer une vélocité de 6 pts/j·p** au lieu de 5 | 188 pts ≈ 31 j·p ≈ 97 % | Pari sur une équipe qui découvre la stack — **le levier le plus risqué** |
+
+**Recommandation** : appliquer les leviers 1 et 2 (−15 pts → **160 pts ≈ 32 j·p
+≈ 100 %**), et considérer que l'**ordre de repli** de `plan-mvp.md` §7 n'est
+plus une soupape d'urgence mais **le plan nominal** : hors-ligne + relais
+d'abord, sécurité ensuite, dashboard en dernier. Autrement dit, il faut décider
+maintenant ce qu'on ne fera pas, pas le découvrir le 26/09.
 
 ---
 
@@ -506,26 +523,52 @@ d'abord, sécurité ensuite, dashboard en dernier.
 | Les contrats S1 sont **bâclés** → il faut les rouvrir en S2, et tout le backlog S2 vacille | moyenne | Label `contract` + gel formel en réunion + revue à 3 obligatoire sur les 4 contrats |
 | Les **bouchons deviennent la réalité** : l'app marche sur le bouchon, le vrai FFI arrive trop tard | **haute** | US-302 planifiée **au premier jour de S3**, pas au milieu. Répétition E2E dès qu'elle est verte. |
 | **Sur-processus** : 55 issues, DoR à 8 points, revue croisée — pour 3 personnes sur 3 semaines | moyenne | La DoR/DoD s'applique aux US `Must` ; les `chore` et `docs` passent en mode allégé. Le board ne doit pas coûter plus de 10 min/jour à tenir. |
-| S3 sous-dimensionné (63 pts sur ~10 j·p) | **haute** | C'est le vrai point de rupture. Avancer US-301/302 en fin de S2 si le cœur est prêt. |
+| S3 sous-dimensionné (72 pts sur ~10 j·p) | **haute** | C'est le vrai point de rupture. Avancer US-301/302 en fin de S2 si le cœur est prêt. |
 | La rotation ralentit l'équipe à court terme | certaine | Assumé : le coût est en S1-S2, le bénéfice en S3 (quand il faut que tout le monde puisse débugger). |
 
 ---
 
-## 12. Prochaines actions
+## 12. État de la mise en place GitHub (09/09)
 
-**Cette semaine (avant le 14/09) :**
+**Fait par Paul** : les **6 milestones** (J0 → J5, avec dates d'échéance) · la
+**taxonomie de labels** complète (`area:`, `type:`, `sprint:`, `moscow:`,
+`skill:`, `needs:`, `contract`, `blocked`) · les **55 issues**, chacune avec un
+corps structuré : contexte, critères d'acceptation cochables, dépendances liées
+par numéro d'issue, référence documentaire, stratégie de test, **DoR en 8 points
+cochée**, rappel de la DoD.
 
-1. **Réunion de ratification** — valider : monorepo (§4.1), les 3 sprints
-   (§5.2), la DoR/DoD (§6-7), la répartition S1 (§10.4), et surtout **sortir
-   les 5 US `Should` du périmètre** (§10.5).
+**Fait ensuite** : le **board Projects v2** —
+<https://github.com/users/G1TS23/projects/2>
+
+| Élément | Contenu |
+| --- | --- |
+| **Items** | les 55 issues, tous champs renseignés |
+| **Champs** | Sprint · Area · Estimation · MoSCoW · DoR · Contrainte dure · Bloquée par · Chemin critique |
+| **Vue 1** — *Board — avancement* | tableau kanban par statut, colonnes Sprint / Area / Estimation / MoSCoW / ⚡ |
+| **Vue 2** — *▶ Démarrables maintenant* | filtre `dor:"✅ prête" -status:Done` → **15 US** aujourd'hui. C'est **la vue d'entrée** : ce qu'on peut prendre sans attendre personne. Elle s'enrichit automatiquement à mesure que les dépendances se ferment. |
+| **Vue 3** — *Par sprint* | table complète avec `Bloquée par` et le jalon |
+| **Vue 4** — *Par area — équilibrage* | board pour repérer les déséquilibres de charge |
+| **Vue 5** — *⚡ Chemin critique* | les 8 maillons, avec leur statut et qui les porte |
+| **Vue 6** — *Contraintes dures* | les 10 US bloquées par du matériel ou le VPS |
+| **Vue 7** — *Périmètre engagé (Must)* | les 50 US `Must` non terminées |
+
+**Entretien manuel** : le champ **DoR** est un proxy — il vaut « ✅ prête »
+quand aucune dépendance n'est ouverte. GitHub ne sait pas l'évaluer tout seul :
+**à la fermeture d'une US, passer à ✅ les US qu'elle débloquait.** C'est le
+seul geste récurrent que le board demande (~1 min par US fermée).
+
+**Limitation** : le regroupement (*group by*) des vues n'est pas exposé par
+l'API GitHub. Deux clics à faire dans l'interface : vue 1 → grouper par
+**Status**, vue 4 → grouper par **Area**.
+
+### Reste à faire cette semaine (avant le 14/09)
+
+1. **Réunion de ratification** — valider monorepo (§4.1), sprints (§5.2),
+   DoR/DoD (§6-7), répartition S1 (§10.4), et surtout **trancher les leviers de
+   réduction de charge** (§10.5) : on est à 118 % de la capacité.
 2. **Lever les 3 contraintes dures** (§10.2) : 2ᵉ carte ESP32, téléphones
-   mutualisés, accès VPS pour les 3. C'est ce qui a le meilleur rapport
-   effort/effet sur l'interchangeabilité.
+   mutualisés, accès VPS pour les 3. Meilleur rapport effort/effet sur
+   l'interchangeabilité.
 3. **Finir US-101 et US-108 en priorité absolue** — ce sont les deux gates.
-4. Créer le projet GitHub, les 6 milestones, les labels, les 55 issues.
-
-**Je peux créer tout ça avec `gh`** (le token a bien le scope `project`) :
-milestones, labels, template d'issues, les 55 issues avec leurs dépendances en
-`Blocked by`, et le board Projects v2 avec ses champs personnalisés. Dis-moi si
-je lance — et si tu veux que je crée les issues en français avec le corps
-pré-rempli (contexte + critères d'acceptation + lien `docs/synthese/`).
+4. **US-113** : créer `.github/` (templates, CODEOWNERS, protection de `main`,
+   workflows) — c'est ce qui rend la revue croisée obligatoire (§10.3).
