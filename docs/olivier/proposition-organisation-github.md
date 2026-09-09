@@ -561,6 +561,90 @@ seul geste récurrent que le board demande (~1 min par US fermée).
 l'API GitHub. Deux clics à faire dans l'interface : vue 1 → grouper par
 **Status**, vue 4 → grouper par **Area**.
 
+---
+
+## 13. Attribution du Sprint 1 (assignée sur GitHub le 09/09)
+
+Comptes : **POWLAIR** = Paul · **OswinFreyr** = Tanguy · **G1TS23** = Olivier.
+L'ordre est encodé dans le champ **`Ordre S1`** du board (colonne de tête de la
+vue *▶ Démarrables maintenant*).
+
+### Rang 1 · mercredi 09/09 au matin — initialiser les trois projets
+
+**C'est le point que personne ne doit avoir à se demander.** Trois squelettes,
+un par personne, faits en premier — tout le reste du sprint atterrit dedans.
+
+| US | Qui | Initie | Doublure |
+| --- | --- | --- | --- |
+| **#4 · US-104** workspace Cargo + `rustfmt`/`clippy` + CI `core` | **Paul** | **le projet Rust** | Olivier |
+| **#9 · US-109** squelette Android (Compose, service de fond, permissions) | **Tanguy** | **le projet Kotlin** | Paul |
+| **#10 · US-110** squelette `dashboard/api` (FastAPI, SQLite, `/healthz`) | **Olivier** | **le projet Python** | Tanguy |
+
+> Formellement, la règle d'or tient : aucune de ces trois US n'en attend une
+> autre. Mais en pratique **US-104 conditionne tout le Rust de la semaine** et
+> **US-109 tout le Kotlin** — d'où le rang 1 et la consigne : ces trois PR sont
+> mergées avant midi, avant de commencer autre chose.
+
+### Rang 2 · 09/09 après-midi → 10/09 — les trois gates ⚡
+
+| US | Qui | Ce que ça débloque | Doublure |
+| --- | --- | --- | --- |
+| **#1 · US-101** Spike A — cross-compile xtensa | **Paul** | toute la branche firmware (US-307 → 308 → 309 → 312) | Tanguy |
+| **#3 · US-103** Spike C — hello mesh Android + MTU réel | **Tanguy** | go/no-go de l'app native (A-1) + la constante MTU | Olivier |
+| **#8 · US-108** Contrat `protocol::types` + vecteurs | **Olivier** | **la moitié du backlog S2** — maillon 1 du chemin critique | **Paul** |
+
+> **US-108 à Olivier, pas à Paul — choix délibéré.** Paul est déjà sur le gate
+> firmware ; concentrer les deux gates sur lui reproduirait le bus factor 1
+> qu'on cherche à casser. Olivier a écrit `format-trame.md`, il a le contexte,
+> et `protocol::types` est du Rust **déclaratif** (enums, structs, constantes
+> transcrites de `powl/03`), pas de la logique. **Paul en doublure et relit le
+> jour même** — c'est le point de contrôle qui rend ce choix tenable.
+
+### Rang 3 · 11 → 12/09 — les contrats restants
+
+| US | Qui | Doublure |
+| --- | --- | --- |
+| **#5 · US-105** `trait Transport` + `MockTransport` | **Paul** | Tanguy |
+| **#6 · US-106** surface `dengon-ffi` v0 (UDL) + bouchon Kotlin | **Tanguy** | **Paul — 30 min de pairing sur la partie UniFFI** |
+| **#7 · US-107** enveloppe d'événement + 20 fixtures golden | **Olivier** | Paul |
+
+> **US-106 est la seule US du sprint qui demande un vrai binôme** : le côté UDL
+> est du Rust/UniFFI, le côté bouchon est du Kotlin. Prévoir la demi-heure,
+> plutôt que de la découvrir en s'enlisant.
+
+### Rang 4 · 13 → 14/09 — squelettes et outillage
+
+| US | Qui |
+| --- | --- |
+| **#14 · US-114** squelette firmware ESP-IDF + NimBLE | **Paul** |
+| **#11 · US-111** squelette `dashboard/web` | **Tanguy** |
+| **#13 · US-113** `.github/` — templates, CODEOWNERS, protection de `main` | **Olivier** |
+
+### Rang 5 · si le temps le permet
+
+| US | Qui |
+| --- | --- |
+| **#2 · US-102** Spike B — `btleplug` peripheral | **Tanguy** |
+| **#12 · US-112** delta doc sécurité | **Olivier** |
+
+### Charge et principe de doublure
+
+| | US | Points | dont `Must` |
+| --- | :---: | :---: | :---: |
+| **Paul** (POWLAIR) | 4 | 11 | 8 |
+| **Tanguy** (OswinFreyr) | 5 | 12 | 10 |
+| **Olivier** (G1TS23) | 5 | 13 | 13 |
+
+Paul porte moins de points mais les **plus durs** (cross-compile xtensa, design
+du trait). Olivier porte le plus de points mais les plus **mécaniques**
+(squelette Python, fixtures, `.github/`, doc).
+
+> **Règle de doublure retenue** : la doublure d'une US est **la personne qui
+> consommera son artefact au sprint suivant**. Tanguy relit `trait Transport`
+> parce qu'il écrira `AndroidTransport` en S2 ; Paul relit l'enveloppe
+> d'événement parce que le firmware l'émettra. La revue devient utile au
+> relecteur, pas une formalité.
+
 ### Reste à faire cette semaine (avant le 14/09)
 
 1. **Réunion de ratification** — valider monorepo (§4.1), sprints (§5.2),
