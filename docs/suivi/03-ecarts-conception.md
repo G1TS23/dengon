@@ -130,15 +130,36 @@ _(aucun écart pour l'instant)_
 
 ---
 
-### Pièges de `.gitignore` repérés mais **non corrigés** (dette assumée)
+### 2026-09-10 — `.gitignore` : les fixtures de clés de test sont ré-incluses
 
-Repérés en passant, laissés en l'état parce qu'ils ne gênent pas encore et que
-les corriger à l'aveugle serait hors périmètre de l'US-104 :
+- **Prévu :** rien. Le `.gitignore` générique (commit `c0e2a9b`, écrit quand la
+  stack n'était pas choisie) ignore `*.pem`, `*.key`, `*.p12` et `*.pfx` pour
+  éviter qu'un vrai secret soit commité.
+- **Réel :** quatre négations limitées aux répertoires `tests/` des crates
+  (`!crates/**/tests/**/*.pem` et les trois autres).
+- **Raison :** signalé en **revue de la PR #57** par `G1TS23`. Une clé
+  d'exemple servant de fixture n'est pas un secret, mais les motifs génériques
+  l'avalaient **en silence** : le fichier n'était jamais ajouté, sans erreur ni
+  avertissement. Le symptôme ne serait apparu que plus tard et ailleurs — tests
+  verts en local, rouges en CI — au moment de l'**US-108 (crypto)**, qui est sur
+  le chemin critique du sprint 2. Corriger ici coûtait quatre lignes ; découvrir
+  le problème pendant une US de gate aurait coûté une demi-journée.
+- **Conséquences :** la portée est volontairement étroite — uniquement sous
+  `tests/`, uniquement dans `crates/`. Vérifié dans les deux sens :
+  `crates/dengon-core/tests/fixtures/alice.key` est désormais ajoutable
+  (`git add --dry-run` → `add '...'`), tandis que `crates/dengon-core/prod.pem`,
+  `dashboard/api/prod.pem` et `secret.key` restent refusés. GitGuardian, actif
+  sur chaque PR, sert de second filet. Les autres areas (`dashboard/`,
+  `contracts/`) devront faire le même geste quand elles y toucheront.
+- **Doc de conception mise à jour ?** sans objet ; la raison est en commentaire
+  dans le `.gitignore` lui-même.
+
+---
+
+### Piège de `.gitignore` repéré mais **non corrigé** (dette assumée)
 
 - Ligne `bin/` (section .NET, non ancrée) → ignorerait `crates/*/src/bin/` le
-  jour où une crate aura des binaires secondaires.
-- Lignes `*.pem` et `*.key` → ignoreront **silencieusement** les fixtures de
-  clés de test de `crypto` et `ledger` (P1.5, P1.7). À neutraliser par un
-  `!crates/**/tests/fixtures/**` à ce moment-là. C'est le plus dangereux des
-  trois : l'oubli se manifesterait par des tests qui passent en local et
-  échouent en CI.
+  jour où une crate aura des binaires secondaires. Laissé en l'état : aucune
+  crate n'a de binaire secondaire, et le mode d'échec est bruyant (le fichier
+  manque, la compilation échoue) — contrairement à celui des clés, qui était
+  silencieux.

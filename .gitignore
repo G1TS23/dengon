@@ -193,6 +193,19 @@ go.work.sum
 # Rapport de couverture produit par cargo llvm-cov.
 lcov.info
 
+# Fixtures de test : une clé d'exemple n'est pas un secret.
+# Sans ces négations, les motifs *.pem / *.key / *.p12 / *.pfx (l.57-60) les
+# avalent EN SILENCE — le fichier n'est simplement jamais ajouté, sans erreur
+# ni avertissement. Le symptôme apparaît plus tard et ailleurs : tests verts en
+# local, rouges en CI. C'est le pire mode d'échec possible pour US-108
+# (crypto), qui est sur le chemin critique du sprint 2.
+# La portée reste volontairement étroite (sous `tests/`, dans `crates/`) : les
+# vrais secrets restent ignorés partout ailleurs.
+!crates/**/tests/**/*.pem
+!crates/**/tests/**/*.key
+!crates/**/tests/**/*.p12
+!crates/**/tests/**/*.pfx
+
 # ===== PHP =====
 /vendor/
 composer.phar

@@ -489,6 +489,48 @@ MSRV / toolchain épinglée.
   cette US, cette entrée suit donc la nouvelle organisation :
   `01-etat-du-code.md` n'est plus touché, il ne contient que des pointeurs.
 
+### Retours de revue (2026-09-10)
+
+PR **approuvée** par `G1TS23` après vérification sur clone frais. Quatre
+retours, aucun bloquant. Traitement :
+
+- **`.gitignore` avale les fixtures de clés** — *corrigé ici*. Le reviewer a
+  fait remarquer que l'US qui en souffrirait est **US-108 (crypto)**, sur le
+  chemin critique, et que le mode d'échec silencieux est le pire possible.
+  Quatre négations ajoutées, portée limitée à `crates/**/tests/**`. Voir
+  [`03-ecarts-conception.md`](03-ecarts-conception.md).
+
+- **« `dtolnay/rust-toolchain` lit déjà `rust-toolchain.toml`, l'étape *Lire la
+  toolchain figée* est redondante »** — **inexact, et l'étape a été conservée.**
+  Vérifié dans la source de l'action : `toolchain` y est déclaré
+  `required: true`, et la première étape sort en erreur explicite
+  (`'toolchain' is a required input`) si l'entrée est vide. Le mot `toml`
+  n'apparaît nulle part dans son `action.yml`. Supprimer notre étape ferait
+  donc **échouer le job immédiatement**. La seule alternative serait d'épingler
+  la version dans le `@rev` de l'action (`dtolnay/rust-toolchain@1.98.1`), ce
+  qui dupliquerait le numéro entre le workflow et `rust-toolchain.toml` —
+  exactement ce que l'étape évite.
+  Nuance en faveur du reviewer : rustup, *lui*, honore bien `rust-toolchain.toml`
+  au moment où `cargo` s'exécute. Le fichier reste donc la source de vérité ;
+  c'est l'action qui ne sait pas le lire.
+  **Consigné ici pour que personne ne « simplifie » cette étape plus tard.**
+
+- **`modules/_index.md` : modification structurelle d'un fichier `merge=union`**
+  — exact. J'ai réécrit l'intro et fait passer le tableau de 3 à 4 colonnes,
+  alors que le README de l'US-115 recommande de faire ça en PR seule. Sans
+  conséquence ici (rien d'autre ne touchait le fichier) ; le reviewer
+  reformatera les lignes de #59 / #60 à leur rebase. À retenir pour la suite.
+
+- **`pub enum Verdict` inerte dans un binaire** — exact, et **déjà consigné**
+  avant la revue dans [`modules/dengon-verify.md`](modules/dengon-verify.md)
+  (« non importable depuis l'extérieur… il faudra scinder en `src/lib.rs` +
+  `src/main.rs` »). Aucune action : l'échange avec le dashboard se fait par la
+  sortie du processus, pas par l'API Rust.
+
+Reste due : la revue `/crates/` de `OswinFreyr` (CODEOWNERS). Le push de ce
+correctif **invalide l'approbation** de `G1TS23` (la protection de `main`
+invalide les approbations à chaque push) ; il devra re-approuver.
+
 ### Vérification (commandes réellement exécutées)
 
 ```
