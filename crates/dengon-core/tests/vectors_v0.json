@@ -1,0 +1,58 @@
+{
+  "note": "Vecteurs de conformite v0 du format de trame L3 dengon (US-108). Chaque entree : octets d'un paquet -> champs attendus, ou raison de rejet. Base du job CI cross-vectors (US-222), consomme aussi par le firmware et le dashboard. Le decodage complet est verifie par US-201 (protocol::codec) ; cette version verifie la coherence structurelle.",
+  "spec": "docs/powl/03-network-protocol.md (fait foi) ; docs/synthese/05-protocole-et-trame.md",
+  "header_layout_be": "version[0:1] type[1:2] ttl[2:3] flags[3:4] timestamp_ms[4:12] sender_id[12:20] recipient_id[20:28 SI ADDRESSED] payload_len[20|28 :+2] payload[22|30 :+N] signature[fin :+64 SI SIGNED]",
+  "flag_bits": { "ADDRESSED": 1, "SIGNED": 2, "FRAGMENT": 4, "RELAY_OK": 8, "PADDED": 16, "RESERVED_MASK": 224 },
+  "accept": [
+    {
+      "name": "announce-broadcast-signed",
+      "note": "0x01 ANNOUNCE : jamais adresse, toujours signe, TTL bas (broadcast).",
+      "hex": "010102020000019100000000aaaaaaaaaaaaaaaa000401020304cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expect": { "version": 1, "type": 1, "type_name": "Announce", "ttl": 2, "flags": 2, "addressed": false, "signed": true, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": null, "payload_len": 4, "payload": "01020304" }
+    },
+    {
+      "name": "noise-msg-addressed",
+      "note": "0x03 NOISE_MSG : adresse, non signe (integrite = session Noise), RELAY_OK.",
+      "hex": "010307090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0006deadbeef0011",
+      "expect": { "version": 1, "type": 3, "type_name": "NoiseMsg", "ttl": 7, "flags": 9, "addressed": true, "signed": false, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": "bbbbbbbbbbbbbbbb", "payload_len": 6, "payload": "deadbeef0011" }
+    },
+    {
+      "name": "ack-addressed",
+      "note": "0x05 ACK : adresse, non signe (dans une session Noise).",
+      "hex": "010507010000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb00081122334455667788",
+      "expect": { "version": 1, "type": 5, "type_name": "Ack", "ttl": 7, "flags": 1, "addressed": true, "signed": false, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": "bbbbbbbbbbbbbbbb", "payload_len": 8, "payload": "1122334455667788" }
+    },
+    {
+      "name": "sealed-envelope-broadcast-signed",
+      "note": "0x04 SEALED_ENVELOPE : broadcast, toujours signe. payload = recipient_tag(16) + epoch_day(2) + ciphertext(10).",
+      "hex": "0104070a0000019100000000aaaaaaaaaaaaaaaa001c00112233445566778899aabbccddeeff4f740102030405060708090acccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expect": { "version": 1, "type": 4, "type_name": "SealedEnvelope", "ttl": 7, "flags": 10, "addressed": false, "signed": true, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": null, "payload_len": 28, "payload": "00112233445566778899aabbccddeeff4f740102030405060708090a" }
+    },
+    {
+      "name": "inventory-addressed-signed",
+      "note": "0x0D INVENTORY : adresse, signe, RELAY_OK. payload = count(2) + msgID(32)*count (ici count=1).",
+      "hex": "010d070b0000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0022000100112233445566778899aabbccddeeff00112233445566778899aabbccddeeffcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expect": { "version": 1, "type": 13, "type_name": "Inventory", "ttl": 7, "flags": 11, "addressed": true, "signed": true, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": "bbbbbbbbbbbbbbbb", "payload_len": 34, "payload": "000100112233445566778899aabbccddeeff00112233445566778899aabbccddeeff" }
+    },
+    {
+      "name": "fragment-addressed",
+      "note": "0x09 FRAGMENT : herite de l'adressage. payload = frag_id(8) + index(2) + total(2) + chunk(20).",
+      "hex": "0109070d0000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0020abcdef0123456789000000030102030405060708090a0b0c0d0e0f1011121314",
+      "expect": { "version": 1, "type": 9, "type_name": "Fragment", "ttl": 7, "flags": 13, "addressed": true, "signed": false, "fragment": true, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": "bbbbbbbbbbbbbbbb", "payload_len": 32, "payload": "abcdef0123456789000000030102030405060708090a0b0c0d0e0f1011121314" }
+    },
+    {
+      "name": "log-attest-broadcast-signed",
+      "note": "0x0A LOG_ATTEST : broadcast, toujours signe, TTL bas. payload = ledger_root(32) + height(8) + node_pub_sign(32).",
+      "hex": "010a03020000019100000000aaaaaaaaaaaaaaaa0048111111111111111111111111111111111111111111111111111111111111111100000000000000052222222222222222222222222222222222222222222222222222222222222222cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expect": { "version": 1, "type": 10, "type_name": "LogAttest", "ttl": 3, "flags": 2, "addressed": false, "signed": true, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": null, "payload_len": 72, "payload": "111111111111111111111111111111111111111111111111111111111111111100000000000000052222222222222222222222222222222222222222222222222222222222222222" }
+    }
+  ],
+  "reject": [
+    { "name": "bad-version", "hex": "020307090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0000", "reject": "version 0x02 != PROTO_VERSION (1)" },
+    { "name": "unknown-type", "hex": "010007090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0000", "reject": "type 0x00 : hors 0x01..0x0D" },
+    { "name": "reserved-flag-set", "hex": "010307290000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0000", "reject": "flags : bit reserve 5 pose (0x20)" },
+    { "name": "payload-len-mismatch", "hex": "010307090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb001001020304", "reject": "payload_len = 16 mais 4 octets de payload disponibles" },
+    { "name": "truncated-header", "hex": "01030709000001910000", "reject": "en-tete tronque : 10 octets < 30 (paquet adresse)" },
+    { "name": "signed-without-signature", "hex": "010102020000019100000000aaaaaaaaaaaaaaaa000401020304", "reject": "SIGNED pose mais paquet trop court pour 64 octets de signature" }
+  ]
+}

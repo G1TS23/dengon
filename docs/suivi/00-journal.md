@@ -12,6 +12,91 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-10 — `protocol::{consts, types}` + vecteurs de conformité v0 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/protocol/` (nouveau), `src/lib.rs`,
+`Cargo.toml`, `Cargo.lock`, `crates/dengon-core/tests/` (nouveau),
+`docs/suivi/{00-journal, 02-avancement, 03-ecarts, modules/dengon-core, modules/_index}`.
+**Lot :** Lot 0 — Fondations (issue #8, US-108). Branche
+`contract/US-108-protocol-types`, prise après le merge de US-104 (workspace).
+
+### Fait
+- **`protocol::consts`** — ~35 constantes transcrites de `synthese/05` §2 :
+  version, UUIDs GATT, TTL (`TTL_DEFAULT=7`, clamp densité), jitter de relais,
+  seen-set, fragmentation, `MSG_TTL_S`, `FLOOD_MAX_PER_MIN_PEER=20`, budget de
+  copies (v2), `PAD_BUCKETS`, périodes d'ANNOUNCE, tolérance d'horodatage,
+  tailles de champ d'en-tête (`HEADER_LEN_BROADCAST=22`, `_ADDRESSED=30`,
+  `PEER_ID_LEN=8`, `MSG_ID_LEN=32`, `SIGNATURE_LEN=64`). 5 tests.
+- **`protocol::types`** :
+  - `PacketType` (`#[repr(u8)]`, `0x01`–`0x0D`). **`Inventory = 0x0D`** — numéro
+    figé (AC US-108). `from_u8`/`to_u8`, `is_mvp()` (les `GOSSIP_*` `0x06`–`0x08`
+    sont v2), `is_always_signed()`, `is_addressed()`.
+  - `Flags` (newtype `u8`) : `ADDRESSED/SIGNED/FRAGMENT/RELAY_OK/PADDED` +
+    `RESERVED_MASK`. `from_bits_truncate`, `contains`, `has_reserved`, `BitOr`.
+    Pas de crate `bitflags`.
+  - `Header` (en-tête **décodé**, champs seulement) : `header_len()`,
+    `wire_len()`, `flags_are_consistent()`. La (dé)sérialisation est US-201.
+  - `AppFrameKind` (L4 : `Message`, `Ack`, `ReadReceipt` v2, `Profile` post-MVP),
+    `AckStatus` (`Delivered=2`, `Read=3` v2). Alias `PeerId`/`MsgId`/`Signature`.
+  - 7 tests (discriminants contigus, `from_u8`∘`to_u8`, périmètre MVP, bits,
+    `Header`, frames L4).
+- **`tests/vectors_v0.json`** — 7 vecteurs `accept` (announce, noise_msg, ack,
+  sealed_envelope, inventory, fragment, log_attest) + 6 vecteurs `reject`
+  (mauvaise version, type inconnu, bit réservé, `payload_len` incohérent,
+  en-tête tronqué, `SIGNED` sans signature). `tests/protocol_vectors.rs` — 3
+  tests : cohérence structurelle des `accept` via `protocol::{consts, types}`,
+  chaque `reject` viole une règle, `Inventory` = `0x0D`.
+- **`src/lib.rs`** : `PROTOCOL_VERSION` devient un **alias** de
+  `protocol::consts::PROTO_VERSION` (les crates sœurs l'utilisent comme test de
+  liaison — US-104). Doc du module `protocol` ajoutée.
+
+### Pourquoi / décisions
+- **Types livrés sans `codec`** (US-201) : c'est l'objet de l'US-108 — `sync::*`
+  (US-209) peut s'écrire contre `PacketType`/`Flags`/`Header` sans attendre la
+  sérialisation.
+- **`Header.recipient_id: Option<PeerId>`** (pas `PeerId` + booléen) → l'invariant
+  « présent ⇔ `ADDRESSED` » est vérifiable.
+- **Bitfield maison** : 5 bits, API figée, une dépendance de moins.
+- **Vecteurs en JSON neutre**, dans `crates/dengon-core/tests/` faute de
+  `contracts/` sur `main` (voir écarts). Test **structurel** seulement (pas de
+  décodeur).
+
+### Écarts vs conception
+Deux, consignés dans `03-ecarts-conception.md` (2026-09-10) :
+- vecteurs dans `crates/dengon-core/tests/` au lieu de `contracts/packet/`
+  (dossier `contracts/` pas encore sur `main`) — déplacement prévu ;
+- `serde_json` en dev-dependency de `dengon-core` (lecture des vecteurs ;
+  aucun effet `no_std`).
+
+### Appris
+- **`allow-unwrap-in-tests` / `allow-expect-in-tests` du `clippy.toml` ne
+  couvrent PAS les crates de `tests/`** (compilées à part, hors `#[cfg(test)]`) :
+  il faut un `#![allow(clippy::unwrap_used, clippy::expect_used)]` en tête du
+  fichier de test intégré.
+
+### État après cette session
+- `cargo test -p dengon-core` → 14 tests lib + 3 intégration, verts. Toutes les
+  crates sœurs passent (alias `PROTOCOL_VERSION`). `no_std` OK, `fmt` OK,
+  `clippy -D warnings` OK.
+- `protocol::codec` (US-201) peut démarrer : il branchera `decode()` sur
+  `tests/vectors_v0.json` et comparera à `expect`.
+- Fiche `modules/dengon-core.md` mise à jour ; `_index` et `02-avancement` idem.
+- **Contrat à annoncer « gelé »** au point d'équipe (DoD §7.2, type contrat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                   exit 0
+$ cargo build --workspace --all-targets --locked               exit 0
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   exit 0
+$ cargo check -p dengon-core --no-default-features --locked     exit 0
+$ cargo test --workspace --all-features --locked
+  dengon-core (lib) : 14 passed ; protocol_vectors : 3 passed ; sœurs : OK
+$ cargo test --workspace --all-features --locked --doc          exit 0
+```
+
+---
+
 ## 2026-09-09 — `docs/suivi/` : fin des conflits de merge (US-115)
 
 **Auteur :** Claude (Sonnet 5)
