@@ -12,10 +12,21 @@ retrouver vite le bon fichier si elle veut y plonger.
 
 ## Index
 
-| Module | Fiche | Dernière mise à jour |
-|---|---|---|
-| `process` (`.github/`) | [processus-github.md](processus-github.md) | 2026-09-09 |
-| `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | 2026-09-09 |
+Les six crates Rust sont à l'état **esquisse** : elles compilent et sont
+testées, mais aucune n'implémente encore de logique métier (US-104, socle du
+sprint 2). La fiche `process` décrit l'**outillage**. Chaque fiche sert aussi de
+note d'onboarding de son area (proposition d'organisation §10.3 point 3).
 
-Chaque fiche sert aussi de **note d'onboarding** de son area (proposition
-d'organisation §10.3 point 3).
+| Module | Fiche | État | Dernière mise à jour |
+|---|---|---|---|
+| `dengon-core` | [dengon-core.md](dengon-core.md) | esquisse | 2026-09-09 |
+| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |
+| `dengon-node` | [dengon-node.md](dengon-node.md) | esquisse | 2026-09-09 |
+| `dengon-sim` | [dengon-sim.md](dengon-sim.md) | esquisse | 2026-09-09 |
+| `dengon-verify` | [dengon-verify.md](dengon-verify.md) | esquisse | 2026-09-09 |
+| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | esquisse | 2026-09-09 |
+| `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-10 |
+| `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
+
+Pas encore de fiche (le composant n'existe pas) : application Android, firmware
+`dengon-relay`, dashboard `web`.

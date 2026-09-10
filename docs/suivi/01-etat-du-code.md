@@ -1,73 +1,39 @@
-# État du code — photo courante
+# État du code — comment lire l'état courant
 
-> Réécrit à chaque session. Décrit ce qui **existe et fonctionne aujourd'hui**, pas
-> ce qui est prévu. Dernière mise à jour : **2026-09-09**.
+Ce fichier ne contient que des **pointeurs** (il change rarement, donc pas de
+conflit de merge). L'état réel se lit ici :
 
-## Résumé
+| Pour savoir… | Regarder |
+|---|---|
+| l'avancement par composant + l'outillage | [`02-avancement.md`](02-avancement.md) |
+| le détail d'un module (structs, flux, tests) | [`modules/`](modules/) et son [index](modules/_index.md) |
+| ce qui est **en cours** (branches, PR ouvertes) | le board GitHub · `gh pr list` |
+| pourquoi le code diverge de la conception | [`03-ecarts-conception.md`](03-ecarts-conception.md) |
+| l'historique des sessions | [`00-journal.md`](00-journal.md) |
 
-**Aucun code applicatif écrit sur `main`.** Le dépôt contient : la conception
-([`docs/powl/`](../powl/), [`docs/synthese/`](../synthese/)), ce dossier de
-suivi, un `.gitignore`, des hooks git (`.githooks/`) et, depuis le 09/09,
-l'**outillage de processus** dans `.github/` (US-113).
+## Résumé (1 ligne)
 
-Des PR sont en vol et ne sont pas comptées ci-dessous, puisqu'elles ne sont pas
-encore sur `main` : **#57** (US-104 — workspace Cargo, six crates squelettes, CI
-`core`), **#56** (US-109 — squelette Android) et la branche
-`chore/US-110-squelette-dashboard-api` (US-110 — squelette du dashboard `api`,
-décrite dans [`modules/dashboard-api.md`](modules/dashboard-api.md)).
+Lot 0 en cours (fondations & spikes). **Aucun composant applicatif n'est encore
+sur `main`.**
 
-## Avancement par composant
+## Commandes utiles
 
-| Composant | Prévu (conception) | Réel | Avancement | Fiche |
-|---|---|---|---|---|
-| `dengon-core` | crate Rust : protocol, crypto, store, sync, ledger, observability | — | 0 % | — |
-| `dengon-ble` | trait Transport + impl btleplug | — | 0 % | — |
-| `dengon-node` | binaire CLI (nœud headless) | — | 0 % | — |
-| `dengon-sim` | simulateur multi-nœuds | — | 0 % | — |
-| `dengon-ffi` | bindings UniFFI | — | 0 % | — |
-| App Android | Kotlin + Compose | — | 0 % | — |
-| Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
-| Dashboard `api` | FastAPI + SQLite + SSE (A-5) | squelette permissif hors `main` (US-110) | ~10 % | [dashboard-api.md](modules/dashboard-api.md) |
-| Dashboard `web` | page légère + SSE | — | 0 % | — |
-| Déploiement VPS | Caddy/nginx + uvicorn (A-5, A-6) | — | 0 % | — |
-
-## Outillage et processus
-
-| Élément | Réel | Fiche |
-|---|---|---|
-| Formulaires d'issue (`user-story`, `spike`, `bug`) | présents, non encore actifs (GitHub ne les lit que depuis `main`) | [processus-github.md](modules/processus-github.md) |
-| Template de PR (DoD §7.1 + §7.2) | présent | idem |
-| `CODEOWNERS` — revue croisée | présent ; **suggère** un relecteur, ne le **bloque** pas encore | idem |
-| `labels.yml` — 32 labels versionnés | présent, 0 écart avec GitHub | idem |
-| Workflow `labels` (synchro manuelle) | présent, lançable après merge | idem |
-| **Protection de `main`** | **active depuis le 09/09 15:18** (posée par `G1TS23`) : 1 approbation, `core` en check requis, approbations invalidées à chaque push. Posée avant le merge de #57 : #56 et #58 sont bloquées sur un `core` que rien ne rapporte. | idem |
-| Squash-only + suppression auto des branches | **déjà actifs** au niveau du dépôt, avant l'US-113 | idem |
-| Workflow `core` (fmt, clippy, nextest, couverture) | dans la PR #57, pas sur `main` | — |
-| GitGuardian + SonarCloud | applications GitHub installées, rapportent un statut sur chaque PR (vertes sur #58) | — |
-| Hook Conventional Commits | actif (`.githooks/commit-msg`) | — |
-
-## Ce qui tourne / commandes utiles
-
-_(à remplir quand il y aura du code : comment builder, lancer, tester chaque partie)_
-
-En attendant, la vérification de l'outillage :
+_(à enrichir quand il y aura du code : comment builder, lancer, tester chaque
+partie — voir aussi la note d'onboarding en tête de chaque fiche `modules/`.)_
 
 ```bash
-# Les labels du dépôt correspondent-ils au fichier versionné ?
+# Labels du dépôt vs fichier versionné
 gh label list --limit 100 --json name,color,description
 
-# Où en est la protection de main ?
-# ⚠ Depuis un compte NON ADMIN, cet endpoint renvoie 404 que la protection
-#   existe ou non : son 404 ne prouve rien.
-gh api repos/G1TS23/dengon/branches/main/protection
-
-# Contrôle fiable sans droit admin : l'état de fusion d'une PR.
+# État de fusion d'une PR (fiable même sans droit admin)
 gh pr view <n> --json mergeStateStatus,statusCheckRollup
+
+# Les attributs de merge sont-ils actifs ?
+git check-attr merge -- docs/suivi/00-journal.md   # -> merge: union
 ```
 
 ## Prochaines étapes
 
-Voir [`docs/powl/10-mvp-scope-roadmap.md`](../powl/10-mvp-scope-roadmap.md) — **Lot 0** :
-1. Spike A — `dengon-core` (protocol + crypto) cross-compile pour xtensa-esp32 ?
-2. Spike B — `btleplug` en rôle GATT peripheral sous Linux.
-3. Spike C — Android `BluetoothGattServer` + scan en foreground service.
+[`docs/synthese/10-benchmarks-mvp-tests.md`](../synthese/10-benchmarks-mvp-tests.md)
+§3.2 — **Lot 0** : Spike A (`dengon-core` cross-compile xtensa ?), Spike B
+(`btleplug` peripheral), Spike C (Android GATT server en foreground).
