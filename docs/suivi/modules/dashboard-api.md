@@ -4,7 +4,7 @@
 en HTTPS, et servir plus tard le parcours + l'état de chaque message.
 **Correspond à la conception :** [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §2 (architecture), §3 (ingestion), §11.2 (schéma cible).
-**Dernière mise à jour :** 2026-09-09
+**Dernière mise à jour :** 2026-09-10
 **État :** esquisse — squelette **permissif** (US-110). `/healthz` + `/ingest/batch`
 qui stocke le JSON brut. Aucune validation, aucune signature, aucune projection.
 
@@ -33,12 +33,12 @@ dashboard/api/
   uv.lock                — lock des deps (transitives + hash) ; géré par uv, fait foi en CI
   app/
     config.py            — db_path() : lit DENGON_DASHBOARD_DB (défaut dashboard.db)
-    migrations.py        — MIGRATIONS : liste (version, nom, sql) ; le SQL est un littéral du module
-    db.py               — connect() ; run_migrations() : applique MIGRATIONS, trace dans schema_migrations
+    migrations.py        — MIGRATIONS : liste (version, nom, [instructions SQL]), littéraux du module
+    db.py               — connect() ; run_migrations() : atomique + sûr en concurrence
     main.py             — app FastAPI ; lifespan → migrations ; routes /healthz et /ingest/batch
   tests/
     conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan
-    test_api.py          — 6 tests (voir plus bas)
+    test_api.py          — 12 tests (voir plus bas)
 ```
 
 ## Concepts / types importants
@@ -46,24 +46,27 @@ dashboard/api/
 | Élément | Fichier:ligne | Ce que ça fait |
 |---|---|---|
 | `db_path()` | `app/config.py:19` | chemin du fichier SQLite, lu depuis l'env à chaque appel (pas de cache → tests simples) |
-| `MIGRATIONS` | `app/migrations.py:38` | liste `(version, nom, sql)` ; le SQL est un **littéral du module** (pas un fichier lu), donc versionné, embarqué dans le paquet, sans I/O disque |
-| `connect()` | `app/db.py:19` | connexion SQLite, `row_factory = Row`, `WAL`, `foreign_keys = ON` |
-| `run_migrations(conn)` | `app/db.py:38` | applique les migrations manquantes dans l'ordre de version, insère dans `schema_migrations`, renvoie les versions appliquées ; idempotent |
-| `lifespan` | `app/main.py:31` | au démarrage de l'app : ouvre une connexion, migre, ferme |
-| `GET /healthz` | `app/main.py:47` | renvoie `{"status": "ok"}` |
-| `_guess_event_count()` | `app/main.py:52` | devine le nombre d'événements (`[...]` ou `{"events": [...]}`) sans imposer de schéma ; `None` sinon, jamais de rejet |
-| `POST /ingest/batch` | `app/main.py:69` | lit le corps brut → `json.loads` (400 si invalide) → `INSERT` dans `raw_batches` → `202` avec `batch_id` |
+| `MIGRATIONS` | `app/migrations.py` | liste `(version, nom, [instructions])` ; littéraux du module (pas de fichier lu), versionnés, embarqués, sans I/O disque ; chaque `CREATE` en `IF NOT EXISTS` |
+| `connect()` | `app/db.py` | connexion SQLite : `isolation_level=None` (transactions explicites), `WAL`, `busy_timeout=5000`, `foreign_keys=ON` |
+| `run_migrations(conn)` | `app/db.py` | applique les migrations manquantes ; chaque migration dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou rien), revérification de la version sous verrou → sûr avec `uvicorn --workers N` ; idempotent |
+| `lifespan` | `app/main.py` | au démarrage de l'app : ouvre une connexion, migre, ferme |
+| `GET /healthz` | `app/main.py` | route **sync** → threadpool FastAPI ; renvoie `{"status": "ok"}` |
+| `_guess_event_count()` | `app/main.py` | devine le nombre d'événements (`[...]` ou `{"events": [...]}`) sans imposer de schéma ; `None` sinon, jamais de rejet |
+| `_store_raw_batch()` | `app/main.py` | insertion synchrone d'un batch ; ouvre sa propre connexion (appelée dans un thread) |
+| `POST /ingest/batch` | `app/main.py` | décode UTF-8 → `json.loads` (400 si non-UTF-8 ou non-JSON) → INSERT via `run_in_threadpool` → `202` ; `503` + `Retry-After` si la base est verrouillée |
 
 ## Flux principal (exemple)
 
 ```
 un nœud : POST /ingest/batch   body = {"events":[{...},{...}]}
-  main.ingest_batch
+  main.ingest_batch (async)
     raw = await request.body()
-    json.loads(raw)            → OK (sinon 400)
+    text = raw.decode("utf-8")          → 400 si non-UTF-8
+    parsed = json.loads(text)           → 400 si non-JSON
     batch_id = uuid4()
-    event_count = 2            (_guess_event_count)
-    INSERT INTO raw_batches (batch_id, received_ms, remote_addr, content_type, event_count, body)
+    event_count = 2                     (_guess_event_count)
+    await run_in_threadpool(_store_raw_batch, ...)   → INSERT dans un thread
+       └─ sqlite3.OperationalError ?    → 503 + Retry-After: 1
   → 202  {"stored": true, "batch_id": "...", "event_count": 2}
 ```
 
@@ -96,18 +99,32 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   test a sa base (`tmp_path`) sans recharger de module.
 - **`202 Accepted`** et non `200` : l'ingestion est un dépôt asynchrone, pas une
   requête traitée sur le champ. Prépare la sémantique de US-216.
-- **`errors="replace"` au moment de stocker le corps** : `json.loads` a déjà
-  garanti que c'est de l'UTF-(8/16/32) valide ; le garde-fou évite juste un
-  crash sur un cas exotique.
+- **Décodage UTF-8 avant `json.loads`** (retour de revue #59) : `json.loads`
+  accepterait de l'UTF-16/32, mais le stocker en `TEXT` le corromprait et US-216
+  vérifiera une signature Ed25519 sur ces octets. `CANONICAL.md` impose l'UTF-8 →
+  on rejette (400) ce qui n'en est pas, plutôt que `errors="replace"`.
+- **I/O SQLite hors boucle d'événements** (retour de revue #59) : la route est
+  `async` (pour `await request.body()`) mais l'écriture passe par
+  `run_in_threadpool` — sinon un flush concurrent gèlerait la boucle et une
+  sonde de liveness sur `/healthz` pourrait expirer.
+- **`503` + `Retry-After` sur base verrouillée** (retour de revue #59) : SQLite
+  n'a qu'un écrivain ; le perdant d'un flush simultané reçoit un signal de
+  retenter, il ne perd pas son batch sur un 500.
+- **Migrations atomiques et sûres en concurrence** (retour de revue #59) :
+  `BEGIN IMMEDIATE` + revérification sous verrou + `CREATE … IF NOT EXISTS`.
+  Un crash entre le DDL et l'enregistrement de version, ou deux workers au
+  démarrage, ne cassent plus tous les démarrages suivants.
 
 ## Tests
 
-- `tests/test_api.py` — 6 tests : `/healthz` ; objet arbitraire accepté (202,
-  `event_count` = 3) ; tableau nu accepté ; corps stocké **verbatim** en base ;
-  non-JSON → 400 ; migrations appliquées une seule fois (`[1]`).
+- `tests/test_api.py` — **12 tests** : `/healthz` ; objet arbitraire (202,
+  `event_count` = 3) ; tableau nu ; corps **verbatim** en base ; non-JSON → 400 ;
+  **JSON non-UTF-8 → 400** ; **base verrouillée → 503 + `Retry-After`** ;
+  migrations appliquées une fois ; **migrations idempotentes après DDL partiel** ;
+  3 formes de payload paramétrées.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .` et `uv run pytest` → **6 passed** (vérifié le
-  2026-09-09).
+  `uv run ruff check .` et `uv run pytest` → **12 passed** (vérifié le
+  2026-09-10).
 
 ## Limites connues / TODO
 
@@ -116,9 +133,10 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
 - **Aucune projection** : on ne sait pas encore reconstruire un statut de
   message. → US-217.
 - **Pas de SSE**, pas de routes REST de lecture. → US-218, US-219.
-- **Pas de déploiement** : tourne en local via `uvicorn`. → US-224 (VPS + TLS).
-- 2 `DeprecationWarning` (`httpx`/`anyio`) sous Python 3.14 en local ; sans
-  effet, absents en 3.11.
+- **Pas de déploiement** : tourne en local via `uvicorn`. Les migrations
+  tournent dans le `lifespan` — US-224 pourra les sortir en étape explicite. →
+  US-224 (VPS + TLS).
+- 2 `DeprecationWarning` (`httpx`/`anyio`) en local ; sans effet, absents en CI.
 
 ## Pour l'oral
 

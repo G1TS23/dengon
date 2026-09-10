@@ -1,4 +1,7 @@
 import json
+import sqlite3
+
+import pytest
 
 
 def test_healthz(client):
@@ -53,6 +56,30 @@ def test_ingest_rejects_non_json(client):
     assert response.status_code == 400
 
 
+def test_ingest_rejects_non_utf8_json(client):
+    # JSON valide mais encodé en UTF-16 : json.loads l'accepterait, mais le
+    # stocker en texte le corromprait (retour de revue #59, point 1).
+    body = json.dumps({"events": [{"x": 1}]}).encode("utf-16")
+    response = client.post(
+        "/ingest/batch",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+
+
+def test_ingest_returns_503_when_storage_is_locked(client, monkeypatch):
+    # Le chemin d'erreur « base verrouillée » : un flush concurrent perd la
+    # course et le nœud doit retenter (retour de revue #59, point 3).
+    def _boom(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("app.main._store_raw_batch", _boom)
+    response = client.post("/ingest/batch", json={"events": []})
+    assert response.status_code == 503
+    assert response.headers.get("Retry-After") == "1"
+
+
 def test_migrations_applied_once(client):
     from app.db import connect, run_migrations
 
@@ -62,3 +89,25 @@ def test_migrations_applied_once(client):
     versions = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")]
     conn.close()
     assert versions == [1]
+
+
+def test_migrations_idempotent_after_partial_apply(tmp_path, monkeypatch):
+    # Simule un arrêt entre le DDL et l'INSERT dans schema_migrations :
+    # la reprise ne doit pas planter (retour de revue #59, point 4).
+    monkeypatch.setenv("DENGON_DASHBOARD_DB", str(tmp_path / "partial.db"))
+    from app.db import connect, run_migrations
+    from app.migrations import MIGRATIONS
+
+    conn = connect()
+    for statement in MIGRATIONS[0][2]:  # applique le DDL sans enregistrer la version
+        conn.execute(statement)
+
+    assert run_migrations(conn) == [1]  # se termine proprement grâce à IF NOT EXISTS
+    assert [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")] == [1]
+    conn.close()
+
+
+@pytest.mark.parametrize("payload", [{"events": []}, [], {"a": 1}])
+def test_ingest_event_count_shapes(client, payload):
+    response = client.post("/ingest/batch", json=payload)
+    assert response.status_code == 202

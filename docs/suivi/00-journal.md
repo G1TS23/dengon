@@ -126,7 +126,45 @@ $ uv run ruff check .   → All checks passed!
 $ uv run pytest         → 6 passed
 ```
 
----
+### Retours de revue de Paul (2026-09-10)
+
+Branche resynchronisée sur `main` (US-104 + US-115 mergées entre-temps).
+Conflit `docs/suivi/` résolu à la main **cette fois** (`.gitattributes` de
+l'US-115 n'était pas encore actif au moment où ce merge l'introduit) :
+`01-etat-du-code.md` pris en version `main` (pointeurs), mon avancement déplacé
+dans `02-avancement.md`, ligne `_index.md` reformatée en 4 colonnes.
+
+Quatre retours de fond, tous valides, tous traités :
+
+1. **`raw.decode("utf-8", errors="replace")` cassait le contrat « verbatim »** —
+   `json.loads` accepte l'UTF-16/32, le corps était alors stocké en mojibake et
+   ne round-trip plus (US-216 y vérifiera une signature Ed25519). Corrigé :
+   décodage UTF-8 **avant** `json.loads`, un corps non-UTF-8 est rejeté (400).
+   Cohérent avec `contracts/events/CANONICAL.md` (UTF-8 imposé).
+2. **I/O SQLite bloquante sur la boucle d'événements** — la route `async` faisait
+   `connect`/`execute`/`commit` synchrones. Corrigé : l'écriture passe par
+   `starlette.concurrency.run_in_threadpool` (la route reste `async` pour
+   `await request.body()`). J'ai préféré ça au « route sync » suggéré, qui
+   interdit `await request.body()`.
+3. **Écriture concurrente → 500 non géré** — deux flush simultanés, le perdant
+   lève `sqlite3.OperationalError`. Corrigé : `except` → `503` + `Retry-After`,
+   + `PRAGMA busy_timeout = 5000`.
+4. **Migrations non atomiques / non concurrence-safe** — `executescript` en
+   autocommit : DDL committé avant l'enregistrement de version → un crash entre
+   les deux, ou `uvicorn --workers N`, cassait tous les démarrages suivants.
+   Corrigé : migrations = **liste d'instructions** (plus d'`executescript`),
+   chacune dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou
+   rien), revérification de la version sous verrou, `CREATE … IF NOT EXISTS`.
+   `connect()` passe en `isolation_level=None` (transactions explicites,
+   comportement identique 3.11→3.13).
+
+Tests : **6 → 12** (JSON non-UTF-8 → 400 ; base verrouillée → 503 ; migrations
+idempotentes après DDL partiel ; formes de payload paramétrées).
+
+```
+$ uv run ruff check .   → All checks passed!
+$ uv run pytest         → 12 passed
+```
 
 ---
 
