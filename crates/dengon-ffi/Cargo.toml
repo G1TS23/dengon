@@ -1,0 +1,23 @@
+[package]
+name        = "dengon-ffi"
+description = "Bindings UniFFI de dengon-core (Kotlin ; Swift en v2)"
+
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+repository.workspace   = true
+authors.workspace      = true
+publish.workspace      = true
+
+[lib]
+# "lib" (rlib) est INDISPENSABLE : sans lui, `cargo test` ne peut pas compiler
+# les tests unitaires de la crate. "cdylib" produit le libdengon_ffi.so chargé
+# par l'application Android. "staticlib" sera ajouté le jour où le firmware
+# ESP32 aura besoin d'une libdengon_core.a (docs/synthese/08-relais-esp32.md).
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+dengon-core = { workspace = true }
+
+[lints]
+workspace = true

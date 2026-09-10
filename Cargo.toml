@@ -1,0 +1,92 @@
+# ---------------------------------------------------------------------------
+# Workspace Rust dengon — voir docs/synthese/04-architecture.md §5
+#
+# Six crates :
+#   dengon-core    lib      LE protocole (protocol, crypto, identity, store,
+#                           sync, ledger, observability, api)
+#   dengon-ble     lib      trait Transport + implémentation btleplug (desktop)
+#   dengon-node    bin      nœud CLI headless
+#   dengon-sim     lib+bin  simulateur multi-nœuds, scénarios .ron
+#   dengon-verify  bin      vérification de journal chaîné (appelé par le
+#                           dashboard Python en sous-processus)
+#   dengon-ffi     lib      bindings UniFFI vers Kotlin (cdylib)
+#
+# US-104 ne livre que les squelettes : chaque crate compile, expose une
+# constante et un test fumigène. Les implémentations réelles arrivent au
+# sprint 2 (voir docs/plan-mvp.md).
+# ---------------------------------------------------------------------------
+
+[workspace]
+members  = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+# Choix transverse figé par docs/synthese/04-architecture.md §7.
+edition = "2021"
+# MSRV : PLANCHER de version acceptée, à ne pas confondre avec la version
+# exacte figée dans rust-toolchain.toml (qui est, elle, ce que la CI installe).
+# 1.85 est très au-dessus du minimum réel (les lints de workspace demandent
+# 1.74) : c'est un plancher confortable, pas une contrainte étudiée. Aucun job
+# CI ne le vérifie encore — voir docs/suivi/03-ecarts-conception.md.
+rust-version = "1.85"
+repository   = "https://github.com/G1TS23/dengon"
+authors      = ["G1TS23"]
+# Licence pas encore tranchée par l'équipe (docs/synthese/01-sujets-a-trancher.md).
+# publish = false rend le champ `license` non bloquant en attendant.
+publish = false
+
+# ---------------------------------------------------------------------------
+# Dépendances partagées : chaque crate écrit `foo = { workspace = true }`.
+#
+# Volontairement limité aux crates INTERNES. Une dépendance externe déclarée
+# ici avec un numéro de version erroné fait échouer tout le workspace, y
+# compris `cargo fmt`. On ajoute une ligne au moment où une PR l'utilise
+# réellement (US-105 pour btleplug, US-106 pour uniffi, US-108 pour la crypto).
+# ---------------------------------------------------------------------------
+[workspace.dependencies]
+dengon-core = { path = "crates/dengon-core", version = "0.1.0" }
+dengon-ble  = { path = "crates/dengon-ble", version = "0.1.0" }
+
+# ---------------------------------------------------------------------------
+# Lints centralisés (Cargo >= 1.74). C'est la « configuration clippy
+# versionnée » exigée par l'US-104 : clippy.toml ne peut PAS activer un lint,
+# il ne fait que configurer ceux activés ici.
+#
+# ⚠ PIÈGE SILENCIEUX : ces lints n'ont AUCUN effet sur une crate qui n'écrit
+# pas `[lints] workspace = true` dans son propre Cargo.toml. Aucune erreur
+# n'est émise — la crate est juste ignorée. Vérifier les six.
+#
+# Avantage sur `-D warnings` en CI seul : ces lints s'appliquent aussi au
+# `cargo clippy` local, donc le développeur voit le problème avant de pousser.
+#
+# On n'utilise JAMAIS "forbid" : forbid est inviolable, et dengon-ffi devra
+# neutraliser `unsafe_code` (UniFFI génère de l'unsafe).
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unsafe_code                   = "deny"
+missing_debug_implementations = "warn"
+unused_qualifications         = "warn"
+# priority = -1 : sans lui, un lint individuel du même groupe ne peut pas
+# surcharger le groupe et Cargo refuse la configuration.
+rust_2018_idioms = { level = "warn", priority = -1 }
+# missing_docs = "warn"   # à activer sur dengon-core quand l'API se stabilise
+
+[workspace.lints.clippy]
+all           = { level = "warn", priority = -1 }
+unwrap_used   = "warn"
+expect_used   = "warn"
+todo          = "warn"
+unimplemented = "warn"
+dbg_macro     = "warn"
+mem_forget    = "warn"
+# Pertinents pour un codec binaire (TTL, longueurs, offsets) mais bruyants
+# tant qu'il n'y a pas de code : à activer avec `protocol` (US-108).
+# cast_possible_truncation = "warn"
+# cast_sign_loss           = "warn"
+# cast_possible_wrap       = "warn"
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"

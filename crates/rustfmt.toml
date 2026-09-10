@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# Configuration rustfmt — dengon
+#
+# Ce fichier vit dans crates/ et non à la racine : rustfmt le cherche en
+# REMONTANT depuis chaque fichier source, donc `cargo fmt` lancé depuis la
+# racine le trouve quand même. Vérifié en le retirant : le formatage change.
+#
+# RÈGLE : options STABLES uniquement. Une option nightly placée ici est
+# ignorée sur stable (rustfmt avertit sur stderr mais `cargo fmt --check`
+# sort quand même en 0) : le formatage divergerait silencieusement entre un
+# poste sous nightly et la CI sous stable.
+#
+# Volontairement absentes car NIGHTLY-ONLY, malgré la tentation :
+#   imports_granularity, group_imports, wrap_comments, comment_width,
+#   normalize_comments, format_code_in_doc_comments, format_strings,
+#   match_block_trailing_comma, where_single_line, overflow_delimited_expr,
+#   struct_field_align_threshold, condense_wildcard_suffixes,
+#   error_on_line_overflow
+#
+# Conséquence pratique : `wrap_comments` étant nightly, les commentaires et
+# les `//!` en français ne sont PAS re-wrappés automatiquement. Convention
+# d'équipe : les couper à la main à ~100 colonnes.
+# ---------------------------------------------------------------------------
+
+# À maintenir en phase avec `edition` du Cargo.toml racine. Redondant quand
+# rustfmt est appelé par `cargo fmt`, utile pour un `rustfmt` direct et pour
+# rust-analyzer.
+edition = "2021"
+
+max_width            = 100
+tab_spaces           = 4
+hard_tabs            = false
+newline_style        = "Unix"
+use_small_heuristics = "Default"
+
+reorder_imports      = true
+reorder_modules      = true
+merge_derives        = true
+remove_nested_parens = true
+
+use_field_init_shorthand = true
+use_try_shorthand        = true
+force_explicit_abi       = true
+
+# Nom stable depuis rustfmt 1.72 ; l'ancien `fn_args_layout` est déprécié.
+fn_params_layout = "Tall"

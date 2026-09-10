@@ -25,6 +25,23 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ## Notes
 
+### `merge=union` — fusionner des fichiers « append » sans conflit
+
+**C'est quoi :** un pilote de fusion **intégré à git**. Sur un fichier marqué
+`merge=union` dans `.gitattributes`, quand deux branches modifient la même zone,
+git **prend les deux versions** au lieu d'écrire des marqueurs `<<<<<<<`.
+**Pourquoi dans dengon :** `docs/suivi/00-journal.md` & co. reçoivent une entrée
+par PR, toujours au même endroit → conflit systématique (US-115).
+**Piège / surprise :** `union` **ne trie pas**. Il concatène les deux côtés dans
+un ordre non garanti, sans forcément remettre de ligne vide. Après la fusion, on
+relit le haut du journal et on remet l'ordre anti-chronologique si besoin. À ne
+**pas** mettre sur un fichier qu'on *réécrit* (il dupliquerait des paragraphes) —
+d'où `01-etat-du-code.md` laissé hors `union` et vidé de son contenu volatil.
+**Où c'est utilisé :** `.gitattributes` racine ; règle expliquée dans
+`docs/suivi/README.md` § Fusion.
+**Pour aller plus loin :** `man gitattributes` (section « Merging branches with
+differing checkin/checkout attributes »), `git help merge`.
+
 ### Formulaire d'issue (*issue form*) vs template Markdown
 
 **C'est quoi :** deux façons de pré-remplir une issue GitHub. Le template
@@ -120,6 +137,143 @@ une PR est donc **intestable avant merge** — il n'apparaît nulle part. Il fau
 l'écrire avec soin, et prévoir un mode simulation par défaut plutôt que de
 compter sur un essai préalable.
 **Où c'est utilisé :** `.github/workflows/labels.yml`.
+
+---
+
+### `[workspace.lints]` et `clippy.toml` ne font pas la même chose
+
+**C'est quoi :** deux fichiers qui ont l'air de configurer clippy, mais qui ont
+des rôles disjoints. `[workspace.lints]` (dans `Cargo.toml`, depuis Cargo 1.74)
+**active ou désactive** des lints. `clippy.toml` **configure** ceux qui sont
+déjà activés — seuils, exceptions — et ne peut en activer aucun.
+
+**Pourquoi dans dengon :** l'US-104 demandait « une configuration clippy
+versionnée ». On aurait pu croire que `clippy.toml` suffisait. En réalité les
+deux sont nécessaires et complémentaires : `[workspace.lints.clippy]` active
+`unwrap_used`, et `clippy.toml` ajoute `allow-unwrap-in-tests = true` — sans
+quoi chaque test croulerait sous les `#[allow]`.
+
+**Piège / surprise :** trois pièges, dont un vicieux.
+1. Les lints du workspace sont **ignorés en silence** dans toute crate qui
+   n'écrit pas `[lints] workspace = true` dans son propre `Cargo.toml`. Aucune
+   erreur, aucun avertissement — la crate n'est simplement pas vérifiée. C'est
+   pour ça qu'on a testé la chaîne en ajoutant un `unwrap()` volontaire.
+2. Une clé inconnue dans `clippy.toml` fait **échouer** clippy, alors qu'une
+   option inconnue dans `rustfmt.toml` est seulement ignorée.
+3. `priority = -1` est obligatoire sur un groupe (`all`, `rust_2018_idioms`),
+   sinon un lint individuel du même groupe ne peut pas le surcharger.
+
+**Où c'est utilisé :** `Cargo.toml:66-87`, `crates/clippy.toml`, et
+`[lints] workspace = true` dans les six `crates/*/Cargo.toml`.
+**Pour aller plus loin :** `cargo help lints`, et la liste des options
+configurables sur rust-lang.github.io/rust-clippy/master/index.html.
+
+---
+
+---
+
+### En CI, le nom du *job* devient le nom du *check* requis
+
+**C'est quoi :** quand GitHub publie le résultat d'un workflow, l'identifiant
+visible dans la protection de branche est le nom du **job**, pas celui du
+fichier ni du workflow.
+
+**Pourquoi dans dengon :** la conception exige que `core`, `sim`, `audit` et
+`cross-vectors` soient verts pour merger. Il faut donc que le job s'appelle
+exactement `core`.
+
+**Piège / surprise :** deux façons de casser ça sans s'en apercevoir. Mettre une
+`strategy.matrix` sur le job : le check devient `core (ubuntu-latest)` et la
+protection ne le trouve plus. Passer par un workflow réutilisable : il devient
+`appelant / appelé`. Découper en quatre jobs (fmt, clippy, test, couverture)
+publierait quatre checks et **aucun** nommé `core`.
+
+**Où c'est utilisé :** `.github/workflows/core.yml`, un seul job `core`.
+
+---
+
+---
+
+### MSRV et toolchain épinglée : deux choses différentes
+
+**C'est quoi :** `rust-version` dans `Cargo.toml` est la **MSRV** — la version
+minimale de Rust acceptée, un *plancher*. `channel` dans `rust-toolchain.toml`
+est la version **exacte** que rustup installe et que la CI utilise.
+Invariant : `channel >= rust-version`.
+
+**Pourquoi dans dengon :** la conception dit « MSRV figée » sans donner de
+numéro. On a mis les deux : `rust-version = "1.85"` (plancher confortable) et
+`channel = "1.98.1"` (ce que tout le monde utilise réellement).
+
+**Piège / surprise :** épingler `channel = "stable"` serait une fausse bonne
+idée. Une nouvelle stable sort toutes les six semaines avec de nouveaux lints ;
+comme la CI lance `clippy -D warnings`, `main` peut virer au rouge un matin sans
+qu'une ligne du dépôt ait changé. Avec une version exacte, la montée de version
+devient une PR volontaire. Autre subtilité : rustup lit `rust-toolchain.toml` et
+installe tout seul la bonne version au premier `cargo` — y compris les
+composants listés (`llvm-tools`, indispensable à `cargo llvm-cov`).
+
+**Où c'est utilisé :** `Cargo.toml` (`rust-version`), `rust-toolchain.toml:19`.
+**À noter :** aucun job CI ne vérifie encore que la MSRV annoncée est tenue.
+
+---
+
+---
+
+### Où chaque fichier de configuration Rust doit vivre
+
+**C'est quoi :** les cinq fichiers de configuration Rust n'ont pas du tout les
+mêmes règles de localisation, alors qu'on a tendance à tous les jeter à la racine.
+
+| Fichier | Trouvé comment | Peut descendre dans un dossier ? |
+|---|---|---|
+| `Cargo.toml` | remontée depuis le **répertoire courant** | oui, mais toute commande depuis la racine échoue |
+| `Cargo.lock` | toujours à côté de `Cargo.toml` | non, pas configurable |
+| `rustfmt.toml` | remontée depuis **chaque fichier source** | oui, sans coût |
+| `clippy.toml` | remontée depuis le **manifeste de la crate** | oui, sans coût |
+| `rust-toolchain.toml` | remontée depuis le **répertoire courant**, par rustup | déconseillé (voir ci-dessous) |
+
+**Pourquoi dans dengon :** le dépôt est polyglotte — `android/`, `firmware/` et
+`dashboard/` vont arriver, et chacun gardera sa configuration chez lui. Laisser
+cinq fichiers Rust à la racine était asymétrique. On en a descendu deux dans
+`crates/`.
+
+**Piège / surprise :** `rust-toolchain.toml` est résolu par rustup depuis le
+**répertoire courant**, pas depuis `--manifest-path`. Si on le range dans
+`crates/`, alors `cargo build --manifest-path crates/Cargo.toml` lancé de la
+racine compile **en ignorant silencieusement la version épinglée**. Aucun
+avertissement. C'est exactement le contraire de ce qu'on cherche en figeant une
+toolchain, donc ce fichier reste à la racine.
+
+**Où c'est utilisé :** `crates/rustfmt.toml`, `crates/clippy.toml`, et à la
+racine `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`.
+
+---
+
+### Épingler les actions GitHub sur un SHA, pas sur un tag
+
+**C'est quoi :** dans un workflow, `uses: dorny/paths-filter@v4` désigne un tag
+Git — donc une étiquette **mutable**. Son propriétaire peut la repointer vers
+n'importe quel commit. `@master` est pire encore : c'est une branche, qui bouge
+par construction. Un SHA de commit complet, lui, est immuable.
+
+**Pourquoi dans dengon :** SonarCloud (règle `githubactions:S7637`) a fait
+échouer la Quality Gate de la PR #57 sur exactement ce point, avec une note de
+sécurité « C » sur le nouveau code. C'était justifié : une action tierce
+s'exécute dans notre CI avec accès au dépôt.
+
+**Piège / surprise :** on croit qu'épingler `@v4` suffit parce que ça ressemble
+à une version figée. Ce n'est pas le cas — seul un SHA l'est. À noter que Sonar
+n'a pas signalé `actions/checkout` ni `actions/upload-artifact` : les actions
+officielles `actions/*` sont considérées de confiance. La contrepartie de
+l'épinglage est qu'il faut mettre à jour à la main ; on garde donc le numéro de
+version en commentaire à droite du SHA, pour rester lisible.
+
+**Où c'est utilisé :** `.github/workflows/core.yml`, les six `uses:`.
+**Pour aller plus loin :** règle S7637 sur rules.sonarsource.com, et la
+documentation GitHub « Using third-party actions ».
+
+---
 
 Sujets probables (d'après la conception) — à traiter quand on les rencontre :
 

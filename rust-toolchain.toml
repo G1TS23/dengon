@@ -1,0 +1,24 @@
+# ---------------------------------------------------------------------------
+# Toolchain figée pour tout le dépôt (postes de dev ET CI).
+#
+# Pourquoi une version EXACTE et pas "stable" : la CI lance
+# `clippy -D warnings`. Une nouvelle stable sort toutes les six semaines et
+# apporte de nouveaux lints — avec "stable", `main` peut virer au rouge un
+# mardi matin sans qu'une ligne du dépôt ait changé. Sur un projet de trois
+# semaines, c'est du temps qu'on n'a pas. La montée de version devient une PR
+# explicite et volontaire.
+#
+# À NE PAS CONFONDRE avec `rust-version` du Cargo.toml, qui est la MSRV,
+# c'est-à-dire un plancher. Invariant : channel >= rust-version.
+#
+# Cross-compilation ESP32 (US-101 / Spike A) : la cible xtensa-esp32-none-elf
+# passe par le fork esp-rs installé avec `espup`, qui ne respecte pas ce
+# fichier de la même façon. À traiter dans US-101, pas ici.
+# ---------------------------------------------------------------------------
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"
+# llvm-tools est indispensable à `cargo llvm-cov` (il fournit llvm-profdata
+# et llvm-cov). Le déclarer ici règle le cas de tout le monde, pas seulement
+# de la CI.
+components = ["rustfmt", "clippy", "llvm-tools"]
