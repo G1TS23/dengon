@@ -244,14 +244,15 @@ OUT_OF_SCOPE = {
 
 
 def canonical_json(obj: object) -> bytes:
-    """Forme canonique signée : clés triées, séparateurs compacts, UTF-8.
+    """Forme canonique signée : clés triées, séparateurs compacts, UTF-8, pas de NaN.
 
     C'EST le contrat de signature. L'implémentation Rust (`serde_json` +
-    tri des clés) doit produire des octets identiques. Voir events/CANONICAL.md.
+    tri des clés, entiers jamais en `f64`) doit produire des octets identiques.
+    Voir events/CANONICAL.md.
     """
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
-        "utf-8"
-    )
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
 
 
 def event_id(node_id: str, seq: int) -> str:

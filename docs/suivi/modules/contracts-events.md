@@ -5,7 +5,7 @@ tête d'un événement d'observabilité, le corps de `POST /ingest/batch`, et
 20 exemples signés qui font référence pour tous les composants.
 **Correspond à la conception :** [`docs/powl/08-observability-events.md`](../../powl/08-observability-events.md),
 [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §9.
-**Dernière mise à jour :** 2026-09-09
+**Dernière mise à jour :** 2026-09-10
 **État :** fonctionnel — schémas + 20 fixtures + `validate.py` vert. **Contrat
 à geler** au point d'équipe (US-107).
 
@@ -85,22 +85,34 @@ tools/validate.py  (ce que lance la CI)
 - **Catalogue en Python, schéma dérivé** : une seule source à maintenir.
 - **Fixtures committées, régénération vérifiée en CI** (`git diff --exit-code`) :
   un diff = une dérive visible.
-- **`msg_log_id` = 8 octets / 16 hex** (contradiction des docs tranchée, voir
-  `03-ecarts-conception.md`).
+- **Identifiants pseudonymes tronqués = 8 octets / 16 hex** (`msg_log_id`,
+  `conv_hash`, `from_peer`/`peer`/`to_peer` — contradiction des docs tranchée,
+  voir `03-ecarts-conception.md`).
 - **Un `sig` par batch** (pas par événement).
+- **`canonical_json` avec `allow_nan=False`** : la règle « pas de NaN/Infinity »
+  de `CANONICAL.md` est appliquée par la référence, pas seulement écrite (retour
+  de revue #60).
 
 ## Tests
 
 - `tools/validate.py` **est** la suite de tests. `uv run python tools/validate.py`
-  → `✓ 20 fixtures valides — 28 noms d'événements couverts.` (2026-09-09).
+  → `✓ 20 fixtures valides — 28 noms d'événements couverts.` (2026-09-10).
+- Contrôles par fixture : schéma batch/enveloppe · redaction · **signature
+  Ed25519** · **`batch_id` recalculé** · par événement : `node_id`/`event_id`
+  cohérents, `msg_log_id` en 16 hex, `payload` vs catalogue **et vs le
+  `payloads.schema.json` livré**. Globaux : fraîcheur du schéma généré,
+  couverture du catalogue.
+- Négatif vérifié en local : `batch_id` trafiqué → rejet ; champ requis retiré
+  d'un payload → rejet par le catalogue **et** par `payloads.schema.json`.
 - CI : `.github/workflows/contracts.yml` (ruff + régénération stable + validate).
 
 ## Limites connues / TODO
 
 - Le `payload` n'est **pas fermé** (`additionalProperties` autorisé) : un champ
   en trop passe. Voulu — l'ajout de champ est rétrocompatible (`schema_version`).
-- Pas de fixture « invalide attendue » (batch mal signé, clé interdite) pour
-  tester que `validate.py` **rejette** bien. À ajouter si le besoin se confirme.
+- Pas de fixture « invalide attendue » committée (batch mal signé, clé
+  interdite) : le rejet est vérifié à la main, pas dans la CI. À committer si le
+  besoin se confirme.
 - `catalogue.py` doit rester synchronisé à la main avec `docs/powl/08` — pas de
   vérification croisée automatique.
 

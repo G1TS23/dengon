@@ -45,10 +45,12 @@ git add events/ && git commit
 cd contracts && uv sync && uv run python tools/validate.py
 ```
 
-`validate.py` contrôle : schéma batch + enveloppe, `payload` vs catalogue,
-`event_id` / `node_id` cohérents, **signature Ed25519**, **redaction** (aucune
-clé `msg_uuid` / `recipient` / texte ; tout `msg_log_id` est une empreinte 16
-hex), fraîcheur de `payloads.schema.json`, couverture du catalogue.
+`validate.py` contrôle : schéma batch + enveloppe, `payload` vs catalogue
+**et vs le `payloads.schema.json` livré** (celui que consomme US-217),
+`event_id` / `node_id` cohérents, `batch_id` = `hex(SHA-256(canonical_json(events)))`,
+**signature Ed25519**, **redaction** (aucune clé `msg_uuid` / `recipient` /
+texte ; tout `msg_log_id` est une empreinte 16 hex), fraîcheur de
+`payloads.schema.json`, couverture du catalogue.
 
 ## Statut
 

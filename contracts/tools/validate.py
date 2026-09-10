@@ -2,19 +2,23 @@
 
     uv run python tools/validate.py
 
-Contrôles :
-  1. chaque fixture valide contre batch.schema.json (+ envelope.schema.json) ;
-  2. chaque `payload` respecte le catalogue (champs requis + types) ;
-  3. `event_id` = hex(SHA-256(node_id ‖ seq)) ; `node_id` du batch = celui des events ;
-  4. la signature Ed25519 du batch est valide pour la clé de test ;
-  5. redaction : aucune clé interdite, tout `msg_log_id` est bien une empreinte 16 hex ;
-  6. `events/payloads.schema.json` est à jour vis-à-vis du catalogue ;
+Contrôles, par fixture :
+  1. valide contre batch.schema.json (+ envelope.schema.json) ;
+  2. redaction : aucune clé interdite ;
+  3. signature Ed25519 du batch valide pour la clé de test ;
+  4. `batch_id` == hex(SHA-256(canonical_json(events))) ;
+  5. par événement : `node_id` cohérent, `event_id` recalculé, `msg_log_id`
+     empreinte 16 hex, `payload` conforme au catalogue **et** au
+     `payloads.schema.json` réellement livré (celui que consomme US-217).
+Contrôles globaux :
+  6. `payloads.schema.json` à jour vis-à-vis du catalogue ;
   7. les 20 fixtures couvrent tout le catalogue.
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -29,16 +33,22 @@ ROOT = Path(__file__).resolve().parent.parent
 EVENTS = ROOT / "events"
 FIXTURES = EVENTS / "fixtures"
 
+GLOBAL = "(global)"
 FORBIDDEN_KEYS = {"msg_uuid", "recipient", "text", "body", "plaintext", "message", "content"}
+_HEX = set("0123456789abcdef")
 
 errors: list[str] = []
 
 
-def fail(fixture: str, msg: str) -> None:
-    errors.append(f"{fixture}: {msg}")
+def fail(where: str, msg: str) -> None:
+    errors.append(f"{where}: {msg}")
 
 
-def _registry() -> Registry:
+def _is_hex16(value: object) -> bool:
+    return isinstance(value, str) and len(value) == 16 and set(value) <= _HEX
+
+
+def _batch_registry() -> Registry:
     reg = Registry()
     for schema_file in ("envelope.schema.json", "batch.schema.json"):
         schema = json.loads((EVENTS / schema_file).read_text())
@@ -47,64 +57,110 @@ def _registry() -> Registry:
     return reg
 
 
+def _verify_key() -> VerifyKey:
+    pub = json.loads((EVENTS / "test-signing-key.json").read_text())["public_hex"]
+    return VerifyKey(bytes.fromhex(pub))
+
+
 def _walk_keys(obj: object):
     if isinstance(obj, dict):
-        for k, v in obj.items():
-            yield k
-            yield from _walk_keys(v)
+        for key, value in obj.items():
+            yield key
+            yield from _walk_keys(value)
     elif isinstance(obj, list):
-        for v in obj:
-            yield from _walk_keys(v)
+        for value in obj:
+            yield from _walk_keys(value)
 
 
-def check_payload(fixture: str, name: str, payload: dict) -> None:
-    spec = CATALOGUE.get(name)
-    if spec is None:
-        fail(fixture, f"événement hors catalogue : {name}")
-        return
-    for field in spec["required"]:
-        if field not in payload:
-            fail(fixture, f"{name}: champ requis manquant « {field} »")
-    validator = Draft202012Validator({"type": "object", "properties": spec["props"]})
-    for err in validator.iter_errors(payload):
-        fail(fixture, f"{name}: payload invalide — {err.message}")
-
-
-def check_fixture(path: Path, batch_validator: Draft202012Validator) -> None:
-    fx = path.name
-    body = json.loads(path.read_text())
-
+def _check_schema(fx: str, body: dict, batch_validator: Draft202012Validator) -> None:
     for err in sorted(batch_validator.iter_errors(body), key=str):
         fail(fx, f"schéma batch — {err.message}")
 
-    # redaction
+
+def _check_redaction(fx: str, body: dict) -> None:
     for key in _walk_keys(body):
         if key in FORBIDDEN_KEYS:
             fail(fx, f"clé interdite (redaction) : « {key} »")
 
-    # signature
-    vk = VerifyKey(
-        bytes.fromhex(json.loads((EVENTS / "test-signing-key.json").read_text())["public_hex"])
-    )
+
+def _check_signature(fx: str, body: dict, verify_key: VerifyKey) -> None:
     unsigned = {k: v for k, v in body.items() if k != "sig"}
     try:
-        vk.verify(canonical_json(unsigned), base64.b64decode(body["sig"]))
+        verify_key.verify(canonical_json(unsigned), base64.b64decode(body["sig"]))
     except (BadSignatureError, KeyError, ValueError) as exc:
         fail(fx, f"signature invalide : {exc}")
 
-    for e in body.get("events", []):
-        if e.get("node_id") != body.get("node_id"):
-            fail(fx, f"node_id de l'événement {e.get('seq')} ≠ node_id du batch")
-        if e.get("event_id") != event_id(e.get("node_id", ""), e.get("seq", -1)):
-            fail(fx, f"event_id incohérent pour seq {e.get('seq')}")
-        pl = e.get("payload", {})
-        for k, v in pl.items():
-            if k.endswith("msg_log_id") or k == "msg_log_id":
-                if not (
-                    isinstance(v, str) and len(v) == 16 and all(c in "0123456789abcdef" for c in v)
-                ):
-                    fail(fx, f"msg_log_id « {v} » n'est pas une empreinte 16 hex")
-        check_payload(fx, e.get("name", ""), pl)
+
+def _check_batch_id(fx: str, body: dict) -> None:
+    expected = hashlib.sha256(canonical_json(body.get("events", []))).hexdigest()
+    if body.get("batch_id") != expected:
+        fail(fx, "batch_id ≠ hex(SHA-256(canonical_json(events)))")
+
+
+def _check_payload_vs_catalogue(fx: str, name: str, payload: dict) -> None:
+    spec = CATALOGUE.get(name)
+    if spec is None:
+        fail(fx, f"événement hors catalogue : {name}")
+        return
+    for field in spec["required"]:
+        if field not in payload:
+            fail(fx, f"{name}: champ requis manquant « {field} »")
+    validator = Draft202012Validator({"type": "object", "properties": spec["props"]})
+    for err in validator.iter_errors(payload):
+        fail(fx, f"{name}: payload invalide (catalogue) — {err.message}")
+
+
+def _check_event(
+    fx: str, body: dict, event: dict, payloads_validator: Draft202012Validator
+) -> None:
+    if event.get("node_id") != body.get("node_id"):
+        fail(fx, f"node_id de l'événement {event.get('seq')} ≠ node_id du batch")
+    if event.get("event_id") != event_id(event.get("node_id", ""), event.get("seq", -1)):
+        fail(fx, f"event_id incohérent pour seq {event.get('seq')}")
+
+    name = event.get("name", "")
+    payload = event.get("payload", {})
+    for key, value in payload.items():
+        if key.endswith("msg_log_id") and not _is_hex16(value):
+            fail(fx, f"msg_log_id « {value} » n'est pas une empreinte 16 hex")
+
+    _check_payload_vs_catalogue(fx, name, payload)
+    # Confronte l'événement au schéma JSON RÉELLEMENT livré (US-217 le consomme) :
+    # un bug dans payloads_json_schema() est ainsi attrapé par les fixtures.
+    for err in payloads_validator.iter_errors({"name": name, "payload": payload}):
+        fail(fx, f"{name}: payloads.schema.json — {err.message}")
+
+
+def check_fixture(
+    path: Path,
+    batch_validator: Draft202012Validator,
+    payloads_validator: Draft202012Validator,
+    verify_key: VerifyKey,
+) -> None:
+    fx = path.name
+    body = json.loads(path.read_text())
+
+    _check_schema(fx, body, batch_validator)
+    _check_redaction(fx, body)
+    _check_signature(fx, body, verify_key)
+    _check_batch_id(fx, body)
+    for event in body.get("events", []):
+        _check_event(fx, body, event, payloads_validator)
+
+
+def _check_schema_freshness() -> None:
+    on_disk = json.loads((EVENTS / "payloads.schema.json").read_text())
+    if on_disk != payloads_json_schema():
+        fail(GLOBAL, "events/payloads.schema.json est périmé — relancer build_fixtures.py")
+
+
+def _check_catalogue_coverage(fixtures: list[Path]) -> None:
+    covered = {
+        e["name"] for path in fixtures for e in json.loads(path.read_text()).get("events", [])
+    }
+    missing = set(CATALOGUE) - covered
+    if missing:
+        fail(GLOBAL, f"catalogue non couvert : {sorted(missing)}")
 
 
 def main() -> int:
@@ -112,37 +168,32 @@ def main() -> int:
         print("test-signing-key.json manquant", file=sys.stderr)
         return 2
 
-    registry = _registry()
-    batch_schema = json.loads((EVENTS / "batch.schema.json").read_text())
-    batch_validator = Draft202012Validator(batch_schema, registry=registry)
+    batch_validator = Draft202012Validator(
+        json.loads((EVENTS / "batch.schema.json").read_text()), registry=_batch_registry()
+    )
+    payloads_validator = Draft202012Validator(
+        json.loads((EVENTS / "payloads.schema.json").read_text())
+    )
+    verify_key = _verify_key()
 
     fixtures = sorted(FIXTURES.glob("*.json"))
     if len(fixtures) != 20:
-        fail("(global)", f"{len(fixtures)} fixtures au lieu de 20")
+        fail(GLOBAL, f"{len(fixtures)} fixtures au lieu de 20")
 
     for path in fixtures:
-        check_fixture(path, batch_validator)
+        check_fixture(path, batch_validator, payloads_validator, verify_key)
 
-    # payloads.schema.json à jour ?
-    on_disk = json.loads((EVENTS / "payloads.schema.json").read_text())
-    if on_disk != payloads_json_schema():
-        fail("(global)", "events/payloads.schema.json est périmé — relancer build_fixtures.py")
-
-    # couverture du catalogue
-    covered = {
-        e["name"] for path in fixtures for e in json.loads(path.read_text()).get("events", [])
-    }
-    missing = set(CATALOGUE) - covered
-    if missing:
-        fail("(global)", f"catalogue non couvert : {sorted(missing)}")
+    _check_schema_freshness()
+    _check_catalogue_coverage(fixtures)
 
     if errors:
         print(f"✗ {len(errors)} problème(s) :", file=sys.stderr)
-        for e in errors:
-            print(f"  - {e}", file=sys.stderr)
+        for err in errors:
+            print(f"  - {err}", file=sys.stderr)
         return 1
 
-    print(f"✓ {len(fixtures)} fixtures valides — {len(covered)} noms d'événements couverts.")
+    covered = len({e["name"] for p in fixtures for e in json.loads(p.read_text())["events"]})
+    print(f"✓ {len(fixtures)} fixtures valides — {covered} noms d'événements couverts.")
     return 0
 
 

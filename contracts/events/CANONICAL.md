@@ -13,19 +13,31 @@ ces octets.
 | Clés d'objet triées | ordre lexicographique par point de code Unicode, **récursivement** |
 | Aucun espace | séparateurs `,` et `:` — pas d'espace après |
 | Pas d'échappement non-ASCII | les caractères ≥ U+0080 sortent en UTF-8 littéral, pas en `\uXXXX` |
-| Entiers | sans `.0`, sans exposant |
-| Pas de `NaN` / `Infinity` | interdits |
+| Nombres = entiers | tous les champs numériques du catalogue sont des **entiers** : sérialisés sans partie fractionnaire (`2`, pas `2.0`) ni exposant. Aucun flottant dans le contrat. |
+| Pas de `NaN` / `Infinity` | **interdits** : la sérialisation lève une erreur plutôt que de les émettre |
 | Fin | pas de retour à la ligne final |
 
 Référence Python (`contracts/tools/catalogue.py`) :
 
 ```python
-json.dumps(x, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+json.dumps(
+    x, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+).encode("utf-8")
 ```
 
-Côté Rust : `serde_json` ne trie pas les clés par défaut. Utiliser une `Map`
-triée (feature `preserve_order` + tri explicite) ou `serde_json_canonicalizer`,
-et vérifier contre les fixtures de ce dossier (test de conformité `cross-vectors`).
+`allow_nan=False` fait échouer `json.dumps` sur `NaN` / `Infinity` — le contrat
+est ainsi appliqué, pas seulement énoncé.
+
+Côté Rust : deux pièges à traiter pour produire les **mêmes octets**.
+
+1. **Tri des clés.** `serde_json` ne trie pas par défaut : utiliser une `Map`
+   triée (feature `preserve_order` + tri explicite) ou `serde_json_canonicalizer`.
+2. **Entiers vs flottants.** Un champ numérique désérialisé en `f64` puis
+   resérialisé sort en `2.0` et **casse la signature**. Désérialiser les champs
+   numériques du catalogue en entier (`u64` / `i64`), jamais en `f64`.
+
+Vérifier l'ensemble contre les fixtures de ce dossier (test de conformité
+`cross-vectors`).
 
 > Les fixtures n'utilisent que de l'ASCII : la règle non-ASCII est spécifiée
 > pour l'avenir, pas exercée aujourd'hui.
@@ -52,18 +64,24 @@ blanche, `POST /api/nodes`).
 | --- | --- |
 | `event_id` | `hex(SHA-256(node_id_ascii ‖ seq_uint64_big_endian))` — 64 hex |
 | `batch_id` | `hex(SHA-256(canonical_json(events)))` — 64 hex |
-| `msg_log_id` | `hex(SHA-256(msgID))[0:16]` — **16 hex (8 octets)**, voir la note ci-dessous |
-| `conv_hash` | `hex(SHA-256(min(peerA,peerB) ‖ max(peerA,peerB)))[0:16]` — 16 hex |
-| `from_peer` / `peer` / `to_peer` | `peerID` tronqué à **8 octets** → 16 hex |
+| `msg_log_id` | `SHA-256(msgID)`, **8 premiers octets** → 16 hex — voir la note |
+| `conv_hash` | `SHA-256(min(peerA,peerB) ‖ max(peerA,peerB))`, **8 premiers octets** → 16 hex — voir la note |
+| `from_peer` / `peer` / `to_peer` | `peerID` tronqué aux **8 premiers octets** → 16 hex |
 | `recipient_tag` | 16 octets → 32 hex (déjà anonyme et tournant, `docs/synthese/06`) |
 
-### Note — longueur de `msg_log_id`
+### Note — largeur des identifiants pseudonymes tronqués
 
-Les documents de conception se contredisent : `docs/powl/08` §1.3 écrit
-`SHA-256(msgID)[0..16]`, `docs/synthese/04` §7 `SHA-256(msgID)[:16]`,
-`docs/synthese/09` §11.2 commente « hex 16 o ». Le **seul exemple concret**
-(`docs/synthese/09` §9, `"4d5e6f7a8b9c0d1e"`) fait **16 caractères hex = 8
-octets**. Ce contrat retient donc **8 octets / 16 hex** — le plus court est
-préférable (moins corrélable, suffisant pour dédupliquer de l'observabilité).
+Les documents de conception donnent des notations incohérentes, et lisibles dans
+les deux sens (octets ou caractères hex) : `msg_log_id` = `[0..16]` (`powl/08`
+§1.3), `[:16]` (`synthese/04` §7), « 16 o » (`synthese/09` §11.2) ;
+`conv_hash` = `[0..8]` (`synthese/09` §9) ; `from_peer` = « `peerID` tronqué à
+8 o » (`synthese/09` §9).
+
+Ce contrat tranche : **tous ces champs = 8 premiers octets du SHA-256 → 16
+caractères hex** (`^[0-9a-f]{16}$`). Les deux exemples concrets du corpus
+(`synthese/09` §9 : `msg_log_id` `"4d5e6f7a8b9c0d1e"`, `from_peer`
+`"a1b2c3d4e5f60718"`) font 16 hex. Uniformiser évite des largeurs différentes
+pour des objets de même nature. `recipient_tag` reste à 16 octets / 32 hex.
+
 Réconciliation à répercuter dans `docs/powl/` et `docs/synthese/` — voir
 `docs/suivi/03-ecarts-conception.md`.

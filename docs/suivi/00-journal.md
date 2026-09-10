@@ -96,7 +96,41 @@ $ uv run python tools/build_fixtures.py && git diff --stat -- events/
 ```
 - La CI `contracts` n'a pas encore tourné : à l'ouverture de la PR.
 
----
+### Retours de revue de Paul (2026-09-10)
+
+Branche resynchronisée sur `main` (US-104 + US-115). Conflit `docs/suivi/`
+résolu à la main (idem PR #59). Cinq retours, tous traités :
+
+1. **`payloads.schema.json` généré mais jamais exercé** — `validate.py`
+   validait les `payload` contre le `CATALOGUE` en mémoire et ne vérifiait que
+   l'égalité fichier ↔ régénération. Le schéma JSON que US-217 va **consommer**
+   n'était jamais confronté aux fixtures. Ajouté : chaque `{name, payload}` de
+   fixture est aussi validé contre `payloads.schema.json`. Négatif vérifié
+   (champ requis retiré → rejeté par les deux voies).
+2. **`conv_hash` non réconcilié comme `msg_log_id`** — l'entrée
+   `03-ecarts-conception.md` ne couvrait que `msg_log_id`. Élargie à **tous les
+   identifiants pseudonymes tronqués** (`msg_log_id`, `conv_hash`,
+   `from_peer`/`peer`/`to_peer`) : règle unique = 8 premiers octets → 16 hex.
+   `CANONICAL.md` §3 mis à jour dans le même sens.
+3. **`canonical_json` sans `allow_nan=False`** — le snippet « fait foi » et
+   `catalogue.py` émettaient `NaN`/`Infinity` (JSON invalide) au lieu de lever.
+   `allow_nan=False` ajouté aux deux ; règle du tableau §1 reformulée
+   (« la sérialisation lève une erreur »).
+4. **Discipline des nombres pour Rust** — `CANONICAL.md` §1 : ajout du piège
+   `f64` (un entier resérialisé en `2.0` casse la signature) et de la consigne
+   de désérialiser les champs numériques du catalogue en entier.
+5. **Broutille : `batch_id` jamais recontrôlé** — `validate.py` recalcule
+   `hex(SHA-256(canonical_json(events)))` et le compare. Négatif vérifié.
+
+Au passage, 3 *code smells* SonarCloud sur `validate.py` (complexité cognitive
+21 > 15, `if` imbriqué, littéral `"(global)"` ×3) : la fonction est éclatée en
+petits `_check_*`, constante `GLOBAL`, `if` fusionné.
+
+```
+$ uv run ruff check .   → All checks passed!
+$ uv run python tools/build_fixtures.py && git diff --exit-code -- events/   → stable
+$ uv run python tools/validate.py   → ✓ 20 fixtures valides — 28 noms couverts.
+```
 
 ---
 
