@@ -386,6 +386,190 @@ $ gh api repos/G1TS23/dengon/rulesets
   test est bloquée tant que les checks ne sont pas verts ») — impossible sans
   la protection, donc sans droit admin.
 
+## 2026-09-09 — Workspace Cargo, rustfmt/clippy et CI `core` (US-104)
+
+**Auteur :** Claude (Opus 5)
+**Périmètre :** `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`,
+`crates/` (6 crates + `rustfmt.toml` + `clippy.toml`),
+`.github/workflows/core.yml`, `.gitignore`.
+**Lot :** Lot 0 — Fondations & spikes (issue #4, US-104, sprint S1, jalon J0).
+
+### Fait
+
+- **Toolchain** : installation de rustup sur le poste (rien n'était installé) —
+  `rustc 1.98.1`. Figée pour tout le dépôt dans `rust-toolchain.toml:19`.
+- **Workspace** : `Cargo.toml` racine (`members = ["crates/*"]`, resolver 2),
+  champs de package hérités, et les lints centralisés dans
+  `[workspace.lints]` (`Cargo.toml:66-87`).
+- **Six crates squelettes** sous `crates/`, conformes au découpage de
+  `docs/synthese/04-architecture.md` §5 : `dengon-core` (lib, bascule
+  `no_std`), `dengon-ble` (lib), `dengon-node` (bin), `dengon-sim` (lib+bin),
+  `dengon-verify` (bin), `dengon-ffi` (lib + cdylib). Chacune compile, expose
+  au moins une constante et porte un test.
+- **Graphe de dépendances câblé** : `ble→core`, `node→core+ble`, `sim→core`,
+  `verify→core`, `ffi→core`. Chaque arête est *réellement utilisée* dans un
+  test, sinon une dépendance déclarée mais inutilisée passerait inaperçue.
+- **Style et lints** : `crates/rustfmt.toml` (options stables uniquement) et
+  `crates/clippy.toml` (configuration des lints, pas leur activation).
+- **CI** : `.github/workflows/core.yml`, un seul job nommé `core` : `fmt
+  --check`, `build --locked`, `clippy -D warnings`, `check
+  --no-default-features` (frontière `no_std`), `llvm-cov nextest`, doctests,
+  rapport lcov en artefact et résumé de couverture dans le job.
+- **`.gitignore`** : la ligne `Cargo.lock` est retirée, le lock est désormais
+  versionné ; ajout de `lcov.info`.
+
+### Pourquoi / décisions
+
+- **Les lints vivent dans `[workspace.lints]`, pas dans `clippy.toml`.** C'est
+  la subtilité du sujet : `clippy.toml` ne peut pas *activer* un lint, il ne
+  fait que *configurer* ceux activés ailleurs. Les deux sont complémentaires —
+  `[workspace.lints]` active `clippy::unwrap_used`, `clippy.toml` dit « sauf
+  dans les tests ». Avantage sur un simple `-D warnings` en CI : les lints
+  s'appliquent aussi au `cargo clippy` local, donc l'erreur se voit avant le push.
+- **`unsafe_code = "deny"` et non `"forbid"`** : `forbid` est inviolable, et
+  `dengon-ffi` devra le neutraliser puisque UniFFI génère de l'`unsafe`.
+- **Toolchain épinglée à une version exacte, pas `"stable"`** : la CI lance
+  `clippy -D warnings` ; une nouvelle stable tous les six semaines apporte de
+  nouveaux lints et ferait virer `main` au rouge sans qu'une ligne ait changé.
+- **Un vrai test dans chaque crate**, pas un squelette nu : `cargo nextest run`
+  échoue sur un workspace sans aucun test, et `llvm-cov` produirait un rapport
+  vide.
+- **`Cargo.lock` versionné** : le workspace produit trois binaires, et les jobs
+  `audit` / `cross-vectors` à venir exigent des builds reproductibles.
+- **`rustfmt.toml` et `clippy.toml` rangés dans `crates/`, pas à la racine.**
+  Les deux outils cherchent leur configuration en *remontant* l'arborescence —
+  rustfmt depuis chaque fichier source, clippy depuis le manifeste de la crate
+  — donc `crates/` suffit et `cargo fmt` / `cargo clippy` lancés depuis la
+  racine les trouvent quand même. Vérifié dans les deux sens : avec un
+  `max_width = 40` de test la signature est bien recoupée, et en retirant
+  `clippy.toml` le `unwrap()` en test redevient une erreur. La racine du dépôt
+  passe de cinq fichiers Rust à trois, ce qui compte : elle devra bientôt
+  accueillir `android/`, `firmware/` et `dashboard/`.
+- **En revanche `Cargo.toml`, `Cargo.lock` et `rust-toolchain.toml` restent à
+  la racine.** Les deux premiers parce que `04-architecture.md` §5 le prévoit et
+  que Cargo cherche son manifeste en remontant depuis le répertoire courant :
+  déplacé, toute commande lancée depuis la racine échouerait. Le troisième à
+  cause d'un piège **silencieux** : rustup résout `rust-toolchain.toml` depuis
+  le répertoire courant et **pas** depuis `--manifest-path`. Testé — avec le
+  fichier dans `crates/`, un `cargo build --manifest-path crates/Cargo.toml`
+  lancé de la racine compile en ignorant la version épinglée, sans le moindre
+  avertissement. Ça viderait de son sens la raison même de figer la toolchain.
+- **Pas de seuil de couverture bloquant** : sur des crates squelettes le
+  chiffre n'a aucun sens, et `--fail-under-lines` porte sur le rapport entier
+  alors que l'objectif de 85 % ne vise que `dengon-core`.
+- **Aucune dépendance externe déclarée** : leurs numéros de version n'étaient
+  pas vérifiables ici, et une version erronée casse jusqu'à `cargo fmt`. Elles
+  arriveront avec les US qui les utilisent (US-105 `btleplug`, US-106
+  `uniffi`, US-108 la crypto).
+
+### Écarts vs conception
+
+Deux, tous deux consignés dans [`03-ecarts-conception.md`](03-ecarts-conception.md) :
+
+1. Le filtrage par chemin du workflow est fait **dans le job**, pas via
+   `on.pull_request.paths` comme le demandait littéralement l'issue #4.
+2. `Cargo.lock` est versionné, ce que le `.gitignore` d'origine interdisait.
+
+### Appris
+
+Quatre notes ajoutées à [`04-apprentissages.md`](04-apprentissages.md) :
+`[workspace.lints]` vs `clippy.toml`, le nom du job qui devient le nom du check
+requis, le piège `paths:` sur les checks obligatoires, et la distinction
+MSRV / toolchain épinglée.
+
+### État après cette session
+
+- Le dépôt **compile** et `cargo test` est vert (8 tests). C'est le premier code
+  Rust du projet ; il ne fait encore rien d'utile, c'est voulu.
+- Fiches module **créées** : les six, à l'état « esquisse » —
+  [`modules/_index.md`](modules/_index.md).
+- [`02-avancement.md`](02-avancement.md) : **mes lignes seulement** ont été
+  modifiées (les six crates, plus une ligne d'outillage Rust et la ligne du
+  workflow `core`), conformément à la règle posée par l'US-115. Rebasée après
+  cette US, cette entrée suit donc la nouvelle organisation :
+  `01-etat-du-code.md` n'est plus touché, il ne contient que des pointeurs.
+
+### Retours de revue (2026-09-10)
+
+PR **approuvée** par `G1TS23` après vérification sur clone frais. Quatre
+retours, aucun bloquant. Traitement :
+
+- **`.gitignore` avale les fixtures de clés** — *corrigé ici*. Le reviewer a
+  fait remarquer que l'US qui en souffrirait est **US-108 (crypto)**, sur le
+  chemin critique, et que le mode d'échec silencieux est le pire possible.
+  Quatre négations ajoutées, portée limitée à `crates/**/tests/**`. Voir
+  [`03-ecarts-conception.md`](03-ecarts-conception.md).
+
+- **« `dtolnay/rust-toolchain` lit déjà `rust-toolchain.toml`, l'étape *Lire la
+  toolchain figée* est redondante »** — **inexact, et l'étape a été conservée.**
+  Vérifié dans la source de l'action : `toolchain` y est déclaré
+  `required: true`, et la première étape sort en erreur explicite
+  (`'toolchain' is a required input`) si l'entrée est vide. Le mot `toml`
+  n'apparaît nulle part dans son `action.yml`. Supprimer notre étape ferait
+  donc **échouer le job immédiatement**. La seule alternative serait d'épingler
+  la version dans le `@rev` de l'action (`dtolnay/rust-toolchain@1.98.1`), ce
+  qui dupliquerait le numéro entre le workflow et `rust-toolchain.toml` —
+  exactement ce que l'étape évite.
+  Nuance en faveur du reviewer : rustup, *lui*, honore bien `rust-toolchain.toml`
+  au moment où `cargo` s'exécute. Le fichier reste donc la source de vérité ;
+  c'est l'action qui ne sait pas le lire.
+  **Consigné ici pour que personne ne « simplifie » cette étape plus tard.**
+
+- **`modules/_index.md` : modification structurelle d'un fichier `merge=union`**
+  — exact. J'ai réécrit l'intro et fait passer le tableau de 3 à 4 colonnes,
+  alors que le README de l'US-115 recommande de faire ça en PR seule. Sans
+  conséquence ici (rien d'autre ne touchait le fichier) ; le reviewer
+  reformatera les lignes de #59 / #60 à leur rebase. À retenir pour la suite.
+
+- **`pub enum Verdict` inerte dans un binaire** — exact, et **déjà consigné**
+  avant la revue dans [`modules/dengon-verify.md`](modules/dengon-verify.md)
+  (« non importable depuis l'extérieur… il faudra scinder en `src/lib.rs` +
+  `src/main.rs` »). Aucune action : l'échange avec le dashboard se fait par la
+  sortie du processus, pas par l'API Rust.
+
+Reste due : la revue `/crates/` de `OswinFreyr` (CODEOWNERS). Le push de ce
+correctif **invalide l'approbation** de `G1TS23` (la protection de `main`
+invalide les approbations à chaque push) ; il devra re-approuver.
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ rustc --version
+rustc 1.98.1 (48a229cea 2026-09-01)
+
+$ cargo fmt --all -- --check                                          → exit 0
+$ cargo build --workspace --all-targets                               → exit 0
+$ cargo clippy --workspace --all-targets --all-features --locked \
+    -- -D warnings                                                    → exit 0
+$ cargo check -p dengon-core --no-default-features --locked           → exit 0
+$ cargo test --workspace --all-features --locked                      → exit 0
+    8 tests passés, 0 échec (1+2+1+1+2+0+1 selon les cibles)
+$ cargo test --workspace --all-features --locked --doc                → exit 0
+```
+
+Rejoué à l'identique après avoir déplacé `rustfmt.toml` et `clippy.toml` dans
+`crates/` : les six commandes restent à `exit 0`.
+
+Contrôle supplémentaire : pour vérifier que `[workspace.lints]` **mord**
+réellement (le piège étant qu'une crate sans `[lints] workspace = true` est
+ignorée en silence), un `unwrap()` a été ajouté temporairement hors test dans
+`dengon-core` → clippy a bien échoué (`error: used 'unwrap()' on an 'Option'
+value`), puis le fichier a été restauré et la vérification rejouée.
+
+**Ce qui n'a PAS pu être vérifié :**
+
+- `cargo nextest` et `cargo llvm-cov` : **non installés en local** (choix
+  assumé pour ne pas alourdir le poste). Ces deux étapes du workflow ne sont
+  donc validées par personne à ce stade — **seule la CI les exercera**.
+- Le critère d'acceptation n°5 (« workflow vert sur une PR de test ») : rien
+  n'a été commité ni poussé, à la demande de l'utilisateur. Le workflow n'a
+  jamais tourné.
+- Les tags des actions GitHub ont été vérifiés via l'API (`checkout@v7`,
+  `upload-artifact@v7`, `paths-filter@v4`, `rust-cache@v2`,
+  `install-action@v2`), mais aucune n'a été exécutée.
+
+---
+
 ---
 
 ## 2026-09-08 — Mise en place du dossier de suivi

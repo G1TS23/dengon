@@ -1,0 +1,16 @@
+[package]
+name        = "dengon-sim"
+description = "Simulateur multi-nœuds dengon (transport en mémoire, scénarios .ron)"
+
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+repository.workspace   = true
+authors.workspace      = true
+publish.workspace      = true
+
+[dependencies]
+dengon-core = { workspace = true }
+
+[lints]
+workspace = true

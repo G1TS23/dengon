@@ -50,8 +50,25 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Revue croisée** | Règle du projet : le relecteur d'une PR n'est jamais de la même `area:` que l'auteur (§10.3). Sert autant l'apprentissage que la qualité. |
 | **Doublure** | Deuxième personne nommée sur une US : celle qui **consommera son artefact au sprint suivant**, donc celle à qui la relecture sert vraiment (§13). |
 | **Protection de branche** | Réglage GitHub qui interdit de pousser directement sur `main` : PR obligatoire, approbations, checks verts, historique linéaire. |
-| **Check requis** (*required status check*) | Job de CI dont le succès conditionne le merge. Piège : un check jamais rapporté bloque la PR indéfiniment, il n'échoue pas. |
+| **Check requis** (*required status check*) | Job de CI dont le succès conditionne le merge. Identifié par le nom du **job**, pas du workflow. Piège : un check jamais rapporté bloque la PR indéfiniment, il n'échoue pas. |
 | **Historique linéaire** | Interdiction des commits de fusion sur `main` : chaque PR y entre comme un seul commit (squash), l'historique se lit comme une liste. |
 | **Ruleset** | Forme moderne de la protection de branche chez GitHub, cumulable et applicable à plusieurs branches. Non utilisée ici : la protection classique suffit à trois. |
 | **`workflow_dispatch`** | Déclencheur manuel d'un workflow GitHub Actions. N'apparaît que si le fichier est présent sur la branche par défaut. |
 | **Épinglage par SHA** | Référencer une action tierce par le hash complet de son commit plutôt que par un tag. Un tag est mutable : son auteur peut le repointer vers du code arbitraire, qui s'exécuterait dans notre CI. |
+
+## Outillage Rust et CI (ajouté 2026-09-09, US-104)
+
+| Terme | Définition courte |
+|---|---|
+| **Workspace Cargo** | Un seul projet Rust regroupant plusieurs bibliothèques et programmes (« crates »), qui partagent une configuration et un fichier de verrouillage communs. Ici : les six `dengon-*`. |
+| **Crate** | Unité de compilation Rust : soit une bibliothèque, soit un exécutable. |
+| **`crate-type`** | Forme sous laquelle une bibliothèque est produite : `lib` (utilisable par du Rust), `cdylib` (bibliothèque partagée chargeable depuis Kotlin/C), `staticlib` (à lier dans un firmware). |
+| **`no_std`** | Mode de compilation Rust sans la bibliothèque standard, pour les microcontrôleurs qui n'ont ni système de fichiers ni allocateur par défaut. `no_std + alloc` autorise quand même les `Vec` et les `String`. |
+| **MSRV** (*minimum supported Rust version*) | La plus ancienne version de Rust avec laquelle le projet accepte de compiler. C'est un plancher, à ne pas confondre avec la version exacte utilisée au quotidien. |
+| **`rustfmt`** | Formateur automatique de code Rust. `cargo fmt --check` échoue si le code n'est pas formaté : ça supprime les débats de style en revue. |
+| **`clippy`** | Analyseur qui repère les tournures suspectes ou maladroites. `-D warnings` transforme chaque avertissement en erreur, donc en échec de CI. |
+| **Lint** | Règle d'analyse statique. Elle peut être en `allow`, `warn`, `deny` (erreur, contournable localement) ou `forbid` (erreur, incontournable). |
+| **`cargo-nextest`** | Lanceur de tests plus rapide que `cargo test`, qui isole chaque test dans son propre processus. N'exécute pas les doctests. |
+| **`cargo-llvm-cov`** | Mesure de la couverture de tests : quel pourcentage des lignes de code est réellement exécuté par la suite de tests. |
+| **`Cargo.lock`** | Fichier qui fige la version exacte de chaque dépendance. Versionné ici, pour que tout le monde et la CI compilent strictement la même chose. |
+| **Doctest** | Exemple de code écrit dans un commentaire de documentation, et exécuté comme un test. Garantit que la doc ne ment pas. |
