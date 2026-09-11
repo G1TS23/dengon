@@ -10,6 +10,86 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — US-109 : corrections suite à la revue de la PR #56
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/gradle/verification-metadata.xml`,
+`android/app/proguard-rules.pro`, `docs/suivi/modules/_index.md`
+**Lot :** US-109 (suite), Sprint 1
+
+### Fait
+- Revue de @G1TS23 sur la PR #56 : `changes requested`, un point bloquant et
+  deux nits.
+- 🔴 Bloquant — `gradle/verification-metadata.xml` incomplet : checksum
+  présent uniquement pour le `.pom` de `org.junit:junit-bom` (5.9.2 et
+  5.9.3), pas pour le `.module` (Gradle Module Metadata), que Gradle
+  résout et **préfère** depuis la version 6 quand les deux existent. Sur un
+  clone frais (`GRADLE_USER_HOME` vide), la vérification de dépendances
+  échouait dès la configuration du build (`Dependency verification failed
+  for configuration ':classpath'`) — reproduit deux fois côté relecteur.
+  Corrigé en vidant `~/.gradle/caches/modules-2` (le cache de résolution de
+  dépendances, pas les téléchargements de distribution Gradle) puis en
+  relançant `./gradlew --write-verification-metadata sha256 clean
+  assembleDebug testDebugUnitTest assembleRelease` : le fichier régénéré
+  contient maintenant les deux entrées `.module` (diff de 6 lignes
+  seulement — rien d'autre n'a bougé).
+- 🟡 Nit — `android/app/proguard-rules.pro:1` : le commentaire disait
+  « release non minifiée au MVP », qui contredisait `isMinifyEnabled = true`
+  / `isShrinkResources = true` (activés au round 1 des corrections
+  SonarQube). Reformulé pour refléter l'état réel.
+- 🟡 Nit — `docs/suivi/modules/_index.md` : deux tableaux distincts pour la
+  fiche `android-app` (artefact de la fusion `merge=union`). Fusionnés dans
+  le tableau principal (colonne `État` = esquisse, cohérent avec l'entête de
+  `modules/android-app.md`), et la phrase « pas encore de fiche » ne cite
+  plus l'app Android.
+
+### Pourquoi / décisions
+- Vidage ciblé de `caches/modules-2` plutôt que `rm -rf ~/.gradle` en entier
+  (suggestion du relecteur) : suffisant pour forcer une résolution de
+  dépendances à froid — donc pour faire réapparaître le bug — sans perdre le
+  cache de distribution Gradle (évite un re-téléchargement de plusieurs
+  minutes) ni le cache de transformation AAPT2 (une tentative avec un
+  `GRADLE_USER_HOME` entièrement neuf a fait échouer le daemon AAPT2 pour
+  une raison sans rapport avec ce correctif — environnement Windows local,
+  pas creusé plus loin car hors sujet).
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Le mode `--write-verification-metadata` **n'échoue jamais** : il
+  enregistre ce qui est résolu pendant le build au lieu de le vérifier. Si
+  un artefact est déjà dans `caches/modules-2` (résolu lors d'un run
+  antérieur, avant l'ajout de la dependency verification), sa génération de
+  checksum peut être incomplète sans que rien ne le signale sur la machine
+  où il tourne. Piège : ça ne se voit qu'au premier build sur une machine
+  neuve (ou un `GRADLE_USER_HOME` vide) — donc régénérer systématiquement
+  `verification-metadata.xml` depuis un cache de dépendances vidé, jamais
+  depuis le poste de dev « chaud ». Ajouté à `04-apprentissages.md`.
+
+### État après cette session
+- Les trois points de la revue sont traités ; en attente d'un nouveau passage
+  de @G1TS23.
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+- 01-etat-du-code.md mis à jour : non (toujours pointeur seul, pas de
+  changement d'avancement).
+
+### Vérification (commandes réellement exécutées)
+```
+$ rm -rf ~/.gradle/caches/modules-2
+$ cd android && ./gradlew --write-verification-metadata sha256 clean assembleDebug testDebugUnitTest assembleRelease --console=plain
+BUILD SUCCESSFUL in 2m 39s — 87 actionable tasks: 84 executed, 3 up-to-date
+$ grep -n -A2 junit-bom gradle/verification-metadata.xml
+→ confirme la présence des entrées junit-bom-5.9.2.module / 5.9.3.module
+```
+- **Non re-testé** depuis un `GRADLE_USER_HOME` totalement vide (échec
+  AAPT2 sans rapport avec la dependency verification en cours de
+  reproduction, voir ci-dessus) : la preuve de correction repose sur la
+  régénération à froid du fichier de vérification, pas sur une répétition
+  complète du scénario exact du relecteur.
+
+---
+
 ## 2026-09-09 — US-109 : corrections SonarQube Cloud, round 2 (PR #56)
 
 **Auteur :** Claude (Sonnet 5)

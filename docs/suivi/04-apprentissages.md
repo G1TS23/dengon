@@ -337,3 +337,31 @@ périmètre de résolution.
 `./gradlew --write-verification-metadata sha256 <tasks>`).
 **Pour aller plus loin :** doc Gradle « Verifying dependencies » et
 « Locking dependency versions ».
+
+### `--write-verification-metadata` n'échoue jamais — piège du cache chaud
+
+**C'est quoi :** en mode écriture (`./gradlew --write-verification-metadata
+sha256 <tasks>`), Gradle **enregistre** les checksums de ce qu'il résout
+pendant ce build précis, il ne **vérifie** rien. Si un artefact est déjà
+présent dans `~/.gradle/caches/modules-2` (résolu lors d'un run antérieur,
+avant l'ajout de la vérification), sa checksum peut manquer sans que la
+commande échoue ou avertisse.
+**Pourquoi dans dengon :** relevé en revue de la PR #56 —
+`gradle/verification-metadata.xml` ne contenait que le `.pom` de
+`org.junit:junit-bom` (5.9.2/5.9.3), pas le `.module` (Gradle Module
+Metadata, préféré par Gradle depuis la version 6 dès qu'il existe). Sur un
+clone frais où la vérification s'applique **réellement** (mode normal, pas
+`--write-verification-metadata`), le build échouait dès la configuration
+(`Dependency verification failed for configuration ':classpath'`) —
+invisible sur le poste où le fichier avait été généré, parce que ce
+`.module` y était déjà en cache.
+**Piège / surprise :** régénérer `verification-metadata.xml` « ça marche »
+localement ne prouve rien tant que le `GRADLE_USER_HOME` n'est pas
+repassé à froid — le seul test fiable est de vider
+`~/.gradle/caches/modules-2` (ou d'utiliser un `GRADLE_USER_HOME` vide)
+avant de régénérer, sinon le fichier peut être incomplet à l'insu de son
+auteur et casser seulement sur la machine de quelqu'un d'autre (ou la
+future CI).
+**Où c'est utilisé :** `android/gradle/verification-metadata.xml`.
+**Pour aller plus loin :** doc Gradle « Gradle Module Metadata » — pourquoi
+`.module` est préféré à `.pom` quand les deux sont publiés.

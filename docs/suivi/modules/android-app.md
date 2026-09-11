@@ -100,6 +100,17 @@ android/
   couvre tout ce qui est résolu, plugins compris. Régénérer après tout
   changement de version dans `gradle/libs.versions.toml` (sinon le build
   échoue : entrée manquante dans les checksums).
+- **`gradle/verification-metadata.xml` incomplet sur clone frais** (relevé en
+  revue de la PR #56) : la première génération ne contenait le checksum que
+  du `.pom` de `org.junit:junit-bom` (5.9.2 et 5.9.3), pas du `.module`
+  (Gradle Module Metadata), que Gradle préfère depuis la version 6 dès qu'il
+  est présent — donc échec dès qu'un environnement (clone frais, future CI)
+  doit réellement le résoudre. Cause : le fichier avait été régénéré sur un
+  `GRADLE_USER_HOME` déjà chaud pour ce module (`.module` déjà en cache
+  local, jamais re-téléchargé donc jamais re-checksummé). Fixé en vidant
+  `~/.gradle/caches/modules-2` avant de relancer `./gradlew
+  --write-verification-metadata sha256 clean assembleDebug
+  testDebugUnitTest assembleRelease` — voir `04-apprentissages.md`.
 - **Version catalog** (`gradle/libs.versions.toml`) : corrige `kotlin:S6624`
   (« Do not hardcode version numbers ») en centralisant toutes les versions
   (AGP, Kotlin, Compose, dépendances) à un seul endroit, référencées via
@@ -130,6 +141,10 @@ android/
   SUCCESSFUL** (voir `docs/suivi/00-journal.md`, entrée du 2026-09-09).
 - `./gradlew assembleDebug` → **BUILD SUCCESSFUL**, APK généré dans
   `app/build/outputs/apk/debug/app-debug.apk`.
+- `./gradlew clean assembleDebug testDebugUnitTest assembleRelease` rejoué
+  avec `~/.gradle/caches/modules-2` vidé (dependency verification
+  effectivement testée à froid, pas juste régénérée) → **BUILD SUCCESSFUL**
+  (voir `00-journal.md`, entrée « corrections revue PR #56 »).
 - **Non fait** : test manuel « ≥ 5 min écran éteint sur appareil réel »
   (critère d'acceptation US-109) — aucun appareil Android disponible dans
   l'environnement où ce squelette a été écrit. Reste à faire avant de

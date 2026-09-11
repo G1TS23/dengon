@@ -26,9 +26,7 @@ d'onboarding de l'area `process` (§10.3 point 3).
 | `dengon-verify` | [dengon-verify.md](dengon-verify.md) | esquisse | 2026-09-09 |
 | `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | esquisse | 2026-09-09 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
+| `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
 
-Pas encore de fiche (le composant n'existe pas) : application Android, firmware
-`dengon-relay`, dashboard `api` et `web`.
-| Module | Fiche | Dernière mise à jour |
-|---|---|---|
-| `android-app` (`android/`) | [android-app.md](android-app.md) | 2026-09-09 |
+Pas encore de fiche (le composant n'existe pas) : firmware `dengon-relay`,
+dashboard `api` et `web`.
