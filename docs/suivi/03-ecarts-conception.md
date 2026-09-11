@@ -212,3 +212,31 @@ _(aucun écart pour l'instant)_
   crate n'a de binaire secondaire, et le mode d'échec est bruyant (le fichier
   manque, la compilation échoue) — contrairement à celui des clés, qui était
   silencieux.
+
+---
+
+### 2026-09-11 — `pkt.seen.rssi` reste optionnel dans le catalogue (US-107)
+
+- **Prévu :** `docs/powl/08-observability-events.md:43` et
+  `docs/synthese/09-dashboard-et-donnees.md:181` listent le payload de
+  `pkt.seen` comme `{ msg_log_id, type, ttl_in, size_bucket, from_peer, rssi }`
+  — sans `?` sur `rssi`, contrairement à `pseudo?` (`peer.announce_seen`) ou
+  `ssid?`/`duration_s?` (`relay.wifi_up`/`down`) dans les mêmes tableaux. Par
+  la convention du document, `rssi` y est donc **requis**.
+- **Réel :** `contracts/tools/catalogue.py`, l'entrée `pkt.seen` ne liste pas
+  `rssi` dans `"required"` — seulement dans `"props"`. Un événement `pkt.seen`
+  sans `rssi` passe `validate.py`.
+- **Raison :** signalé en **revue de la PR #60** par `OswinFreyr`. Le RSSI
+  n'est pas toujours disponible à la couche transport : `TransportEvent::
+  PeerConnected.rssi` (US-105, `crates/dengon-ble/src/transport.rs`) est déjà
+  typé `Option<i16>`, avec la même raison documentée en rustdoc — Android ne
+  fournit le RSSI qu'à la demande, NimBLE pas du tout sur une connexion
+  entrante. Rendre `rssi` requis dans le contrat d'événement obligerait à
+  inventer une valeur sur les chemins où le transport n'en a pas, ce qui
+  serait plus trompeur qu'un champ absent.
+- **Conséquences :** c'est la **doc de conception** qui est en retard, pas le
+  contrat. `docs/synthese/09-dashboard-et-donnees.md:181` mis à jour avec
+  `rssi?` pour refléter ce que `powl/03-network-protocol.md`/US-105 ont déjà
+  établi côté transport ; `docs/powl/08` non touché (dossier figé, cf.
+  `CLAUDE.md`).
+- **Doc de conception mise à jour ?** oui — `docs/synthese/09-dashboard-et-donnees.md`.

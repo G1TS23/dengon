@@ -5,7 +5,7 @@ tête d'un événement d'observabilité, le corps de `POST /ingest/batch`, et
 20 exemples signés qui font référence pour tous les composants.
 **Correspond à la conception :** [`docs/powl/08-observability-events.md`](../../powl/08-observability-events.md),
 [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §9.
-**Dernière mise à jour :** 2026-09-10
+**Dernière mise à jour :** 2026-09-11
 **État :** fonctionnel — schémas + 20 fixtures + `validate.py` vert. **Contrat
 à geler** au point d'équipe (US-107).
 
@@ -92,18 +92,45 @@ tools/validate.py  (ce que lance la CI)
 - **`canonical_json` avec `allow_nan=False`** : la règle « pas de NaN/Infinity »
   de `CANONICAL.md` est appliquée par la référence, pas seulement écrite (retour
   de revue #60).
+- **`pkt.seen.rssi` reste optionnel dans `CATALOGUE`**, malgré `powl/08` et
+  `synthese/09` qui le listent sans `?` : le RSSI n'est pas toujours
+  disponible côté transport (`TransportEvent::PeerConnected.rssi:
+  Option<i16>`, US-105) — le rendre requis forcerait à inventer une valeur
+  sur les chemins où le transport n'en a pas. `synthese/09` corrigé
+  (`rssi?`) ; écart consigné (retour de revue #60).
+- **`batch.schema.json.node_id` référence `envelope.schema.json#/$defs/node_id`**
+  via `$ref` plutôt que de retyper le motif `^(relay|client)-[0-9a-f]{6,}$` :
+  il n'était dupliqué qu'à cet endroit-là côté JSON Schema (`envelope.schema.json`
+  l'a toujours eu en `$defs`) — une divergence future ne peut plus passer
+  inaperçue. Le motif reste dupliqué une fois côté Python
+  (`catalogue.NODE_ID_PATTERN`, pour `subject_node`) : `catalogue.py` ne peut
+  pas faire de `$ref` vers un fichier JSON Schema (retour de revue #60).
+- **`seq` validé avant `event_id()`** dans `validate.py` : un `seq` manquant,
+  négatif ou non entier faisait planter `int.to_bytes()` (`OverflowError`/
+  `AttributeError`) **après** que `_check_schema` l'avait déjà signalé —
+  traceback brute au lieu du rapport `✗ N problème(s)` attendu. Reproduit et
+  corrigé (retour de revue #60) : un `seq` invalide devient une entrée
+  d'`errors`, plus un crash.
+- **`Draft202012Validator` mis en cache par nom d'événement** dans
+  `_check_payload_vs_catalogue` : il était reconstruit à chaque événement
+  alors que le schéma est identique pour tous les events qui partagent un
+  `name` — ~28 recompilations pour 28 events sur 20 fixtures (retour de
+  revue #60, perf, non bloquant).
 
 ## Tests
 
 - `tools/validate.py` **est** la suite de tests. `uv run python tools/validate.py`
-  → `✓ 20 fixtures valides — 28 noms d'événements couverts.` (2026-09-10).
+  → `✓ 20 fixtures valides — 28 noms d'événements couverts.` (2026-09-11).
 - Contrôles par fixture : schéma batch/enveloppe · redaction · **signature
   Ed25519** · **`batch_id` recalculé** · par événement : `node_id`/`event_id`
-  cohérents, `msg_log_id` en 16 hex, `payload` vs catalogue **et vs le
-  `payloads.schema.json` livré**. Globaux : fraîcheur du schéma généré,
-  couverture du catalogue.
+  cohérents (`seq` validé avant tout calcul), `msg_log_id` en 16 hex,
+  `payload` vs catalogue **et vs le `payloads.schema.json` livré**. Globaux :
+  fraîcheur du schéma généré, couverture du catalogue.
 - Négatif vérifié en local : `batch_id` trafiqué → rejet ; champ requis retiré
-  d'un payload → rejet par le catalogue **et** par `payloads.schema.json`.
+  d'un payload → rejet par le catalogue **et** par `payloads.schema.json` ;
+  `seq` mis à `-1` dans une fixture → **rapport propre** (`schéma batch`,
+  `signature invalide`, `batch_id ≠ …`, `seq invalide`), plus de traceback
+  (reproduit l'`OverflowError` sans le fix, confirmé absent avec).
 - CI : `.github/workflows/contracts.yml` (ruff + régénération stable + validate).
 
 ## Limites connues / TODO

@@ -21,6 +21,10 @@ HEX16 = {"type": "string", "pattern": "^[0-9a-f]{16}$"}  # msg_log_id, peerID tr
 HEX32 = {"type": "string", "pattern": "^[0-9a-f]{32}$"}  # recipient_tag (16 o)
 HEX64 = {"type": "string", "pattern": "^[0-9a-f]{64}$"}  # racine de journal (SHA-256)
 UINT = {"type": "integer", "minimum": 0}
+# Même motif que $defs/node_id de events/envelope.schema.json (référencé aussi
+# par batch.schema.json via $ref) — dupliqué ici parce que ce module est
+# Python, pas JSON Schema, donc ne peut pas faire de $ref vers ce fichier.
+NODE_ID_PATTERN = r"^(relay|client)-[0-9a-f]{6,}$"
 PKT_TYPE = {"type": "integer", "minimum": 1, "maximum": 13}  # types de paquets, synthese/05 §4
 SIZE_BUCKET = {"enum": [256, 512, 1024, 2048]}
 RSSI = {"type": "integer", "minimum": -120, "maximum": 0}
@@ -163,7 +167,7 @@ CATALOGUE: dict[str, dict] = {
     "attest.observed": {
         "required": ["subject_node", "root", "height"],
         "props": {
-            "subject_node": {"type": "string", "pattern": "^(relay|client)-[0-9a-f]{6,}$"},
+            "subject_node": {"type": "string", "pattern": NODE_ID_PATTERN},
             "root": HEX64,
             "height": UINT,
         },

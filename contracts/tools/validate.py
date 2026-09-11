@@ -97,6 +97,21 @@ def _check_batch_id(fx: str, body: dict) -> None:
         fail(fx, "batch_id ≠ hex(SHA-256(canonical_json(events)))")
 
 
+# Un seul Draft202012Validator par nom d'événement : le schéma est identique
+# pour tous les events qui partagent ce nom (~28 events sur 20 fixtures) — le
+# reconstruire à chaque appel recompile le même schéma en boucle (retour de
+# revue #60, point perf).
+_payload_validators: dict[str, Draft202012Validator] = {}
+
+
+def _payload_validator(name: str, spec: dict) -> Draft202012Validator:
+    validator = _payload_validators.get(name)
+    if validator is None:
+        validator = Draft202012Validator({"type": "object", "properties": spec["props"]})
+        _payload_validators[name] = validator
+    return validator
+
+
 def _check_payload_vs_catalogue(fx: str, name: str, payload: dict) -> None:
     spec = CATALOGUE.get(name)
     if spec is None:
@@ -105,9 +120,14 @@ def _check_payload_vs_catalogue(fx: str, name: str, payload: dict) -> None:
     for field in spec["required"]:
         if field not in payload:
             fail(fx, f"{name}: champ requis manquant « {field} »")
-    validator = Draft202012Validator({"type": "object", "properties": spec["props"]})
-    for err in validator.iter_errors(payload):
+    for err in _payload_validator(name, spec).iter_errors(payload):
         fail(fx, f"{name}: payload invalide (catalogue) — {err.message}")
+
+
+def _valid_seq(seq: object) -> bool:
+    # bool est une sous-classe d'int en Python : True/False passeraient
+    # isinstance(seq, int) alors que ce n'est pas un seq valide.
+    return isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0
 
 
 def _check_event(
@@ -115,8 +135,17 @@ def _check_event(
 ) -> None:
     if event.get("node_id") != body.get("node_id"):
         fail(fx, f"node_id de l'événement {event.get('seq')} ≠ node_id du batch")
-    if event.get("event_id") != event_id(event.get("node_id", ""), event.get("seq", -1)):
-        fail(fx, f"event_id incohérent pour seq {event.get('seq')}")
+
+    seq = event.get("seq")
+    if not _valid_seq(seq):
+        # Déjà signalé par _check_schema (envelope.schema.json exige seq
+        # entier ≥ 0) : on n'essaie pas de recalculer event_id sur une valeur
+        # qui ferait planter seq.to_bytes() (OverflowError si négatif,
+        # AttributeError si ce n'est pas un entier) — un rapport de
+        # validation propre, pas une traceback brute (retour de revue #60).
+        fail(fx, f"seq invalide ({seq!r}) : event_id non vérifiable")
+    elif event.get("event_id") != event_id(event.get("node_id", ""), seq):
+        fail(fx, f"event_id incohérent pour seq {seq}")
 
     name = event.get("name", "")
     payload = event.get("payload", {})

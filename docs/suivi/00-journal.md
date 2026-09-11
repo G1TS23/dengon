@@ -10,6 +10,96 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — `contracts/events` : retours de revue d'OswinFreyr sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{validate,catalogue}.py`, `contracts/events/batch.schema.json`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/04-apprentissages.md`,
+`docs/synthese/09-dashboard-et-donnees.md`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- 5 points relevés en revue par @OswinFreyr, tous vérifiés dans le code avant
+  correction :
+  1. **`validate.py:118` — crash non géré sur `seq` invalide.**
+     `event_id(node_id, event.get("seq", -1))` appelle `seq.to_bytes(8,
+     "big")` : `OverflowError` si négatif, `AttributeError` si pas un entier.
+     `_check_schema` avait déjà signalé le problème dans `errors`, mais le
+     script continuait quand même et plantait avec une traceback brute au
+     lieu du rapport attendu. **Reproduit** en mettant `seq = -1` dans une
+     fixture (copie de travail, jamais committée) : confirmé le crash exact
+     décrit, puis confirmé le rapport propre une fois corrigé. `seq` validé
+     (entier, pas un bool, ≥ 0) avant tout calcul d'`event_id`.
+  2. **`catalogue.py` — `pkt.seen.rssi` optionnel alors que `powl/08` et
+     `synthese/09` le listent sans `?`.** Vérifié : c'est la doc de
+     conception qui est en retard, pas le contrat — `TransportEvent::
+     PeerConnected.rssi` (US-105) est déjà `Option<i16>` pour la même
+     raison (RSSI pas toujours fourni côté transport). Écart consigné,
+     `synthese/09` corrigé (`rssi?`).
+  3. **Apprentissages non propagés** — l'entrée de journal US-107 mentionnait
+     deux notions réelles (`referencing.Registry`, longueur de signature
+     Ed25519 en base64) sans les ajouter à `04-apprentissages.md` (règle 5,
+     `CLAUDE.md`). Ajoutées.
+  4. **Motif `node_id` dupliqué** dans `batch.schema.json`,
+     `envelope.schema.json#/$defs/node_id` et `catalogue.py`. Le premier
+     référence maintenant le second via `$ref` (draft 2020-12 autorise `$ref`
+     à côté d'autres mots-clés comme `description`). Le doublon Python
+     (`subject_node`) reste — pas de `$ref` possible entre un module Python
+     et un fichier JSON Schema — mais nommé (`NODE_ID_PATTERN`) plutôt que
+     recopié.
+  5. **Perf, non bloquant** — `_check_payload_vs_catalogue` reconstruisait un
+     `Draft202012Validator` à chaque événement. Mis en cache par nom
+     (`_payload_validators`).
+- `uv run ruff check .` propre, `validate.py` toujours vert sur les 20
+  fixtures réelles après les 5 correctifs.
+
+### Pourquoi / décisions
+- **`rssi` reste optionnel** (pas aligné sur « requis ») : je préfère corriger
+  la doc de conception plutôt que le contrat, parce que j'ai une raison
+  technique déjà actée ailleurs dans le dépôt (US-105) pour laquelle
+  l'exiger serait faux, pas juste une paresse à corriger la conception.
+- **`$ref` seulement côté JSON Schema**, pas de tentative de faire lire le
+  fichier `.json` depuis `catalogue.py` au moment de l'import pour extraire
+  le motif : ça introduirait un couplage fragile (ordre d'import, chemin
+  relatif) pour économiser une ligne dupliquée.
+
+### Écarts vs conception
+- Un nouveau, décrit dans `03-ecarts-conception.md` : `pkt.seen.rssi`
+  optionnel (point 2 ci-dessus).
+
+### Appris
+- Rien de nouveau cette session — les deux apprentissages ajoutés
+  aujourd'hui dataient de la session précédente (US-107 initiale), juste pas
+  encore propagés (point 3 ci-dessus).
+
+### État après cette session
+- Les 5 points de la revue d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/contracts-events.md](modules/contracts-events.md)
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run python tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check .
+All checks passed!
+
+# Reproduction du crash sans le fix (git stash sur validate.py, seq=-1
+# injecté dans une copie de 01-pkt-seen.json, jamais committée) :
+OverflowError: can't convert negative int to unsigned
+
+# Avec le fix, même fixture mutée :
+✗ 4 problème(s) :
+  - schéma batch — -1 is less than the minimum of 0
+  - signature invalide : Signature was forged or corrupt
+  - batch_id ≠ hex(SHA-256(canonical_json(events)))
+  - seq invalide (-1) : event_id non vérifiable
+# Fixture restaurée (git checkout --) avant de committer.
+```
+
+---
+
 ## 2026-09-09 — Contrat des événements d'observabilité + 20 fixtures golden (US-107)
 
 **Auteur :** Claude (Sonnet 5)

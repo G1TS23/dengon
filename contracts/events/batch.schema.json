@@ -13,8 +13,7 @@
       "description": "Identifiant du lot (hex SHA-256)."
     },
     "node_id": {
-      "type": "string",
-      "pattern": "^(relay|client)-[0-9a-f]{6,}$",
+      "$ref": "envelope.schema.json#/$defs/node_id",
       "description": "Nœud émetteur du lot. Doit correspondre au node_id de chaque événement."
     },
     "schema_version": {

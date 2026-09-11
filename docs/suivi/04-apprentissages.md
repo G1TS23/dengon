@@ -275,6 +275,39 @@ documentation GitHub « Using third-party actions ».
 
 ---
 
+### `jsonschema` (Python) : `referencing.Registry` remplace `RefResolver`
+
+**C'est quoi :** depuis `jsonschema` 4.18, la résolution des `$ref` inter-
+fichiers passe par le paquet `referencing` : un `Registry` qu'on peuple à la
+main (`Resource.from_contents(...)`), pas par le `RefResolver` intégré des
+versions antérieures (déprécié).
+**Pourquoi dans dengon :** `contracts/events/batch.schema.json` référence
+`envelope.schema.json` (`$ref: "envelope.schema.json"`, et depuis la revue de
+la PR #60, `$ref: "envelope.schema.json#/$defs/node_id"`) — sans registre
+peuplé, `Draft202012Validator` ne sait pas résoudre ce chemin relatif.
+**Piège / surprise :** une ressource doit être enregistrée **sous son `$id`
+et sous son nom de fichier** si les deux formes de `$ref` doivent marcher
+(un `$ref` par nom de fichier relatif, un autre potentiel par URI absolue) —
+l'oublier fait échouer la résolution silencieusement selon la forme du `$ref`
+utilisée.
+**Où c'est utilisé :** `contracts/tools/validate.py::_batch_registry()`.
+**Pour aller plus loin :** doc du paquet `referencing` (`python-jsonschema.readthedocs.io`).
+
+### Longueur d'une signature Ed25519 en base64
+
+**C'est quoi :** une signature Ed25519 fait **64 octets** fixes. En base64
+standard (avec padding), ça donne toujours **88 caractères**, dont les 2
+derniers sont le padding `==` (64 octets = 512 bits, non multiple de 3 ×
+8 = 24 bits, d'où le padding).
+**Pourquoi dans dengon :** `contracts/events/batch.schema.json` contraint
+`sig` par un motif de longueur fixe : `^[A-Za-z0-9+/]{86}==$` (86 caractères
+utiles + le `==`), plutôt qu'un motif générique de longueur variable — une
+signature d'une autre taille (mauvais algorithme, troncature accidentelle)
+est rejetée par le schéma lui-même, sans avoir besoin de la décoder.
+**Où c'est utilisé :** `contracts/events/batch.schema.json` (champ `sig`).
+
+---
+
 Sujets probables (d'après la conception) — à traiter quand on les rencontre :
 
 - Routage épidémique / gossip / store-carry-forward (DTN).
