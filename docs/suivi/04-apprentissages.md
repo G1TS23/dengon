@@ -345,3 +345,78 @@ Sujets probables (d'après la conception) — à traiter quand on les rencontre 
 - UniFFI : comment un cœur Rust est appelé depuis Kotlin.
 - TimescaleDB : hypertable, rétention, agrégats continus.
 - MQTT : QoS, topics, mTLS.
+
+### SonarCloud : Security Rating vs Security Hotspots Reviewed
+
+**C'est quoi :** deux conditions de Quality Gate distinctes. `Security
+Rating` = pire sévérité parmi les issues de type **Vulnerability**
+(bugs de sécurité avérés, ex. obfuscation désactivée, cleartext traffic
+ambigu, dépendances non verrouillées). `Security Hotspots Reviewed` = %
+de **Security Hotspots** (code sensible à trier manuellement, ex. usage de
+crypto, permissions) qui ont été revus — gate séparée.
+**Pourquoi dans dengon :** la PR #56 (squelette Android, US-109) a été
+bloquée par `Security Rating on New Code = C`. Chercher dans les
+Hotspots aurait été une perte de temps : il fallait l'onglet
+`Vulnerabilities` / filtre `types=VULNERABILITY` de l'API
+`/api/issues/search`.
+**Piège / surprise :** le nom de la gate ne dit pas explicitement
+« Vulnerabilities » — facile de confondre avec les Hotspots qui, eux,
+demandent une revue humaine plutôt qu'un vrai fix de code.
+**Où c'est utilisé :** `android/app/build.gradle.kts` (release
+`isMinifyEnabled`), `android/app/src/main/AndroidManifest.xml`
+(`usesCleartextTraffic`), `android/build.gradle.kts` (dependency locking).
+**Pour aller plus loin :** `https://sonarcloud.io/api/issues/search?componentKeys=<projet>&pullRequest=<n>&types=VULNERABILITY`.
+
+### Gradle : dependency locking vs dependency verification
+
+**C'est quoi :** deux mécanismes Gradle différents, souvent confondus.
+**Dependency locking** (`gradle.lockfile`, `resolutionStrategy
+.activateDependencyLocking()`) fige les versions **résolues** d'un
+sous-projet pour la reproductibilité (utile surtout avec des versions
+dynamiques, `1.+`). **Dependency verification**
+(`gradle/verification-metadata.xml`, `--write-verification-metadata`)
+enregistre des **checksums** de tout ce que Gradle télécharge, pour
+l'intégrité (détecter un artefact corrompu/remplacé) — et ça couvre aussi
+la résolution des **plugins**, que le locking ne touche pas.
+**Pourquoi dans dengon :** le `gradle.lockfile` de `:app` ne suffisait pas
+à faire disparaître `text:S8569` (Sonar) sur `android/build.gradle.kts` —
+c'est le fichier racine où sont déclarés les plugins (AGP, Kotlin), résolus
+*avant* que les blocs `subprojects{}` (et donc le locking) s'appliquent.
+**Piège / surprise :** les deux mécanismes ont des fichiers différents mais
+tous deux qualifiés de « lock file » en langage courant — la doc Sonar
+elle-même les traite comme équivalents (« gradle.lockfile **or**
+verification-metadata.xml ») alors qu'ils ne couvrent pas le même
+périmètre de résolution.
+**Où c'est utilisé :** `android/app/gradle.lockfile` (locking),
+`android/gradle/verification-metadata.xml` (verification, régénéré via
+`./gradlew --write-verification-metadata sha256 <tasks>`).
+**Pour aller plus loin :** doc Gradle « Verifying dependencies » et
+« Locking dependency versions ».
+
+### `--write-verification-metadata` n'échoue jamais — piège du cache chaud
+
+**C'est quoi :** en mode écriture (`./gradlew --write-verification-metadata
+sha256 <tasks>`), Gradle **enregistre** les checksums de ce qu'il résout
+pendant ce build précis, il ne **vérifie** rien. Si un artefact est déjà
+présent dans `~/.gradle/caches/modules-2` (résolu lors d'un run antérieur,
+avant l'ajout de la vérification), sa checksum peut manquer sans que la
+commande échoue ou avertisse.
+**Pourquoi dans dengon :** relevé en revue de la PR #56 —
+`gradle/verification-metadata.xml` ne contenait que le `.pom` de
+`org.junit:junit-bom` (5.9.2/5.9.3), pas le `.module` (Gradle Module
+Metadata, préféré par Gradle depuis la version 6 dès qu'il existe). Sur un
+clone frais où la vérification s'applique **réellement** (mode normal, pas
+`--write-verification-metadata`), le build échouait dès la configuration
+(`Dependency verification failed for configuration ':classpath'`) —
+invisible sur le poste où le fichier avait été généré, parce que ce
+`.module` y était déjà en cache.
+**Piège / surprise :** régénérer `verification-metadata.xml` « ça marche »
+localement ne prouve rien tant que le `GRADLE_USER_HOME` n'est pas
+repassé à froid — le seul test fiable est de vider
+`~/.gradle/caches/modules-2` (ou d'utiliser un `GRADLE_USER_HOME` vide)
+avant de régénérer, sinon le fichier peut être incomplet à l'insu de son
+auteur et casser seulement sur la machine de quelqu'un d'autre (ou la
+future CI).
+**Où c'est utilisé :** `android/gradle/verification-metadata.xml`.
+**Pour aller plus loin :** doc Gradle « Gradle Module Metadata » — pourquoi
+`.module` est préféré à `.pom` quand les deux sont publiés.

@@ -10,6 +10,84 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — US-109 : corrections suite à la revue de la PR #56
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/gradle/verification-metadata.xml`,
+`android/app/proguard-rules.pro`, `docs/suivi/modules/_index.md`
+**Lot :** US-109 (suite), Sprint 1
+
+### Fait
+- Revue de @G1TS23 sur la PR #56 : `changes requested`, un point bloquant et
+  deux nits.
+- 🔴 Bloquant — `gradle/verification-metadata.xml` incomplet : checksum
+  présent uniquement pour le `.pom` de `org.junit:junit-bom` (5.9.2 et
+  5.9.3), pas pour le `.module` (Gradle Module Metadata), que Gradle
+  résout et **préfère** depuis la version 6 quand les deux existent. Sur un
+  clone frais (`GRADLE_USER_HOME` vide), la vérification de dépendances
+  échouait dès la configuration du build (`Dependency verification failed
+  for configuration ':classpath'`) — reproduit deux fois côté relecteur.
+  Corrigé en vidant `~/.gradle/caches/modules-2` (le cache de résolution de
+  dépendances, pas les téléchargements de distribution Gradle) puis en
+  relançant `./gradlew --write-verification-metadata sha256 clean
+  assembleDebug testDebugUnitTest assembleRelease` : le fichier régénéré
+  contient maintenant les deux entrées `.module` (diff de 6 lignes
+  seulement — rien d'autre n'a bougé).
+- 🟡 Nit — `android/app/proguard-rules.pro:1` : le commentaire disait
+  « release non minifiée au MVP », qui contredisait `isMinifyEnabled = true`
+  / `isShrinkResources = true` (activés au round 1 des corrections
+  SonarQube). Reformulé pour refléter l'état réel.
+- 🟡 Nit — `docs/suivi/modules/_index.md` : deux tableaux distincts pour la
+  fiche `android-app` (artefact de la fusion `merge=union`). Fusionnés dans
+  le tableau principal (colonne `État` = esquisse, cohérent avec l'entête de
+  `modules/android-app.md`), et la phrase « pas encore de fiche » ne cite
+  plus l'app Android.
+
+### Pourquoi / décisions
+- Vidage ciblé de `caches/modules-2` plutôt que `rm -rf ~/.gradle` en entier
+  (suggestion du relecteur) : suffisant pour forcer une résolution de
+  dépendances à froid — donc pour faire réapparaître le bug — sans perdre le
+  cache de distribution Gradle (évite un re-téléchargement de plusieurs
+  minutes) ni le cache de transformation AAPT2 (une tentative avec un
+  `GRADLE_USER_HOME` entièrement neuf a fait échouer le daemon AAPT2 pour
+  une raison sans rapport avec ce correctif — environnement Windows local,
+  pas creusé plus loin car hors sujet).
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Le mode `--write-verification-metadata` **n'échoue jamais** : il
+  enregistre ce qui est résolu pendant le build au lieu de le vérifier. Si
+  un artefact est déjà dans `caches/modules-2` (résolu lors d'un run
+  antérieur, avant l'ajout de la dependency verification), sa génération de
+  checksum peut être incomplète sans que rien ne le signale sur la machine
+  où il tourne. Piège : ça ne se voit qu'au premier build sur une machine
+  neuve (ou un `GRADLE_USER_HOME` vide) — donc régénérer systématiquement
+  `verification-metadata.xml` depuis un cache de dépendances vidé, jamais
+  depuis le poste de dev « chaud ». Ajouté à `04-apprentissages.md`.
+
+### État après cette session
+- Les trois points de la revue sont traités ; en attente d'un nouveau passage
+  de @G1TS23.
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+- 01-etat-du-code.md mis à jour : non (toujours pointeur seul, pas de
+  changement d'avancement).
+
+### Vérification (commandes réellement exécutées)
+```
+$ rm -rf ~/.gradle/caches/modules-2
+$ cd android && ./gradlew --write-verification-metadata sha256 clean assembleDebug testDebugUnitTest assembleRelease --console=plain
+BUILD SUCCESSFUL in 2m 39s — 87 actionable tasks: 84 executed, 3 up-to-date
+$ grep -n -A2 junit-bom gradle/verification-metadata.xml
+→ confirme la présence des entrées junit-bom-5.9.2.module / 5.9.3.module
+```
+- **Non re-testé** depuis un `GRADLE_USER_HOME` totalement vide (échec
+  AAPT2 sans rapport avec la dependency verification en cours de
+  reproduction, voir ci-dessus) : la preuve de correction repose sur la
+  régénération à froid du fichier de vérification, pas sur une répétition
+  complète du scénario exact du relecteur.
+
 ---
 
 ## 2026-09-10 — Spike A : le cœur Rust cross-compile pour l'ESP32 (US-101)
@@ -92,6 +170,276 @@ $ xtensa-esp32-elf-nm libspike_us101.a | grep esp_fill_random
   le link dans un projet ESP-IDF complet n'a pas été fait ; ni la taille flash
   réelle ni les performances n'ont été mesurées. Détaillé au §6 du rapport.
 
+---
+
+## 2026-09-09 — US-109 : corrections SonarQube Cloud, round 2 (PR #56)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/build.gradle.kts`, `android/app/build.gradle.kts`,
+`android/gradle/libs.versions.toml` (nouveau), `android/gradle/verification-metadata.xml`
+(nouveau), `android/settings-gradle.lockfile` (nouveau)
+**Lot :** US-109 (suite), Sprint 1
+
+### Fait
+- Nouveau scan SonarCloud sur la PR #56 après le round 1 : 5 issues
+  restantes (relevées via l'API `/api/issues/search?...pullRequest=56`) :
+  1. `text:S8569` (MAJOR, VULNERABILITY) **toujours ouverte**, mais
+     maintenant sur `android/build.gradle.kts` (le fichier racine, pas
+     `app/`) : le `gradle.lockfile` ajouté au round 1 ne couvre que les
+     configurations de dépendances de `:app` — il ne verrouille pas la
+     résolution des **plugins** déclarés dans le `plugins{}` du build
+     racine (`com.android.application`, `org.jetbrains.kotlin.android`),
+     qui passe par un mécanisme de résolution différent (classpath de
+     plugin, avant l'application des blocs `subprojects{}`).
+  2. `kotlin:S6624` × 4 (MAJOR, CODE_SMELL) : numéros de version en dur
+     dans `app/build.gradle.kts` lignes 64-66 et 75 (`core-ktx:1.13.1`,
+     `lifecycle-runtime-ktx:2.8.4`, `activity-compose:1.9.1`,
+     `junit:4.13.2`).
+- Corrections :
+  1. **Version catalog** `android/gradle/libs.versions.toml` : centralise
+     toutes les versions (plugins + dépendances). `android/build.gradle.kts`
+     et `app/build.gradle.kts` référencent désormais `libs.plugins.*` /
+     `libs.*` au lieu de chaînes `"groupe:artefact:version"` — corrige les
+     4 `kotlin:S6624`.
+  2. **`gradle/verification-metadata.xml`** généré via `./gradlew
+     --write-verification-metadata sha256 clean assembleDebug
+     testDebugUnitTest assembleRelease` : contrairement au
+     `gradle.lockfile` par sous-projet, la vérification de dépendances
+     s'accroche au moteur de résolution lui-même et couvre **aussi** la
+     résolution des plugins du build racine (vérifié : les entrées
+     `com.android.application.gradle.plugin` / `org.jetbrains.kotlin.android
+     .gradle.plugin` sont bien présentes dans le fichier généré) — corrige
+     `text:S8569` sur `android/build.gradle.kts`.
+  3. `app/gradle.lockfile` conservé (toujours valide, régénéré avec les
+     mêmes coordonnées après le passage au catalogue) ; nouveau
+     `settings-gradle.lockfile` produit en même temps par Gradle (verrou de
+     l'import du catalogue lui-même, quasi vide, gardé par cohérence).
+- Reconfirmé : `./gradlew clean assembleDebug testDebugUnitTest` avec la
+  vérification de dépendances **active** (elle est appliquée à chaque build
+  une fois `gradle/verification-metadata.xml` présent, pas seulement à la
+  génération) → toujours vert.
+
+### Pourquoi / décisions
+- **Deux mécanismes de verrou gardés ensemble** (dependency locking pour
+  `:app` + dependency verification pour tout le build, racine incluse)
+  plutôt que de choisir l'un ou l'autre : la vérification est plus complète
+  (couvre les plugins) mais son but premier est l'intégrité (checksums), pas
+  la reproductibilité de résolution ; le locking reste utile si un jour une
+  dépendance est déclarée avec une version dynamique. Peu de coût à garder
+  les deux ici (peu de dépendances, projet naissant).
+- **Version catalog plutôt que corriger ligne par ligne** : `kotlin:S6624`
+  ne visait que 4 lignes sur les 9 dépendances versionnées du module, mais
+  toutes auraient fini par être flaguées une à une ; centraliser une bonne
+  fois dans `libs.versions.toml` (pratique standard Gradle/Android
+  actuelle) règle la classe de problème plutôt que les symptômes.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Le `gradle.lockfile` de dependency locking (`configurations.all {
+  resolutionStrategy.activateDependencyLocking() }`) ne verrouille que les
+  **configurations de dépendances** d'un projet Gradle ; il ne touche pas à
+  la résolution du **classpath de plugin** (`plugins{}` / `pluginManagement`
+  en settings), qui se produit avant même l'évaluation des blocs
+  `subprojects{}`/`allprojects{}`. Pour verrouiller/vérifier aussi les
+  plugins, il faut la **dependency verification** de Gradle
+  (`gradle/verification-metadata.xml`, `--write-verification-metadata`).
+  Ajouté à `04-apprentissages.md`.
+
+### État après cette session
+- Les 5 issues du round 2 devraient disparaître au prochain scan de la
+  PR #56 (non re-vérifié : nécessite un push + re-run CI).
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+- 01-etat-du-code.md mis à jour : non (durcissement de build, pas de
+  changement d'avancement fonctionnel)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew assembleDebug testDebugUnitTest assembleRelease --console=plain
+BUILD SUCCESSFUL in 1m 14s — 86 actionable tasks: 86 executed
+(après passage au version catalog)
+
+$ ./gradlew --write-verification-metadata sha256 clean assembleDebug testDebugUnitTest assembleRelease --console=plain
+BUILD SUCCESSFUL in 46s — 87 actionable tasks: 84 executed, 3 up-to-date
+→ gradle/verification-metadata.xml généré (2635 lignes)
+
+$ grep -m5 "com.android.application\|org.jetbrains.kotlin.android" gradle/verification-metadata.xml
+→ confirme la présence des artefacts de plugin
+
+$ ./gradlew clean assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL in 9s — 42 actionable tasks: 41 executed, 1 up-to-date
+(build propre avec la vérification de dépendances active)
+```
+- **Non vérifié** : le nouveau scan SonarCloud (nécessite un push + re-run CI).
+
+---
+
+## 2026-09-09 — US-109 : corrections SonarQube Cloud (PR #56, Security Rating C)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/build.gradle.kts`, `android/app/build.gradle.kts`,
+`android/app/src/main/AndroidManifest.xml`, `android/app/gradle.lockfile` (nouveau)
+**Lot :** US-109 (suite), Sprint 1
+
+### Fait
+- PR #56 (squelette Android) bloquée par le Quality Gate SonarCloud :
+  `Security Rating on New Code` = C (requis ≥ A). Trois vulnérabilités
+  relevées via l'API SonarCloud (`/api/issues/search?...pullRequest=56`) :
+  1. `kotlin:S7204` (MAJOR) — obfuscation désactivée en release
+     (`app/build.gradle.kts:26`, `isMinifyEnabled = false`).
+  2. `xml:S5332` (MINOR) — `usesCleartextTraffic` implicitement activé sur
+     les anciennes versions d'Android (`AndroidManifest.xml:31`, pas
+     d'attribut explicite).
+  3. `text:S8569` (MAJOR) — pas de fichier de verrouillage des versions de
+     dépendances (`android/build.gradle.kts`).
+- Corrections :
+  1. `isMinifyEnabled = true` + `isShrinkResources = true` sur le
+     `buildType release`.
+  2. `android:usesCleartextTraffic="false"` explicite sur `<application>`
+     (l'app ne fait aucun appel HTTP dans ce squelette — BLE uniquement).
+  3. `subprojects { configurations.all { resolutionStrategy
+     .activateDependencyLocking() } }` dans `android/build.gradle.kts` +
+     génération de `android/app/gradle.lockfile` via
+     `./gradlew :app:dependencies --write-locks`.
+- Revérifié après coup : `./gradlew assembleDebug testDebugUnitTest` et
+  `./gradlew assembleRelease` (le release n'était pas testé avant — c'est
+  justement le variant touché par le fix R8/minify) → tous verts.
+
+### Pourquoi / décisions
+- Fix ciblé sur les 3 findings réels plutôt qu'un durcissement générique :
+  on corrige ce que Sonar a effectivement détecté, pas un audit de sécurité
+  complet hors périmètre de l'US.
+- `assembleRelease` n'était pas dans la vérification initiale de l'US-109
+  (seul `assembleDebug` est un critère d'acceptation explicite) — ajouté ici
+  car l'activation de R8/minify est justement le genre de changement qui
+  peut casser silencieusement un build release (règles proguard manquantes
+  pour Compose/reflection). Résultat : ça passe tel quel avec les consumer
+  proguard rules d'AndroidX/Compose, aucune règle custom nécessaire pour
+  l'instant.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- SonarCloud distingue `Security Rating` (vulnérabilités réelles, bloquant
+  ce Quality Gate) de `Security Hotspots Reviewed` (hotspots à trier, gate
+  séparée) — utile à savoir pour ne pas chercher au mauvais endroit la
+  prochaine fois. Ajouté à `04-apprentissages.md`.
+
+### État après cette session
+- Les 3 findings devraient disparaître au prochain scan de la PR #56 (non
+  re-vérifié ici : le nouveau scan tourne côté CI GitHub Actions, pas
+  localement).
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+- 01-etat-du-code.md mis à jour : non (pas de changement d'avancement, juste
+  un durcissement du squelette existant)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew :app:dependencies --write-locks --console=plain
+BUILD SUCCESSFUL — gradle.lockfile écrit pour :app et le buildscript racine
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL in 7s — 41 actionable tasks: 10 executed, 31 up-to-date
+
+$ ./gradlew assembleRelease --console=plain
+BUILD SUCCESSFUL in 45s — 46 actionable tasks: 46 executed
+(minifyReleaseWithR8, shrinkReleaseRes exécutés sans erreur)
+```
+- **Non vérifié** : le nouveau scan SonarCloud sur la PR (nécessite un push
+  + re-run CI, pas fait depuis cet environnement).
+
+---
+
+## 2026-09-09 — US-109 : squelette Android (Compose + service de fond BLE)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/` (nouveau module Gradle), `.gitignore`
+**Lot :** US-109, Sprint 1 (`docs/olivier/proposition-organisation-github.md` §8.1)
+
+### Fait
+- Création du module Gradle `android/` (Kotlin DSL, AGP 8.5.2, Gradle 8.9,
+  Kotlin 1.9.24, Jetpack Compose via BOM 2024.06.00). `applicationId` /
+  `namespace` = `com.dengon.app` (non fixé par la conception — choisi ici,
+  voir « Décisions » ci-dessous).
+- `AndroidManifest.xml` : permissions BLE d'exécution `BLUETOOTH_SCAN`
+  (`neverForLocation`), `BLUETOOTH_CONNECT`, `BLUETOOTH_ADVERTISE` (API 31+) ;
+  `BLUETOOTH`/`BLUETOOTH_ADMIN`/`ACCESS_FINE_LOCATION` en repli (`maxSdkVersion=30`) ;
+  `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_CONNECTED_DEVICE` ;
+  `POST_NOTIFICATIONS` (API 33+).
+- `ble/MeshForegroundService.kt` : service `foregroundServiceType="connectedDevice"`,
+  notification permanente (canal `IMPORTANCE_LOW`), `START_STICKY`. Squelette
+  seulement — pas encore de vraie logique GATT (arrive avec `AndroidTransport`,
+  US-213).
+- `ble/BlePermissions.kt` : liste les permissions à demander selon
+  `Build.VERSION.SDK_INT` + vérifie si elles sont déjà accordées.
+- `MainActivity.kt` (Compose) : demande les permissions à l'exécution
+  (`ActivityResultContracts.RequestMultiplePermissions`), démarre/arrête le
+  service, affiche l'état.
+- Test unitaire minimal `BlePermissionsTest` (JVM pur, sans Robolectric).
+- Correction `.gitignore` : `!gradle/wrapper/gradle-wrapper.jar` n'était
+  ancré qu'à la racine → ajout de `!**/gradle/wrapper/gradle-wrapper.jar`
+  pour que le wrapper d'un module non-racine (ici `android/`) soit versionné.
+- SDK Android installé localement pour la vérification (cmdline-tools,
+  `platform-tools`, `platforms;android-34`, `build-tools;34.0.0`) — pas encore
+  dans le dépôt (outillage machine, pas du code).
+
+### Pourquoi / décisions
+- **Package / SDK versions non fixés par `docs/synthese/`** : choisis
+  `com.dengon.app`, `minSdk=26` (API BLE peripheral stables sur la majorité
+  des OEM), `compileSdk`/`targetSdk=34` (Android 14, la version qui impose
+  `foregroundServiceType="connectedDevice"` d'après
+  `docs/synthese/10-benchmarks-mvp-tests.md` §2.7). À reconfirmer en réunion
+  si l'équipe veut une autre convention de nommage.
+- **`neverForLocation` sur `BLUETOOTH_SCAN`** : le scan sert uniquement à
+  détecter le service GATT `dengon`, jamais à dériver une position → évite
+  de demander la localisation sur Android 12+.
+- **`START_STICKY`** : le relais doit rester joignable ; si l'OS tue le
+  service pour libérer de la mémoire, il doit redémarrer seul.
+- Pas de logique BLE réelle dans le service : US-109 ne livre que le
+  squelette (Compose + déclaration + permissions + notification), conforme
+  au périmètre de l'US. La suite (GATT server/scanner/advertiser) est US-213.
+
+### Écarts vs conception
+- Aucun écart vs `docs/synthese/` : le choix de package/SDK versions est un
+  **détail d'implémentation non spécifié**, pas une divergence — pas
+  d'entrée dans `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau ajouté à `04-apprentissages.md` cette session (mise en
+  place d'outillage plus que découverte conceptuelle).
+
+### État après cette session
+- `./gradlew assembleDebug` et `./gradlew testDebugUnitTest` passent
+  localement (voir vérification ci-dessous).
+- **Non vérifié** : le critère d'acceptation « le service tourne encore
+  après ≥ 5 min écran éteint sur au moins un appareil réel » — nécessite un
+  vrai téléphone Android, indisponible dans cet environnement d'exécution.
+  **À faire avant de clore l'US** : installer l'APK sur un appareil réel,
+  couper l'écran 5 min, vérifier (notification toujours affichée + `adb
+  shell dumpsys activity services` montre le service actif), consigner le
+  résultat ici en append.
+- Pas de CI (`android.yml`) : hors périmètre US-109 (relève de US-113/US-222,
+  pas encore faites). Le dépôt n'a donc **aucune CI verte** au sens de la DoD
+  globale §7.1 pt.3 — attendu à ce stade du projet (premier code applicatif).
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md) (créée)
+- 01-etat-du-code.md mis à jour : oui
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew.bat assembleDebug --console=plain
+BUILD SUCCESSFUL in 1m 10s — 35 actionable tasks: 35 executed
+APK généré : android/app/build/outputs/apk/debug/app-debug.apk
+
+$ ./gradlew.bat testDebugUnitTest --console=plain
+BUILD SUCCESSFUL in 5s — 23 actionable tasks: 7 executed, 16 up-to-date
+```
+- Manifeste fusionné inspecté (`app/build/intermediates/.../AndroidManifest.xml`) :
+  présence confirmée de `foregroundServiceType="connectedDevice"` sur le
+  service, des permissions BLE et notification.
+- **Non exécuté** : test manuel des 5 minutes écran éteint sur appareil réel
+  (pas de matériel Android dans cet environnement).
 ---
 
 ## 2026-09-09 — `docs/suivi/` : fin des conflits de merge (US-115)

@@ -79,3 +79,5 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **`staticlib`** | Format de sortie Rust produisant une archive `.a` de code objet, destinée à être **liée dans un programme C**. C'est sous cette forme que `dengon-core` entrera dans le firmware ESP-IDF. |
 | **Features additives (Cargo)** | Règle de Cargo : les *features* demandées par toutes les dépendances s'**additionnent**, jamais l'inverse. Une crate qui exige `std` chez l'une de ses dépendances ne peut donc pas être ramenée en `no_std` de l'extérieur. |
 | **Spike** | Tâche de recherche **timeboxée** dont le livrable est une **décision écrite** (oui/non), pas du code. Le code d'essai est explicitement jeté. Voir [`spikes/`](spikes/). |
+| **Foreground service (Android)** | Service Android « premier plan » : doit afficher une notification permanente et déclarer un `foregroundServiceType` (ex. `connectedDevice`) pour survivre écran éteint sans être tué par le système. |
+| **`START_STICKY`** | Valeur de retour d'`onStartCommand` qui demande à Android de relancer le service (sans son intent d'origine) s'il a dû être tué. |
