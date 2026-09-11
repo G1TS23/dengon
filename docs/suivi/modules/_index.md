@@ -27,6 +27,9 @@ d'organisation §10.3 point 3).
 | `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | esquisse | 2026-09-09 |
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
+| `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
 
 Pas encore de fiche (le composant n'existe pas) : application Android, firmware
 `dengon-relay`, dashboard `api` (fiche sur la branche PR #59) et `web`.
+Pas encore de fiche (le composant n'existe pas) : firmware `dengon-relay`,
+dashboard `api` et `web`.
