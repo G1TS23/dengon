@@ -213,8 +213,15 @@ résolution.
   `olivier` note « piste : libsodium `crypto_box` » comme choix par défaut à
   détailler en doc sécurité. L'orientation proposée ci-dessus suit `powl`
   (option 1, une implé Rust ; repli `trait Crypto` + mbedTLS limité au lien BLE
-  sur ESP32), à valider en réunion et conditionnée au Spike A. Convergence
-  acquise sur : X25519 + AEAD moderne + Ed25519, jamais de crypto maison.
+  sur ESP32), **à valider en réunion**. Convergence acquise sur : X25519 + AEAD
+  moderne + Ed25519, jamais de crypto maison.
+  **La condition « sous réserve du Spike A » est levée** (US-101, 2026-09-10) :
+  le spike a répondu **oui**, `snow` ≥ 0.10 et les briques dalek cross-compilent
+  pour `xtensa-esp32-none-elf`, donc le repli mbedTLS n'est pas activé. Voir
+  **B-1** et
+  [`suivi/spikes/US-101-cross-compile-xtensa.md`](../suivi/spikes/US-101-cross-compile-xtensa.md).
+  Ce qui reste à confirmer est la **ratification d'équipe**, pas la faisabilité
+  technique.
 
 ### A-4. Carte ESP32 : WROVER ou WROOM ?
 
