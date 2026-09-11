@@ -12,6 +12,97 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-11 — `trait Transport`, `MockTransport` et suite de conformité (US-105)
+
+**Auteur :** Paul Claverie + Claude (Opus 5)
+**Périmètre :** `crates/dengon-ble/src/{lib,transport,mock,conformance}.rs`,
+`crates/dengon-ble/tests/conformite_mock.rs`,
+`docs/suivi/modules/dengon-ble.md`, `docs/suivi/03-ecarts-conception.md`.
+**Lot :** Lot 1 — contrats (issue #5, US-105). Branche
+`feat/US-105-trait-transport`.
+
+### Fait
+- **`transport.rs`** : le contrat. `trait Transport: Send` (`start`, `poll`,
+  `send`, `broadcast`), `LinkId`, `TransportConfig`, `TransportEvent`,
+  `DisconnectReason`, `TransportError` (`Display` en français +
+  `std::error::Error`). Le comportement en **déconnexion brutale** est spécifié
+  en 5 points numérotés dans le rustdoc du trait.
+- **`mock.rs`** : `MockTransport`, bouchon en mémoire. Deux familles de
+  méthodes : l'implémentation de `Transport`, et le **pilotage** réservé au test
+  (`connecter_pair`, `couper_brutalement`, `injecter_trame`,
+  `trames_envoyees_a`).
+- **`conformance.rs`** : 11 cas + `suite_complete()`, derrière un trait
+  `BancDEssai` que chaque implémentation fournit. **`pub`, pas `#[cfg(test)]`**.
+- **`tests/conformite_mock.rs`** : la suite jouée contre le bouchon. Sert de
+  modèle à recopier pour US-303, US-213 et US-220.
+- **Aucune dépendance externe ajoutée** : ni `btleplug`, ni `thiserror`.
+  `Cargo.lock` est inchangé, ce que `--locked` prouve.
+
+### Pourquoi / décisions
+- **`poll` ne rend pas un `Result`.** Premier jet : `Result<Vec<..>>`, pour
+  signaler un `start` oublié. Revenu en arrière — `04-architecture.md` §3 le
+  veut infaillible, `poll` est appelé en boucle et traverse le FFI vers Kotlin
+  et C, où un type résultat coûte cher pour une pure erreur de programmation.
+  Sur un contrat **gelé**, la fidélité à la spec prime. C'est `send` qui signale
+  `NotStarted`.
+- **`LinkId` n'est pas un `peerID`.** Un lien n'est pas un nœud, et le transport
+  ne sait pas qui est au bout avant le handshake applicatif. Effet de bord
+  précieux : `dengon-ble` ne dépend pas de `protocol::types`, donc US-105 et
+  US-108 avancent en parallèle dans le même sprint.
+- **Un `LinkId` n'est jamais réutilisé.** Sinon une trame en retard sur un
+  ancien lien serait attribuée au nouveau pair, et la dédup en amont ne
+  rattraperait rien (elle raisonne sur le `msgID`, pas sur l'origine). Écrit
+  dans le contrat, testé, et vérifié par la suite de conformité.
+- **La suite est publique.** Sous `#[cfg(test)]` elle ne serait compilée que
+  pour cette crate — exactement ce qu'il ne faut pas, puisque sa raison d'être
+  est d'être appelée depuis `btleplug`, Android et NimBLE.
+
+### Écarts vs conception
+- **Deux, consignés dans `03-ecarts-conception.md`** :
+  1. `PeerDisconnected` porte un `reason` que `04-architecture.md` §3 ne prévoit
+     pas — élargissement assumé d'un contrat gelé, à trancher au point d'équipe.
+  2. `TransportConfig` et `LinkId` sont **inventés ici** : la conception les
+     nomme sans jamais les définir. C'est un comblement, pas une divergence.
+
+### Appris
+- Rien de neuf sur le langage. Le point non évident était de **conception** :
+  une suite de conformité doit piloter le transport par l'extérieur, d'où le
+  trait `BancDEssai` — la suite ne sait pas connecter un téléphone, seul le banc
+  le sait.
+
+### État après cette session
+- US-105 est la **première des 4 coutures gelées**. `sync::routing` (US-209) et
+  `dengon-sim` (US-221) peuvent démarrer sans attendre le BLE.
+- Fiche module mise à jour : `modules/dengon-ble.md` (réécrite), ligne d'index
+  passée à « contrat gelé ».
+- Reste à faire : annoncer le gel en point d'équipe (DoD §7.2, ligne
+  « Contrat ») — ce n'est pas automatisable.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                   OK
+$ cargo build --workspace --all-targets --locked                OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+  OK, 0 avertissement
+$ cargo check -p dengon-core --no-default-features --locked      OK
+$ cargo test --workspace --all-features --locked      31 passés, 0 échec
+$ cargo test --workspace --all-features --locked --doc  2 passés, 0 échec
+```
+- **Pas vérifié** : aucune radio n'a été touchée — toute la conformité est
+  vérifiée contre un bouchon qui, par construction, respecte le contrat. Ça fige
+  l'énoncé, ça ne dit rien de `btleplug` ni de NimBLE.
+- **Pas vérifié** : la couverture. `cargo-llvm-cov` n'est pas installé sur le
+  poste ; c'est la CI qui la rapportera.
+- **Pas vérifié** : la suite n'a tourné contre **aucune implémentation
+  réelle**, pour la bonne raison qu'aucune n'existe. Elle peut les atteindre
+  toutes les trois (`btleplug` directement ; `AndroidTransport` parce que
+  `Transport` est une callback interface UniFFI, `plan-mvp.md:172` ; NimBLE via
+  un adaptateur Rust au-dessus du shim `extern "C"`), donc le critère « jeu de
+  tests réutilisable tel quel » est tenu — mais la preuve viendra d'US-213,
+  US-220 et US-303, sur matériel réel.
+
+---
+
 ## 2026-09-09 — `docs/suivi/` : fin des conflits de merge (US-115)
 
 **Auteur :** Claude (Sonnet 5)

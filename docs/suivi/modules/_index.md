@@ -20,7 +20,7 @@ d'onboarding de l'area `process` (§10.3 point 3).
 | Module | Fiche | État | Dernière mise à jour |
 |---|---|---|---|
 | `dengon-core` | [dengon-core.md](dengon-core.md) | esquisse | 2026-09-09 |
-| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |
+| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-11 |
 | `dengon-node` | [dengon-node.md](dengon-node.md) | esquisse | 2026-09-09 |
 | `dengon-sim` | [dengon-sim.md](dengon-sim.md) | esquisse | 2026-09-09 |
 | `dengon-verify` | [dengon-verify.md](dengon-verify.md) | esquisse | 2026-09-09 |

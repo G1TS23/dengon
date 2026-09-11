@@ -163,3 +163,55 @@ _(aucun écart pour l'instant)_
   crate n'a de binaire secondaire, et le mode d'échec est bruyant (le fichier
   manque, la compilation échoue) — contrairement à celui des clés, qui était
   silencieux.
+
+---
+
+### `TransportEvent::PeerDisconnected` porte un **motif**, absent de la conception
+
+- **Conception :** [`docs/synthese/04-architecture.md`](../synthese/04-architecture.md)
+  §3 décrit `PeerDisconnected { peer_link_id }` — le lien, rien d'autre.
+- **Code :** `crates/dengon-ble/src/transport.rs:181` ajoute un champ
+  `reason: DisconnectReason`, à trois valeurs : `Propre`, `Brutale`, `Locale`.
+- **Pourquoi :** le critère d'acceptation n°4 de l'US-105 demande que « le
+  comportement attendu en déconnexion brutale soit spécifié ». On peut le
+  spécifier en rustdoc — c'est fait — mais la couche du dessus doit aussi
+  pouvoir **distinguer les cas à l'exécution** : une coupure brutale justifie de
+  retenter tout de suite (le pair est peut-être encore à portée), un départ
+  propre non. Sans ce champ, `sync::routing` (US-209) ne peut que deviner, et
+  devinerait mal dans le cas le plus fréquent — un réseau maillé mobile passe
+  son temps à perdre des liens brutalement.
+- **Conséquences :** c'est un **élargissement du contrat gelé**, à assumer comme
+  tel : les quatre implémentations (`btleplug`, Android, NimBLE, bouchon)
+  devront remplir ce champ correctement, et la suite de conformité les y oblige
+  (`cas_deconnexion_brutale`, `cas_deconnexion_propre_est_distinguee`). Sur
+  matériel réel, produire une `Brutale` veut dire couper l'alimentation de la
+  carte d'en face, pas appeler `disconnect` — c'est écrit dans la doc du trait
+  `BancDEssai`. Le coût est réel mais borné ; le bénéfice est qu'un
+  comportement central du maillage cesse d'être implicite.
+- **Doc de conception mise à jour ?** **Non.** `04-architecture.md` §3 garde sa
+  version. À trancher au point d'équipe qui gèle le contrat : soit on met la
+  conception à jour, soit on retire le champ. Le laisser diverger en silence
+  serait le pire des trois.
+
+---
+
+### `TransportConfig` et `LinkId` sont inventés ici, sans référence de conception
+
+- **Conception :** `04-architecture.md` §3 **les nomme** dans la signature du
+  trait (`fn start(&mut self, cfg: TransportConfig)`, `peer_link_id: LinkId`)
+  mais ne les définit nulle part. Aucun autre document ne les décrit.
+- **Code :** `crates/dengon-ble/src/transport.rs:44` (`LinkId`) et `:78`
+  (`TransportConfig`, 5 champs).
+- **Pourquoi :** il fallait bien choisir. Les partis pris, justifiés en rustdoc
+  et dans [`modules/dengon-ble.md`](modules/dengon-ble.md) : `LinkId` identifie
+  une **connexion** et non un nœud (le `peerID` d'A-8 reste au protocole) ;
+  `TransportConfig` ne porte que ce qui **varie d'un nœud à l'autre**, pas les
+  constantes de protocole, qui arrivent avec `protocol::consts` (US-108).
+- **Conséquences :** ce découplage est ce qui permet à US-105 et US-108
+  d'avancer **en parallèle** dans le même sprint, sans dépendance croisée.
+  Contrepartie : `TransportConfig::local_peer_id` est typé `[u8; 8]` et non
+  `PeerId` ; le remplacer quand US-108 aura livré ce type est un changement de
+  signature, pas de sémantique.
+- **Doc de conception mise à jour ?** Non — ce n'est pas une divergence mais un
+  **comblement**. À verser dans `04-architecture.md` §3 si l'équipe veut que la
+  conception reste la référence complète du contrat.
