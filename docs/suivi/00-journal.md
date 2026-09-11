@@ -10,6 +10,165 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — US-112 : rectification après un commentaire manqué de POWLAIR
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+`docs/synthese/09-dashboard-et-donnees.md`
+**Lot :** US-112 (suite), Sprint 1
+
+### Fait
+- **Erreur de process** : l'entrée précédente (ci-dessous) a été écrite sans
+  vérifier les commentaires de l'issue #12 au préalable. Paul (POWLAIR) y
+  avait laissé, ~15 min avant le début de cette session de travail, un
+  commentaire détaillé signalant une branche locale non poussée
+  (`docs/trancher-sujets-ouverts`, commit `ac062fc`) qui couvrait déjà une
+  partie des critères de l'US, plus deux vraies coquilles trouvées dans
+  `09-dashboard-et-donnees.md`. Repéré seulement quand l'utilisateur a
+  demandé si ce commentaire avait été vu — réponse honnête : non.
+- Comparé le contenu déjà écrit dans la PR #66 à ce que le commentaire de
+  Paul décrit : le §5.1 (mapping des colonnes chiffrées) n'est **pas**
+  couvert par sa branche (son tableau des critères ne le mentionne pas) —
+  pas de doublon sur ce point. En revanche deux choses manquaient :
+  1. Le **résultat du Spike A** existe déjà : [PR #64](https://github.com/G1TS23/dengon/pull/64)
+     (US-101, en revue), conclusion **OUI** (`snow` 0.10 cross-compile pour
+     xtensa). §3 et l'en-tête de `06-securite.md`, et la ligne C-11 de
+     `00-contexte-global.md`, mis à jour pour pointer dessus au lieu de
+     rester sur « en cours ».
+  2. **Deux vraies incohérences** dans `09-dashboard-et-donnees.md` (prose vs
+     SQL du même fichier) : `quarantined` manquait dans la liste des
+     couleurs de statut (l. 86, présent dans le `CHECK` l. 419, D-5) ;
+     `rejected_sig` manquait dans la liste des verdicts d'intégrité (l. 93,
+     présent dans le `CHECK` l. 433, D-4). Corrigées.
+- Vérifié indépendamment ces deux points par lecture directe du fichier
+  (pas seulement sur la foi du commentaire de Paul).
+- Répondu sur l'issue #12 pour éviter le travail en double : PR #66 déjà
+  ouverte, contenu complémentaire (pas redondant) avec sa branche locale,
+  pas besoin qu'il la pousse pour ce point précis.
+
+### Pourquoi / décisions
+- Pas de retrait de la PR #66 : le contenu ajouté (mapping §5.1) est
+  original et répond au critère que la branche de Paul ne couvrait pas.
+  Seule la partie « déjà faite ailleurs » a été corrigée/complétée, pas
+  réécrite depuis zéro.
+- Référencer la PR #64 plutôt qu'attendre son merge pour écrire le résultat
+  du Spike A : la PR est ouverte, en revue, son contenu est public et
+  vérifiable — attendre aurait rouvert l'US pour un simple changement de
+  formulation une fois #64 mergée. La mention « pas encore mergée » évite de
+  faire passer un résultat pour définitivement acté.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Vérifier les **commentaires** d'une issue avant de commencer, pas
+  seulement son corps — le process suivi jusqu'ici (lire l'issue, vérifier
+  git status, démarrer) n'incluait pas cette étape. À généraliser aux
+  prochaines US : `gh issue view <n> --comments` avant tout travail.
+
+### État après cette session
+- US-112 : mapping colonnes chiffrées (nouveau, §5.1), Spike A (référencé,
+  PR #64), D-4/D-5 (corrigées dans `09-dashboard-et-donnees.md`) — tous
+  couverts. Reste la relecture croisée (4ᵉ critère), et le passage sans
+  conditionnel du Spike A une fois #64 mergée (pas bloquant pour cette US).
+- Fiche(s) module mise(s) à jour : sans objet (documentation transverse).
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh api repos/G1TS23/dengon/issues/12/comments
+→ commentaire de POWLAIR, 2026-09-11T09:29:33Z, lu en entier
+$ grep -n "online.*stale.*suspect\|ok.*broken.*fork" docs/synthese/09-dashboard-et-donnees.md
+→ confirme les deux endroits où la prose retardait sur le SQL (l. 86, 93)
+  avant correction
+```
+- **Non vérifié** : le contenu exact de la branche locale
+  `docs/trancher-sujets-ouverts` de Paul (jamais poussée, donc invisible
+  depuis cette session) — seule sa description dans le commentaire a pu
+  être exploitée.
+
+---
+
+## 2026-09-11 — US-112 : delta doc sécurité (`docs/synthese/06-securite.md`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`
+**Lot :** US-112, Sprint 1
+
+### Fait
+- `docs/synthese/06-securite.md` existait déjà (créé lors de l'éclatement de
+  `docs/synthese/`) mais portait encore, en tête de fichier, la mention « il
+  ne reste qu'un delta à rédiger » — exactement le contenu que cette US doit
+  produire. Complété plutôt que dupliqué dans un nouveau fichier.
+- Vérifié l'état des trois réconciliations listées par C-11
+  (`01-sujets-a-trancher.md` §D) : D-1 et D-2 étaient **déjà** intégrées dans
+  le corps du fichier (§2, §3) ; D-4 et D-5 étaient **déjà** réconciliées dans
+  `09-dashboard-et-donnees.md` (`-- D-4`, `-- D-5` dans le SQL). Seul
+  manquait vraiment : le **mapping des colonnes chiffrées** champ par champ,
+  et un état explicite du **Spike A** (US-101, toujours ouverte).
+- Ajout §5.1 : table complète des colonnes de `dengon-core::store`
+  (`powl/09-data-model.md` §1), classées en 3 cas — Keystore/Keychain (clés
+  privées), XChaCha20 champ par champ (`messages.body`,
+  `noise_sessions.state`), déjà chiffré par le protocole donc pas de second
+  chiffrement (`outbox.packet`, `held_envelopes.packet`), ou clair
+  (métadonnées, identifiants publics).
+- Ajout d'un état explicite du Spike A en §3 (renvoi à l'issue #1) plutôt
+  qu'un TODO nu.
+- Mis à jour la ligne C-11 de `00-contexte-global.md` (le delta n'est plus
+  "à rédiger", il pointe vers `06-securite.md`).
+- Vérifié : tous les liens relatifs du fichier résolvent vers un fichier
+  existant (script Python, voir ci-dessous) ; cohérent avec B-3/C-11/A-13 de
+  la table de décisions.
+
+### Pourquoi / décisions
+- Compléter le fichier existant plutôt qu'en créer un nouveau : il se
+  présentait déjà explicitement comme le brouillon de ce delta (tête de
+  fichier), créer un second document aurait dupliqué §1-§4 sans raison et
+  cassé le lien que `00-contexte-global.md` (C-11) pointe déjà dessus.
+- Le commentaire `-- clair local uniquement` sur `messages.body` dans
+  `powl/09` (doc figée, non modifiée — `docs/powl/` reste inchangé) est
+  ambigu une fois B-3 tranché ; explicité dans le mapping comme décrivant le
+  contenu (texte déchiffré par l'app), pas l'état de chiffrement au repos —
+  pour éviter qu'un futur lecteur code `store` (US-207) sur cette phrase
+  littérale.
+- `outbox.packet` / `held_envelopes.packet` classés « déjà chiffré » plutôt
+  que « à chiffrer » : ce sont des paquets L3 déjà scellés par Noise avant
+  d'atteindre la base (session ou enveloppe) — un second chiffrement
+  XChaCha20 n'ajoute rien contre le modèle de menace local (vol d'appareil),
+  seulement du CPU. Distinction utile pour ne pas sur-spécifier US-207.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (US-112 est une synthèse de décisions déjà prises, pas une
+  découverte technique).
+
+### État après cette session
+- US-112 : les 3 volets du mapping (Spike A, `recipient_tag`, colonnes
+  chiffrées) sont traités — 2 déjà faits ailleurs, 1 ajouté ici. Ne reste que
+  le **résultat** du Spike A lui-même (dépend de la clôture de l'issue #1,
+  hors périmètre de cette US).
+- Pas de fiche module : US-112 est un travail de documentation transverse,
+  pas un composant du dépôt.
+- 01-etat-du-code.md mis à jour : non (pointeur seul, inchangé).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 - <<'EOF'
+# résout chaque lien relatif de docs/synthese/06-securite.md vers un fichier
+# réel (os.path.isfile), ignore les liens http(s)
+EOF
+→ 7/7 liens internes résolvent (00-contexte-global.md,
+  01-sujets-a-trancher.md ×3, 09-dashboard-et-donnees.md,
+  ../powl/09-data-model.md)
+```
+- **Non fait** : relecture croisée par une autre personne (4ᵉ critère
+  d'acceptation de l'US) — nécessite un passage de Paul ou Tanguy, hors
+  périmètre de cette session.
+
+---
+
 ## 2026-09-11 — US-109 : corrections suite à la revue de la PR #56
 
 **Auteur :** Claude (Sonnet 5)

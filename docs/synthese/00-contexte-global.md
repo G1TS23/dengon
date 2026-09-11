@@ -68,7 +68,7 @@ retransmet à la prochaine occasion.
 | C-7 | Anti-rejeu = `conv_seq` + `msgID` + seen-set + fenêtre timestamp ±2 h. | tranché |
 | C-9 | Le **relais ESP32 fait partie du MVP** (livrable complet, pas une PoC). | tranché |
 | C-10 | On **s'inspire des idées** de Meshtastic / Bitchat, on ne reprend pas de code (langages différents). | tranché |
-| C-11 | Doc sécurité de référence = **`powl/04-security.md`** ; il ne reste qu'un *delta* à rédiger. | tranché |
+| C-11 | Doc sécurité de référence = **`powl/04-security.md`** ; delta rédigé dans [`06-securite.md`](06-securite.md) (US-112). Résultat du Spike A (US-101) disponible dans PR #64, en revue. | tranché |
 | C-12 | Échange de clés = **QR scanné en présentiel + code de vérification 60 chiffres + TOFU**. | tranché |
 
 **Encore ouvert** : D-1/D-2/D-4/D-5 (réconciliations de rédaction internes à
