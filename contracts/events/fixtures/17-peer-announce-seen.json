@@ -1,0 +1,22 @@
+{
+  "batch_id": "f433463144679b740cf8355b0abb5fbcf3b9aa7ecd69e26e0d5e8d772f5bfcb2",
+  "node_id": "relay-3f2a9c",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "1667dedc06778504bb21d63b5584434b6ca3524c29374339ac75ef501bfaad2e",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1014,
+      "ts_ms": 1725800001200,
+      "name": "peer.announce_seen",
+      "payload": {
+        "peer": "0f1e2d3c4b5a6978",
+        "pseudo": "kiosque-hall-B",
+        "ledger_height": 88123,
+        "caps": 3
+      }
+    }
+  ],
+  "sig": "7U6HSuXz+uVwPVrA6N1XYXOxYtve94XJjlttFmeX/sQUVQIIq8jTo9cuqDS6k4YnEum6LBza3PT+8Pg9Q8lzAw=="
+}

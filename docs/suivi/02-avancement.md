@@ -22,7 +22,7 @@
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
 | Dashboard `api` | FastAPI + SQLite + SSE (A-5) | — | 0 % | — |
 | Dashboard `web` | page légère + SSE (A-5) | — | 0 % | — |
-| Contrats (`contracts/`) | schémas d'événements + fixtures golden | — | 0 % | — |
+| Contrats (`contracts/`) | schémas d'événements + fixtures golden | événements : envelope/batch/payloads schema + CANONICAL.md + 20 fixtures signées + validate.py (US-107, PR #60) | ~15 % | [contracts-events](modules/contracts-events.md) |
 | Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | — | 0 % | — |
 
 ## Outillage et processus

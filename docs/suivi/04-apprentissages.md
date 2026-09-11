@@ -275,6 +275,38 @@ documentation GitHub « Using third-party actions ».
 
 ---
 
+### `jsonschema` (Python) : `referencing.Registry` remplace `RefResolver`
+
+**C'est quoi :** depuis `jsonschema` 4.18, la résolution des `$ref` inter-
+fichiers passe par le paquet `referencing` : un `Registry` qu'on peuple à la
+main (`Resource.from_contents(...)`), pas par le `RefResolver` intégré des
+versions antérieures (déprécié).
+**Pourquoi dans dengon :** `contracts/events/batch.schema.json` référence
+`envelope.schema.json` (`$ref: "envelope.schema.json"`, et depuis la revue de
+la PR #60, `$ref: "envelope.schema.json#/$defs/node_id"`) — sans registre
+peuplé, `Draft202012Validator` ne sait pas résoudre ce chemin relatif.
+**Piège / surprise :** une ressource doit être enregistrée **sous son `$id`
+et sous son nom de fichier** si les deux formes de `$ref` doivent marcher
+(un `$ref` par nom de fichier relatif, un autre potentiel par URI absolue) —
+l'oublier fait échouer la résolution silencieusement selon la forme du `$ref`
+utilisée.
+**Où c'est utilisé :** `contracts/tools/validate.py::_batch_registry()`.
+**Pour aller plus loin :** doc du paquet `referencing` (`python-jsonschema.readthedocs.io`).
+
+### Longueur d'une signature Ed25519 en base64
+
+**C'est quoi :** une signature Ed25519 fait **64 octets** fixes. En base64
+standard (avec padding), ça donne toujours **88 caractères**, dont les 2
+derniers sont le padding `==` (64 octets = 512 bits, non multiple de 3 ×
+8 = 24 bits, d'où le padding).
+**Pourquoi dans dengon :** `contracts/events/batch.schema.json` contraint
+`sig` par un motif de longueur fixe : `^[A-Za-z0-9+/]{86}==$` (86 caractères
+utiles + le `==`), plutôt qu'un motif générique de longueur variable — une
+signature d'une autre taille (mauvais algorithme, troncature accidentelle)
+est rejetée par le schéma lui-même, sans avoir besoin de la décoder.
+**Où c'est utilisé :** `contracts/events/batch.schema.json` (champ `sig`).
+
+---
 ### Cible « tier 3 » et `-Z build-std` — quand `core` n'est pas livré compilé
 
 **C'est quoi :** Rust classe ses cibles en 3 niveaux. Une cible **tier 3** est
@@ -420,3 +452,42 @@ future CI).
 **Où c'est utilisé :** `android/gradle/verification-metadata.xml`.
 **Pour aller plus loin :** doc Gradle « Gradle Module Metadata » — pourquoi
 `.module` est préféré à `.pom` quand les deux sont publiés.
+
+---
+
+### `$` en regex Python matche avant un `\n` final — piège pour un motif JSON Schema
+
+**C'est quoi :** en Python (`re`, sans `re.MULTILINE`), `$` matche soit la fin
+absolue de la chaîne, soit la position juste avant un unique `\n` final. Un
+motif `^[0-9a-f]{16}$` accepte donc une chaîne de **17** caractères si le
+17ᵉ est `\n`. Ce n'est pas le comportement d'ECMA 262 (JavaScript), la norme
+visée par le mot-clé `pattern` de JSON Schema — donc un validateur JS serait
+strict là où le validateur Python (`jsonschema`, qui utilise `re` en
+interne) ne l'est pas.
+**Pourquoi dans dengon :** relevé en **relecture approfondie de la revue de
+la PR #60** — `"<16 hex>\n"` passait `HEX16`/`HEX32`/`HEX64` dans
+`contracts/tools/catalogue.py`. `\Z` (extension Python, pas de `\n` de
+tolérance) aurait corrigé le symptôme, mais ces fragments finissent dans
+`payloads.schema.json`, censé rester neutre en langage — y introduire une
+extension Python irait contre l'objectif même de `contracts/`.
+**Piège / surprise :** la correction n'est pas `\Z` mais `minLength`/
+`maxLength` en plus du `pattern` — un mot-clé JSON Schema standard, qui ferme
+le même trou sans dépendre du moteur regex. Seuls les champs de longueur
+**fixe** peuvent en profiter ; un motif ouvert (`{6,}` sans borne haute) reste
+vulnérable, documenté comme dette assumée dans `03-ecarts-conception.md`.
+**Où c'est utilisé :** `contracts/tools/catalogue.py` (`HEX16`/`HEX32`/
+`HEX64`), `contracts/events/{envelope,batch}.schema.json` (`event_id`,
+`batch_id`, `sig`).
+
+### JSON Schema `required` fait déjà ce qu'une boucle manuelle referait
+
+**C'est quoi :** le mot-clé `required` d'un schéma JSON (`{"required": [...]}`)
+vérifie la présence de champs — exactement ce qu'une boucle `for field in
+required: if field not in payload: ...` referait à côté, en double.
+**Pourquoi dans dengon :** `contracts/tools/validate.py` construisait un
+`Draft202012Validator` **sans** `required` (seulement `properties`), et
+compensait par une boucle manuelle juste avant — repéré en revue de la
+PR #60. Ajouter `required` au schéma du validateur a permis de supprimer la
+boucle : une seule vérification, native, au lieu de deux qui doivent rester
+synchronisées.
+**Où c'est utilisé :** `contracts/tools/validate.py::_payload_validator`.

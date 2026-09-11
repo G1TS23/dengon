@@ -1,0 +1,20 @@
+{
+  "batch_id": "7e212a51d7df9e74128f197aae1399a9db77f5890f67e9acb1a55ef7bab2462c",
+  "node_id": "client-9c1d84",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "80dc07068c5686c310f034b5351f5ea875995e2dffc61712cdc6eaa11f602b2c",
+      "node_id": "client-9c1d84",
+      "node_kind": "client",
+      "seq": 5002,
+      "ts_ms": 1725800000110,
+      "name": "msg.queued",
+      "payload": {
+        "msg_log_id": "1122334455667788",
+        "conv_hash": "0011223344556677"
+      }
+    }
+  ],
+  "sig": "Sb7iDVKmyf8F1WoFCHZyqJnmnXjyYxp6hWRI31CG0zxy0h85pGCI+GvTfBiwatCYt6DOAtJDIvxBbyoTB7DPCw=="
+}

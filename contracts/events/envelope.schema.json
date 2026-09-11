@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dengon.local/contracts/events/envelope.schema.json",
+  "title": "Enveloppe d'un événement d'observabilité dengon",
+  "description": "Structure commune à tout événement. Réf : docs/synthese/09 §9, docs/powl/08 §1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "node_id", "node_kind", "seq", "ts_ms", "name", "payload"],
+  "properties": {
+    "event_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64,
+      "description": "hex(SHA-256(node_id ‖ seq sur 8 octets big-endian)). Sert de clé de déduplication côté VPS."
+    },
+    "node_id": { "$ref": "#/$defs/node_id" },
+    "node_kind": { "enum": ["relay", "client"] },
+    "seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Numéro de séquence du journal chaîné, monotone par nœud."
+    },
+    "ts_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Horodatage nœud, ms depuis epoch. Best-effort (dérive d'horloge possible)."
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z]+\\.[a-z_]+$",
+      "description": "<domaine>.<action> en snake_case."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Forme contrainte par le nom, voir payloads.schema.json."
+    }
+  },
+  "$defs": {
+    "node_id": {
+      "type": "string",
+      "pattern": "^(relay|client)-[0-9a-f]{6,}$",
+      "description": "Pseudonyme stable, non rattachable à une personne (C-4)."
+    }
+  }
+}

@@ -178,7 +178,7 @@ batch.
 
 | `name` | Producteur | `payload` | Sens |
 | --- | --- | --- | --- |
-| `pkt.seen` | relais, client | `{ msg_log_id, type, ttl_in, size_bucket, from_peer, rssi }` | paquet reçu (avant dédup) |
+| `pkt.seen` | relais, client | `{ msg_log_id, type, ttl_in, size_bucket, from_peer, rssi? }` | paquet reçu (avant dédup) — `rssi` absent si le transport ne le fournit pas (US-105) |
 | `pkt.duplicate` | relais, client | `{ msg_log_id, from_peer }` | déjà dans le seen-set |
 | `pkt.relayed` | relais, client | `{ msg_log_id, type, ttl_in, ttl_out, fanout, from_peer }` | rediffusé |
 | `pkt.delivered_local` | client | `{ msg_log_id, type }` | paquet pour moi, traité |

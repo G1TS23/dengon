@@ -55,6 +55,55 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-09 — Dossier `contracts/` ajouté au layout du dépôt (US-107)
+
+- **Prévu :** `docs/synthese/04` §5 dessine le dépôt sans dossier pour les
+  artefacts de contrat inter-langages ; les « vecteurs de conformité » y sont
+  seulement évoqués (`synthese/10` §4.7, job `cross-vectors`).
+- **Réel :** un dossier **`contracts/`** à la racine, contenant `events/`
+  (schémas JSON + `CANONICAL.md` + 20 fixtures signées) et `tools/` (générateur
+  + validateur, outillés `uv`).
+- **Raison :** ces artefacts sont **neutres en langage** et consommés par trois
+  composants (`dashboard/` Python, `crates/` Rust, `firmware/` C). Les mettre
+  sous l'un d'eux créerait une dépendance de build inversée ; sous `docs/` ils
+  ne seraient pas exécutables par la CI.
+- **Conséquences :** un `paths: contracts/**` de plus en CI
+  (`.github/workflows/contracts.yml`). Le job `cross-vectors` de `synthese/10`
+  §4.7, quand il existera, consommera `contracts/events/fixtures/`.
+- **Doc de conception mise à jour ?** non (layout indicatif). À mentionner au
+  prochain rafraîchissement de `synthese/04` §5.
+
+---
+
+### 2026-09-09 — Identifiants pseudonymes tronqués : tous à 8 octets / 16 hex (US-107)
+
+- **Prévu :** notations incohérentes selon le document —
+  `msg_log_id` : `docs/powl/08` §1.3 `hex(SHA-256(msgID)[0..16])`,
+  `docs/synthese/04` §7 `SHA-256(msgID)[:16]`, `docs/synthese/09` §11.2
+  « hex 16 o » ;
+  `conv_hash` : `docs/synthese/09` §9 `SHA-256(min‖max)[0..8]` ;
+  `from_peer` / `peer` / `to_peer` : « `peerID` tronqué à 8 o » (`docs/synthese/09`
+  §9). « 16 », « 8 » = octets ou caractères hex ? Les trois se lisent dans les
+  deux sens.
+- **Réel :** le contrat US-107 fixe **une seule règle pour tous les
+  identifiants pseudonymes tronqués : 8 octets → 16 caractères hex**
+  (`^[0-9a-f]{16}$`). `recipient_tag` reste à 16 octets / 32 hex (déjà défini
+  ainsi, `docs/synthese/06`).
+- **Raison :** le **seul exemple concret** du corpus (`docs/synthese/09` §9,
+  `msg_log_id` = `"4d5e6f7a8b9c0d1e"` et `from_peer` = `"a1b2c3d4e5f60718"`)
+  fait 16 hex dans les deux cas. Uniformiser évite d'avoir des largeurs
+  différentes pour des objets de même nature (empreintes SHA-256 tronquées).
+  Plus court = moins corrélable, suffisant pour dédupliquer / grouper de
+  l'observabilité.
+- **Conséquences :** `docs/powl/08`, `docs/synthese/04` §7 et `docs/synthese/09`
+  (§9 pour `conv_hash`, §11.2 pour `messages.msg_log_id` : `TEXT` de 16
+  caractères) doivent être alignés sur « 8 octets / 16 hex » pour **tous** ces
+  champs. `dengon-core` (US-208) et l'ingest (US-216) tronquent à 8 octets.
+- **Doc de conception mise à jour ?** pas encore — à répercuter dans
+  `docs/powl/` et `docs/synthese/`. Résumé dans `contracts/events/CANONICAL.md` §3.
+
+---
+
 ### 2026-09-09 — Le label est `good first issue`, pas `good-first-issue`
 
 - **Prévu :** §5.3 liste le label `good-first-issue`, avec des traits d'union.
@@ -163,3 +212,58 @@ _(aucun écart pour l'instant)_
   crate n'a de binaire secondaire, et le mode d'échec est bruyant (le fichier
   manque, la compilation échoue) — contrairement à celui des clés, qui était
   silencieux.
+
+---
+
+### 2026-09-11 — `pkt.seen.rssi` reste optionnel dans le catalogue (US-107)
+
+- **Prévu :** `docs/powl/08-observability-events.md:43` et
+  `docs/synthese/09-dashboard-et-donnees.md:181` listent le payload de
+  `pkt.seen` comme `{ msg_log_id, type, ttl_in, size_bucket, from_peer, rssi }`
+  — sans `?` sur `rssi`, contrairement à `pseudo?` (`peer.announce_seen`) ou
+  `ssid?`/`duration_s?` (`relay.wifi_up`/`down`) dans les mêmes tableaux. Par
+  la convention du document, `rssi` y est donc **requis**.
+- **Réel :** `contracts/tools/catalogue.py`, l'entrée `pkt.seen` ne liste pas
+  `rssi` dans `"required"` — seulement dans `"props"`. Un événement `pkt.seen`
+  sans `rssi` passe `validate.py`.
+- **Raison :** signalé en **revue de la PR #60** par `OswinFreyr`. Le RSSI
+  n'est pas toujours disponible à la couche transport : `TransportEvent::
+  PeerConnected.rssi` (US-105, `crates/dengon-ble/src/transport.rs`) est déjà
+  typé `Option<i16>`, avec la même raison documentée en rustdoc — Android ne
+  fournit le RSSI qu'à la demande, NimBLE pas du tout sur une connexion
+  entrante. Rendre `rssi` requis dans le contrat d'événement obligerait à
+  inventer une valeur sur les chemins où le transport n'en a pas, ce qui
+  serait plus trompeur qu'un champ absent.
+- **Conséquences :** c'est la **doc de conception** qui est en retard, pas le
+  contrat. `docs/synthese/09-dashboard-et-donnees.md:181` mis à jour avec
+  `rssi?` pour refléter ce que `powl/03-network-protocol.md`/US-105 ont déjà
+  établi côté transport ; `docs/powl/08` non touché (dossier figé, cf.
+  `CLAUDE.md`).
+- **Doc de conception mise à jour ?** oui — `docs/synthese/09-dashboard-et-donnees.md`.
+
+---
+
+### Piège JSON Schema repéré mais **partiellement corrigé** (dette assumée) — `node_id`/`name`
+
+- Les motifs `^(relay|client)-[0-9a-f]{6,}$` (`node_id`) et `^[a-z]+\.[a-z_]+$`
+  (`name`) dans `contracts/events/envelope.schema.json` restent vulnérables
+  au même piège que `HEX16`/`HEX32`/`HEX64`/`sig`/`batch_id` (un `$` Python
+  matche juste avant un `\n` final — retour de revue #60) : ces deux-là n'ont
+  **pas** reçu de `minLength`/`maxLength` correctif, contrairement aux
+  champs de longueur fixe.
+- **Raison de ne pas corriger pareil :** ces deux motifs sont **ouverts**
+  (`{6,}` sans borne haute, `name` sans longueur fixe) — `minLength` seul ne
+  fermerait pas le trou. La seule fermeture complète serait `\Z` au lieu de
+  `$`, une extension **Python**, absente d'ECMA 262 (la norme visée par
+  `pattern` en JSON Schema) — l'introduire irait à l'encontre de l'objectif
+  même de `contracts/` (neutre en langage, potentiellement validé un jour par
+  un moteur non-Python).
+- **Impact réel :** faible. Un `node_id`/`name` avec un `\n` final ne casse
+  rien silencieusement : `name` sert de clé dans `CATALOGUE`, donc un nom
+  suffixé échouerait de toute façon au lookup (`événement hors catalogue`) ;
+  `node_id` n'entre dans aucun calcul qui plante dessus (contrairement à
+  `seq`/`payload`, corrigés). C'est une strictness manquante, pas un chemin
+  de crash.
+- **Condition de levée :** si `contracts/` gagne un jour un second
+  consommateur non-Python qui a besoin d'une validation stricte de ces deux
+  champs, ou si le motif `node_id` gagne une borne haute naturelle.
