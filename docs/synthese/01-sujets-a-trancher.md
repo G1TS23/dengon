@@ -185,7 +185,14 @@ résolution.
   - **primitives = exactement la convergence** (X25519, ChaCha20-Poly1305,
     Ed25519, SHA-256), crates pures Rust éprouvées.
 
-  **Repli si le Spike A montre que `snow` ne cross-compile pas pour xtensa** :
+  **Statut du Spike A (2026-09-10, US-101)** : ✅ **exécuté — `snow` cross-compile
+  bien pour xtensa** (en version **≥ 0.10.0** ; la 0.9.6 non). L'option 1 est
+  donc retenue **sans repli** : une seule implémentation crypto Rust, partagée
+  téléphone et ESP32. Voir B-1 et
+  [`suivi/spikes/US-101-cross-compile-xtensa.md`](../suivi/spikes/US-101-cross-compile-xtensa.md).
+  Le repli ci-dessous est **conservé pour mémoire, non activé**.
+
+  **Repli (NON ACTIVÉ) si le Spike A avait montré que `snow` ne cross-compile pas pour xtensa** :
   - `sha2` + `ed25519-dalek` restent en Rust **partout** (petits crates `no_std`,
     cross-compilation attendue sans souci) → couvrent `msgID`/dédup + vérif et
     signature de paquets + `LOG_ATTEST` du relais ;
@@ -657,12 +664,27 @@ résolution.
   (déjà présent) ou libsodium (port ESP-IDF)**.
 - **Piste de résolution** : **Spike A** obligatoire au Lot 0. Livrable : rapport
   de décision.
-- **Statut** : `tranché` sur l'approche (= A-3, 2026-09-08, à ratifier en
-  réunion) → **tout en Rust si le Spike A le permet ; sinon `trait Crypto` +
-  mbedTLS côté firmware, limité au handshake Noise `XX` de lien BLE**, `sha2` +
-  `ed25519-dalek` restant en Rust partout. Le seul point qui dépend encore du
-  **Spike A** est le curseur exact Rust/C (complet vs partiel), pas la stratégie.
-  Voir A-3.
+- **Statut** : **`tranché`** — **Spike A exécuté le 2026-09-10 (US-101,
+  issue #1). Réponse : OUI, option (a), tout en Rust.** Rapport complet :
+  [`suivi/spikes/US-101-cross-compile-xtensa.md`](../suivi/spikes/US-101-cross-compile-xtensa.md).
+  `sha2`, `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305` **et `snow`**
+  compilent pour `xtensa-esp32-none-elf` en `no_std + alloc` et produisent un
+  `.a` linkable. Le curseur Rust/C que A-3 laissait ouvert est donc **100 %
+  Rust** : le repli `trait Crypto` + mbedTLS **n'est pas activé**, aucune crypto
+  en C n'est à écrire.
+  - **Condition 1 — `snow` ≥ 0.10.0 obligatoire.** La 0.9.6 (celle qu'avaient en
+    tête `powl/01` et A-3) est **structurellement** impossible en `no_std` :
+    `rand_core` y est non optionnel avec `features = ["std", "getrandom"]` en
+    dur, et la crate n'a pas de `#![no_std]`. La 0.10.0 rend `std` et
+    `getrandom` optionnels. À épingler en US-108.
+  - **Condition 2 — le firmware fournit l'aléa.** Sans `use-getrandom`,
+    `snow` compile mais `resolve_rng()` renvoie `None` : le handshake échoue
+    **au runtime**, pas à la compilation. Il faut un `CryptoResolver` maison sur
+    `esp_fill_random()` (écrit et compilé pendant le spike). ⚠️ ce dernier n'est
+    un vrai TRNG que Wi-Fi/BT actif ou après `bootloader_random_enable()` — à
+    vérifier en US-307.
+  - **Non prouvé par le spike** : rien n'a tourné sur matériel, et le link dans
+    un vrai projet ESP-IDF reste à valider (US-307).
 
 ### B-2. Authentification des relais auprès du VPS : mTLS ou JWT signé ?
 
@@ -891,7 +913,7 @@ résolution.
 - **Sources** : `olivier/decisions-v1 §Impact du délai`,
   `olivier/architecture §9`, `olivier/mise-en-commun §5`.
 - **Sujet** : `olivier` pousse fortement pour **recentrer la démo** (2 téléphones
-  + 1 relais, 1-à-1, 1-2 sauts, statut jusqu'à « Distribué », chiffrement si le
+  - 1 relais, 1-à-1, 1-2 sauts, statut jusqu'à « Distribué », chiffrement si le
   temps le permet) et garder l'**étude** complète. L'ESP32 pourrait rester au
   stade « étude + preuve de concept » si les téléphones suffisent à montrer le
   relais. `powl/10` vise au contraire un MVP matériel complet (2 Android + relais

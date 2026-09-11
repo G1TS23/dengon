@@ -72,3 +72,10 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **`cargo-llvm-cov`** | Mesure de la couverture de tests : quel pourcentage des lignes de code est réellement exécuté par la suite de tests. |
 | **`Cargo.lock`** | Fichier qui fige la version exacte de chaque dépendance. Versionné ici, pour que tout le monde et la CI compilent strictement la même chose. |
 | **Doctest** | Exemple de code écrit dans un commentaire de documentation, et exécuté comme un test. Garantit que la doc ne ment pas. |
+| **`no_std`** | Mode de compilation Rust sans bibliothèque standard : pas d'OS, donc ni fichiers, ni threads, ni `/dev/urandom`. Restent `core` et, si on fournit un allocateur, `alloc` (`Vec`, `Box`). C'est le mode du code embarqué sur l'ESP32. |
+| **Xtensa** | L'architecture du processeur de l'ESP32 (à ne pas confondre avec l'ESP32-C3, qui est en RISC-V). Cible Rust : `xtensa-esp32-none-elf`, où `none` veut dire « pas de système d'exploitation ». |
+| **`espup`** | Installeur officiel de la chaîne d'outils Rust pour Espressif. Nécessaire car Xtensa n'est pas supportée par le Rust amont : il installe un **fork** du compilateur (toolchain `esp`, ~1,9 Go). |
+| **Cible tier 3** | Cible que Rust sait viser mais pour laquelle personne ne distribue de `core`/`alloc` précompilés : il faut les recompiler à la volée (`-Z build-std`), ce qui impose une toolchain *nightly*. |
+| **`staticlib`** | Format de sortie Rust produisant une archive `.a` de code objet, destinée à être **liée dans un programme C**. C'est sous cette forme que `dengon-core` entrera dans le firmware ESP-IDF. |
+| **Features additives (Cargo)** | Règle de Cargo : les *features* demandées par toutes les dépendances s'**additionnent**, jamais l'inverse. Une crate qui exige `std` chez l'une de ses dépendances ne peut donc pas être ramenée en `no_std` de l'extérieur. |
+| **Spike** | Tâche de recherche **timeboxée** dont le livrable est une **décision écrite** (oui/non), pas du code. Le code d'essai est explicitement jeté. Voir [`spikes/`](spikes/). |

@@ -12,6 +12,88 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-10 — Spike A : le cœur Rust cross-compile pour l'ESP32 (US-101)
+
+**Auteur :** Paul Claverie + Claude (Opus 5)
+**Périmètre :** `docs/suivi/spikes/US-101-cross-compile-xtensa.md` (nouveau),
+`docs/suivi/README.md`, `docs/synthese/01-sujets-a-trancher.md` (B-1 et A-3).
+**Aucun code applicatif** — c'est un spike, le code d'essai est jetable et reste
+hors du dépôt (critère d'acceptation n°5).
+**Lot :** Lot 0 — Fondations (issue #1, US-101). Branche
+`spike/US-101-cross-compile-xtensa`.
+
+### Fait
+- Installé la toolchain Xtensa : `espup 0.17.1` puis `espup install` →
+  toolchain `esp` (`rustc 1.97.0-nightly`, LLVM 21.1.3). La cible
+  `xtensa-esp32-none-elf` **n'existe pas** dans le Rust amont, seulement dans le
+  fork Espressif.
+- Écrit une crate jouet `no_std` + `alloc`, `crate-type = ["staticlib"]` (la
+  forme attendue par `08-relais-esp32.md:71`), et ajouté les briques crypto
+  **une par une** avec compilation après chacune.
+- Résultat : `sha2` 0.10.9, `ed25519-dalek` 2.2.0, `x25519-dalek` 2.0.1,
+  `chacha20poly1305` 0.10.1 et `snow` **0.10.0** compilent tous. Compilation
+  propre complète en 54,69 s, archive de 2 105 688 octets.
+- Écrit et compilé le `CryptoResolver` qui branche `snow` sur
+  `esp_fill_random()` de l'ESP-IDF.
+- **B-1 tranchée : OUI, tout en Rust.** Consigné dans le rapport de spike, dans
+  B-1 et dans A-3 (dont le repli mbedTLS est marqué « non activé »).
+
+### Pourquoi / décisions
+- **Dépendances ajoutées une par une, pas toutes d'un coup** : un échec groupé
+  aurait donné « ça ne compile pas » sans dire quelle brique. C'est ce qui a
+  permis d'isoler `snow` comme seul point dur.
+- **Chaque brique est réellement appelée** derrière un `extern "C"` : sinon
+  l'éditeur de liens élague le code et on « compile » du vide. Vérifié ensuite
+  au `nm` que les 6 symboles sont bien dans l'archive.
+- **`snow` 0.9.6 → 0.10.0** : le premier essai a échoué. Plutôt que de conclure
+  « non » et d'activer le repli mbedTLS (deux implémentations crypto à
+  maintenir), j'ai vérifié l'index crates.io : la 0.10.0 venait de sortir avec
+  un vrai support `no_std`. C'est ce qui fait basculer la réponse du spike.
+
+### Écarts vs conception
+- **Aucun écart.** Le spike **confirme** l'hypothèse de
+  `08-relais-esp32.md:71` (`libdengon_core.a` en `no_std + alloc` cross-compilé
+  xtensa) et lève la condition qui y était attachée.
+
+### Appris
+- Cible tier 3, `-Z build-std`, `no_std` sans OS, features Cargo additives (on ne
+  peut pas *retirer* une feature demandée par une dépendance) → notes ajoutées
+  dans `04-apprentissages.md`, termes dans `05-glossaire.md`.
+
+### État après cette session
+- B-1 est fermée, la branche firmware (US-307 → 308 → 309 → 312) est débloquée
+  et part sur du tout-Rust. Un des deux critères du jalon **J0** est acquis.
+- Reste à faire, reporté aux US concernées : épingler `snow = "0.10"` (US-108),
+  écrire le resolver ESP32 pour de vrai et vérifier l'entropie réelle
+  d'`esp_fill_random` (US-307), valider le link dans un composant ESP-IDF
+  (US-307), mesurer flash/RAM (US-308).
+- Fiche(s) module mise(s) à jour : **aucune** — un spike ne livre pas de module.
+  Le livrable est le rapport `spikes/US-101-cross-compile-xtensa.md`, et le
+  dossier `spikes/` devient la convention pour les spikes B et C.
+
+### Vérification (commandes réellement exécutées)
+```
+$ rustc +esp --print target-list | grep xtensa
+xtensa-esp32-none-elf                      (present)
+
+$ cargo build --release          # cible xtensa-esp32-none-elf, build-std
+Finished `release` profile [optimized] target(s) in 54.69s     # 0 erreur
+
+$ cargo tree -e normal | grep -c getrandom
+0                                # getrandom totalement absent de l'arbre
+
+$ xtensa-esp32-elf-nm libspike_us101.a | grep " T spike_"
+spike_aead / spike_ed25519 / spike_noise_xx / spike_sha256 / spike_socle / spike_x25519
+
+$ xtensa-esp32-elf-nm libspike_us101.a | grep esp_fill_random
+         U esp_fill_random       # resolu au link final par l'ESP-IDF
+```
+- **Pas vérifié** : rien n'a tourné sur un vrai ESP32 (aucune carte utilisée) ;
+  le link dans un projet ESP-IDF complet n'a pas été fait ; ni la taille flash
+  réelle ni les performances n'ont été mesurées. Détaillé au §6 du rapport.
+
+---
+
 ## 2026-09-09 — `docs/suivi/` : fin des conflits de merge (US-115)
 
 **Auteur :** Claude (Sonnet 5)

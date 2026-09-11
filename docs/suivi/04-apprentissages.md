@@ -275,6 +275,61 @@ documentation GitHub « Using third-party actions ».
 
 ---
 
+### Cible « tier 3 » et `-Z build-std` — quand `core` n'est pas livré compilé
+
+**C'est quoi :** Rust classe ses cibles en 3 niveaux. Une cible **tier 3** est
+supportée par le compilateur mais **personne ne distribue de `core`/`alloc`
+précompilés** pour elle. Il faut donc les rebâtir depuis les sources à chaque
+projet, via `-Z build-std=core,alloc` — une option *nightly*.
+**Pourquoi dans dengon :** `xtensa-esp32-none-elf` est tier 3, et n'existe même
+pas dans le Rust amont : seul le **fork d'Espressif** (installé par `espup`) la
+connaît. D'où une toolchain `esp` séparée, en plus de la 1.98.1 figée par
+`rust-toolchain.toml`.
+**Piège / surprise :** `rustup target add xtensa-esp32-none-elf` ne marchera
+jamais sur la toolchain du dépôt — le message d'erreur ne dit pas qu'il faut un
+autre compilateur. Et `espup install` pèse **1,9 Go** : à prévoir dans la CI si
+on veut y compiler le firmware un jour.
+**Où c'est utilisé :** spike US-101 (crate jetable, hors dépôt) ; à reprendre en
+US-307. Voir [`spikes/US-101-cross-compile-xtensa.md`](spikes/US-101-cross-compile-xtensa.md) §3.
+**Pour aller plus loin :** <https://docs.esp-rs.org/book/>
+
+### Les features Cargo sont **additives** — on ne peut pas en retirer une
+
+**C'est quoi :** quand une crate A dépend de B avec `features = ["std"]`, aucun
+utilisateur de A ne peut désactiver ce `std`. Cargo *unifie* les features
+demandées par tout le graphe : elles ne peuvent que s'ajouter. `default-features
+= false` ne retire que les features **par défaut**, jamais celles explicitement
+demandées par une dépendance intermédiaire.
+**Pourquoi dans dengon :** c'est ce qui rend `snow` 0.9.6 **définitivement**
+incompatible `no_std` : son manifeste écrit `rand_core = { features = ["std",
+"getrandom"] }` en dur. Aucun réglage de notre côté n'y change quoi que ce soit.
+La 0.10.0 a dû rendre ces dépendances optionnelles pour que ça devienne possible.
+**Piège / surprise :** on perd facilement une heure à essayer des combinaisons de
+features avant de comprendre que la réponse est dans le `Cargo.toml` **de la
+dépendance**. Le réflexe qui fait gagner du temps : lire
+`~/.cargo/registry/src/*/<crate>-<version>/Cargo.toml` **avant** de tâtonner.
+**Où c'est utilisé :** [`spikes/US-101-cross-compile-xtensa.md`](spikes/US-101-cross-compile-xtensa.md) §5.
+
+### `no_std` : ce qui disparaît, et ce que le compilateur ne dira pas
+
+**C'est quoi :** sans système d'exploitation, la bibliothèque standard n'existe
+pas. Restent `core` (le langage) et, si on fournit un allocateur, `alloc`
+(`Vec`, `Box`, `String`). Il faut déclarer soi-même un `#[global_allocator]` et
+un `#[panic_handler]`.
+**Pourquoi dans dengon :** le relais ESP32 embarque `libdengon_core.a` en
+`no_std + alloc` (`docs/synthese/08-relais-esp32.md:71`), et `dengon-core` porte
+déjà le `#![cfg_attr(not(feature = "std"), no_std)]` posé par US-104.
+**Piège / surprise :** deux pièges non détectés par le compilateur.
+1. **Le code non appelé est élagué.** Déclarer une dépendance ne prouve rien : si
+   on ne l'appelle pas depuis un symbole exporté, l'archive ne la contient pas et
+   on croit avoir « compilé » du vide. Vérifier au `nm`.
+2. **L'aléa devient un problème d'exécution.** Sans OS, pas de `/dev/urandom` :
+   `getrandom` échoue *à la compilation* (tant mieux), mais une crate qui rend sa
+   source d'aléa optionnelle — comme `snow` 0.10 — **compile** puis échoue *au
+   runtime*. Le firmware doit fournir son propre RNG matériel.
+**Où c'est utilisé :** [`spikes/US-101-cross-compile-xtensa.md`](spikes/US-101-cross-compile-xtensa.md) §4-5.
+
+
 Sujets probables (d'après la conception) — à traiter quand on les rencontre :
 
 - Routage épidémique / gossip / store-carry-forward (DTN).
