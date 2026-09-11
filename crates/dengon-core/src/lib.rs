@@ -6,29 +6,27 @@
 //! réseau** : elle produit et consomme des octets, transportés par un
 //! `Transport` (voir la crate `dengon-ble`).
 //!
-//! Modules à venir, d'après `docs/synthese/04-architecture.md` §2 :
-//! `protocol`, `crypto`, `identity`, `store`, `sync`, `ledger`,
-//! `observability` et la façade `api`.
+//! Modules, d'après `docs/synthese/04-architecture.md` §2 : [`protocol`]
+//! (livré — types & constantes), puis `crypto`, `identity`, `store`, `sync`,
+//! `ledger`, `observability` et la façade `api` (sprint 2).
 //!
 //! # Contrainte `no_std`
 //!
-//! `protocol`, `sync` et `ledger` doivent rester compilables en `no_std` +
+//! [`protocol`], `sync` et `ledger` doivent rester compilables en `no_std` +
 //! `alloc` pour la cible ESP32. La feature `std` est activée par défaut ; la
 //! CI lance `cargo check -p dengon-core --no-default-features` pour détecter
 //! toute dépendance à `std` qui se serait glissée par inadvertance.
-//!
-//! # État
-//!
-//! Squelette livré par l'US-104. Aucun module réel n'est implémenté.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+pub mod protocol;
+
 /// Version du protocole dengon implémentée par cette crate.
 ///
-/// Correspond au champ `version` présent dans chaque paquet
-/// (`docs/synthese/05-protocole-et-trame.md`), qui permet la négociation de
-/// version à l'ANNOUNCE.
-pub const PROTOCOL_VERSION: u8 = 1;
+/// Alias historique de [`protocol::consts::PROTO_VERSION`], conservé parce que
+/// les crates sœurs (`dengon-ble`, `dengon-node`, …) l'utilisent comme test de
+/// liaison (US-104). La source de vérité est `protocol::consts`.
+pub const PROTOCOL_VERSION: u8 = protocol::consts::PROTO_VERSION;
 
 /// Version de la crate, telle que déclarée dans `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -45,5 +43,6 @@ mod tests {
     #[test]
     fn la_version_de_protocole_vaut_un() {
         assert_eq!(PROTOCOL_VERSION, 1);
+        assert_eq!(PROTOCOL_VERSION, crate::protocol::consts::PROTO_VERSION);
     }
 }

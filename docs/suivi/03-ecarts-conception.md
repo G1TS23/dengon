@@ -163,3 +163,39 @@ _(aucun écart pour l'instant)_
   crate n'a de binaire secondaire, et le mode d'échec est bruyant (le fichier
   manque, la compilation échoue) — contrairement à celui des clés, qui était
   silencieux.
+
+---
+
+### 2026-09-10 — Vecteurs de conformité v0 dans `crates/dengon-core/tests/`, pas `contracts/packet/` (US-108)
+
+- **Prévu :** l'US-108 demande « un fichier partagé, consommé par le core, le
+  firmware et le dashboard (base du job CI `cross-vectors`) ». Le dossier
+  `contracts/` (créé par US-107) est l'emplacement naturel, neutre en langage.
+- **Réel :** les vecteurs sont dans `crates/dengon-core/tests/vectors_v0.json`,
+  contrôlés par `tests/protocol_vectors.rs`.
+- **Raison :** `contracts/` **n'est pas encore sur `main`** (PR #60 en revue).
+  Y déposer `contracts/packet/` depuis cette branche entraînerait un conflit sur
+  `contracts/pyproject.toml` / `uv.lock` / `.github/workflows/contracts.yml` au
+  rebase. Le fichier reste consommable par le firmware (C) et le dashboard
+  (Python) à ce chemin ; il est juste rangé dans la crate qui le produit.
+- **Conséquences :** déplacement vers `contracts/packet/` prévu une fois #60
+  mergé (refactor localisé : `git mv` + ajout d'un `validate_packets.py` +
+  ligne dans `contracts.yml`). Le job `cross-vectors` (US-222) pointera sur
+  l'emplacement final.
+- **Doc de conception mise à jour ?** sans objet.
+
+---
+
+### 2026-09-10 — `serde_json` en dev-dependency de `dengon-core` (US-108)
+
+- **Prévu :** `docs/suivi/…` (entrée US-104) : « on ajoute une dépendance
+  externe au moment où une PR l'utilise réellement ».
+- **Réel :** `serde_json = "1"` en `[dev-dependencies]` de `dengon-core`.
+- **Raison :** `tests/protocol_vectors.rs` lit `vectors_v0.json`. Via
+  `serde_json::Value` (pas de `#[derive]`), donc `serde` n'est pas tiré comme
+  dépendance de proc-macro. `cargo check` ne compile pas les dev-deps → **aucun
+  effet sur `no_std`** ni sur l'artefact firmware.
+- **Conséquences :** `Cargo.lock` gagne `serde_json`, `itoa`, `memchr`, `ryu`,
+  `serde` (dev uniquement). `dengon-core` en dépendra de toute façon en runtime
+  pour `observability` (US-208) — JSON canonique des événements.
+- **Doc de conception mise à jour ?** non — usage attendu.
