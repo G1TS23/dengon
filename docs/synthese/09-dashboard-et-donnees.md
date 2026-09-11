@@ -83,14 +83,15 @@ reconstructibles en rejouant `events`.
   RSSI) ; **statut courant** reconstruit avec l'horodatage de chaque transition
   et la **source** de l'info ; badges d'intégrité.
 - **Carte / santé du réseau** : graphe des `nodes` + `links` ; couleur = statut
-  (`online`/`stale`/`suspect`) ; épaisseur d'arête = trafic ; panneau latéral =
+  (`online`/`stale`/`suspect`/`quarantined`, D-5) ; épaisseur d'arête = trafic ; panneau latéral =
   densité moyenne, latence de relais médiane, taux de livraison, nb
   d'enveloppes en circulation (estimé).
 - **Flotte de relais** : tableau `node_id`, label, version fw, uptime, RSSI
   moyen, tailles de buffers, `logs_dropped`, dernière remontée. Alertes : relais
   muet > 5 min, buffer > 90 %, version obsolète.
 - **Intégrité des journaux** : par nœud — hauteur, racine courante, dernier
-  contrôle, verdict (`ok` / `broken` / `fork` / `gap` / `unverified`). Vue
+  contrôle, verdict (`ok` / `broken` / `fork` / `gap` / `unverified` /
+  `rejected_sig`, D-4). Vue
   « diff » quand un fork est détecté.
 - **Recherche de logs** : filtre sur `events` (name, node, payload), fenêtre
   temporelle, export CSV/JSON.

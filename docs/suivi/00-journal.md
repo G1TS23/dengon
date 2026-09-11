@@ -10,6 +10,85 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — US-112 : rectification après un commentaire manqué de POWLAIR
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+`docs/synthese/09-dashboard-et-donnees.md`
+**Lot :** US-112 (suite), Sprint 1
+
+### Fait
+- **Erreur de process** : l'entrée précédente (ci-dessous) a été écrite sans
+  vérifier les commentaires de l'issue #12 au préalable. Paul (POWLAIR) y
+  avait laissé, ~15 min avant le début de cette session de travail, un
+  commentaire détaillé signalant une branche locale non poussée
+  (`docs/trancher-sujets-ouverts`, commit `ac062fc`) qui couvrait déjà une
+  partie des critères de l'US, plus deux vraies coquilles trouvées dans
+  `09-dashboard-et-donnees.md`. Repéré seulement quand l'utilisateur a
+  demandé si ce commentaire avait été vu — réponse honnête : non.
+- Comparé le contenu déjà écrit dans la PR #66 à ce que le commentaire de
+  Paul décrit : le §5.1 (mapping des colonnes chiffrées) n'est **pas**
+  couvert par sa branche (son tableau des critères ne le mentionne pas) —
+  pas de doublon sur ce point. En revanche deux choses manquaient :
+  1. Le **résultat du Spike A** existe déjà : [PR #64](https://github.com/G1TS23/dengon/pull/64)
+     (US-101, en revue), conclusion **OUI** (`snow` 0.10 cross-compile pour
+     xtensa). §3 et l'en-tête de `06-securite.md`, et la ligne C-11 de
+     `00-contexte-global.md`, mis à jour pour pointer dessus au lieu de
+     rester sur « en cours ».
+  2. **Deux vraies incohérences** dans `09-dashboard-et-donnees.md` (prose vs
+     SQL du même fichier) : `quarantined` manquait dans la liste des
+     couleurs de statut (l. 86, présent dans le `CHECK` l. 419, D-5) ;
+     `rejected_sig` manquait dans la liste des verdicts d'intégrité (l. 93,
+     présent dans le `CHECK` l. 433, D-4). Corrigées.
+- Vérifié indépendamment ces deux points par lecture directe du fichier
+  (pas seulement sur la foi du commentaire de Paul).
+- Répondu sur l'issue #12 pour éviter le travail en double : PR #66 déjà
+  ouverte, contenu complémentaire (pas redondant) avec sa branche locale,
+  pas besoin qu'il la pousse pour ce point précis.
+
+### Pourquoi / décisions
+- Pas de retrait de la PR #66 : le contenu ajouté (mapping §5.1) est
+  original et répond au critère que la branche de Paul ne couvrait pas.
+  Seule la partie « déjà faite ailleurs » a été corrigée/complétée, pas
+  réécrite depuis zéro.
+- Référencer la PR #64 plutôt qu'attendre son merge pour écrire le résultat
+  du Spike A : la PR est ouverte, en revue, son contenu est public et
+  vérifiable — attendre aurait rouvert l'US pour un simple changement de
+  formulation une fois #64 mergée. La mention « pas encore mergée » évite de
+  faire passer un résultat pour définitivement acté.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Vérifier les **commentaires** d'une issue avant de commencer, pas
+  seulement son corps — le process suivi jusqu'ici (lire l'issue, vérifier
+  git status, démarrer) n'incluait pas cette étape. À généraliser aux
+  prochaines US : `gh issue view <n> --comments` avant tout travail.
+
+### État après cette session
+- US-112 : mapping colonnes chiffrées (nouveau, §5.1), Spike A (référencé,
+  PR #64), D-4/D-5 (corrigées dans `09-dashboard-et-donnees.md`) — tous
+  couverts. Reste la relecture croisée (4ᵉ critère), et le passage sans
+  conditionnel du Spike A une fois #64 mergée (pas bloquant pour cette US).
+- Fiche(s) module mise(s) à jour : sans objet (documentation transverse).
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh api repos/G1TS23/dengon/issues/12/comments
+→ commentaire de POWLAIR, 2026-09-11T09:29:33Z, lu en entier
+$ grep -n "online.*stale.*suspect\|ok.*broken.*fork" docs/synthese/09-dashboard-et-donnees.md
+→ confirme les deux endroits où la prose retardait sur le SQL (l. 86, 93)
+  avant correction
+```
+- **Non vérifié** : le contenu exact de la branche locale
+  `docs/trancher-sujets-ouverts` de Paul (jamais poussée, donc invisible
+  depuis cette session) — seule sa description dans le commentaire a pu
+  être exploitée.
+
+---
+
 ## 2026-09-11 — US-112 : delta doc sécurité (`docs/synthese/06-securite.md`)
 
 **Auteur :** Claude (Sonnet 5)

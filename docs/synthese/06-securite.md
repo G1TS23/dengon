@@ -11,9 +11,9 @@
 > (§3) intégrées ci-dessous ; D-4/D-5 réconciliées dans
 > [`09-dashboard-et-donnees.md`](09-dashboard-et-donnees.md) (enums
 > `NODES.status` / `EVENTS.integrity`, hors périmètre sécurité) ; mapping des
-> colonnes chiffrées en §5. Ne reste **que le résultat du Spike A** (US-101,
-> [issue #1](https://github.com/G1TS23/dengon/issues/1), en cours) —
-> voir §3.
+> colonnes chiffrées en §5. Résultat du Spike A disponible
+> ([PR #64](https://github.com/G1TS23/dengon/pull/64), en revue) — voir §3 ;
+> à figer sans conditionnel dès que la PR merge.
 
 ---
 
@@ -96,11 +96,14 @@ Rust** dans `dengon-core::crypto` (A-3). Repli si le **Spike A** montre que
 BLE derrière un `trait Crypto` implémenté en C avec mbedTLS **côté firmware
 seulement** ; `sha2` + `ed25519-dalek` restent en Rust partout (B-1).
 
-**État du Spike A** : en cours ([US-101](https://github.com/G1TS23/dengon/issues/1),
-`protocol` + `crypto` cross-compilent-ils pour `xtensa-esp32-none-elf` ?). Le
-résultat tranche laquelle des deux voies ci-dessus s'applique — à consigner
-ici (et dans `docs/suivi/03-ecarts-conception.md` si la voie de repli est
-retenue) dès la clôture de l'issue.
+**État du Spike A** : résultat disponible dans
+[PR #64](https://github.com/G1TS23/dengon/pull/64) (US-101, en revue, pas
+encore mergée) — **OUI**, `protocol` + `crypto` cross-compilent tels quels
+pour `xtensa-esp32-none-elf` (avec `snow` en version 0.10, voir le rapport de
+la PR pour le détail). Le repli « `trait Crypto` + mbedTLS » ci-dessus n'est
+donc **pas activé** ; conservé pour mémoire. À figer ici sans conditionnel dès
+que #64 merge (B-1 passera de « tranché sur l'approche » à tranché tout
+court dans `01-sujets-a-trancher.md` et `00-contexte-global.md`).
 
 **Session en direct — Noise `XX`** (`Noise_XX_25519_ChaChaPoly_SHA256`) :
 handshake 3 messages (`-> e` / `<- e, ee, s, es` / `-> s, se`) → 2 clés de
