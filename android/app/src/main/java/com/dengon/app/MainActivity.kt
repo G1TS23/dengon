@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.dengon.app.ble.BlePermissions
 import com.dengon.app.ble.MeshForegroundService
+import com.dengon.app.ble.spike.HelloMeshSpikeScreen
 
 class MainActivity : ComponentActivity() {
 
@@ -44,6 +45,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val granted by permissionsGranted
             var serviceRunning by remember { mutableStateOf(false) }
+            var showSpike by remember { mutableStateOf(false) }
 
             // Démarrage auto dès que les permissions sont accordées (une
             // seule fois par passage à `true`, pas à chaque recomposition).
@@ -56,19 +58,24 @@ class MainActivity : ComponentActivity() {
 
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    DengonScreen(
-                        permissionsGranted = granted,
-                        serviceRunning = serviceRunning,
-                        onRequestPermissions = { requestPermissions.launch(BlePermissions.required()) },
-                        onToggleService = {
-                            if (serviceRunning) {
-                                stopMeshService()
-                            } else {
-                                startMeshService()
-                            }
-                            serviceRunning = !serviceRunning
-                        },
-                    )
+                    if (showSpike) {
+                        HelloMeshSpikeScreen(onBack = { showSpike = false })
+                    } else {
+                        DengonScreen(
+                            permissionsGranted = granted,
+                            serviceRunning = serviceRunning,
+                            onRequestPermissions = { requestPermissions.launch(BlePermissions.required()) },
+                            onToggleService = {
+                                if (serviceRunning) {
+                                    stopMeshService()
+                                } else {
+                                    startMeshService()
+                                }
+                                serviceRunning = !serviceRunning
+                            },
+                            onOpenSpike = { showSpike = true },
+                        )
+                    }
                 }
             }
         }
@@ -94,6 +101,7 @@ private fun DengonScreen(
     serviceRunning: Boolean,
     onRequestPermissions: () -> Unit,
     onToggleService: () -> Unit,
+    onOpenSpike: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -117,6 +125,10 @@ private fun DengonScreen(
             )
             Button(onClick = onToggleService) {
                 Text(text = if (serviceRunning) "Arrêter" else "Démarrer")
+            }
+            // Écran de debug jetable (US-103) — voir ble/spike/HelloMeshSpikeScreen.kt.
+            Button(onClick = onOpenSpike) {
+                Text(text = "Spike C : hello mesh (debug)")
             }
         }
     }
