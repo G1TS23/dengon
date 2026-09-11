@@ -83,6 +83,12 @@ résolution.
   proposée ci-dessus le confirme et écarte Flutter/RN, sous réserve du Spike C et
   d'une validation en réunion. Note : `oswin/07 §1` indique que l'app Android
   (.apk) et Flutter sont « décidés par l'équipe » — à reconfirmer au vu de `powl`.
+  **Spike C (2026-09-11)** : le code du harnais de mesure (`android/app/.../ble/spike/`)
+  est écrit et compile, mais **non exécuté** — aucun appareil Android
+  disponible dans l'environnement de dev. Les chiffres (MTU réel, timing,
+  matrice d'appareils) restent à produire manuellement avant de considérer
+  le Spike C réussi ; protocole de mesure dans
+  `docs/suivi/modules/android-app.md` §« Spike C ».
 
 ### A-2. Un seul moteur `dengon-core` ou deux implémentations ?
 

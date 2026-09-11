@@ -74,3 +74,7 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Doctest** | Exemple de code écrit dans un commentaire de documentation, et exécuté comme un test. Garantit que la doc ne ment pas. |
 | **Foreground service (Android)** | Service Android « premier plan » : doit afficher une notification permanente et déclarer un `foregroundServiceType` (ex. `connectedDevice`) pour survivre écran éteint sans être tué par le système. |
 | **`START_STICKY`** | Valeur de retour d'`onStartCommand` qui demande à Android de relancer le service (sans son intent d'origine) s'il a dû être tué. |
+| **GATT** (*Generic Attribute Profile*) | Couche BLE qui structure les données échangées en **services** (regroupements) et **characteristics** (valeurs lisibles/écrivables/notifiables à l'intérieur d'un service). |
+| **Rôle central / peripheral (BLE)** | *Peripheral* : annonce sa présence et publie un service GATT (le « serveur »). *Central* : scanne, trouve, se connecte (le « client »). Un nœud `dengon` tient les **deux** rôles en permanence. |
+| **ATT_MTU** | Taille max d'un paquet BLE au niveau attribut (23 o par défaut, jusqu'à 517 si négocié à la connexion). Dimensionne la fragmentation protocole (`FRAG_SIZE`) — mesuré réellement par le Spike C (US-103). |
+| **Spike** | Tâche courte et bornée dans le temps (*timebox*) pour répondre à une question technique par l'expérimentation plutôt que par la lecture. Livrable = une décision écrite + des chiffres, pas une fonctionnalité ; le code produit est jetable. |

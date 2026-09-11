@@ -10,6 +10,141 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — US-103 : correction SonarCloud (complexité cognitive `MainActivity.onCreate`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/MainActivity.kt`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Analyse SonarCloud sur la PR #67 (`feat/US-103-SpikeC-HelloMesh` → `main`) :
+  `kotlin:S3776`, « Refactor this method to reduce its Cognitive Complexity
+  from 16 to the 15 allowed. », sur `MainActivity.onCreate` (ligne 41).
+- Extrait tout le contenu du bloc `setContent { ... }` (branchement
+  Central/Peripheral, `LaunchedEffect` de démarrage auto du service,
+  bascule démarrer/arrêter) dans une nouvelle fonction `@Composable`
+  `DengonApp`, appelée depuis `onCreate` avec `permissionsGranted` et
+  des références de méthode (`::startMeshService`, `::stopMeshService`)
+  en paramètres. `onCreate` ne contient plus de branchement, seulement
+  l'appel à `setContent`.
+
+### Pourquoi / décisions
+- Complexité cognitive comptée par imbrication : les lambdas `if`/`else`
+  du bloc `setContent` (démarrage auto, bascule service, écran spike)
+  étaient toutes imbriquées **dans** `onCreate`. Les déplacer dans une
+  fonction composable dédiée les fait compter dans une complexité
+  séparée (sous le seuil), sans changer le comportement.
+- Pas de changement fonctionnel : mêmes callbacks, même état
+  (`serviceRunning`, `showSpike`), simple extraction de méthode.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (extraction de méthode standard pour réduire la
+  complexité cognitive Sonar sur du code Compose).
+
+### État après cette session
+- `./gradlew compileDebugKotlin`, `assembleDebug` et `testDebugUnitTest`
+  passent après le refactor.
+- Correction poussée sur la branche de la PR #67 ; à re-vérifier sur
+  SonarCloud après ré-analyse.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+```
+
+---
+
+## 2026-09-11 — US-103 : code du Spike C (« hello mesh »), non exécuté faute de matériel
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/spike/` (nouveau,
+5 fichiers), `MainActivity.kt`, `docs/suivi/modules/android-app.md`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Implémenté le harnais de mesure du Spike C : `HelloMeshPeripheral`
+  (`BluetoothGattServer` + `BluetoothLeAdvertiser`, publie `SERVICE_UUID`,
+  expose `CHAR_RX`/`CHAR_TX`) et `HelloMeshCentral` (`BluetoothLeScanner` +
+  `BluetoothGatt` client, négocie le MTU, écrit 20 octets, mesure le
+  round-trip de l'écho), conformes aux UUID et au MTU visé de
+  `docs/powl/03-network-protocol.md` §2 et §6.
+- Écran de debug Compose `HelloMeshSpikeScreen` (bouton dédié dans
+  `MainActivity`) : bascule manuelle Central/Peripheral, journal en direct,
+  carte de résultat (MTU, temps scan→connexion, temps connexion→échange,
+  modèle d'appareil).
+- Rôle choisi manuellement plutôt que par la règle anti-boucle
+  `peerID` du protocole : `dengon-core` n'a pas encore d'identité de nœud —
+  simplification assumée et documentée dans le code et la fiche module.
+- Code marqué explicitement **jetable** (commentaires + fiche module) : à
+  supprimer après la décision go/no-go, `AndroidTransport` (US-213)
+  réimplémentera le double rôle proprement.
+- Rédigé le protocole de mesure manuelle (étapes à suivre sur 2 téléphones)
+  et un tableau de résultats à remplir dans
+  `docs/suivi/modules/android-app.md`.
+- Note d'onboarding `android/` créée dans la même fiche (build, test, 3
+  pièges réels rencontrés depuis US-109) — critère d'acceptation US-103
+  indépendant du matériel, donc réalisable ici.
+
+### Pourquoi / décisions
+- **Pas d'accès à 2 téléphones Android dans cet environnement** : contrainte
+  dure de l'issue #3 (US-103). Décidé avec l'utilisateur de préparer le code
+  + le protocole de mesure maintenant, et de **ne pas fabriquer de chiffres**
+  — les 4 critères d'acceptation qui exigent une mesure réelle restent
+  explicitement non cochés, à exécuter et consigner par l'utilisateur.
+- Écran de debug intégré à `android/app` (plutôt qu'un module Gradle séparé) :
+  plus simple à installer sur 2 appareils pour un spike d'1 jour, cohérent
+  avec la portée « code jetable » du DoD §7.2 (un dossier à supprimer plutôt
+  qu'un module à désinscrire du `settings.gradle.kts`).
+- MTU non lisible côté peripheral (API Android ne l'expose pas après coup à
+  ce niveau) : c'est le résultat côté central qui fait foi, documenté dans
+  la fiche module plutôt que de complexifier le peripheral pour le retrouver.
+
+### Écarts vs conception
+- Aucun sur la conception retenue (`docs/synthese/`) : les simplifications
+  (rôle manuel, un seul échange par lancement) sont des choix de portée du
+  **spike**, pas de l'implémentation finale `AndroidTransport` — documentées
+  comme telles dans le code et la fiche module, pas dans
+  `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau ajouté à `04-apprentissages.md` cette session (assemblage
+  d'API BLE déjà documentées par `docs/powl/03-network-protocol.md`, pas de
+  piège Gradle/Sonar inédit).
+
+### État après cette session
+- `./gradlew assembleDebug`, `testDebugUnitTest` et `assembleRelease`
+  passent avec le nouveau code (`ble/spike/`).
+- **Critères d'acceptation US-103 non satisfaits** : les 4 qui exigent une
+  mesure réelle sur 2 téléphones restent à faire — voir
+  `docs/suivi/modules/android-app.md` §« Spike C » pour le protocole exact
+  à suivre et le tableau à remplir.
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+  (section Onboarding + section Spike C ajoutées).
+- 01-etat-du-code.md mis à jour : non (pointeur seul, pas de changement
+  d'avancement tant que le spike n'a pas produit de résultat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL (1 avertissement de dépréciation, corrigé ensuite avec @Suppress)
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew assembleRelease --console=plain
+BUILD SUCCESSFUL (R8/minify actifs, aucune règle proguard custom nécessaire)
+```
+- **Non vérifié, ne peut pas l'être ici** : les 4 critères d'acceptation
+  matériels (échange réel 20 octets, MTU négocié réel, timing réel, matrice
+  d'appareils). Nécessite 2 téléphones Android physiques.
+
 ## 2026-09-11 — US-109 : corrections suite à la revue de la PR #56
 
 **Auteur :** Claude (Sonnet 5)
