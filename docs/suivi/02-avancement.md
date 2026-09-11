@@ -13,7 +13,7 @@
 | Composant | Prévu (conception) | Réel | Avancement | Fiche |
 |---|---|---|---|---|
 | `dengon-core` | crate Rust : protocol, crypto, store, sync, ledger, observability | squelette : bascule `no_std`, `PROTOCOL_VERSION`, 2 tests | 5 % | [dengon-core](modules/dengon-core.md) |
-| `dengon-ble` | trait Transport + impl btleplug | squelette : aucune API, 1 test de liaison | 3 % | [dengon-ble](modules/dengon-ble.md) |
+| `dengon-ble` | trait Transport + impl btleplug | **contrat livré** (US-105) : `Transport`, `MockTransport`, suite de conformité (11 cas). Pas d'implémentation radio | 40 % | [dengon-ble.md](modules/dengon-ble.md) |
 | `dengon-node` | binaire CLI (nœud headless) | squelette : `main` affiche sa version | 3 % | [dengon-node](modules/dengon-node.md) |
 | `dengon-sim` | simulateur multi-nœuds | squelette : lib + bin, graine fixe déclarée | 3 % | [dengon-sim](modules/dengon-sim.md) |
 | `dengon-verify` | binaire de vérif de journal chaîné (A-5 / B-5) | squelette : enum `Verdict` (Ok/Broken/Fork/Gap) | 3 % | [dengon-verify](modules/dengon-verify.md) |
