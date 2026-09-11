@@ -21,6 +21,7 @@ assistants IA (Claude) après chaque tâche de code (voir [Règles de mise à jo
 | [`01-etat-du-code.md`](01-etat-du-code.md) | **Pointeurs** vers où lire l'état réel. Change rarement. | rarement |
 | [`02-avancement.md`](02-avancement.md) | Avancement par composant + outillage. **Édité en place** : on ne touche que sa/ses ligne(s). | quand un composant avance |
 | [`modules/`](modules/) | Un fichier par crate / composant : explication du **code réel** (structs, fonctions clés, flux, dépendances). | quand le module bouge |
+| [`spikes/`](spikes/) | Un rapport par **spike** : la question posée, le protocole suivi, la réponse **oui/non** et ce qu'elle engage. Un spike ne livre pas de code, donc pas de fiche `modules/`. | à chaque spike |
 | [`03-ecarts-conception.md`](03-ecarts-conception.md) | Différences entre le code et [`docs/powl/`](../powl/), avec justification. | quand un écart apparaît |
 | [`04-apprentissages.md`](04-apprentissages.md) | Volet « apprentissage » : notions comprises, pièges rencontrés, ressources utiles. | quand on apprend qqch |
 | [`05-glossaire.md`](05-glossaire.md) | Termes du projet et du domaine, définis simplement. | au fil de l'eau |
