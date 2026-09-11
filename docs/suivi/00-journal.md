@@ -10,6 +10,57 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — US-103 : correction SonarCloud (complexité cognitive `MainActivity.onCreate`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/MainActivity.kt`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Analyse SonarCloud sur la PR #67 (`feat/US-103-SpikeC-HelloMesh` → `main`) :
+  `kotlin:S3776`, « Refactor this method to reduce its Cognitive Complexity
+  from 16 to the 15 allowed. », sur `MainActivity.onCreate` (ligne 41).
+- Extrait tout le contenu du bloc `setContent { ... }` (branchement
+  Central/Peripheral, `LaunchedEffect` de démarrage auto du service,
+  bascule démarrer/arrêter) dans une nouvelle fonction `@Composable`
+  `DengonApp`, appelée depuis `onCreate` avec `permissionsGranted` et
+  des références de méthode (`::startMeshService`, `::stopMeshService`)
+  en paramètres. `onCreate` ne contient plus de branchement, seulement
+  l'appel à `setContent`.
+
+### Pourquoi / décisions
+- Complexité cognitive comptée par imbrication : les lambdas `if`/`else`
+  du bloc `setContent` (démarrage auto, bascule service, écran spike)
+  étaient toutes imbriquées **dans** `onCreate`. Les déplacer dans une
+  fonction composable dédiée les fait compter dans une complexité
+  séparée (sous le seuil), sans changer le comportement.
+- Pas de changement fonctionnel : mêmes callbacks, même état
+  (`serviceRunning`, `showSpike`), simple extraction de méthode.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (extraction de méthode standard pour réduire la
+  complexité cognitive Sonar sur du code Compose).
+
+### État après cette session
+- `./gradlew compileDebugKotlin`, `assembleDebug` et `testDebugUnitTest`
+  passent après le refactor.
+- Correction poussée sur la branche de la PR #67 ; à re-vérifier sur
+  SonarCloud après ré-analyse.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+```
+
+---
+
 ## 2026-09-11 — US-103 : code du Spike C (« hello mesh »), non exécuté faute de matériel
 
 **Auteur :** Claude (Sonnet 5)

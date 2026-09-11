@@ -16,6 +16,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,41 +44,12 @@ class MainActivity : ComponentActivity() {
         permissionsGranted.value = BlePermissions.allGranted(this)
 
         setContent {
-            val granted by permissionsGranted
-            var serviceRunning by remember { mutableStateOf(false) }
-            var showSpike by remember { mutableStateOf(false) }
-
-            // Démarrage auto dès que les permissions sont accordées (une
-            // seule fois par passage à `true`, pas à chaque recomposition).
-            LaunchedEffect(granted) {
-                if (granted && !serviceRunning) {
-                    startMeshService()
-                    serviceRunning = true
-                }
-            }
-
-            MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
-                    if (showSpike) {
-                        HelloMeshSpikeScreen(onBack = { showSpike = false })
-                    } else {
-                        DengonScreen(
-                            permissionsGranted = granted,
-                            serviceRunning = serviceRunning,
-                            onRequestPermissions = { requestPermissions.launch(BlePermissions.required()) },
-                            onToggleService = {
-                                if (serviceRunning) {
-                                    stopMeshService()
-                                } else {
-                                    startMeshService()
-                                }
-                                serviceRunning = !serviceRunning
-                            },
-                            onOpenSpike = { showSpike = true },
-                        )
-                    }
-                }
-            }
+            DengonApp(
+                permissionsGranted = permissionsGranted,
+                onRequestPermissions = { requestPermissions.launch(BlePermissions.required()) },
+                onStartService = ::startMeshService,
+                onStopService = ::stopMeshService,
+            )
         }
     }
 
@@ -92,6 +64,50 @@ class MainActivity : ComponentActivity() {
 
     private fun stopMeshService() {
         stopService(Intent(this, MeshForegroundService::class.java))
+    }
+}
+
+@Composable
+private fun DengonApp(
+    permissionsGranted: MutableState<Boolean>,
+    onRequestPermissions: () -> Unit,
+    onStartService: () -> Unit,
+    onStopService: () -> Unit,
+) {
+    val granted by permissionsGranted
+    var serviceRunning by remember { mutableStateOf(false) }
+    var showSpike by remember { mutableStateOf(false) }
+
+    // Démarrage auto dès que les permissions sont accordées (une
+    // seule fois par passage à `true`, pas à chaque recomposition).
+    LaunchedEffect(granted) {
+        if (granted && !serviceRunning) {
+            onStartService()
+            serviceRunning = true
+        }
+    }
+
+    MaterialTheme {
+        Surface(modifier = Modifier.fillMaxSize()) {
+            if (showSpike) {
+                HelloMeshSpikeScreen(onBack = { showSpike = false })
+            } else {
+                DengonScreen(
+                    permissionsGranted = granted,
+                    serviceRunning = serviceRunning,
+                    onRequestPermissions = onRequestPermissions,
+                    onToggleService = {
+                        if (serviceRunning) {
+                            onStopService()
+                        } else {
+                            onStartService()
+                        }
+                        serviceRunning = !serviceRunning
+                    },
+                    onOpenSpike = { showSpike = true },
+                )
+            }
+        }
     }
 }
 
