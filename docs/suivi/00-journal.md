@@ -10,6 +10,86 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — US-112 : delta doc sécurité (`docs/synthese/06-securite.md`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`
+**Lot :** US-112, Sprint 1
+
+### Fait
+- `docs/synthese/06-securite.md` existait déjà (créé lors de l'éclatement de
+  `docs/synthese/`) mais portait encore, en tête de fichier, la mention « il
+  ne reste qu'un delta à rédiger » — exactement le contenu que cette US doit
+  produire. Complété plutôt que dupliqué dans un nouveau fichier.
+- Vérifié l'état des trois réconciliations listées par C-11
+  (`01-sujets-a-trancher.md` §D) : D-1 et D-2 étaient **déjà** intégrées dans
+  le corps du fichier (§2, §3) ; D-4 et D-5 étaient **déjà** réconciliées dans
+  `09-dashboard-et-donnees.md` (`-- D-4`, `-- D-5` dans le SQL). Seul
+  manquait vraiment : le **mapping des colonnes chiffrées** champ par champ,
+  et un état explicite du **Spike A** (US-101, toujours ouverte).
+- Ajout §5.1 : table complète des colonnes de `dengon-core::store`
+  (`powl/09-data-model.md` §1), classées en 3 cas — Keystore/Keychain (clés
+  privées), XChaCha20 champ par champ (`messages.body`,
+  `noise_sessions.state`), déjà chiffré par le protocole donc pas de second
+  chiffrement (`outbox.packet`, `held_envelopes.packet`), ou clair
+  (métadonnées, identifiants publics).
+- Ajout d'un état explicite du Spike A en §3 (renvoi à l'issue #1) plutôt
+  qu'un TODO nu.
+- Mis à jour la ligne C-11 de `00-contexte-global.md` (le delta n'est plus
+  "à rédiger", il pointe vers `06-securite.md`).
+- Vérifié : tous les liens relatifs du fichier résolvent vers un fichier
+  existant (script Python, voir ci-dessous) ; cohérent avec B-3/C-11/A-13 de
+  la table de décisions.
+
+### Pourquoi / décisions
+- Compléter le fichier existant plutôt qu'en créer un nouveau : il se
+  présentait déjà explicitement comme le brouillon de ce delta (tête de
+  fichier), créer un second document aurait dupliqué §1-§4 sans raison et
+  cassé le lien que `00-contexte-global.md` (C-11) pointe déjà dessus.
+- Le commentaire `-- clair local uniquement` sur `messages.body` dans
+  `powl/09` (doc figée, non modifiée — `docs/powl/` reste inchangé) est
+  ambigu une fois B-3 tranché ; explicité dans le mapping comme décrivant le
+  contenu (texte déchiffré par l'app), pas l'état de chiffrement au repos —
+  pour éviter qu'un futur lecteur code `store` (US-207) sur cette phrase
+  littérale.
+- `outbox.packet` / `held_envelopes.packet` classés « déjà chiffré » plutôt
+  que « à chiffrer » : ce sont des paquets L3 déjà scellés par Noise avant
+  d'atteindre la base (session ou enveloppe) — un second chiffrement
+  XChaCha20 n'ajoute rien contre le modèle de menace local (vol d'appareil),
+  seulement du CPU. Distinction utile pour ne pas sur-spécifier US-207.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (US-112 est une synthèse de décisions déjà prises, pas une
+  découverte technique).
+
+### État après cette session
+- US-112 : les 3 volets du mapping (Spike A, `recipient_tag`, colonnes
+  chiffrées) sont traités — 2 déjà faits ailleurs, 1 ajouté ici. Ne reste que
+  le **résultat** du Spike A lui-même (dépend de la clôture de l'issue #1,
+  hors périmètre de cette US).
+- Pas de fiche module : US-112 est un travail de documentation transverse,
+  pas un composant du dépôt.
+- 01-etat-du-code.md mis à jour : non (pointeur seul, inchangé).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 - <<'EOF'
+# résout chaque lien relatif de docs/synthese/06-securite.md vers un fichier
+# réel (os.path.isfile), ignore les liens http(s)
+EOF
+→ 7/7 liens internes résolvent (00-contexte-global.md,
+  01-sujets-a-trancher.md ×3, 09-dashboard-et-donnees.md,
+  ../powl/09-data-model.md)
+```
+- **Non fait** : relecture croisée par une autre personne (4ᵉ critère
+  d'acceptation de l'US) — nécessite un passage de Paul ou Tanguy, hors
+  périmètre de cette session.
+
+---
+
 ## 2026-09-11 — US-109 : corrections suite à la revue de la PR #56
 
 **Auteur :** Claude (Sonnet 5)
