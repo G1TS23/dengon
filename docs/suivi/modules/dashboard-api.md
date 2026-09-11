@@ -4,7 +4,7 @@
 en HTTPS, et servir plus tard le parcours + l'état de chaque message.
 **Correspond à la conception :** [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §2 (architecture), §3 (ingestion), §11.2 (schéma cible).
-**Dernière mise à jour :** 2026-09-10
+**Dernière mise à jour :** 2026-09-11
 **État :** esquisse — squelette **permissif** (US-110). `/healthz` + `/ingest/batch`
 qui stocke le JSON brut. Aucune validation, aucune signature, aucune projection.
 
@@ -32,41 +32,45 @@ dashboard/api/
   pyproject.toml         — deps (fastapi, uvicorn) + extra `dev` (pytest, httpx, ruff) + config ruff/pytest
   uv.lock                — lock des deps (transitives + hash) ; géré par uv, fait foi en CI
   app/
-    config.py            — db_path() : lit DENGON_DASHBOARD_DB (défaut dashboard.db)
+    config.py            — db_path(), max_batch_bytes() : lisent l'env à chaque appel
     migrations.py        — MIGRATIONS : liste (version, nom, [instructions SQL]), littéraux du module
     db.py               — connect() ; run_migrations() : atomique + sûr en concurrence
-    main.py             — app FastAPI ; lifespan → migrations ; routes /healthz et /ingest/batch
+    main.py             — app FastAPI ; lifespan → migrations + connexion partagée ; routes /healthz et /ingest/batch
   tests/
     conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan
-    test_api.py          — 12 tests (voir plus bas)
+    test_api.py          — 16 tests (voir plus bas)
 ```
 
 ## Concepts / types importants
 
 | Élément | Fichier:ligne | Ce que ça fait |
 |---|---|---|
-| `db_path()` | `app/config.py:19` | chemin du fichier SQLite, lu depuis l'env à chaque appel (pas de cache → tests simples) |
+| `db_path()` | `app/config.py` | chemin du fichier SQLite, lu depuis l'env à chaque appel (pas de cache → tests simples) |
+| `max_batch_bytes()` | `app/config.py` | taille max acceptée pour `/ingest/batch`, lue depuis l'env à chaque appel (défaut 2 MiB) |
 | `MIGRATIONS` | `app/migrations.py` | liste `(version, nom, [instructions])` ; littéraux du module (pas de fichier lu), versionnés, embarqués, sans I/O disque ; chaque `CREATE` en `IF NOT EXISTS` |
-| `connect()` | `app/db.py` | connexion SQLite : `isolation_level=None` (transactions explicites), `WAL`, `busy_timeout=5000`, `foreign_keys=ON` |
-| `run_migrations(conn)` | `app/db.py` | applique les migrations manquantes ; chaque migration dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou rien), revérification de la version sous verrou → sûr avec `uvicorn --workers N` ; idempotent |
-| `lifespan` | `app/main.py` | au démarrage de l'app : ouvre une connexion, migre, ferme |
+| `connect()` | `app/db.py` | connexion SQLite : `isolation_level=None` (transactions explicites), `check_same_thread=False` (réutilisée depuis le threadpool), `WAL`, `busy_timeout=5000`, `foreign_keys=ON` |
+| `run_migrations(conn)` | `app/db.py` | applique les migrations manquantes ; ensemble déjà-appliquées calculé une fois avant la boucle ; chaque migration dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou rien), revérification **fraîche** de la version sous verrou → sûr avec `uvicorn --workers N` ; idempotent |
+| `lifespan` | `app/main.py` | au démarrage : ouvre **une** connexion, migre, la garde sur `app.state.db_conn` + `app.state.db_lock` (fermée à l'arrêt) |
 | `GET /healthz` | `app/main.py` | route **sync** → threadpool FastAPI ; renvoie `{"status": "ok"}` |
 | `_guess_event_count()` | `app/main.py` | devine le nombre d'événements (`[...]` ou `{"events": [...]}`) sans imposer de schéma ; `None` sinon, jamais de rejet |
-| `_store_raw_batch()` | `app/main.py` | insertion synchrone d'un batch ; ouvre sa propre connexion (appelée dans un thread) |
-| `POST /ingest/batch` | `app/main.py` | décode UTF-8 → `json.loads` (400 si non-UTF-8 ou non-JSON) → INSERT via `run_in_threadpool` → `202` ; `503` + `Retry-After` si la base est verrouillée |
+| `_read_limited_body()` | `app/main.py` | lit `request.stream()` par morceaux, coupe dès que `max_batch_bytes()` est dépassé (`Content-Length` en fast-path, comptage réel sinon) |
+| `_store_raw_batch()` | `app/main.py` | insertion sur la connexion **partagée** de l'app, sous `db_lock` |
+| `_decode_parse_and_store()` | `app/main.py` | décode UTF-8 + `json.loads` + stockage, **en un seul aller-retour threadpool** — le décodage/parsing est le travail CPU dominant d'un gros batch, pas juste l'INSERT |
+| `POST /ingest/batch` | `app/main.py` | lit le corps borné (413 si trop gros) → `run_in_threadpool(_decode_parse_and_store, …)` → `202` ; `400` si UTF-8/JSON invalide, `503` + `Retry-After` si la base est verrouillée |
 
 ## Flux principal (exemple)
 
 ```
 un nœud : POST /ingest/batch   body = {"events":[{...},{...}]}
   main.ingest_batch (async)
-    raw = await request.body()
-    text = raw.decode("utf-8")          → 400 si non-UTF-8
-    parsed = json.loads(text)           → 400 si non-JSON
-    batch_id = uuid4()
-    event_count = 2                     (_guess_event_count)
-    await run_in_threadpool(_store_raw_batch, ...)   → INSERT dans un thread
-       └─ sqlite3.OperationalError ?    → 503 + Retry-After: 1
+    raw = await _read_limited_body(request, max_batch_bytes())  → 413 si trop gros
+    await run_in_threadpool(_decode_parse_and_store, conn, lock, raw, ...)
+       text = raw.decode("utf-8")          → UnicodeDecodeError → 400
+       parsed = json.loads(text)           → JSONDecodeError → 400
+       event_count = 2                     (_guess_event_count)
+       batch_id = uuid4()
+       _store_raw_batch(conn, lock, ...)   → INSERT sous le verrou, connexion partagée
+          └─ sqlite3.OperationalError ?    → 503 + Retry-After: 1
   → 202  {"stored": true, "batch_id": "...", "event_count": 2}
 ```
 
@@ -114,17 +118,46 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   `BEGIN IMMEDIATE` + revérification sous verrou + `CREATE … IF NOT EXISTS`.
   Un crash entre le DDL et l'enregistrement de version, ou deux workers au
   démarrage, ne cassent plus tous les démarrages suivants.
+- **Corps borné (`_read_limited_body`, 2 MiB par défaut)** (retour de revue
+  #59) : `request.body()` n'a pas de limite native — un nœud buggé ou
+  malveillant pourrait épuiser la mémoire du process (et `/healthz` avec
+  lui). Lecture en flux plutôt que `body()` : rejet rapide sur
+  `Content-Length`, comptage réel sinon (couvre l'absence de l'en-tête ou un
+  mensonge dessus).
+- **Décodage + parsing regroupés avec l'écriture dans un seul
+  `run_in_threadpool`** (retour de revue #59) : décoder l'UTF-8 et parser le
+  JSON sont le travail CPU dominant d'un gros batch, plus que l'INSERT ; les
+  laisser sur la boucle d'événements aurait annulé l'intérêt du passage en
+  thread pour `/healthz`.
+- **Connexion SQLite unique, réutilisée** (retour de revue #59) : ouverte au
+  démarrage (`lifespan`), stockée sur `app.state.db_conn`. Ouvrir un fichier
+  + poser 3 `PRAGMA` à chaque `POST` est un coût redondant sous charge
+  réelle. `check_same_thread=False` + `threading.Lock` (`app.state.db_lock`)
+  parce que la connexion est maintenant utilisée depuis le threadpool, donc
+  depuis un thread différent de celui qui l'a ouverte — le verrou protège
+  l'objet Python `Connection`, pas SQLite (qui ne fait qu'un écrivain de
+  toute façon). Ne protège que la concurrence **intra-process** : plusieurs
+  `uvicorn --workers` restent chacun leur connexion/verrou, couverts par le
+  `BEGIN IMMEDIATE` des migrations et le `busy_timeout` des écritures.
+- **`PRAGMA busy_timeout` seul, `timeout=` retiré de `connect()`** (retour
+  de revue #59) : les deux réglaient le même délai (5000 ms = 5.0 s), un des
+  deux était mort et aurait pu diverger silencieusement d'un futur
+  changement de l'autre.
 
 ## Tests
 
-- `tests/test_api.py` — **12 tests** : `/healthz` ; objet arbitraire (202,
+- `tests/test_api.py` — **16 tests** : `/healthz` ; objet arbitraire (202,
   `event_count` = 3) ; tableau nu ; corps **verbatim** en base ; non-JSON → 400 ;
-  **JSON non-UTF-8 → 400** ; **base verrouillée → 503 + `Retry-After`** ;
+  **JSON non-UTF-8 → 400** ; **corps trop gros → 413** / **dans la limite → 202** ;
+  **une seule connexion ouverte pour 5 écritures** (compteur sur `connect()`
+  monkeypatché) ; **20 écritures concurrentes sans collision ni perte**
+  (`ThreadPoolExecutor`) ; **base verrouillée → 503 + `Retry-After`** ;
   migrations appliquées une fois ; **migrations idempotentes après DDL partiel** ;
   3 formes de payload paramétrées.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .` et `uv run pytest` → **12 passed** (vérifié le
-  2026-09-10).
+  `uv run ruff check .`, `uv run ruff format --check .` et `uv run pytest` →
+  **16 passed** (vérifié le 2026-09-11). Test de concurrence rejoué 5 fois de
+  suite sans échec.
 
 ## Limites connues / TODO
 

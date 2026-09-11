@@ -68,6 +68,68 @@ def test_ingest_rejects_non_utf8_json(client):
     assert response.status_code == 400
 
 
+def test_ingest_rejects_body_over_max_size(client, monkeypatch):
+    # Garde-fou mémoire : un corps plus grand que la limite configurée est
+    # rejeté sans être stocké (retour de revue #59, point 1).
+    monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "16")
+    response = client.post(
+        "/ingest/batch",
+        content=b'{"events": [1, 2, 3, 4, 5, 6, 7, 8, 9]}',  # > 16 octets
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+
+
+def test_ingest_accepts_body_within_max_size(client, monkeypatch):
+    # Le garde-fou ne doit pas rejeter un batch qui tient dans la limite.
+    monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "4096")
+    response = client.post("/ingest/batch", json={"events": []})
+    assert response.status_code == 202
+
+
+def test_a_single_connection_is_reused_for_all_writes(tmp_path, monkeypatch):
+    # La connexion ouverte au démarrage doit servir à toutes les écritures :
+    # pas de connect() par requête (retour de revue #59, point 3).
+    monkeypatch.setenv("DENGON_DASHBOARD_DB", str(tmp_path / "reuse.db"))
+    from app.db import connect as vraie_connect
+
+    ouvertures = []
+
+    def _connect_comptee():
+        conn = vraie_connect()
+        ouvertures.append(conn)
+        return conn
+
+    monkeypatch.setattr("app.main.connect", _connect_comptee)
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with TestClient(app) as c:
+        for _ in range(5):
+            response = c.post("/ingest/batch", json={"events": []})
+            assert response.status_code == 202
+
+    assert len(ouvertures) == 1, "une seule connexion doit être ouverte pour les 5 écritures"
+
+
+def test_concurrent_writes_are_not_lost(client):
+    # La connexion partagée + le verrou doivent tenir sous des écritures
+    # concurrentes issues du threadpool (retour de revue #59, points 2 et 3).
+    import concurrent.futures
+
+    def _post(i: int):
+        return client.post("/ingest/batch", json={"events": [], "i": i})
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        reponses = list(pool.map(_post, range(20)))
+
+    assert all(r.status_code == 202 for r in reponses)
+    batch_ids = {r.json()["batch_id"] for r in reponses}
+    assert len(batch_ids) == 20, "pas de collision d'id, pas de batch perdu"
+
+
 def test_ingest_returns_503_when_storage_is_locked(client, monkeypatch):
     # Le chemin d'erreur « base verrouillée » : un flush concurrent perd la
     # course et le nœud doit retenter (retour de revue #59, point 3).

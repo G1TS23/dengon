@@ -10,6 +10,98 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — `dashboard/api` : retours de revue d'OswinFreyr sur la PR #59
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,db,config}.py`, `dashboard/api/tests/test_api.py`
+**Lot :** US-110 (suite), Sprint 1
+
+### Fait
+- 5 commentaires de revue en ligne d'@OswinFreyr sur la PR #59, tous vérifiés
+  dans le code avant correction (pas pris sur parole) :
+  1. **Pas de limite de taille sur le corps ingéré** (`main.py:89`) — `await
+     request.body()` charge tout en mémoire sans borne. Corrigé :
+     `_read_limited_body()` lit en flux (`request.stream()`), coupe dès que
+     `max_batch_bytes()` (config, 2 MiB par défaut, `DENGON_DASHBOARD_MAX_
+     BATCH_BYTES`) est dépassé — rejet rapide via `Content-Length` quand
+     présent, sinon comptage réel pendant la lecture. 413.
+  2. **Décodage/parsing JSON sur la boucle d'événements** (`main.py:96`) —
+     seule l'écriture SQLite passait par `run_in_threadpool`, pas
+     `decode`/`json.loads`, qui dominent le coût CPU d'un gros batch. Corrigé
+     en regroupant décodage + parsing + stockage dans un seul appel
+     threadpool (`_decode_parse_and_store`).
+  3. **Nouvelle connexion SQLite par écriture** (`main.py:75`) — `connect()`
+     rouvrait le fichier + 3 `PRAGMA` à chaque `POST`. Corrigé : une
+     connexion unique ouverte au démarrage (`lifespan`), stockée sur
+     `app.state.db_conn`, réutilisée pour toutes les écritures.
+  4. **`PRAGMA busy_timeout` redondant avec `timeout=5.0`** (`db.py:35`) —
+     les deux réglaient le même délai. Retiré `timeout=5.0` de
+     `sqlite3.connect(...)`, gardé la `PRAGMA` (déjà commentée).
+  5. **`_applied_versions(conn)` requêtée à chaque itération** (`db.py:59`)
+     — un `SELECT` par migration, y compris celles déjà appliquées. Calculée
+     une fois avant la boucle ; seule la revérification sous verrou reste
+     une lecture fraîche.
+- La connexion partagée (point 3) impose `check_same_thread=False` sur
+  `connect()`, puisqu'elle est maintenant utilisée depuis le threadpool —
+  donc un thread différent de celui qui l'a ouverte. Un `threading.Lock`
+  (`app.state.db_lock`) sérialise l'accès : `sqlite3.Connection` n'est pas
+  sûre en usage concurrent non protégé, même avec ce réglage.
+- 4 tests ajoutés (12 → 16) : rejet/acceptation par taille, connexion
+  ouverte une seule fois sur 5 écritures (compteur sur `connect()`
+  monkeypatché), 20 écritures concurrentes via `ThreadPoolExecutor` sans
+  collision ni perte.
+- Au passage : `ruff format` a signalé un défaut d'alignement préexistant
+  dans `db.py` (espaces avant les commentaires de `connect()`) — la CI ne
+  fait tourner que `ruff check`, pas `ruff format --check`, donc c'était
+  passé inaperçu depuis la PR #59. Corrigé, sans rapport avec les 5 points.
+
+### Pourquoi / décisions
+- **Connexion unique + verrou plutôt qu'un pool** : SQLite n'accepte qu'un
+  écrivain à la fois de toute façon (WAL) — un pool de connexions
+  n'apporterait rien pour l'écriture, seulement de la complexité. Le verrou
+  protège l'objet Python `Connection`, pas SQLite lui-même.
+- **Regrouper decode+parse+store en un seul appel threadpool plutôt que
+  deux `run_in_threadpool` séparés** : un aller-retour de thread au lieu de
+  deux, et ça garde `_store_raw_batch` appelable seule (le test
+  `test_ingest_returns_503_when_storage_is_locked` la monkeypatch
+  directement — signature élargie avec `conn`/`lock`, compatible puisque le
+  bouchon `_boom` accepte `*args, **kwargs`).
+- **Limite de taille configurable (2 MiB par défaut) plutôt que fixe en
+  dur** : cohérent avec le style de `config.py` (une variable d'env, lue à
+  chaque appel), et laisse la valeur ajustable si le volume réel de démo la
+  dépasse.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau ajouté à `04-apprentissages.md` — corrections de
+  robustesse, pas de notion nouvelle.
+
+### État après cette session
+- Les 5 points de la revue d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/dashboard-api.md](modules/dashboard-api.md)
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run ruff check . && uv run ruff format --check .
+All checks passed! / 7 files already formatted
+
+$ uv run pytest
+16 passed, 2 warnings in 0.20s
+
+$ for i in 1 2 3 4 5; do uv run pytest -q -k "concurrent or reused"; done
+.. [100%]   (×5, aucune instabilité observée)
+```
+- **Non vérifié** : comportement sous charge réelle (plusieurs `uvicorn
+  --workers`) — chaque worker a son propre process donc sa propre connexion
+  et son propre verrou ; le verrou ne protège que la concurrence **intra-
+  process** (threadpool). Cohérent avec `run_migrations`, déjà conçue pour
+  la concurrence inter-process via `BEGIN IMMEDIATE`.
+
+---
+
 ## 2026-09-09 — Squelette du dashboard `api` : ingestion permissive (US-110)
 
 **Auteur :** Claude (Sonnet 5)
