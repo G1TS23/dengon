@@ -398,3 +398,42 @@ future CI).
 **Où c'est utilisé :** `android/gradle/verification-metadata.xml`.
 **Pour aller plus loin :** doc Gradle « Gradle Module Metadata » — pourquoi
 `.module` est préféré à `.pom` quand les deux sont publiés.
+
+---
+
+### `$` en regex Python matche avant un `\n` final — piège pour un motif JSON Schema
+
+**C'est quoi :** en Python (`re`, sans `re.MULTILINE`), `$` matche soit la fin
+absolue de la chaîne, soit la position juste avant un unique `\n` final. Un
+motif `^[0-9a-f]{16}$` accepte donc une chaîne de **17** caractères si le
+17ᵉ est `\n`. Ce n'est pas le comportement d'ECMA 262 (JavaScript), la norme
+visée par le mot-clé `pattern` de JSON Schema — donc un validateur JS serait
+strict là où le validateur Python (`jsonschema`, qui utilise `re` en
+interne) ne l'est pas.
+**Pourquoi dans dengon :** relevé en **relecture approfondie de la revue de
+la PR #60** — `"<16 hex>\n"` passait `HEX16`/`HEX32`/`HEX64` dans
+`contracts/tools/catalogue.py`. `\Z` (extension Python, pas de `\n` de
+tolérance) aurait corrigé le symptôme, mais ces fragments finissent dans
+`payloads.schema.json`, censé rester neutre en langage — y introduire une
+extension Python irait contre l'objectif même de `contracts/`.
+**Piège / surprise :** la correction n'est pas `\Z` mais `minLength`/
+`maxLength` en plus du `pattern` — un mot-clé JSON Schema standard, qui ferme
+le même trou sans dépendre du moteur regex. Seuls les champs de longueur
+**fixe** peuvent en profiter ; un motif ouvert (`{6,}` sans borne haute) reste
+vulnérable, documenté comme dette assumée dans `03-ecarts-conception.md`.
+**Où c'est utilisé :** `contracts/tools/catalogue.py` (`HEX16`/`HEX32`/
+`HEX64`), `contracts/events/{envelope,batch}.schema.json` (`event_id`,
+`batch_id`, `sig`).
+
+### JSON Schema `required` fait déjà ce qu'une boucle manuelle referait
+
+**C'est quoi :** le mot-clé `required` d'un schéma JSON (`{"required": [...]}`)
+vérifie la présence de champs — exactement ce qu'une boucle `for field in
+required: if field not in payload: ...` referait à côté, en double.
+**Pourquoi dans dengon :** `contracts/tools/validate.py` construisait un
+`Draft202012Validator` **sans** `required` (seulement `properties`), et
+compensait par une boucle manuelle juste avant — repéré en revue de la
+PR #60. Ajouter `required` au schéma du validateur a permis de supprimer la
+boucle : une seule vérification, native, au lieu de deux qui doivent rester
+synchronisées.
+**Où c'est utilisé :** `contracts/tools/validate.py::_payload_validator`.

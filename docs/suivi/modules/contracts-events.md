@@ -116,6 +116,33 @@ tools/validate.py  (ce que lance la CI)
   alors que le schéma est identique pour tous les events qui partagent un
   `name` — ~28 recompilations pour 28 events sur 20 fixtures (retour de
   revue #60, perf, non bloquant).
+- **`node_id`/`payload` validés avant tout calcul** dans `_check_event` : un
+  `node_id: null` (présent mais nul — `event.get("node_id", "")` ne couvre
+  que la clé *absente*) faisait planter `event_id()`
+  (`AttributeError`) ; un `payload` non-objet (ex. une liste) faisait
+  planter `.items()`. Même famille de bug que le `seq` invalide ci-dessus,
+  trouvée en relecture approfondie par @OswinFreyr. Corrigé de la même
+  façon : anomalie → entrée d'`errors`, jamais une exception.
+- **`seq` plafonné à `< 2**64`** en plus de `>= 0` : un `seq` en overflow
+  (`2**64`) passait la garde initiale et faisait planter
+  `seq.to_bytes(8, "big")` (`OverflowError`) — même catégorie de bug,
+  trouvée dans la même relecture.
+- **`required` natif du schéma remplace une boucle manuelle** dans
+  `_payload_validator` : la boucle `for field in spec["required"]: ...`
+  dupliquait ce que le mot-clé JSON Schema `required` fait déjà (retour de
+  revue #60, nit).
+- **Chaque fixture n'est lue/parsée qu'une fois** par `main()` (avant :
+  `check_fixture`, la couverture du catalogue et le résumé final relisaient
+  chacun les 20 fichiers) — retour de revue #60, nit perf.
+- **`minLength`/`maxLength` ajoutés à côté de `pattern`** sur les champs de
+  longueur fixe (`HEX16`/`HEX32`/`HEX64` du catalogue, `event_id`/`batch_id`/
+  `sig` des schémas) : le moteur regex Python de `jsonschema` fait
+  correspondre `$` juste avant un `\n` final, donc `"<16 hex>\n"` passait le
+  seul `pattern`. `\Z` (extension Python) aurait fermé le trou mais
+  introduirait une dépendance à Python dans des schémas censés rester
+  neutres en langage — `minLength`/`maxLength` ferme le même trou sans ça.
+  Les motifs **ouverts** (`node_id`, `name`) restent vulnérables : dette
+  assumée, documentée dans `03-ecarts-conception.md`.
 
 ## Tests
 
@@ -128,9 +155,13 @@ tools/validate.py  (ce que lance la CI)
   fraîcheur du schéma généré, couverture du catalogue.
 - Négatif vérifié en local : `batch_id` trafiqué → rejet ; champ requis retiré
   d'un payload → rejet par le catalogue **et** par `payloads.schema.json` ;
-  `seq` mis à `-1` dans une fixture → **rapport propre** (`schéma batch`,
-  `signature invalide`, `batch_id ≠ …`, `seq invalide`), plus de traceback
-  (reproduit l'`OverflowError` sans le fix, confirmé absent avec).
+  `seq` mis à `-1` puis à `2**64` dans une fixture → rapport propre, plus de
+  traceback (les deux crashes reproduits sans le fix, absents avec) ;
+  `node_id: null` → rapport propre (`AttributeError` reproduite sans le fix) ;
+  `payload` remplacé par une liste → rapport propre (`AttributeError`
+  reproduite sans le fix) ; `msg_log_id` de 16 hex + `\n` final (17
+  caractères) → rejeté par `minLength`/`maxLength` (passait le seul `pattern`
+  avant le fix, confirmé en isolant le regex Python).
 - CI : `.github/workflows/contracts.yml` (ruff + régénération stable + validate).
 
 ## Limites connues / TODO

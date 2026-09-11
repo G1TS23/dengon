@@ -17,9 +17,20 @@ import json
 
 # --- fragments de schéma réutilisés -----------------------------------------
 
-HEX16 = {"type": "string", "pattern": "^[0-9a-f]{16}$"}  # msg_log_id, peerID tronqué 8 o
-HEX32 = {"type": "string", "pattern": "^[0-9a-f]{32}$"}  # recipient_tag (16 o)
-HEX64 = {"type": "string", "pattern": "^[0-9a-f]{64}$"}  # racine de journal (SHA-256)
+# minLength/maxLength en plus du pattern, pas pour la forme : le moteur
+# regex de `jsonschema` (Python `re`) fait correspondre `$` juste AVANT un
+# `\n` final, donc `"<16 hex>\n"` (17 caractères) passerait le seul pattern
+# (retour de revue #60, relecture approfondie). `\Z` corrigerait ça mais est
+# une extension Python — l'éviter ici puisque ces fragments finissent dans
+# payloads.schema.json, censé rester neutre en langage (JSON Schema/ECMA 262
+# n'a pas de `\Z`). minLength/maxLength ferme le même trou sans dépendre du
+# moteur regex.
+# msg_log_id, peerID tronqué 8 o
+HEX16 = {"type": "string", "pattern": "^[0-9a-f]{16}$", "minLength": 16, "maxLength": 16}
+# recipient_tag (16 o)
+HEX32 = {"type": "string", "pattern": "^[0-9a-f]{32}$", "minLength": 32, "maxLength": 32}
+# racine de journal (SHA-256)
+HEX64 = {"type": "string", "pattern": "^[0-9a-f]{64}$", "minLength": 64, "maxLength": 64}
 UINT = {"type": "integer", "minimum": 0}
 # Même motif que $defs/node_id de events/envelope.schema.json (référencé aussi
 # par batch.schema.json via $ref) — dupliqué ici parce que ce module est

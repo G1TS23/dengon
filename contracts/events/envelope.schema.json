@@ -10,6 +10,8 @@
     "event_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64,
       "description": "hex(SHA-256(node_id ‖ seq sur 8 octets big-endian)). Sert de clé de déduplication côté VPS."
     },
     "node_id": { "$ref": "#/$defs/node_id" },

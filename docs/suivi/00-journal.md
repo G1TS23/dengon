@@ -10,6 +10,105 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — `contracts/events` : relecture approfondie d'OswinFreyr sur la PR #60 (round 2)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{validate,catalogue}.py`,
+`contracts/events/{envelope,batch,payloads}.schema.json`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/04-apprentissages.md`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- @OswinFreyr a retesté la branche dans un `git worktree` séparé (Python 3.13,
+  deps installées sans `uv`) après le round 1 : les 5 premiers points sont
+  confirmés corrigés (`validate.py`/`build_fixtures.py` rejoués, régénération
+  byte-identique). En relisant plus en profondeur, il a trouvé 4 points
+  supplémentaires, tous vérifiés dans le code avant correction :
+  1. **`seq` en overflow (`>= 2**64`)** : `_valid_seq()` du round 1 ne
+     vérifiait qu'un plancher (`>= 0`), pas de plafond ;
+     `seq.to_bytes(8, "big")` lève `OverflowError` au-delà de `2**64`.
+     Reproduit (`event_id("x", 2**64)` → `OverflowError: int too big to
+     convert`), corrigé : `_valid_seq` vérifie aussi `< 2**64`.
+  2. **`node_id: null`** : `event.get("node_id", "")` ne couvre que la clé
+     **absente**, pas une clé présente à `null` — `event_id(None, seq)` lève
+     `AttributeError`. Reproduit, corrigé : `node_id` doit être une `str`
+     avant tout calcul, sinon `errors`.
+  3. **`payload` non-objet** (ex. une liste) : `_check_event` faisait
+     `payload.items()` sans vérifier le type. Reproduit
+     (`AttributeError: 'list' object has no attribute 'items'`), corrigé :
+     type vérifié avant toute manipulation.
+  4. **Motifs hex/sig ancrés avec `$`, qui matche avant un `\n` final en
+     Python** (`re`, pas `re.MULTILINE`) : `"<16 hex>\n"` (17 caractères)
+     passait `HEX16`. Reproduit en isolant le regex, puis en mutant une
+     fixture de travail (jamais committée). **Pas corrigé avec `\Z`** (la
+     suggestion du round 1) : `\Z` est une extension Python absente d'ECMA
+     262, la norme visée par `pattern` en JSON Schema — l'introduire dans
+     des schémas censés rester neutres en langage serait un contre-sens.
+     Corrigé avec `minLength`/`maxLength` à côté de `pattern` (mot-clé JSON
+     Schema standard) sur les champs de longueur **fixe** seulement
+     (`HEX16`/`32`/`64`, `event_id`, `batch_id`, `sig`). Les motifs
+     **ouverts** (`node_id`, `name`) restent vulnérables — dette assumée,
+     documentée dans `03-ecarts-conception.md`, impact jugé faible (aucun
+     calcul ne plante dessus, contrairement aux 3 points précédents).
+  - Deux nits non bloquants également corrigés : boucle manuelle sur
+    `spec["required"]` remplacée par le `required` natif du schéma ; chaque
+    fixture n'est plus lue/parsée qu'une fois par `main()` (avant : 3 fois).
+- Rebuild complet : `payloads.schema.json` régénéré (`build_fixtures.py`)
+  après les changements de `catalogue.py` — diff limité au fichier généré,
+  les 20 fixtures restent byte-identiques (régénération déterministe
+  confirmée une nouvelle fois).
+
+### Pourquoi / décisions
+- **`minLength`/`maxLength` plutôt que `\Z`** : décision structurante de
+  cette entrée. `\Z` aurait été la correction la plus rapide (celle
+  suggérée), mais elle aurait fait fuiter une dépendance Python dans un
+  artefact dont toute la raison d'être est d'être consommable par n'importe
+  quel langage. `minLength`/`maxLength` obtient le même résultat sans ce
+  compromis, au prix de ne fonctionner que sur des champs de longueur fixe.
+- **`node_id`/`name` non corrigés pareil, assumé plutôt que forcé** : pas de
+  borne haute naturelle pour ces deux motifs, et l'impact réel est nul
+  (aucun crash, juste une strictness manquante) — mieux vaut le documenter
+  explicitly que d'introduire une extension Python pour fermer un trou à
+  faible risque.
+
+### Écarts vs conception
+- Un nouveau, dans `03-ecarts-conception.md` : le piège `$`/`\n` sur
+  `node_id`/`name` non corrigé (dette assumée).
+
+### Appris
+- `$` en regex Python matche avant un `\n` final (piège pour un `pattern`
+  JSON Schema censé suivre ECMA 262) ; `required` de JSON Schema remplace une
+  vérification manuelle. Les deux ajoutés à `04-apprentissages.md`.
+
+### État après cette session
+- Les 4 nouveaux points + 2 nits de la relecture d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/contracts-events.md](modules/contracts-events.md)
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run python3 tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+$ git status --short events/fixtures/        # vide : régénération byte-identique
+
+$ uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check . && uv run ruff format --check tools/catalogue.py tools/validate.py
+All checks passed!
+
+# Reproduction des 3 crashes, un par un, sur une fixture mutée (jamais
+# committée), restaurée après chaque essai :
+seq = 2**64        → rapport propre (« seq invalide »), plus de traceback
+node_id = null     → rapport propre (« node_id invalide »), plus de traceback
+payload = [...]    → rapport propre (« payload invalide (list) »), plus de traceback
+msg_log_id + "\n"  → rapport propre (« is too long »), passait avant le fix
+```
+
+---
+
+
+
 ## 2026-09-11 — `contracts/events` : retours de revue d'OswinFreyr sur la PR #60
 
 **Auteur :** Claude (Sonnet 5)

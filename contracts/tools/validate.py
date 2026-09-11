@@ -107,7 +107,13 @@ _payload_validators: dict[str, Draft202012Validator] = {}
 def _payload_validator(name: str, spec: dict) -> Draft202012Validator:
     validator = _payload_validators.get(name)
     if validator is None:
-        validator = Draft202012Validator({"type": "object", "properties": spec["props"]})
+        # "required" natif au schéma plutôt qu'une boucle manuelle à côté :
+        # le validateur JSON Schema le vérifie déjà, la boucle dupliquait
+        # exactement ce travail (retour de revue #60, nit non bloquant).
+        schema: dict = {"type": "object", "properties": spec["props"]}
+        if spec["required"]:
+            schema["required"] = spec["required"]
+        validator = Draft202012Validator(schema)
         _payload_validators[name] = validator
     return validator
 
@@ -117,38 +123,53 @@ def _check_payload_vs_catalogue(fx: str, name: str, payload: dict) -> None:
     if spec is None:
         fail(fx, f"événement hors catalogue : {name}")
         return
-    for field in spec["required"]:
-        if field not in payload:
-            fail(fx, f"{name}: champ requis manquant « {field} »")
     for err in _payload_validator(name, spec).iter_errors(payload):
         fail(fx, f"{name}: payload invalide (catalogue) — {err.message}")
 
 
 def _valid_seq(seq: object) -> bool:
     # bool est une sous-classe d'int en Python : True/False passeraient
-    # isinstance(seq, int) alors que ce n'est pas un seq valide.
-    return isinstance(seq, int) and not isinstance(seq, bool) and seq >= 0
+    # isinstance(seq, int) alors que ce n'est pas un seq valide. Borne haute
+    # alignée sur ce que seq.to_bytes(8, "big") accepte : un u64 tient sur
+    # [0, 2**64) (retour de revue #60, relecture approfondie — un seq en
+    # overflow passait cette garde et faisait planter event_id() plus loin).
+    return isinstance(seq, int) and not isinstance(seq, bool) and 0 <= seq < 2**64
 
 
 def _check_event(
     fx: str, body: dict, event: dict, payloads_validator: Draft202012Validator
 ) -> None:
-    if event.get("node_id") != body.get("node_id"):
+    node_id = event.get("node_id")
+    if node_id != body.get("node_id"):
         fail(fx, f"node_id de l'événement {event.get('seq')} ≠ node_id du batch")
 
     seq = event.get("seq")
     if not _valid_seq(seq):
         # Déjà signalé par _check_schema (envelope.schema.json exige seq
         # entier ≥ 0) : on n'essaie pas de recalculer event_id sur une valeur
-        # qui ferait planter seq.to_bytes() (OverflowError si négatif,
-        # AttributeError si ce n'est pas un entier) — un rapport de
-        # validation propre, pas une traceback brute (retour de revue #60).
+        # qui ferait planter seq.to_bytes() (OverflowError si négatif ou
+        # ≥ 2**64) — un rapport de validation propre, pas une traceback
+        # brute (retour de revue #60).
         fail(fx, f"seq invalide ({seq!r}) : event_id non vérifiable")
-    elif event.get("event_id") != event_id(event.get("node_id", ""), seq):
+    elif not isinstance(node_id, str):
+        # Même piège que seq, pour node_id : event.get("node_id", "") ne
+        # couvre que la clé ABSENTE, pas une clé présente à `null` — un
+        # node_id non-str ferait planter node_id.encode() dans event_id()
+        # (retour de revue #60, relecture approfondie).
+        fail(fx, f"node_id invalide ({node_id!r}) : event_id non vérifiable")
+    elif event.get("event_id") != event_id(node_id, seq):
         fail(fx, f"event_id incohérent pour seq {seq}")
 
     name = event.get("name", "")
-    payload = event.get("payload", {})
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        # Déjà signalé par _check_schema (envelope.schema.json exige un
+        # payload objet) : pas de .items() / validation sur une valeur qui
+        # ferait planter le premier accès (ex. AttributeError sur une liste)
+        # — retour de revue #60, relecture approfondie.
+        fail(fx, f"payload invalide ({type(payload).__name__}) pour seq {seq!r}")
+        return
+
     for key, value in payload.items():
         if key.endswith("msg_log_id") and not _is_hex16(value):
             fail(fx, f"msg_log_id « {value} » n'est pas une empreinte 16 hex")
@@ -161,14 +182,12 @@ def _check_event(
 
 
 def check_fixture(
-    path: Path,
+    fx: str,
+    body: dict,
     batch_validator: Draft202012Validator,
     payloads_validator: Draft202012Validator,
     verify_key: VerifyKey,
 ) -> None:
-    fx = path.name
-    body = json.loads(path.read_text())
-
     _check_schema(fx, body, batch_validator)
     _check_redaction(fx, body)
     _check_signature(fx, body, verify_key)
@@ -183,13 +202,12 @@ def _check_schema_freshness() -> None:
         fail(GLOBAL, "events/payloads.schema.json est périmé — relancer build_fixtures.py")
 
 
-def _check_catalogue_coverage(fixtures: list[Path]) -> None:
-    covered = {
-        e["name"] for path in fixtures for e in json.loads(path.read_text()).get("events", [])
-    }
+def _check_catalogue_coverage(bodies: list[dict]) -> set[str]:
+    covered = {e["name"] for body in bodies for e in body.get("events", [])}
     missing = set(CATALOGUE) - covered
     if missing:
         fail(GLOBAL, f"catalogue non couvert : {sorted(missing)}")
+    return covered
 
 
 def main() -> int:
@@ -209,11 +227,16 @@ def main() -> int:
     if len(fixtures) != 20:
         fail(GLOBAL, f"{len(fixtures)} fixtures au lieu de 20")
 
-    for path in fixtures:
-        check_fixture(path, batch_validator, payloads_validator, verify_key)
+    # Chaque fixture n'est lue qu'une fois (retour de revue #60, nit non
+    # bloquant : avant, check_fixture, _check_catalogue_coverage et le
+    # résumé final relisaient chacun les 20 fichiers, sans besoin).
+    bodies = [json.loads(path.read_text()) for path in fixtures]
+
+    for path, body in zip(fixtures, bodies, strict=True):
+        check_fixture(path.name, body, batch_validator, payloads_validator, verify_key)
 
     _check_schema_freshness()
-    _check_catalogue_coverage(fixtures)
+    covered = _check_catalogue_coverage(bodies)
 
     if errors:
         print(f"✗ {len(errors)} problème(s) :", file=sys.stderr)
@@ -221,8 +244,7 @@ def main() -> int:
             print(f"  - {err}", file=sys.stderr)
         return 1
 
-    covered = len({e["name"] for p in fixtures for e in json.loads(p.read_text())["events"]})
-    print(f"✓ {len(fixtures)} fixtures valides — {covered} noms d'événements couverts.")
+    print(f"✓ {len(fixtures)} fixtures valides — {len(covered)} noms d'événements couverts.")
     return 0
 
 

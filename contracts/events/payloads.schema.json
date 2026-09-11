@@ -23,7 +23,9 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               }
             },
             "required": [
@@ -51,7 +53,9 @@
             "properties": {
               "root": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{64}$"
+                "pattern": "^[0-9a-f]{64}$",
+                "minLength": 64,
+                "maxLength": 64
               },
               "height": {
                 "type": "integer",
@@ -88,7 +92,9 @@
               },
               "root": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{64}$"
+                "pattern": "^[0-9a-f]{64}$",
+                "minLength": 64,
+                "maxLength": 64
               },
               "height": {
                 "type": "integer",
@@ -164,15 +170,21 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "recipient_tag": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{32}$"
+                "pattern": "^[0-9a-f]{32}$",
+                "minLength": 32,
+                "maxLength": 32
               },
               "to_peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               }
             },
             "required": [
@@ -202,11 +214,15 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "recipient_tag": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{32}$"
+                "pattern": "^[0-9a-f]{32}$",
+                "minLength": 32,
+                "maxLength": 32
               },
               "reason": {
                 "enum": [
@@ -243,15 +259,21 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "recipient_tag": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{32}$"
+                "pattern": "^[0-9a-f]{32}$",
+                "minLength": 32,
+                "maxLength": 32
               },
               "to_peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "budget_after": {
                 "type": "integer",
@@ -290,7 +312,9 @@
               },
               "to_peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               }
             },
             "required": [
@@ -319,11 +343,15 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "recipient_tag": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{32}$"
+                "pattern": "^[0-9a-f]{32}$",
+                "minLength": 32,
+                "maxLength": 32
               },
               "epoch_day": {
                 "type": "integer",
@@ -362,7 +390,9 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "latency_ms": {
                 "type": "integer",
@@ -395,7 +425,9 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               }
             },
             "required": [
@@ -423,11 +455,15 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "to_peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "via": {
                 "enum": [
@@ -463,11 +499,15 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "conv_hash": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               }
             },
             "required": [
@@ -496,7 +536,9 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "via": {
                 "enum": [
@@ -531,7 +573,9 @@
             "properties": {
               "peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "pseudo": {
                 "type": "string",
@@ -573,7 +617,9 @@
             "properties": {
               "peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "rssi": {
                 "type": "integer",
@@ -614,7 +660,9 @@
             "properties": {
               "peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "duration_s": {
                 "type": "integer",
@@ -652,7 +700,9 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "type": {
                 "type": "integer",
@@ -686,7 +736,9 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "reason": {
                 "enum": [
@@ -723,11 +775,15 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "from_peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               }
             },
             "required": [
@@ -756,7 +812,9 @@
             "properties": {
               "from_peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "reason": {
                 "enum": [
@@ -793,7 +851,9 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "type": {
                 "type": "integer",
@@ -814,7 +874,9 @@
               },
               "from_peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               }
             },
             "required": [
@@ -847,7 +909,9 @@
             "properties": {
               "msg_log_id": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "type": {
                 "type": "integer",
@@ -868,7 +932,9 @@
               },
               "from_peer": {
                 "type": "string",
-                "pattern": "^[0-9a-f]{16}$"
+                "pattern": "^[0-9a-f]{16}$",
+                "minLength": 16,
+                "maxLength": 16
               },
               "rssi": {
                 "type": "integer",

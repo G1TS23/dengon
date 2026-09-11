@@ -240,3 +240,30 @@ _(aucun écart pour l'instant)_
   établi côté transport ; `docs/powl/08` non touché (dossier figé, cf.
   `CLAUDE.md`).
 - **Doc de conception mise à jour ?** oui — `docs/synthese/09-dashboard-et-donnees.md`.
+
+---
+
+### Piège JSON Schema repéré mais **partiellement corrigé** (dette assumée) — `node_id`/`name`
+
+- Les motifs `^(relay|client)-[0-9a-f]{6,}$` (`node_id`) et `^[a-z]+\.[a-z_]+$`
+  (`name`) dans `contracts/events/envelope.schema.json` restent vulnérables
+  au même piège que `HEX16`/`HEX32`/`HEX64`/`sig`/`batch_id` (un `$` Python
+  matche juste avant un `\n` final — retour de revue #60) : ces deux-là n'ont
+  **pas** reçu de `minLength`/`maxLength` correctif, contrairement aux
+  champs de longueur fixe.
+- **Raison de ne pas corriger pareil :** ces deux motifs sont **ouverts**
+  (`{6,}` sans borne haute, `name` sans longueur fixe) — `minLength` seul ne
+  fermerait pas le trou. La seule fermeture complète serait `\Z` au lieu de
+  `$`, une extension **Python**, absente d'ECMA 262 (la norme visée par
+  `pattern` en JSON Schema) — l'introduire irait à l'encontre de l'objectif
+  même de `contracts/` (neutre en langage, potentiellement validé un jour par
+  un moteur non-Python).
+- **Impact réel :** faible. Un `node_id`/`name` avec un `\n` final ne casse
+  rien silencieusement : `name` sert de clé dans `CATALOGUE`, donc un nom
+  suffixé échouerait de toute façon au lookup (`événement hors catalogue`) ;
+  `node_id` n'entre dans aucun calcul qui plante dessus (contrairement à
+  `seq`/`payload`, corrigés). C'est une strictness manquante, pas un chemin
+  de crash.
+- **Condition de levée :** si `contracts/` gagne un jour un second
+  consommateur non-Python qui a besoin d'une validation stricte de ces deux
+  champs, ou si le motif `node_id` gagne une borne haute naturelle.
