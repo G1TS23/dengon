@@ -10,6 +10,66 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-11 — `dashboard/api` : retours de revue d'OswinFreyr sur la PR #59
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,db,config}.py`, `dashboard/api/tests/test_api.py`
+**Lot :** US-110 (suite), Sprint 1
+
+### Fait
+- 5 commentaires de revue en ligne d'@OswinFreyr sur la PR #59, tous vérifiés
+  dans le code avant correction (pas pris sur parole) :
+  1. **Pas de limite de taille sur le corps ingéré** (`main.py:89`) — `await
+     request.body()` charge tout en mémoire sans borne. Corrigé :
+     `_read_limited_body()` lit en flux (`request.stream()`), coupe dès que
+     `max_batch_bytes()` (config, 2 MiB par défaut, `DENGON_DASHBOARD_MAX_
+     BATCH_BYTES`) est dépassé — rejet rapide via `Content-Length` quand
+     présent, sinon comptage réel pendant la lecture. 413.
+  2. **Décodage/parsing JSON sur la boucle d'événements** (`main.py:96`) —
+     seule l'écriture SQLite passait par `run_in_threadpool`, pas
+     `decode`/`json.loads`, qui dominent le coût CPU d'un gros batch. Corrigé
+     en regroupant décodage + parsing + stockage dans un seul appel
+     threadpool (`_decode_parse_and_store`).
+  3. **Nouvelle connexion SQLite par écriture** (`main.py:75`) — `connect()`
+     rouvrait le fichier + 3 `PRAGMA` à chaque `POST`. Corrigé : une
+     connexion unique ouverte au démarrage (`lifespan`), stockée sur
+     `app.state.db_conn`, réutilisée pour toutes les écritures.
+  4. **`PRAGMA busy_timeout` redondant avec `timeout=5.0`** (`db.py:35`) —
+     les deux réglaient le même délai. Retiré `timeout=5.0` de
+     `sqlite3.connect(...)`, gardé la `PRAGMA` (déjà commentée).
+  5. **`_applied_versions(conn)` requêtée à chaque itération** (`db.py:59`)
+     — un `SELECT` par migration, y compris celles déjà appliquées. Calculée
+     une fois avant la boucle ; seule la revérification sous verrou reste
+     une lecture fraîche.
+- La connexion partagée (point 3) impose `check_same_thread=False` sur
+  `connect()`, puisqu'elle est maintenant utilisée depuis le threadpool —
+  donc un thread différent de celui qui l'a ouverte. Un `threading.Lock`
+  (`app.state.db_lock`) sérialise l'accès : `sqlite3.Connection` n'est pas
+  sûre en usage concurrent non protégé, même avec ce réglage.
+- 4 tests ajoutés (12 → 16) : rejet/acceptation par taille, connexion
+  ouverte une seule fois sur 5 écritures (compteur sur `connect()`
+  monkeypatché), 20 écritures concurrentes via `ThreadPoolExecutor` sans
+  collision ni perte.
+- Au passage : `ruff format` a signalé un défaut d'alignement préexistant
+  dans `db.py` (espaces avant les commentaires de `connect()`) — la CI ne
+  fait tourner que `ruff check`, pas `ruff format --check`, donc c'était
+  passé inaperçu depuis la PR #59. Corrigé, sans rapport avec les 5 points.
+
+### Pourquoi / décisions
+- **Connexion unique + verrou plutôt qu'un pool** : SQLite n'accepte qu'un
+  écrivain à la fois de toute façon (WAL) — un pool de connexions
+  n'apporterait rien pour l'écriture, seulement de la complexité. Le verrou
+  protège l'objet Python `Connection`, pas SQLite lui-même.
+- **Regrouper decode+parse+store en un seul appel threadpool plutôt que
+  deux `run_in_threadpool` séparés** : un aller-retour de thread au lieu de
+  deux, et ça garde `_store_raw_batch` appelable seule (le test
+  `test_ingest_returns_503_when_storage_is_locked` la monkeypatch
+  directement — signature élargie avec `conn`/`lock`, compatible puisque le
+  bouchon `_boom` accepte `*args, **kwargs`).
+- **Limite de taille configurable (2 MiB par défaut) plutôt que fixe en
+  dur** : cohérent avec le style de `config.py` (une variable d'env, lue à
+  chaque appel), et laisse la valeur ajustable si le volume réel de démo la
+  dépasse.
 ## 2026-09-11 — US-109 : corrections suite à la revue de la PR #56
 
 **Auteur :** Claude (Sonnet 5)
@@ -57,6 +117,188 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 - Aucun.
 
 ### Appris
+- Rien de nouveau ajouté à `04-apprentissages.md` — corrections de
+  robustesse, pas de notion nouvelle.
+
+### État après cette session
+- Les 5 points de la revue d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/dashboard-api.md](modules/dashboard-api.md)
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run ruff check . && uv run ruff format --check .
+All checks passed! / 7 files already formatted
+
+$ uv run pytest
+16 passed, 2 warnings in 0.20s
+
+$ for i in 1 2 3 4 5; do uv run pytest -q -k "concurrent or reused"; done
+.. [100%]   (×5, aucune instabilité observée)
+```
+- **Non vérifié** : comportement sous charge réelle (plusieurs `uvicorn
+  --workers`) — chaque worker a son propre process donc sa propre connexion
+  et son propre verrou ; le verrou ne protège que la concurrence **intra-
+  process** (threadpool). Cohérent avec `run_migrations`, déjà conçue pour
+  la concurrence inter-process via `BEGIN IMMEDIATE`.
+
+---
+
+## 2026-09-09 — Squelette du dashboard `api` : ingestion permissive (US-110)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/` (nouveau), `.github/workflows/dashboard.yml`,
+`docs/suivi/modules/dashboard-api.md` (créée), `modules/_index.md`,
+`01-etat-du-code.md`.
+**Lot :** Lot 0 — Fondations (issue #10, US-110). Branche
+`chore/US-110-squelette-dashboard-api`.
+
+### Fait
+- `dashboard/api/` : appli FastAPI (`app/main.py`) avec deux routes —
+  `GET /healthz` → `{"status":"ok"}` ; `POST /ingest/batch` qui accepte
+  n'importe quel JSON bien formé, en devine le nombre d'événements sans
+  imposer de schéma, et l'écrit **verbatim** dans `raw_batches`.
+- `app/db.py` : `connect()` (SQLite, WAL, FK) + `run_migrations()` — système
+  maison `migrations/NNNN_*.sql` tracé dans `schema_migrations`, idempotent,
+  lancé par le `lifespan` FastAPI.
+- `migrations/0001_initial.sql` : la seule table `raw_batches` (+ index).
+- `tests/` : fixture `client` sur une base jetable par test ; 6 tests
+  (`test_api.py`).
+- `.github/workflows/dashboard.yml` : `ruff check` + `pytest`, sur
+  `pull_request` et `push` filtrés `paths: dashboard/**`, working-dir
+  `dashboard/api`, Python 3.11.
+- `dashboard/README.md`, `dashboard/api/pyproject.toml` (deps + config
+  ruff/pytest), `dashboard/api/.gitignore`.
+- Fiche module `docs/suivi/modules/dashboard-api.md` (= note d'onboarding de
+  l'area `dashboard-api`).
+
+### Pourquoi / décisions
+- **Ingestion permissive assumée** (critères de l'issue) : le format
+  d'événement est figé par US-108, pas encore mergée. Le squelette ne doit
+  pas l'attendre — proposition d'organisation §3.3. La validation, la
+  signature Ed25519 et les projections sont US-216 / US-217 (S2).
+- **`sqlite3` stdlib + migrations maison**, pas d'ORM ni d'Alembic :
+  squelette, faible volume, base effacée par session (B-4).
+- **`db_path()` relit l'env à chaque appel** → un `tmp_path` par test sans
+  rechargement de module.
+- **`202 Accepted`** plutôt que `200` : dépôt asynchrone, prépare US-216.
+- Repris le brouillon `dashboard.yml` déjà présent sur la branche (filtre
+  élargi de `dashboard/api/**` à `dashboard/**` comme demandé par l'issue,
+  ajout du déclencheur `pull_request` et du lint).
+
+### Écarts vs conception
+- Le squelette est un sous-ensemble strict de `docs/synthese/09` §3 et §11.2 ;
+  rien n'y contredit la cible fonctionnelle.
+- **Un écart de forme** consigné dans `03-ecarts-conception.md` (2026-09-09) :
+  migrations en littéral Python au lieu de fichiers `.sql`, suite au retour de
+  SonarCloud. Voir « Suite » ci-dessous.
+- Correction annexe dans `01-etat-du-code.md` : la ligne « Dashboard `api` »
+  disait encore « Axum + Postgres/Timescale » (stack `powl` d'origine,
+  écartée par A-5) → remplacée par « FastAPI + SQLite + SSE ».
+
+### Appris
+- `TestClient(app)` comme **context manager** (`with`) déclenche le
+  cycle `lifespan` de Starlette — c'est ce qui fait tourner les migrations
+  avant les tests. Sans le `with`, le lifespan ne s'exécute pas.
+
+### État après cette session
+- `dashboard/api` : `/healthz` et `/ingest/batch` fonctionnent, base migrée
+  au démarrage. Manque tout le reste (sécurité, projections, SSE, REST de
+  lecture, déploiement) — c'est le périmètre S2/S3.
+- Fiche module créée ; `_index.md` mis à jour ; `01-etat-du-code.md` mis à
+  jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && python3 -m venv .venv && . .venv/bin/activate
+$ pip install -e '.[dev]'
+$ ruff check .
+  All checks passed!
+$ pytest
+  6 passed, 2 warnings in 0.27s
+```
+- 2 `DeprecationWarning` (`httpx`/`anyio`) sous Python **3.14** en local ;
+  absents en 3.11, version de la CI. Le venv a été supprimé après coup
+  (ignoré par git de toute façon).
+- La CI `dashboard` elle-même n'a pas encore tourné : elle le fera à
+  l'ouverture de la PR.
+
+### Suite (même session) — retour de la CI sur la PR #59
+
+Le job `dashboard` (ruff + pytest) est **vert**. GitGuardian vert. **SonarCloud
+a rejeté la PR** : « Security Rating E sur le nouveau code », sur 5 findings.
+Traitement :
+
+- **BLOCKER `pythonsecurity:S3649`** (`db.py` : SQL construit depuis une donnée
+  « contrôlée par l'utilisateur ») — l'analyseur suivait le chemin
+  `Path.read_text()` → `executescript()`. La donnée n'était pas de l'entrée
+  requête mais nos propres fichiers `migrations/*.sql` versionnés. **Corrigé à
+  la racine** plutôt que suppression : le SQL de migration devient un littéral
+  de `app/migrations.py` (`MIGRATIONS`), `migrations/0001_initial.sql` supprimé.
+  Bénéfice réel : plus d'I/O disque au déploiement. Reporté dans
+  `03-ecarts-conception.md`.
+- **`githubactions:S8541` / `S8544`** (`dashboard.yml` : `pip install` sans
+  `--only-binary`, versions non figées) — CI passée en deux étapes :
+  `pip install --only-binary=:all: -r requirements-dev.txt` (versions épinglées,
+  wheels seulement, aucun script de build de dépendance) puis
+  `pip install --no-deps -e .` pour le projet local. Ajout de
+  `dashboard/api/requirements-dev.txt`.
+- **`githubactions:S8544` / `text:S8565`** (dépendances non lockées, pas de
+  `uv.lock` / `poetry.lock` / …) — le premier correctif (pin `==` dans un
+  `requirements-dev.txt`) n'a **pas** suffi : SonarCloud exige un lock
+  **transitif avec hash**. Comme le dashboard est le **seul Python** du projet
+  (Rust / Kotlin / C ailleurs) et que `uv.lock` est exactement le fichier
+  demandé, **adopté `uv`** pour `dashboard/api/` : `uv.lock` committé,
+  `requirements-dev.txt` supprimé, CI passée à `astral-sh/setup-uv` +
+  `uv sync --frozen --extra dev` + `uv run …`. Choix trivialement réversible,
+  à confirmer d'un mot en réunion.
+
+Re-vérifié en local :
+```
+$ cd dashboard/api && uv sync --frozen --extra dev
+$ uv run ruff check .   → All checks passed!
+$ uv run pytest         → 6 passed
+```
+
+### Retours de revue de Paul (2026-09-10)
+
+Branche resynchronisée sur `main` (US-104 + US-115 mergées entre-temps).
+Conflit `docs/suivi/` résolu à la main **cette fois** (`.gitattributes` de
+l'US-115 n'était pas encore actif au moment où ce merge l'introduit) :
+`01-etat-du-code.md` pris en version `main` (pointeurs), mon avancement déplacé
+dans `02-avancement.md`, ligne `_index.md` reformatée en 4 colonnes.
+
+Quatre retours de fond, tous valides, tous traités :
+
+1. **`raw.decode("utf-8", errors="replace")` cassait le contrat « verbatim »** —
+   `json.loads` accepte l'UTF-16/32, le corps était alors stocké en mojibake et
+   ne round-trip plus (US-216 y vérifiera une signature Ed25519). Corrigé :
+   décodage UTF-8 **avant** `json.loads`, un corps non-UTF-8 est rejeté (400).
+   Cohérent avec `contracts/events/CANONICAL.md` (UTF-8 imposé).
+2. **I/O SQLite bloquante sur la boucle d'événements** — la route `async` faisait
+   `connect`/`execute`/`commit` synchrones. Corrigé : l'écriture passe par
+   `starlette.concurrency.run_in_threadpool` (la route reste `async` pour
+   `await request.body()`). J'ai préféré ça au « route sync » suggéré, qui
+   interdit `await request.body()`.
+3. **Écriture concurrente → 500 non géré** — deux flush simultanés, le perdant
+   lève `sqlite3.OperationalError`. Corrigé : `except` → `503` + `Retry-After`,
+   + `PRAGMA busy_timeout = 5000`.
+4. **Migrations non atomiques / non concurrence-safe** — `executescript` en
+   autocommit : DDL committé avant l'enregistrement de version → un crash entre
+   les deux, ou `uvicorn --workers N`, cassait tous les démarrages suivants.
+   Corrigé : migrations = **liste d'instructions** (plus d'`executescript`),
+   chacune dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou
+   rien), revérification de la version sous verrou, `CREATE … IF NOT EXISTS`.
+   `connect()` passe en `isolation_level=None` (transactions explicites,
+   comportement identique 3.11→3.13).
+
+Tests : **6 → 12** (JSON non-UTF-8 → 400 ; base verrouillée → 503 ; migrations
+idempotentes après DDL partiel ; formes de payload paramétrées).
+
+```
+$ uv run ruff check .   → All checks passed!
+$ uv run pytest         → 12 passed
+```
 - Le mode `--write-verification-metadata` **n'échoue jamais** : il
   enregistre ce qui est résolu pendant le build au lieu de le vérifier. Si
   un artefact est déjà dans `caches/modules-2` (résolu lors d'un run

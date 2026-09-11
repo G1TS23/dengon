@@ -20,7 +20,7 @@
 | `dengon-ffi` | bindings UniFFI | squelette : `lib` + `cdylib`, `version()` | 3 % | [dengon-ffi](modules/dengon-ffi.md) |
 | App Android | Kotlin + Compose | squelette : Compose + `MeshForegroundService` (`foregroundServiceType="connectedDevice"`) + permissions BLE à l'exécution + notification permanente. Pas de vraie logique BLE (GATT). | 15 % (US-109 fait ; US-213/214/215 restent) | [android-app](modules/android-app.md) |
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
-| Dashboard `api` | FastAPI + SQLite + SSE (A-5) | — | 0 % | — |
+| Dashboard `api` | FastAPI + SQLite + SSE (A-5) | squelette : `/healthz` + `/ingest/batch` permissif, migrations, 8 tests (US-110, PR #59) | ~10 % | [dashboard-api](modules/dashboard-api.md) |
 | Dashboard `web` | page légère + SSE (A-5) | — | 0 % | — |
 | Contrats (`contracts/`) | schémas d'événements + fixtures golden | — | 0 % | — |
 | Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | — | 0 % | — |

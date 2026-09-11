@@ -28,6 +28,30 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-09 — Dashboard : migrations en littéral Python, pas en fichiers `.sql`
+
+- **Prévu :** l'issue #10 (US-110) demande une « migration SQLite initiale
+  **versionnée** ». Le premier jet a suivi le pattern classique : un dossier
+  `dashboard/api/migrations/` avec `0001_initial.sql`, lu et exécuté au
+  démarrage.
+- **Réel :** les migrations sont une liste `(version, nom, sql)` dans
+  `dashboard/api/app/migrations.py`, où `sql` est un littéral de chaîne. `db.py`
+  itère cette liste. Plus de dossier `migrations/`.
+- **Raison :** SonarCloud (`pythonsecurity:S3649`, **BLOCKER**, gate de sécurité
+  du nouveau code) flaggait le chemin `Path.read_text()` → `executescript()`
+  comme « SQL construit depuis une donnée contrôlée par l'utilisateur ». C'est
+  un faux positif — la donnée est un fichier versionné, pas de l'entrée
+  requête — mais corriger à la racine est ici plus propre qu'une suppression
+  `# NOSONAR` : un littéral de module est tout aussi versionné, n'ajoute aucune
+  dépendance au système de fichiers au déploiement, et supprime le motif que
+  l'analyseur (à raison, en général) surveille.
+- **Conséquences :** le mot « versionné » de l'AC reste satisfait (git + numéro
+  de version + table `schema_migrations`). Si le nombre de migrations grossit
+  au point de rendre un seul fichier Python pénible, repasser à des `.sql`
+  lus est un refactor localisé à `db.py` + `migrations.py`.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` ne prescrit pas
+  la forme des migrations, seulement le schéma cible (§11.2).
+
 ### 2026-09-09 — Protection de `main` : un seul check requis (`core`) au lieu de quatre
 
 - **Prévu :** l'issue #13 (US-113) et
