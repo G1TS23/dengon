@@ -27,6 +27,9 @@ note d'onboarding de son area (proposition d'organisation §10.3 point 3).
 | `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | esquisse | 2026-09-09 |
 | `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-10 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
+| `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
 
 Pas encore de fiche (le composant n'existe pas) : application Android, firmware
 `dengon-relay`, dashboard `web`.
+Pas encore de fiche (le composant n'existe pas) : firmware `dengon-relay`,
+dashboard `api` et `web`.

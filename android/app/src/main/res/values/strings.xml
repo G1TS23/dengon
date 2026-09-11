@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">dengon</string>
+    <string name="mesh_notification_channel_name">Maillage dengon</string>
+    <string name="mesh_notification_title">dengon actif</string>
+    <string name="mesh_notification_text">Relais du réseau maillé en cours…</string>
+    <string name="permissions_rationale_title">Permissions Bluetooth requises</string>
+    <string name="permissions_rationale_body">dengon a besoin des permissions Bluetooth (et de localisation sur les anciennes versions d\'Android) pour découvrir les autres appareils et relayer les messages sans réseau.</string>
+    <string name="permissions_grant_button">Autoriser</string>
+    <string name="permissions_denied">Permissions refusées : le maillage BLE ne peut pas démarrer.</string>
+    <string name="mesh_status_running">Service de fond : actif</string>
+    <string name="mesh_status_stopped">Service de fond : arrêté</string>
+</resources>
