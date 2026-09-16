@@ -31,6 +31,22 @@
 //! coupure brutale demande de couper l'alimentation d'une carte : aucun
 //! bouchon ne le simule honnêtement.
 //!
+//! # Ce que la suite ne vérifie pas
+//!
+//! Des **5 règles** de déconnexion brutale écrites sur [`Transport`], la suite
+//! en couvre 4 : les points 1, 4 et 5 par
+//! [`cas_deconnexion_brutale`], le point 2 par
+//! [`cas_trame_recue_avant_coupure_est_livree`].
+//!
+//! Le **point 3** — jeter silencieusement les trames *partielles*, dont la
+//! fragmentation BLE n'est pas terminée — n'a **aucun cas**, et c'est
+//! délibéré : [`MockTransport`](crate::MockTransport) n'a pas de fragmentation
+//! BLE du tout. Ajouter au [`BancDEssai`] une méthode « injecter un fragment
+//! incomplet » obligerait chaque plateforme à l'implémenter pour un cas que le
+//! bouchon ne pourrait honorer qu'en ne faisant rien — un test vert qui ne
+//! prouverait rien. La règle est donc à vérifier par les bancs d'essai
+//! **matériels** d'US-213, US-220 et US-303, là où de vrais fragments existent.
+//!
 //! # Comment l'utiliser
 //!
 //! Une implémentation fournit un [`BancDEssai`] : la suite ne sait pas
@@ -230,6 +246,12 @@ pub fn cas_broadcast_sans_pair_reussit<B: BancDEssai>(banc: &mut B) {
 /// Vérifie les points 1, 4 et 5 du contrat écrit sur [`Transport`] :
 /// un `PeerDisconnected` portant [`DisconnectReason::Brutale`], puis un `send`
 /// qui échoue proprement, puis plus aucun événement sur ce lien.
+///
+/// Le point 2 est vérifié à part, par
+/// [`cas_trame_recue_avant_coupure_est_livree`] : il demande une trame injectée
+/// *avant* la coupure, ce qui ne se compose pas avec la vérification « plus
+/// aucun événement » faite ici. Le point 3 n'est couvert par aucun cas, voir
+/// la [documentation du module](self#portée-réelle).
 pub fn cas_deconnexion_brutale<B: BancDEssai>(banc: &mut B) {
     let mut t = demarre(banc);
     let lien = banc.connecter_un_pair(&mut t);
@@ -264,6 +286,59 @@ pub fn cas_deconnexion_brutale<B: BancDEssai>(banc: &mut B) {
     assert!(
         !fantome,
         "conformité : plus aucun événement ne doit porter un LinkId fermé"
+    );
+}
+
+/// **Point 2 du contrat** : une trame reçue avant la coupure est livrée quand
+/// même, et **avant** l'événement de fermeture.
+///
+/// C'est la règle la plus facile à rater en silence : une pile BLE dont le
+/// callback de déconnexion purge sa file de réception avant de la vider vers
+/// [`Transport::poll`] perd un message que le réseau a déjà transporté, sans
+/// jamais le signaler. La trame était complète et valide — la jeter perd un
+/// message que le maillage avait déjà acheminé.
+///
+/// # Panics
+///
+/// Si la trame est absente du lot rendu par `poll`, ou si elle y arrive après
+/// le `PeerDisconnected`.
+pub fn cas_trame_recue_avant_coupure_est_livree<B: BancDEssai>(banc: &mut B) {
+    let mut t = demarre(banc);
+    let lien = banc.connecter_un_pair(&mut t);
+    let _ = t.poll();
+
+    let charge = b"avant-la-coupure".to_vec();
+    banc.faire_recevoir(&mut t, lien, &charge);
+    banc.couper(&mut t, lien, DisconnectReason::Brutale);
+
+    let evenements = t.poll();
+    let rang_trame = evenements.iter().position(|e| {
+        matches!(
+            e,
+            TransportEvent::FrameReceived { peer_link_id, ref bytes }
+                if *peer_link_id == lien && *bytes == charge
+        )
+    });
+    let rang_fermeture = evenements.iter().position(|e| {
+        matches!(
+            e,
+            TransportEvent::PeerDisconnected { peer_link_id, .. } if *peer_link_id == lien
+        )
+    });
+
+    let Some(rang_trame) = rang_trame else {
+        panic!(
+            "conformité : une trame reçue avant la coupure ne doit pas être perdue — \
+             elle était complète et valide"
+        );
+    };
+    let Some(rang_fermeture) = rang_fermeture else {
+        panic!("conformité : une coupure brutale doit produire un PeerDisconnected");
+    };
+    assert!(
+        rang_trame < rang_fermeture,
+        "conformité : la trame reçue avant la coupure doit être livrée *avant* \
+         l'événement de fermeture du lien"
     );
 }
 
@@ -324,6 +399,7 @@ pub fn suite_complete<B: BancDEssai>(banc: &mut B) {
     cas_envoi_vers_un_pair_connecte_reussit(banc);
     cas_broadcast_sans_pair_reussit(banc);
     cas_deconnexion_brutale(banc);
+    cas_trame_recue_avant_coupure_est_livree(banc);
     cas_deconnexion_propre_est_distinguee(banc);
     cas_link_id_jamais_reutilise(banc);
 }

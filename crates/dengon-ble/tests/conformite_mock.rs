@@ -11,7 +11,8 @@
 //! depuis d'autres crates.
 
 use dengon_ble::conformance::{
-    cas_deconnexion_brutale, cas_link_id_jamais_reutilise, suite_complete, BancDEssai,
+    cas_deconnexion_brutale, cas_link_id_jamais_reutilise,
+    cas_trame_recue_avant_coupure_est_livree, suite_complete, BancDEssai,
 };
 use dengon_ble::{DisconnectReason, LinkId, MockTransport};
 
@@ -43,7 +44,7 @@ fn mock_transport_passe_toute_la_suite() {
     suite_complete(&mut BancMock);
 }
 
-// Les deux cas les plus structurants sont aussi appelés seuls : quand la suite
+// Les trois cas les plus structurants sont aussi appelés seuls : quand la suite
 // complète échoue, on veut voir lequel casse sans lire la trace.
 
 #[test]
@@ -54,4 +55,9 @@ fn mock_transport_respecte_le_contrat_de_deconnexion_brutale() {
 #[test]
 fn mock_transport_ne_reutilise_jamais_un_link_id() {
     cas_link_id_jamais_reutilise(&mut BancMock);
+}
+
+#[test]
+fn mock_transport_livre_les_trames_recues_avant_la_coupure() {
+    cas_trame_recue_avant_coupure_est_livree(&mut BancMock);
 }

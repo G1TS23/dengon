@@ -2,7 +2,7 @@
 
 **Rôle en une phrase :** la couche qui cache la radio Bluetooth au reste du programme.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §3.
-**Dernière mise à jour :** 2026-09-11
+**Dernière mise à jour :** 2026-09-16
 **État :** **contrat livré et gelé** (US-105) ; aucune implémentation radio.
 
 ## À quoi ça sert
@@ -42,8 +42,8 @@ dengon-ble/
 | `DisconnectReason` | `src/transport.rs:146` | `Propre` / `Brutale` / `Locale`. **Ajout par rapport à la conception.** |
 | `TransportError` | `src/transport.rs:204` | 6 variantes, `Display` en français, implémente `std::error::Error`. |
 | `MockTransport` | `src/mock.rs:57` | Bouchon : implémente `Transport` **et** expose des méthodes de pilotage. |
-| `trait BancDEssai` | `src/conformance.rs:67` | Ce qu'une implémentation fournit pour être testée. |
-| `suite_complete()` | `src/conformance.rs:307` | Lance les 11 cas de conformité. |
+| `trait BancDEssai` | `src/conformance.rs:93` | Ce qu'une implémentation fournit pour être testée. |
+| `suite_complete()` | `src/conformance.rs:392` | Lance les 12 cas de conformité. |
 
 ## Flux principal (exemple)
 
@@ -104,14 +104,31 @@ et remplit la file en arrière-plan.
 
 - `src/transport.rs` : 5 tests (affichage, valeurs par défaut, messages d'erreur).
 - `src/mock.rs` : 13 tests (cycle de vie, quota, taille max, unicité du `LinkId`).
-- `tests/conformite_mock.rs` : la suite complète + 2 cas isolés.
+- `tests/conformite_mock.rs` : la suite complète + 3 cas isolés.
 - 2 doctests (`MockTransport`, `conformance`) — ils servent d'exemple copiable.
-- Commande : `cargo test --workspace` → **31 passés, 0 échec** ; `--doc` → 2 passés.
+- Commande : `cargo test --workspace --all-features --locked` → **32 passés,
+  0 échec** (30 unitaires/intégration + 2 doctests).
 
-**Ce que les tests ne prouvent pas :** aucune radio n'est touchée. Toute la
-conformité est vérifiée contre un bouchon qui, par construction, respecte le
-contrat — c'est utile pour figer l'énoncé, ça ne dit rien du comportement de
-`btleplug` ou de NimBLE.
+**Couverture du contrat de déconnexion brutale.** Le rustdoc de `Transport`
+énonce **5 règles**. La suite en couvre 4 :
+
+| Règle | Cas de conformité |
+|---|---|
+| 1 — un `PeerDisconnected { Brutale }` | `cas_deconnexion_brutale` |
+| 2 — livrer d'abord les trames déjà reçues | `cas_trame_recue_avant_coupure_est_livree` |
+| 3 — jeter les fragments partiels | **aucun** (voir ci-dessous) |
+| 4 — `send` ultérieur → `UnknownPeer` | `cas_deconnexion_brutale` |
+| 5 — plus aucun événement sur ce lien | `cas_deconnexion_brutale` |
+
+**Ce que les tests ne prouvent pas :**
+
+- **La règle 3 n'est vérifiée nulle part**, et c'est assumé : `MockTransport`
+  n'a aucune fragmentation BLE, donc un cas de conformité sur lui ne testerait
+  rien. Elle revient aux bancs d'essai **matériels** d'US-213, US-220 et
+  US-303.
+- **Aucune radio n'est touchée.** Toute la conformité est vérifiée contre un
+  bouchon qui, par construction, respecte le contrat — c'est utile pour figer
+  l'énoncé, ça ne dit rien du comportement de `btleplug` ou de NimBLE.
 
 ## Limites connues / TODO
 

@@ -12,6 +12,109 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ---
 
+## 2026-09-16 — Suite de conformité : la règle 2 de la déconnexion brutale n'était pas testée (revue PR #65)
+
+**Auteur :** Paul Claverie + Claude (Opus 5)
+**Périmètre :** `crates/dengon-ble/src/conformance.rs`,
+`crates/dengon-ble/tests/conformite_mock.rs`,
+`docs/suivi/modules/dengon-ble.md`, `docs/suivi/02-avancement.md`.
+**Lot :** Lot 1 — contrats (issue #5, US-105). Branche
+`feat/US-105-trait-transport`, suite de la revue `CHANGES_REQUESTED` de G1TS23
+sur la PR #65.
+
+### Fait
+- **Cas de conformité ajouté** : `cas_trame_recue_avant_coupure_est_livree`
+  (`conformance.rs`), enregistré dans `suite_complete()` et appelé seul dans
+  `tests/conformite_mock.rs` — 12 cas au lieu de 11, 32 tests au lieu de 31.
+- **Docstrings corrigés.** `cas_deconnexion_brutale` annonçait « Vérifie les
+  points 1, 4 et 5 » sans dire qui vérifiait le 2 : il renvoie maintenant
+  explicitement vers le nouveau cas. Nouvelle section « Ce que la suite ne
+  vérifie pas » dans le module doc de `conformance.rs`.
+- **`mock.rs` n'a pas été touché.** Le bouchon était déjà conforme :
+  `injecter_trame` et `couper_lien` poussent dans le même `Vec` `file` dans
+  l'ordre d'appel, et `poll()` fait un `mem::take`. Il manquait le test, pas le
+  comportement.
+
+### Pourquoi / décisions
+- **La revue avait raison, et le corps de la PR était faux.** Il affirmait que
+  la règle 2 (« livrer d'abord les trames déjà reçues ») était « vérifié par
+  `cas_deconnexion_brutale` », alors que le docstring de ce cas disait lui-même
+  le contraire. Sur les 5 règles du contrat de déconnexion brutale, c'était la
+  seule sans aucune couverture — et celle qu'une vraie pile BLE a le plus de
+  chances de rater en silence.
+- **Assertion d'ordre, plus stricte que la suggestion de la revue.** Le snippet
+  proposé vérifiait seulement que la trame est *présente* dans le `poll()`. Le
+  contrat dit « livrer **d'abord** » : on vérifie donc avec `position()` que le
+  `FrameReceived` précède le `PeerDisconnected`. `TransportEvent` garantit déjà
+  l'ordre par lien, l'assertion ne demande rien de neuf au contrat.
+- **Cas séparé plutôt que fondu dans `cas_deconnexion_brutale`.** Les deux ne se
+  composent pas : le cas central finit par vérifier « plus aucun événement sur
+  ce lien », ce qui contredit une trame injectée avant la coupure. Et séparé, il
+  est appelable seul pour déboguer, comme les deux autres cas structurants.
+- **La règle 3 (jeter les fragments partiels) reste non couverte, volontairement.**
+  La tester demanderait d'ajouter à `BancDEssai` une méthode « injecter un
+  fragment incomplet » que chaque plateforme devrait implémenter, pour un cas que
+  `MockTransport` ne pourrait honorer qu'en ne faisant rien — il n'a aucune
+  fragmentation BLE. Un test vert qui ne prouve rien est pire que pas de test :
+  c'est écrit dans le rustdoc et dans la fiche module, et la vérification revient
+  aux bancs d'essai matériels d'US-213 / US-220 / US-303.
+
+### Écarts vs conception
+- **Aucun nouveau.** On comble un trou de test, on ne s'écarte pas de
+  `04-architecture.md` §3. `03-ecarts-conception.md` est inchangé.
+
+### Appris
+- Un docstring qui **énumère les points qu'il vérifie** est une mesure de
+  couverture lisible à l'œil nu. Ici c'est lui qui a trahi le trou — le
+  reviewer n'a eu qu'à comparer « points 1, 4 et 5 » aux 5 règles du contrat.
+  Ajouté à `04-apprentissages.md`.
+
+### État après cette session
+- La suite de conformité couvre 4 des 5 règles de déconnexion brutale, et dit
+  laquelle manque. Le contrat n'est toujours **pas formellement gelé** : le
+  point d'équipe reste à faire (critère d'acceptation n°5 d'US-105, DoD §7.2).
+- Fiche(s) module mise(s) à jour : `modules/dengon-ble.md` (tableau de
+  couverture des 5 règles, compteurs de tests), `modules/_index.md`,
+  `02-avancement.md` (11 → 12 cas ; le pourcentage reste à 40 %, le périmètre
+  n'a pas bougé).
+- **Pas de commit, pas de push, pas de réponse à la revue** — demandé tel quel.
+  Le corps de la PR #65 contient donc toujours l'affirmation fausse
+  « Vérifié par `cas_deconnexion_brutale` », à corriger au moment de répondre.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                      OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+                                                                  0 avertissement
+$ cargo test --workspace --all-features --locked                  32 passés, 0 échec
+                                                                  (30 + 2 doctests ; 31 avant)
+$ cargo check -p dengon-core --no-default-features --locked        OK (no_std intacte)
+$ git diff --stat Cargo.lock                                       vide
+```
+
+**Falsification du nouveau cas** — un test de conformité qui ne peut pas rougir
+ne vaut rien. Deux sabotages temporaires de `mock.rs`, annulés ensuite :
+
+1. purge de la file de réception avant de pousser le `PeerDisconnected` (le bug
+   exact que la règle vise) → `cas_trame_recue_avant_coupure_est_livree`
+   **FAILED**, et `cas_deconnexion_brutale` reste **vert** : la démonstration
+   directe du trou signalé par la revue ;
+2. `PeerDisconnected` inséré en tête de file → l'assertion d'ordre **FAILED**
+   avec son propre message.
+
+**Non vérifié :**
+- **Cargo n'est pas installé sur ce poste** (ni `~/.cargo`, ni `~/.rustup`).
+  Tout a tourné dans un conteneur `rust:1.98.1-slim` — la version exacte de
+  `rust-toolchain.toml` — avec le dépôt monté et `CARGO_TARGET_DIR` hors du
+  dépôt. Ce n'est pas la CI, mais c'est la même toolchain.
+- **Couverture non mesurée** : `cargo-llvm-cov` n'est pas installé, c'est la CI
+  qui la rapporte.
+- **Toujours aucune radio touchée**, et la suite n'a toujours tourné contre
+  aucune implémentation réelle.
+
+
+---
+
 ## 2026-09-11 — `trait Transport`, `MockTransport` et suite de conformité (US-105)
 
 **Auteur :** Paul Claverie + Claude (Opus 5)
