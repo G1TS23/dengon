@@ -1,0 +1,20 @@
+{
+  "batch_id": "f2563a63ec5dfbe94ba443d2c6a7d6cb7f2e553a1674d39b4d2ee1941ddf4af7",
+  "node_id": "client-9c1d84",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "7e1aa1c983a4a71dd83b7ae58df0b0282491f1092af6dab24a6267375b625605",
+      "node_id": "client-9c1d84",
+      "node_kind": "client",
+      "seq": 5005,
+      "ts_ms": 1725800001000,
+      "name": "msg.delivered",
+      "payload": {
+        "msg_log_id": "1122334455667788",
+        "latency_ms": 880
+      }
+    }
+  ],
+  "sig": "FCiAtbH1GJwjC0Ez2vffbC3meUGPaZJ8ZUFqnNptIGK5pYd80xBV0n9aZchZFbDOIyVUzotZWXqnOqlIQHmoAg=="
+}

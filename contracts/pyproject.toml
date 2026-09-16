@@ -1,0 +1,22 @@
+[project]
+name = "dengon-contracts"
+version = "0.1.0"
+description = "Contrats inter-composants dengon : schémas d'événements + fixtures golden (US-107)."
+requires-python = ">=3.11"
+dependencies = [
+    "jsonschema>=4.23",
+    "pynacl>=1.5",
+    "referencing>=0.35",
+]
+
+[dependency-groups]
+dev = ["ruff>=0.6"]
+
+[tool.ruff]
+# 120 : les fixtures et le catalogue sont des données denses ; forcer 100 les
+# éclate en un pavé illisible.
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]

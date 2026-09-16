@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dengon.local/contracts/events/batch.schema.json",
+  "title": "Corps de POST /ingest/batch",
+  "description": "Lot d'événements poussé par un nœud. Réf : docs/synthese/09 §9 (exemple de batch).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["batch_id", "node_id", "schema_version", "events", "sig"],
+  "properties": {
+    "batch_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64,
+      "description": "Identifiant du lot (hex SHA-256)."
+    },
+    "node_id": {
+      "$ref": "envelope.schema.json#/$defs/node_id",
+      "description": "Nœud émetteur du lot. Doit correspondre au node_id de chaque événement."
+    },
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Version du catalogue. Ajout de champ = rétrocompatible ; changement de sens = incrément."
+    },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "envelope.schema.json" }
+    },
+    "sig": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{86}==$",
+      "minLength": 88,
+      "maxLength": 88,
+      "description": "base64(Ed25519(canonical_json(batch privé du champ 'sig'))). 64 octets → 88 caractères base64. Voir CANONICAL.md."
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "batch_id": "4c510bea927448c93228599a0f793f556fb21c386a6906ae4c66ac1aa1025f37",
+  "node_id": "client-9c1d84",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "8b7e1988260d933cd82e226f0bff979e2de659e0a33d3610a2601617a74d1b1b",
+      "node_id": "client-9c1d84",
+      "node_kind": "client",
+      "seq": 5007,
+      "ts_ms": 1725800120000,
+      "name": "client.summary",
+      "payload": {
+        "msgs_sent": 4,
+        "msgs_recv": 2,
+        "peers_seen": 5,
+        "app_version": "0.1.0"
+      }
+    }
+  ],
+  "sig": "QIZLCPsppisBd0FUTnV1ZAgrwlFDRNo+Xki3zooBohvXaTqFcPfufvuukkhceInexXhveqDZ2dAYqLpqs28BBA=="
+}
