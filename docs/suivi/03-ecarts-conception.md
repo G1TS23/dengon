@@ -163,3 +163,34 @@ _(aucun écart pour l'instant)_
   crate n'a de binaire secondaire, et le mode d'échec est bruyant (le fichier
   manque, la compilation échoue) — contrairement à celui des clés, qui était
   silencieux.
+
+---
+
+### 2026-09-16 — US-112 : deux écarts vs `powl/09` omis du journal (retour de revue #66, point de Paul)
+
+- **Prévu :** [`docs/powl/09-data-model.md`](../powl/09-data-model.md) §1
+  annote `messages.body` d'un commentaire SQL `-- clair local uniquement`, et
+  ne distingue pas de traitement particulier pour `identity.priv_static` /
+  `identity.priv_sign` au-delà du type `BLOB`.
+- **Réel :** `06-securite.md` §5.1 (US-112) traite les deux différemment :
+  `messages.body` est reclassé **XChaCha20-Poly1305 champ par champ** (B-3),
+  le commentaire `powl/09` étant réinterprété comme décrivant le *contenu*
+  (texte déchiffré côté app) et non l'état de chiffrement au repos ; et
+  `identity.priv_static`/`priv_sign` sont classées **Keystore/Keychain**
+  (Android/iOS) plutôt que XChaCha20 — un traitement plus fort qu'un simple
+  `BLOB`.
+- **Raison :** B-3 (chiffrement champ par champ des données sensibles) est une
+  décision postérieure à `powl/09`, qui ne pouvait pas l'anticiper ; et les
+  clés privées d'identité justifient le coffre matériel de la plateforme
+  plutôt qu'un chiffrement logiciel générique — c'est *le* cas d'usage du
+  Keystore.
+- **Conséquences :** aucune régression — les deux reclassements sont des
+  renforcements, pas des affaiblissements, de ce que `powl/09` décrivait.
+  L'erreur signalée par Paul n'est pas dans le contenu de `06-securite.md`
+  (correct dès la PR initiale) mais dans **le journal** : les deux entrées du
+  2026-09-11 pour US-112 déclarent toutes deux « Écarts vs conception :
+  Aucun », alors que ces deux reclassements en sont, et auraient dû être
+  consignés ici dès leur rédaction plutôt que découverts en revue.
+- **Doc de conception mise à jour ?** non — `docs/powl/` reste inchangé par
+  convention (matière première figée) ; `06-securite.md` (le delta) portait
+  déjà la bonne information, seul le suivi (`00-journal.md`) était en faute.

@@ -10,6 +10,86 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-16 — US-112 : revue de POWLAIR sur la PR #66
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+`docs/suivi/03-ecarts-conception.md`
+**Lot :** US-112 (suite), Sprint 1
+
+### Fait
+- 6 points de @POWLAIR sur la PR #66, tous vérifiés avant correction :
+  1. **§3 conditionnel alors que PR #64 est mergée** (2026-09-11T12:48:04Z,
+     commit `b8fae88`) — le texte « en revue, pas encore mergée » et « à
+     figer sans conditionnel dès que la PR merge » (tête de fichier, §3, et
+     C-11 dans `00-contexte-global.md`) partaient tels quels sur `main`.
+     Corrigé : conditionnel retiré partout, renvoi vers
+     `docs/suivi/spikes/US-101-cross-compile-xtensa.md`. La ligne A-3/B-1
+     (`00-contexte-global.md:50`), aussi encore au conditionnel, corrigée au
+     passage (repérée par Paul comme « hors diff » mais même cause racine).
+  2. **« tels quels » contredit le spike** — le rapport répond OUI à deux
+     conditions (`snow` ≥ 0.10.0 ; le firmware doit fournir l'aléa via un
+     `CryptoResolver` sur `esp_fill_random()`, `getrandom` étant indisponible
+     sur xtensa), §3 ne reprenait que la première. Corrigé : les deux
+     conditions citées, la seconde (qualité de l'aléa d'un handshake Noise)
+     étant la seule qui relève vraiment d'un doc sécurité.
+  3. **Ancre cassée** (`06-securite.md:9`) — le lien vers D-1 pointait
+     `#d-1-...-clés-brutes-ou-empreintes` alors que le slug GitHub réel du
+     titre `### D-1. Entrée du code de vérification : clés brutes ou
+     empreintes ?` porte un double tiret (le `:` du titre) et un tiret final
+     (le `?`) : `#d-1-...-vérification--clés-brutes-ou-empreintes-`. Corrigé
+     avec le slug exact fourni par Paul.
+  4. **§5.1 : 3 des 4 colonnes de `noise_sessions` non classées** — seule
+     `state` figurait, `peer_id`/`established_ms`/`tx_count` manquaient
+     (et `identity.id`, colonne fixe non listée non plus). Ajoutés en
+     « clair » avec justification, cohérent avec le patron des autres tables.
+  5. **`gossip_cache.packet` classé « clair » alors que 3ᵉ cas de la
+     taxonomie du §5.1** — ce sont des paquets L3 relayés donc déjà scellés,
+     même raisonnement que `outbox.packet`/`held_envelopes.packet`. Reclassé
+     en « déjà chiffré (protocole) », `msg_id`/`cached_ms` restant en clair.
+  6. **Journal : « Écarts vs conception : Aucun » mais la PR revendique deux
+     divergences vs `powl/09`** (`-- clair local uniquement` sur
+     `messages.body` superseded par B-3 ; `priv_static`/`priv_sign`
+     reclassés Keystore) — les deux entrées du 2026-09-11 pour US-112
+     disaient toutes deux « Aucun ». Le contenu de `06-securite.md` était
+     correct dès l'origine ; seul le suivi était en faute. Nouvelle entrée
+     ajoutée dans `03-ecarts-conception.md` (append-only : les deux entrées
+     du 11/09 ne sont pas modifiées, la nouvelle entrée les rectifie).
+
+### Pourquoi / décisions
+- **Deux corrections regroupées dans une seule entrée d'écart** (point 6)
+  plutôt que deux entrées séparées : même cause (US-112 antérieure à B-3),
+  même conséquence (rien à corriger dans le contenu, seulement dans le
+  journal) — les séparer aurait dupliqué le contexte sans clarifier.
+
+### Écarts vs conception
+- Voir `03-ecarts-conception.md`, entrée 2026-09-16 (rectification des deux
+  entrées du 2026-09-11 pour US-112).
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- PR #66 : les 6 points traités, vérifiés, commit + push à faire.
+- Pas de fiche module (US-112 reste un travail de documentation transverse).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 - <<'EOF'
+# résout chaque lien relatif de docs/synthese/06-securite.md vers un fichier réel
+EOF
+→ tous OK après merge de main (le lien vers docs/suivi/spikes/US-101-...
+  n'existait pas encore sur cette branche avant merge)
+$ gh pr view 64 --json state,mergedAt,mergeCommit
+→ state: MERGED, mergedAt: 2026-09-11T12:48:04Z, commit b8fae88
+```
+- Slug D-1 non vérifié par un outil (pas de renderer Markdown/GitHub local
+  disponible) — repris tel que calculé et fourni par Paul dans sa revue,
+  cohérent avec l'algorithme github-slugger documenté (minuscules, ponctuation
+  retirée hors espaces/tirets, espaces consécutifs → tirets consécutifs).
+
+---
+
 ## 2026-09-11 — US-112 : rectification après un commentaire manqué de POWLAIR
 
 **Auteur :** Claude (Sonnet 5)
