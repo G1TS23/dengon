@@ -5,9 +5,16 @@
 > [`01-sujets-a-trancher.md`](01-sujets-a-trancher.md).
 >
 > **`docs/powl/04-security.md` est la doc sécurité de référence** (décision
-> C-11). Il ne reste qu'un *delta* à rédiger (résultat du Spike A, mapping des
-> colonnes chiffrées, réconciliations `powl` D-1/D-2/D-4/D-5). Ce fichier
-> résume la conception retenue.
+> C-11). Ce fichier en est le **delta** (US-112) : réconciliations `powl`
+> [D-1](01-sujets-a-trancher.md#d-1-entrée-du-code-de-vérification--clés-brutes-ou-empreintes-)
+> (§2) et [D-2](01-sujets-a-trancher.md#d-2-définition-exacte-de-recipient_tag)
+> (§3) intégrées ci-dessous ; D-4/D-5 réconciliées dans
+> [`09-dashboard-et-donnees.md`](09-dashboard-et-donnees.md) (enums
+> `NODES.status` / `EVENTS.integrity`, hors périmètre sécurité) ; mapping des
+> colonnes chiffrées en §5. Résultat du Spike A intégré au §3
+> ([PR #64](https://github.com/G1TS23/dengon/pull/64), mergée le 2026-09-11,
+> commit `b8fae88`) — voir
+> [`docs/suivi/spikes/US-101-cross-compile-xtensa.md`](../suivi/spikes/US-101-cross-compile-xtensa.md).
 
 ---
 
@@ -85,10 +92,32 @@ bannière UI « la clé de X a changé — re-vérifiez » ; événement
 
 Cadre retenu : **Noise `XX`** (session live) + **Noise `X`** (enveloppes
 scellées) + **Ed25519** (signature de paquet), implémenté **une seule fois en
-Rust** dans `dengon-core::crypto` (A-3). Repli si le **Spike A** montre que
-`snow` ne cross-compile pas pour xtensa : isoler le handshake Noise `XX` de lien
-BLE derrière un `trait Crypto` implémenté en C avec mbedTLS **côté firmware
-seulement** ; `sha2` + `ed25519-dalek` restent en Rust partout (B-1).
+Rust** dans `dengon-core::crypto` (A-3), tranché tout court (B-1) — le repli
+« `trait Crypto` + mbedTLS côté firmware » envisagé avant le Spike A n'est pas
+activé ; conservé pour mémoire ci-dessous.
+
+**Résultat du Spike A** ([PR #64](https://github.com/G1TS23/dengon/pull/64),
+mergée le 2026-09-11, commit `b8fae88` ; détail complet dans
+[`docs/suivi/spikes/US-101-cross-compile-xtensa.md`](../suivi/spikes/US-101-cross-compile-xtensa.md)) :
+**OUI**, `protocol` + `crypto` (dont `snow`/Noise) cross-compilent pour
+`xtensa-esp32-none-elf`, **à deux conditions** :
+
+1. **`snow` ≥ 0.10.0**, pas `0.9.x`. La 0.9.6 dépend de `getrandom` 0.2 **en
+   dur** (`features = ["std", "getrandom"]`), qui n'a aucun backend pour cette
+   cible — échec de compilation. La 0.10.0 rend `getrandom` optionnel derrière
+   `use-getrandom` : à épingler explicitement au moment d'ajouter la crypto
+   (US-108).
+2. **Le firmware doit fournir lui-même l'aléa du handshake Noise.** Sans
+   `use-getrandom` (indisponible sur xtensa), `snow` 0.10 compile mais le
+   `DefaultResolver::resolve_rng()` renvoie `None` au runtime — un
+   `CryptoResolver` maison branché sur `esp_fill_random()` de l'ESP-IDF est
+   nécessaire (US-307). `esp_fill_random()` n'est un vrai TRNG que si le
+   Wi-Fi ou le Bluetooth est actif, ou après `bootloader_random_enable()` — à
+   vérifier en US-307.
+
+La seconde condition est la plus significative pour ce document : c'est elle
+qui porte sur la qualité de l'aléa d'un handshake Noise, donc sur la sécurité
+de la session — pas seulement une contrainte de build.
 
 **Session en direct — Noise `XX`** (`Noise_XX_25519_ChaChaPoly_SHA256`) :
 handshake 3 messages (`-> e` / `<- e, ee, s, es` / `-> s, se`) → 2 clés de
@@ -198,6 +227,39 @@ dépendance native supplémentaire** dans le build (SQLCipher ajouterait une lib
 réutilisable pour la NVS de l'ESP32**. Les métadonnées locales (horodatage,
 `peerID`, statut) restent en clair dans la base — le modèle de menace local est
 le vol d'appareil, ciblé sur le contenu et les clés.
+
+### 5.1 Mapping champ par champ (delta US-112)
+
+Colonne par colonne du schéma `dengon-core::store`
+([`powl/09-data-model.md` §1](../powl/09-data-model.md)), classées selon la
+règle ci-dessus. Trois cas, pas deux : une colonne peut aussi être **déjà**
+chiffrée par le protocole avant même d'atteindre la base (auquel cas un
+second chiffrement XChaCha20 n'apporterait rien — cf. `powl/04 §3.1-3.2`).
+
+| Table | Colonne | Traitement | Pourquoi |
+| --- | --- | --- | --- |
+| `identity` | `priv_static`, `priv_sign` | **Keystore/Keychain**, pas XChaCha20 | ce sont *les* clés privées visées par B-3 ; sur Android/iOS, le coffre matériel de la plateforme est strictement supérieur à un chiffrement logiciel. Sur ESP32, `identity` entier est en **NVS chiffrée** (`powl/09` « Adaptation ESP32 ») — la colonne SQLite ne s'applique pas à ce backend. |
+| `identity` | `id`, `peer_id`, `pub_static`, `pub_sign`, `pseudo`, `created_ms` | clair | `id` est une clé primaire fixe (`CHECK (id = 1)`, une seule ligne) sans valeur secrète ; le reste public par construction (diffusé dans `ANNOUNCE`/le QR) ou métadonnée non sensible. |
+| `contacts` | `peer_id`, `pub_static`, `pub_sign`, `pseudo`, `verified_at`, `first_seen_ms`, `last_seen_ms`, `key_changed_at`, `blocked` | clair | idem : identité publique du contact + métadonnées locales (§5 al. 2). |
+| `conversations` | toutes | clair | `conv_id` est un hash dérivé des `peer_id` (publics), pas du contenu ; pas de gain de confidentialité à le chiffrer face au modèle de menace (vol d'appareil — le propriétaire connaît déjà ses propres contacts). |
+| `messages` | `body` | **XChaCha20-Poly1305 champ par champ** | c'est *le* « contenu des messages » de B-3 — la colonne que ce delta existe pour trancher. Le commentaire `-- clair local uniquement` de `powl/09` décrit le *contenu* (texte déchiffré, par opposition au fil chiffré), pas l'état de la colonne SQLite : il est **superseded** par B-3, à lire comme « clair une fois déchiffré par l'app, jamais chiffré XChaCha20 sur le fil ». |
+| `messages` | `msg_uuid`, `conv_id`, `direction`, `author_peer_id`, `conv_seq`, `sent_ms`, `received_ms`, `status`, `status_ms`, `read_ms` | clair | métadonnées (§5 al. 2). |
+| `outbox` | `packet` | **déjà chiffré (protocole)**, pas de XChaCha20 supplémentaire | paquet L3 **encodé prêt à émettre** : pour `kind='session'` c'est déjà un `NOISE_MSG` (AEAD ChaCha20-Poly1305) ; pour `kind='envelope'` un `SEALED_ENVELOPE` (Noise `X`). Un second chiffrement XChaCha20 n'ajouterait rien contre le modèle de menace local (vol d'appareil), seulement du CPU. |
+| `outbox` | `msg_uuid`, `dest_peer_id`, `kind`, `attempts`, `first_sent_ms`, `last_sent_ms`, `expires_ms` | clair | métadonnées de file d'attente. |
+| `held_envelopes` | `packet` | **déjà chiffré (protocole)** | `SEALED_ENVELOPE` complet (Noise `X`) — même raisonnement que `outbox.packet`. |
+| `held_envelopes` | `msg_log_id`, `recipient_tag`, `epoch_day`, `copy_budget`, `deposit_ms`, `expires_ms` | clair | `recipient_tag` est **déjà** un tag anonyme tournant (§3) — le chiffrer localement n'apporterait rien, il n'est confidentiel qu'en transit face à un tiers, pas face au propriétaire de l'appareil qui l'a généré ou reçu. |
+| `seen_set` | toutes | clair | `msg_id` de déduplication, rien à protéger. |
+| `gossip_cache` | `packet` | **déjà chiffré (protocole)**, pas de XChaCha20 supplémentaire | paquet L3 relayé, déjà scellé — même raisonnement que `outbox.packet`/`held_envelopes.packet` (cf. lignes ci-dessus). Note : correspond aux `GOSSIP_*` (`0x06`-`0x08`), **v2** (`05-protocole-et-trame.md` §4, A-13) — remplacés par `INVENTORY` (`0x0D`) au MVP ; table probablement à retirer du schéma quand `store` sera implémenté (US-207). |
+| `gossip_cache` | `msg_id`, `cached_ms` | clair | clé de déduplication et métadonnée de cache. |
+| `noise_sessions` | `state` | **XChaCha20-Poly1305 champ par champ** | sérialisation `snow` d'une session Noise établie : contient les clés de transport symétriques en cours d'usage. Sensibilité proche d'une clé privée, mais une par contact et créée dynamiquement (contrairement à `identity`, qui est unique et statique) → mal adaptée à un Keystore (conçu pour peu de clés nommées, pas N blobs par pair) ; c'est exactement le cas d'usage du chiffrement champ par champ générique. |
+| `noise_sessions` | `peer_id`, `established_ms`, `tx_count` | clair | métadonnées de session (§5 al. 2) — `peer_id` est la clé primaire, public par construction. |
+| `ledger` | toutes | clair | entrées destinées à être **diffusées** (`LOG_ATTEST`) et vérifiées par des tiers (§4) ; `payload_json` ne contient jamais de contenu de message (`msgID` déjà haché, cf. `powl/04 §4.2`) — rien à protéger en confidentialité locale. |
+| `ship_cursor` | toutes | clair | curseur d'expédition, pas de donnée sensible. |
+
+**Gestion de la clé XChaCha20 elle-même** (dérivation, rotation) : hors
+périmètre de ce delta — décision d'implémentation de
+[US-207](https://github.com/G1TS23/dengon/issues/21) (`store` SQLite), qui
+consomme ce mapping comme contrat d'entrée.
 
 ## 6. Sécurité des relais ESP32
 
