@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Trois nœuds reliés : symbole simple du maillage. -->
+    <path
+        android:fillColor="#5AC8FA"
+        android:pathData="M54,24 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
+    <path
+        android:fillColor="#5AC8FA"
+        android:pathData="M30,74 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
+    <path
+        android:fillColor="#5AC8FA"
+        android:pathData="M78,74 m-10,0 a10,10 0 1,0 20,0 a10,10 0 1,0 -20,0" />
+    <path
+        android:strokeColor="#5AC8FA"
+        android:strokeWidth="4"
+        android:pathData="M54,24 L30,74 M54,24 L78,74 M30,74 L78,74" />
+</vector>
