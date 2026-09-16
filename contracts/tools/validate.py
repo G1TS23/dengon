@@ -48,6 +48,15 @@ def _is_hex16(value: object) -> bool:
     return isinstance(value, str) and len(value) == 16 and set(value) <= _HEX
 
 
+def _reject_non_finite(token: str) -> None:
+    # Passé à json.loads(parse_constant=...) : NaN/Infinity/-Infinity sont
+    # acceptés par le JSON de Python (extension non-standard) mais interdits
+    # par canonical_json() (allow_nan=False) — rejeter tôt, au chargement,
+    # plutôt que de laisser une fixture avec un NaN atteindre canonical_json()
+    # plus loin sans garde (retour de revue #60, round 3).
+    raise ValueError(f"constante JSON non finie interdite : {token}")
+
+
 def _batch_registry() -> Registry:
     reg = Registry()
     for schema_file in ("envelope.schema.json", "batch.schema.json"):
@@ -86,8 +95,12 @@ def _check_redaction(fx: str, body: dict) -> None:
 def _check_signature(fx: str, body: dict, verify_key: VerifyKey) -> None:
     unsigned = {k: v for k, v in body.items() if k != "sig"}
     try:
+        # TypeError : `sig` non-str (ex. `123`) — b64decode ne l'accepte pas.
+        # Sans ce guard, seul un `sig` absent (KeyError) ou mal encodé
+        # (ValueError) donnait un message propre ; un `sig` du mauvais type
+        # laissait passer une traceback brute (retour de revue #60, round 3).
         verify_key.verify(canonical_json(unsigned), base64.b64decode(body["sig"]))
-    except (BadSignatureError, KeyError, ValueError) as exc:
+    except (BadSignatureError, KeyError, ValueError, TypeError) as exc:
         fail(fx, f"signature invalide : {exc}")
 
 
@@ -137,8 +150,16 @@ def _valid_seq(seq: object) -> bool:
 
 
 def _check_event(
-    fx: str, body: dict, event: dict, payloads_validator: Draft202012Validator
+    fx: str, body: dict, event: object, payloads_validator: Draft202012Validator
 ) -> None:
+    if not isinstance(event, dict):
+        # `"events": ["x"]` — un élément non-objet fait planter le premier
+        # `.get()` avec une AttributeError avant l'impression du rapport
+        # (retour de revue #60, round 3). Déjà signalé par _check_schema
+        # (envelope.schema.json exige un objet par événement).
+        fail(fx, f"événement invalide ({type(event).__name__}), objet attendu")
+        return
+
     node_id = event.get("node_id")
     if node_id != body.get("node_id"):
         fail(fx, f"node_id de l'événement {event.get('seq')} ≠ node_id du batch")
@@ -202,8 +223,22 @@ def _check_schema_freshness() -> None:
         fail(GLOBAL, "events/payloads.schema.json est périmé — relancer build_fixtures.py")
 
 
-def _check_catalogue_coverage(bodies: list[dict]) -> set[str]:
-    covered = {e["name"] for body in bodies for e in body.get("events", [])}
+def _check_catalogue_coverage(bodies: list[dict | None]) -> set[str]:
+    # e.get("name") plutôt que e["name"] : un event sans "name", ou un
+    # élément d'"events" qui n'est pas un objet, faisait planter main() sur
+    # une KeyError/AttributeError avant même l'impression du rapport
+    # « ✗ N problème(s) » — déjà signalé ailleurs par _check_schema /
+    # _check_event, pas la peine de re-planter ici (retour de revue #60,
+    # round 3). `body is None` : fixture rejetée au chargement (NaN/Infinity),
+    # rien à compter dedans.
+    covered = {
+        e.get("name")
+        for body in bodies
+        if body is not None
+        for e in body.get("events", [])
+        if isinstance(e, dict)
+    }
+    covered.discard(None)
     missing = set(CATALOGUE) - covered
     if missing:
         fail(GLOBAL, f"catalogue non couvert : {sorted(missing)}")
@@ -230,9 +265,27 @@ def main() -> int:
     # Chaque fixture n'est lue qu'une fois (retour de revue #60, nit non
     # bloquant : avant, check_fixture, _check_catalogue_coverage et le
     # résumé final relisaient chacun les 20 fichiers, sans besoin).
-    bodies = [json.loads(path.read_text()) for path in fixtures]
+    #
+    # parse_constant lève sur NaN/Infinity/-Infinity : json.loads les accepte
+    # par défaut (extension non-standard), mais canonical_json() les refuse
+    # (allow_nan=False, CANONICAL.md). Sans ce garde, un NaN quelque part dans
+    # la fixture faisait planter le premier appel à canonical_json() — dans
+    # _check_signature avec un message trompeur (« signature invalide »,
+    # ValueError attrapée mais mal étiquetée), ou dans _check_batch_id où
+    # rien n'attrapait l'exception, tuant main() avant l'impression du
+    # rapport (retour de revue #60, round 3, même famille que les crashs des
+    # rounds précédents).
+    bodies: list[dict | None] = []
+    for path in fixtures:
+        try:
+            bodies.append(json.loads(path.read_text(), parse_constant=_reject_non_finite))
+        except ValueError as exc:
+            fail(path.name, f"JSON invalide : {exc}")
+            bodies.append(None)
 
     for path, body in zip(fixtures, bodies, strict=True):
+        if body is None:
+            continue
         check_fixture(path.name, body, batch_validator, payloads_validator, verify_key)
 
     _check_schema_freshness()

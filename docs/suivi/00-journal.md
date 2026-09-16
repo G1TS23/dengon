@@ -10,6 +10,92 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-16 — `contracts/events` : revue « round 3 » de POWLAIR sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{catalogue,validate}.py`, `contracts/events/envelope.schema.json`,
+`contracts/events/payloads.schema.json` (généré), `.github/workflows/contracts.yml`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- 5 points de @POWLAIR (revue « round 3 », 15/09 22:31), tous vérifiés avant
+  correction :
+  1. **`name` non contraint par aucun schéma** — un `name` hors catalogue
+     passait `envelope`, `batch` et `payloads.schema.json` (toutes les
+     clauses `if (name==X) then` d'un `allOf` sont vacuellement vraies pour
+     un `X` inconnu), seul le `CATALOGUE` Python le rejetait. Corrigé :
+     `payloads_json_schema()` ajoute `"properties": {"name": {"enum":
+     sorted(CATALOGUE)}}` à la racine. Reproduit : `"pkt.seeen"` (faute de
+     frappe) passait les 3 schémas avant, rejeté par `payloads.schema.json`
+     après.
+  2. **`prev_hash` absent de l'enveloppe stricte** — `integrity.chain_broken`
+     ne pouvait pas être dérivé, `synthese/09` en dépend pourtant. Ajouté en
+     `properties` (HEX64), **optionnel** (pas de producteur avant US-208, pas
+     de fixture ne le porte) — écart consigné.
+  3. **`NaN` fait planter l'outil** — `json.loads` accepte `NaN`/`Infinity`
+     par défaut, `canonical_json()` (`allow_nan=False`) les refuse. Corrigé :
+     chargement des fixtures avec `parse_constant` qui lève, capturé par
+     fixture → entrée d'`errors`, plus de traceback. Reproduit :
+     `ttl_in: NaN` tuait `main()` avant le fix (message trompeur côté
+     signature ou traceback nue selon le chemin), rapport propre après.
+  4. **`e["name"]` en accès direct → `KeyError`** dans
+     `_check_catalogue_coverage`, avant l'impression du rapport. Corrigé en
+     `e.get("name")` + filtre `isinstance(e, dict)`. Deux voisins signalés
+     dans le même commentaire, corrigés aussi : un élément non-objet dans
+     `"events"` (`AttributeError` dans `_check_event`, corrigé par un garde
+     `isinstance(event, dict)` en tête de fonction) et `sig` non-str
+     (`TypeError` non couverte dans `_check_signature`, ajoutée à la clause
+     d'exception).
+  5. **CI (`contracts.yml`) — filtre au niveau du trigger**, même piège que
+     `core.yml`/`dashboard.yml`. Corrigé : `dorny/paths-filter` + `if:` par
+     step.
+- Tous les crashs reproduits en mutant une copie de travail d'une fixture
+  réelle (jamais committée), confirmés absents avec le fix, fixture restaurée
+  (`git diff --stat` vide sur `events/fixtures/` à la fin).
+
+### Pourquoi / décisions
+- **`prev_hash` reste optionnel**, pas `required` : le rendre obligatoire
+  casserait le contrat sans qu'aucun producteur (US-208) n'existe encore pour
+  le remplir. La possibilité de transit est acquise, la vérification
+  bout-en-bout ne l'est pas — écart documenté plutôt que rendu required par
+  precaution.
+- **`name` fermé par `enum`, pas par une regex plus stricte** : une
+  comparaison de chaîne exacte contre le catalogue est plus forte qu'un motif
+  — elle referme aussi, incidemment, le trou `\n`-final resté ouvert sur
+  `name` depuis le round 2 (dette assumée, `03-ecarts-conception.md`).
+
+### Écarts vs conception
+- `prev_hash` optionnel — nouvelle entrée dans `03-ecarts-conception.md`
+  (2026-09-16).
+- Note ajoutée à l'entrée existante sur le piège `\n`-final : le trou côté
+  `name` est refermé par l'`enum`, celui côté `node_id` reste ouvert.
+
+### Appris
+- Rien de nouveau — même famille de bugs (validation défensive avant tout
+  calcul qui peut planter) que les rounds précédents, déjà consignée dans
+  `04-apprentissages.md`.
+
+### État après cette session
+- PR #60 : les 5 points traités, vérifiés, fixtures régénérées à l'identique
+  (aucun diff), commit + push + merge de `main` à faire.
+- Fiche module mise à jour : `modules/contracts-events.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run --no-build python tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+$ git diff --stat -- events/     # seuls envelope.schema.json et payloads.schema.json changent
+$ uv run --no-build ruff check .
+All checks passed!
+$ uv run --no-build python tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+```
+- Chaque bug (NaN, name inconnu, event non-objet, sig non-str, name absent)
+  reproduit en mutant `events/fixtures/01-pkt-seen.json` en place, confirmé
+  absent après restauration (`git diff` vide sur `fixtures/`).
+
+---
+
 ## 2026-09-11 — `contracts/events` : relecture approfondie d'OswinFreyr sur la PR #60 (round 2)
 
 **Auteur :** Claude (Sonnet 5)

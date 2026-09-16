@@ -29,11 +29,18 @@
     "name": {
       "type": "string",
       "pattern": "^[a-z]+\\.[a-z_]+$",
-      "description": "<domaine>.<action> en snake_case."
+      "description": "<domaine>.<action> en snake_case. Restreint au catalogue MVP par payloads.schema.json."
     },
     "payload": {
       "type": "object",
       "description": "Forme contrainte par le nom, voir payloads.schema.json."
+    },
+    "prev_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64,
+      "description": "event_id de l'événement précédent du même node_id (seq - 1). Optionnel : absent, `integrity.chain_broken` (synthese/09 §D-…) n'est pas dérivable pour ce nœud — écart assumé, voir 03-ecarts-conception.md. Présent, il porte le `got_prev` que synthese/09:235 attend, recalculable nulle part ailleurs que côté nœud."
     }
   },
   "$defs": {

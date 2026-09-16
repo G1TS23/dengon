@@ -299,5 +299,12 @@ def payloads_json_schema() -> dict:
         "title": "Contraintes de payload par nom d'événement (périmètre MVP)",
         "description": "Généré depuis contracts/tools/catalogue.py — ne pas éditer à la main.",
         "type": "object",
+        # Sans cette contrainte, aucune clause `if (name == X) then …` ne
+        # matche pour un `name` hors catalogue (ex. une faute de frappe) :
+        # toutes les branches sont vacuellement vraies, donc un name inconnu
+        # passe les trois schémas (envelope, batch, payloads) — seul le
+        # CATALOGUE Python le refuse, invérifiable par un consommateur C ou
+        # Python pur (retour de revue #60, round 3, point de Paul).
+        "properties": {"name": {"enum": sorted(CATALOGUE)}},
         "allOf": clauses,
     }

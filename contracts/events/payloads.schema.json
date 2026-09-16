@@ -4,6 +4,40 @@
   "title": "Contraintes de payload par nom d'événement (périmètre MVP)",
   "description": "Généré depuis contracts/tools/catalogue.py — ne pas éditer à la main.",
   "type": "object",
+  "properties": {
+    "name": {
+      "enum": [
+        "ack.observed",
+        "attest.emitted",
+        "attest.observed",
+        "client.summary",
+        "envelope.delivered",
+        "envelope.expired",
+        "envelope.handoff",
+        "envelope.offered",
+        "envelope.stored",
+        "msg.delivered",
+        "msg.expired",
+        "msg.handed_off",
+        "msg.queued",
+        "msg.received",
+        "peer.announce_seen",
+        "peer.connected",
+        "peer.disconnected",
+        "pkt.delivered_local",
+        "pkt.dropped",
+        "pkt.duplicate",
+        "pkt.rejected",
+        "pkt.relayed",
+        "pkt.seen",
+        "relay.boot",
+        "relay.health",
+        "relay.overloaded",
+        "relay.wifi_down",
+        "relay.wifi_up"
+      ]
+    }
+  },
   "allOf": [
     {
       "if": {

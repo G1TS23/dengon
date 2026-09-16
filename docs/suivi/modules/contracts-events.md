@@ -5,7 +5,7 @@ tête d'un événement d'observabilité, le corps de `POST /ingest/batch`, et
 20 exemples signés qui font référence pour tous les composants.
 **Correspond à la conception :** [`docs/powl/08-observability-events.md`](../../powl/08-observability-events.md),
 [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §9.
-**Dernière mise à jour :** 2026-09-11
+**Dernière mise à jour :** 2026-09-16
 **État :** fonctionnel — schémas + 20 fixtures + `validate.py` vert. **Contrat
 à geler** au point d'équipe (US-107).
 
@@ -143,16 +143,54 @@ tools/validate.py  (ce que lance la CI)
   neutres en langage — `minLength`/`maxLength` ferme le même trou sans ça.
   Les motifs **ouverts** (`node_id`, `name`) restent vulnérables : dette
   assumée, documentée dans `03-ecarts-conception.md`.
+- **`payloads_json_schema()` contraint `name` à `{"enum": sorted(CATALOGUE)}`**
+  à la racine du schéma généré : sans ça, un `name` hors catalogue ne matche
+  aucune clause `if (name == X) then …` (toutes vacuellement vraies), donc
+  passe les trois schémas — seul le `CATALOGUE` Python le refusait,
+  invérifiable par un consommateur non-Python (retour de revue #60, round 3).
+  Ferme aussi, en pratique, le trou `\n`-final resté ouvert sur `name` (note
+  ci-dessus) : l'`enum` compare des chaînes exactes, pas une regex.
+- **`prev_hash` (HEX64) ajouté à `envelope.schema.json`, optionnel** (retour
+  de revue #60, round 3) : sans lui, aucun consommateur ne pouvait le faire
+  transiter (`additionalProperties: false`), rendant `integrity.chain_broken`
+  indérivable pour de bon. Reste optionnel — aucune fixture ne le porte
+  encore (pas de producteur avant US-208) — écart consigné dans
+  `03-ecarts-conception.md`.
+- **`validate.py` charge les fixtures avec `parse_constant` qui lève sur
+  NaN/Infinity** (retour de revue #60, round 3) : `json.loads` les accepte
+  par défaut (extension non-standard), mais `canonical_json()` les refuse
+  (`allow_nan=False`). Sans ce garde, un `NaN` faisait planter le premier
+  appel à `canonical_json()` — dans `_check_signature` avec un message
+  trompeur (`ValueError` attrapée mais étiquetée « signature invalide »), ou
+  dans `_check_batch_id` où rien ne l'attrapait, tuant `main()` avant
+  l'impression du rapport.
+- **`_check_event` valide `isinstance(event, dict)` avant tout accès**
+  (retour de revue #60, round 3) : un élément non-objet dans `"events"`
+  (ex. `"events": ["x"]`) faisait planter le premier `.get()` avec une
+  `AttributeError`. Même famille que les gardes `seq`/`node_id`/`payload`
+  déjà en place.
+- **`_check_catalogue_coverage` utilise `e.get("name")`**, pas `e["name"]`
+  (retour de revue #60, round 3) : un event sans `name` faisait planter
+  `main()` sur une `KeyError` avant l'impression du rapport, alors que
+  `_check_event` avait déjà proprement signalé l'anomalie plus haut.
+- **`base64.b64decode` : `TypeError` ajoutée à la clause de `_check_signature`**
+  (retour de revue #60, round 3) : un `sig` du mauvais type (ex. un entier)
+  n'était couvert ni par `KeyError` (absent) ni par `ValueError` (mal
+  encodé).
+- **`.github/workflows/contracts.yml` : filtre de chemin déplacé du
+  déclencheur vers un `if:` de job** (`dorny/paths-filter`, retour de revue
+  #60, round 3) — même piège que `core.yml`/`dashboard.yml`.
 
 ## Tests
 
 - `tools/validate.py` **est** la suite de tests. `uv run python tools/validate.py`
-  → `✓ 20 fixtures valides — 28 noms d'événements couverts.` (2026-09-11).
+  → `✓ 20 fixtures valides — 28 noms d'événements couverts.` (2026-09-16).
 - Contrôles par fixture : schéma batch/enveloppe · redaction · **signature
   Ed25519** · **`batch_id` recalculé** · par événement : `node_id`/`event_id`
   cohérents (`seq` validé avant tout calcul), `msg_log_id` en 16 hex,
-  `payload` vs catalogue **et vs le `payloads.schema.json` livré**. Globaux :
-  fraîcheur du schéma généré, couverture du catalogue.
+  `payload` vs catalogue **et vs le `payloads.schema.json` livré** (name
+  compris — enum, pas seulement le lookup catalogue). Globaux : fraîcheur du
+  schéma généré, couverture du catalogue, aucune constante JSON non finie.
 - Négatif vérifié en local : `batch_id` trafiqué → rejet ; champ requis retiré
   d'un payload → rejet par le catalogue **et** par `payloads.schema.json` ;
   `seq` mis à `-1` puis à `2**64` dans une fixture → rapport propre, plus de
@@ -161,7 +199,15 @@ tools/validate.py  (ce que lance la CI)
   `payload` remplacé par une liste → rapport propre (`AttributeError`
   reproduite sans le fix) ; `msg_log_id` de 16 hex + `\n` final (17
   caractères) → rejeté par `minLength`/`maxLength` (passait le seul `pattern`
-  avant le fix, confirmé en isolant le regex Python).
+  avant le fix, confirmé en isolant le regex Python) ; `ttl_in: NaN` → rapport
+  propre citant « constante JSON non finie interdite » (traceback brute
+  reproduite sans le fix) ; `name` retypé en `"pkt.seeen"` (faute de frappe) →
+  rejeté par `payloads.schema.json` en plus du catalogue (passait le schéma
+  avant le fix) ; `name` retiré → rapport propre, plus de `KeyError` (reproduit
+  sans le fix) ; un élément non-objet ajouté à `events` → rapport propre, plus
+  d'`AttributeError` (reproduit sans le fix) ; `sig` retypé en entier →
+  rapport propre citant le `TypeError`, plus de traceback (reproduit sans le
+  fix).
 - CI : `.github/workflows/contracts.yml` (ruff + régénération stable + validate).
 
 ## Limites connues / TODO
@@ -173,6 +219,10 @@ tools/validate.py  (ce que lance la CI)
   besoin se confirme.
 - `catalogue.py` doit rester synchronisé à la main avec `docs/powl/08` — pas de
   vérification croisée automatique.
+- `prev_hash` peut transiter (`envelope.schema.json`) mais aucune fixture ne
+  le porte : `integrity.chain_broken` reste non exercé bout-en-bout tant
+  qu'US-208 (journal chaîné côté nœud) n'existe pas — voir
+  `03-ecarts-conception.md`, entrée 2026-09-16.
 
 ## Pour l'oral
 

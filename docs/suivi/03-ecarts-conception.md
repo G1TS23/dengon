@@ -267,3 +267,36 @@ _(aucun écart pour l'instant)_
 - **Condition de levée :** si `contracts/` gagne un jour un second
   consommateur non-Python qui a besoin d'une validation stricte de ces deux
   champs, ou si le motif `node_id` gagne une borne haute naturelle.
+- **Mise à jour 2026-09-16 (retour de revue #60, round 3) :** le trou côté
+  `name` est refermé, mais pas par ce mécanisme — `payloads_json_schema()`
+  contraint désormais `name` à `{"enum": sorted(CATALOGUE)}` (comparaison de
+  chaîne exacte, pas une regex). Un `name` avec un `\n` final, ou toute autre
+  valeur hors catalogue, échoue à l'égalité de chaîne peu importe la regex du
+  champ dans `envelope.schema.json`. Le trou décrit ci-dessus ne s'applique
+  donc plus qu'à `node_id`.
+
+---
+
+### 2026-09-16 — `prev_hash` ajouté à l'enveloppe, optionnel (US-107, retour de revue #60 round 3)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §D (`integrity.chain_broken`
+  → `{expected_prev, got_prev}`) et `:430` (colonne `events.prev_hash`)
+  supposent qu'un événement porte le hash de l'événement précédent du même
+  nœud.
+- **Réel :** `envelope.schema.json` était strict (`additionalProperties: false`)
+  sans déclarer `prev_hash` — aucun consommateur ne pouvait le faire
+  transiter. `prev_hash` (HEX64) a été ajouté aux `properties`, **sans** le
+  mettre dans `required` : optionnel.
+- **Raison :** fermer la possibilité de transit avant le gel du contrat plutôt
+  que de découvrir après coup qu'`integrity.chain_broken` est indérivable
+  pour de bon. Rester optionnel (au lieu de required) parce qu'aucun
+  producteur (`dengon-core`, US-208) n'existe encore pour le remplir, et
+  qu'aucune des 20 fixtures ne le porte — le rendre requis casserait le
+  contrat sans qu'un vrai producteur en bénéficie.
+- **Conséquences :** `chain_broken` reste **non exercé** par les fixtures
+  (`got_prev` n'apparaît dans aucun batch golden) — seule la possibilité de
+  transit est acquise, pas la vérification bout-en-bout. À revisiter quand
+  US-208 (journal chaîné côté nœud) existera : soit une 21ᵉ fixture porteuse
+  de `prev_hash`, soit le passage en `required`.
+- **Doc de conception mise à jour ?** non — `synthese/09` décrivait déjà ce
+  besoin, c'est le contrat qui le rattrape.
