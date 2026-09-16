@@ -48,13 +48,22 @@ fn is_rejected(raw: &[u8]) -> bool {
     if PacketType::from_u8(raw[1]).is_none() {
         return true; // type inconnu
     }
-    if raw[3] & Flags::RESERVED_MASK != 0 {
-        return true; // bit réservé posé
-    }
+    // Pas de rejet sur bit réservé : synthese/05:80 les dit ignorés à la
+    // réception (retour de revue #63, point de Paul — l'ancienne règle
+    // contredisait la spec et aurait jeté tout le trafic v1.1 le jour où un
+    // bit 5-7 serait attribué). `from_bits_truncate` les masque simplement.
     let flags = Flags::from_bits_truncate(raw[3]);
     let addressed = flags.contains(Flags::ADDRESSED);
     let hdr = header_len(addressed);
-    if raw.len() < hdr + 2 {
+    // hdr inclut DÉJÀ les 2 octets de payload_len (voir
+    // consts::tailles_den_tete_coherentes : 4 + 8 + PEER_ID_LEN + 2) : lire
+    // raw[hdr-2..hdr] demande raw.len() >= hdr, pas hdr + 2. L'ancien garde
+    // à `hdr + 2` rejetait à tort tout paquet valide avec payload_len ∈
+    // {0, 1}, et rendait les vecteurs reject "bad-version"/"unknown-type"
+    // (exactement `hdr` octets) attrapables par CETTE règle de longueur
+    // plutôt que par celle qui les nomme (retour de revue #63, point de
+    // Paul — vérifié en isolant chaque contrôle).
+    if raw.len() < hdr {
         return true; // tronqué avant payload_len
     }
     let plen = u16::from_be_bytes([raw[hdr - 2], raw[hdr - 1]]) as usize;
@@ -72,7 +81,10 @@ fn is_rejected(raw: &[u8]) -> bool {
 fn accept_vectors_are_structurally_consistent() {
     let doc: Value = serde_json::from_str(VECTORS_JSON).expect("JSON invalide");
     let accept = doc["accept"].as_array().expect("champ accept");
-    assert!(accept.len() >= 7, "au moins 7 vecteurs accept attendus");
+    // 8, pas 7 : "reserved-flag-set" a rejoint accept (retour de revue #63,
+    // point de Paul — un bit réservé posé est ignoré à la réception, pas un
+    // motif de rejet, synthese/05:80).
+    assert!(accept.len() >= 8, "au moins 8 vecteurs accept attendus");
 
     for v in accept {
         let name = v["name"].as_str().unwrap();
@@ -94,7 +106,13 @@ fn accept_vectors_are_structurally_consistent() {
         );
         assert_eq!(u64::from(raw[2]), e["ttl"].as_u64().unwrap(), "{name}: ttl");
 
-        assert_eq!(raw[3] & Flags::RESERVED_MASK, 0, "{name}: bit réservé posé");
+        // Le bit réservé brut n'est plus vérifié ici (retour de revue #63,
+        // point de Paul) : un accept vector peut légitimement le porter
+        // (voir "noise-msg-addressed-reserved-bit-ignored") puisque
+        // synthese/05:80 dit ces bits ignorés, pas rejetés — c'est
+        // `from_bits_truncate` juste en dessous qui les masque, et les
+        // assertions sur `flags`/`addressed`/`signed`/`fragment` valident
+        // que le masquage est correct.
         let flags = Flags::from_bits_truncate(raw[3]);
         assert_eq!(
             u64::from(flags.bits()),
@@ -117,11 +135,13 @@ fn accept_vectors_are_structurally_consistent() {
             "{name}: FRAGMENT"
         );
 
-        // Cohérence type ⇄ drapeaux (Fragment hérite → non testé).
-        if pt != PacketType::Fragment {
+        // Cohérence type ⇄ drapeaux. `is_addressed()` renvoie `None` pour
+        // Fragment (hérite du paquet transporté, synthese/05:123) — plus
+        // besoin de le court-circuiter ici avec un `if pt != Fragment`
+        // (retour de revue #63, point de Paul).
+        if let Some(expected_addressed) = pt.is_addressed() {
             assert_eq!(
-                addressed,
-                pt.is_addressed(),
+                addressed, expected_addressed,
                 "{name}: is_addressed() vs drapeau"
             );
         }
@@ -191,7 +211,7 @@ fn accept_vectors_are_structurally_consistent() {
 fn reject_vectors_each_violate_a_rule() {
     let doc: Value = serde_json::from_str(VECTORS_JSON).expect("JSON invalide");
     let reject = doc["reject"].as_array().expect("champ reject");
-    assert!(reject.len() >= 6, "au moins 6 vecteurs reject attendus");
+    assert!(reject.len() >= 5, "au moins 5 vecteurs reject attendus");
 
     for v in reject {
         let name = v["name"].as_str().unwrap();

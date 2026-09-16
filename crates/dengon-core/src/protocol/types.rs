@@ -100,7 +100,12 @@ impl PacketType {
                 | Self::SealedEnvelope
                 | Self::GossipFilter
                 | Self::GossipPull
-                | Self::GossipPush
+                // GOSSIP_PUSH : pas signé (synthese/05:122, colonne SIGNED =
+                // « non ») — son payload est une liste de paquets déjà
+                // signés individuellement, la ré-encapsulation n'a pas besoin
+                // d'une seconde signature. Retiré d'ici (retour de revue #63,
+                // point de Paul) : un pair conforme en v2 l'émettra sans
+                // SIGNED, et ce prédicat le rejetait à tort.
                 | Self::LogAttest
                 | Self::EnvelopeOffer
                 | Self::EnvelopeRequest
@@ -108,12 +113,20 @@ impl PacketType {
         )
     }
 
-    /// `true` si un paquet de ce type est **adressé** (`recipient_id` présent,
-    /// [`Flags::ADDRESSED`] posé). `docs/synthese/05` §4, colonne `ADDRESSED`.
-    /// [`PacketType::Fragment`] hérite du paquet qu'il transporte.
+    /// `true`/`false` si un paquet de ce type est **toujours** ou **jamais**
+    /// adressé (`recipient_id` présent, [`Flags::ADDRESSED`] posé) ;
+    /// `None` si ça dépend du paquet transporté. `docs/synthese/05` §4,
+    /// colonne `ADDRESSED`. [`PacketType::Fragment`] **hérite** de
+    /// l'adressage du paquet qu'il fragmente (`synthese/05:123` : « hérite »,
+    /// ni oui ni non) — `bool` ne peut pas représenter ce troisième cas ;
+    /// avant ce type, aucun appelant externe ne pouvait exprimer « hérite »
+    /// sans court-circuiter l'API (retour de revue #63, point de Paul).
     #[must_use]
-    pub const fn is_addressed(self) -> bool {
-        matches!(
+    pub const fn is_addressed(self) -> Option<bool> {
+        if matches!(self, Self::Fragment) {
+            return None;
+        }
+        Some(matches!(
             self,
             Self::NoiseHs
                 | Self::NoiseMsg
@@ -124,7 +137,7 @@ impl PacketType {
                 | Self::EnvelopeOffer
                 | Self::EnvelopeRequest
                 | Self::Inventory
-        )
+        ))
     }
 }
 
@@ -160,6 +173,21 @@ impl Flags {
         Self(bits & !Self::RESERVED_MASK)
     }
 
+    /// Depuis l'octet brut, **sans** filtrer les bits réservés.
+    ///
+    /// Aucun constructeur public ne pouvait poser un bit 5-7 avant celui-ci
+    /// (`empty()`, les constantes, `union`/`BitOr` et `from_bits_truncate()`
+    /// masquent tous `RESERVED_MASK`) : [`Self::has_reserved`] était donc
+    /// inatteignable depuis l'extérieur du module, un test devait lire
+    /// `raw[3] & Flags::RESERVED_MASK` à la place de l'API (retour de revue
+    /// #63, point de Paul). Réservé au diagnostic/observabilité — le décodage
+    /// normal (US-201) doit utiliser `from_bits_truncate` : `synthese/05:80`
+    /// dit ces bits **ignorés** à la réception, pas motif de rejet.
+    #[must_use]
+    pub const fn from_bits_raw(bits: u8) -> Self {
+        Self(bits)
+    }
+
     /// L'octet brut.
     #[must_use]
     pub const fn bits(self) -> u8 {
@@ -178,7 +206,15 @@ impl Flags {
         Self(self.0 | other.0)
     }
 
-    /// `true` si un bit réservé (5-7) est posé → paquet non conforme.
+    /// `true` si un bit réservé (5-7) est posé dans cette valeur.
+    ///
+    /// Utile pour du diagnostic/observabilité, **pas** pour rejeter un
+    /// paquet : `synthese/05:80` — « Champ "réservé" = 0 à l'émission,
+    /// **ignoré à la réception** ». Le jour où v1.1 attribue le bit 5, un
+    /// nœud v1.0 qui traiterait `has_reserved() == true` comme un rejet
+    /// jetterait 100 % du trafic v1.1 (retour de revue #63, point de Paul —
+    /// la doc précédente disait « → paquet non conforme », ce qui contredit
+    /// la spec).
     #[must_use]
     pub const fn has_reserved(self) -> bool {
         self.0 & Self::RESERVED_MASK != 0
@@ -236,11 +272,16 @@ impl Header {
     }
 
     /// Cohérence interne : la présence de `recipient_id` doit refléter
-    /// [`Flags::ADDRESSED`], et aucun bit réservé ne doit être posé.
+    /// [`Flags::ADDRESSED`].
+    ///
+    /// Ne vérifie **plus** l'absence de bits réservés (retour de revue #63,
+    /// point de Paul) : `synthese/05:80` les dit ignorés à la réception, pas
+    /// motif de rejet — les exiger à zéro ici aurait invalidé un `Header`
+    /// par ailleurs correct dès qu'un bit futur (v1.1) serait posé par un
+    /// pair plus récent.
     #[must_use]
     pub const fn flags_are_consistent(&self) -> bool {
-        !self.flags.has_reserved()
-            && self.recipient_id.is_some() == self.flags.contains(Flags::ADDRESSED)
+        self.recipient_id.is_some() == self.flags.contains(Flags::ADDRESSED)
     }
 }
 
@@ -339,7 +380,7 @@ mod tests {
     #[test]
     fn discriminants_contigus_0x01_a_0x0d() {
         for (i, t) in ALL_TYPES.iter().enumerate() {
-            assert_eq!(t.to_u8(), (i as u8) + 1);
+            assert_eq!(t.to_u8(), u8::try_from(i).unwrap() + 1);
         }
         assert_eq!(PacketType::Inventory.to_u8(), 0x0D);
     }
@@ -388,7 +429,12 @@ mod tests {
             Flags::from_bits_truncate(0b1110_0011),
             Flags::ADDRESSED | Flags::SIGNED
         );
-        assert!(Flags(0b0010_0000).has_reserved());
+        // from_bits_raw : seul constructeur public qui laisse passer un bit
+        // réservé (les autres masquent tous RESERVED_MASK) — has_reserved()
+        // était sinon inatteignable depuis l'extérieur du module (retour de
+        // revue #63, point de Paul).
+        assert!(Flags::from_bits_raw(0b0010_0000).has_reserved());
+        assert!(!Flags::from_bits_truncate(0b0010_0000).has_reserved());
     }
 
     #[test]
@@ -435,6 +481,27 @@ mod tests {
             payload_len: 0,
         };
         assert!(!bad.flags_are_consistent());
+    }
+
+    #[test]
+    fn bit_reserve_pose_n_invalide_plus_flags_are_consistent() {
+        // synthese/05:80 : bits réservés ignorés à la réception, pas motif
+        // de rejet. Un Header par ailleurs cohérent (ADDRESSED ⇔
+        // recipient_id) reste cohérent même avec un bit réservé posé —
+        // sinon un pair v1.1 futur verrait 100 % de son trafic jeté par un
+        // nœud v1.0 (retour de revue #63, point de Paul).
+        let header = Header {
+            version: PROTO_VERSION,
+            packet_type: PacketType::NoiseMsg,
+            ttl: 7,
+            flags: Flags::from_bits_raw(Flags::ADDRESSED.bits() | 0b0010_0000),
+            timestamp_ms: 1,
+            sender_id: [0; PEER_ID_LEN],
+            recipient_id: Some([1; PEER_ID_LEN]),
+            payload_len: 0,
+        };
+        assert!(header.flags.has_reserved());
+        assert!(header.flags_are_consistent());
     }
 
     #[test]

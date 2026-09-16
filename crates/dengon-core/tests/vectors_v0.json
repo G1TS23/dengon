@@ -6,9 +6,9 @@
   "accept": [
     {
       "name": "announce-broadcast-signed",
-      "note": "0x01 ANNOUNCE : jamais adresse, toujours signe, TTL bas (broadcast).",
-      "hex": "010102020000019100000000aaaaaaaaaaaaaaaa000401020304cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "expect": { "version": 1, "type": 1, "type_name": "Announce", "ttl": 2, "flags": 2, "addressed": false, "signed": true, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": null, "payload_len": 4, "payload": "01020304" }
+      "note": "0x01 ANNOUNCE : jamais adresse, toujours signe, RELAY_OK (relayable au moins 1 saut malgre TTL bas de broadcast, synthese/05 §6 - retour de revue #63, point de Paul).",
+      "hex": "0101020a0000019100000000aaaaaaaaaaaaaaaa000401020304cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expect": { "version": 1, "type": 1, "type_name": "Announce", "ttl": 2, "flags": 10, "addressed": false, "signed": true, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": null, "payload_len": 4, "payload": "01020304" }
     },
     {
       "name": "noise-msg-addressed",
@@ -42,15 +42,20 @@
     },
     {
       "name": "log-attest-broadcast-signed",
-      "note": "0x0A LOG_ATTEST : broadcast, toujours signe, TTL bas. payload = ledger_root(32) + height(8) + node_pub_sign(32).",
-      "hex": "010a03020000019100000000aaaaaaaaaaaaaaaa0048111111111111111111111111111111111111111111111111111111111111111100000000000000052222222222222222222222222222222222222222222222222222222222222222cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "expect": { "version": 1, "type": 10, "type_name": "LogAttest", "ttl": 3, "flags": 2, "addressed": false, "signed": true, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": null, "payload_len": 72, "payload": "111111111111111111111111111111111111111111111111111111111111111100000000000000052222222222222222222222222222222222222222222222222222222222222222" }
+      "note": "0x0A LOG_ATTEST : broadcast, toujours signe, RELAY_OK (relayable, synthese/05 §6 - retour de revue #63, point de Paul : sans ce bit, ce paquet mourrait au premier saut et n'atteindrait jamais le VPS). payload = ledger_root(32) + height(8) + node_pub_sign(32).",
+      "hex": "010a030a0000019100000000aaaaaaaaaaaaaaaa0048111111111111111111111111111111111111111111111111111111111111111100000000000000052222222222222222222222222222222222222222222222222222222222222222cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "expect": { "version": 1, "type": 10, "type_name": "LogAttest", "ttl": 3, "flags": 10, "addressed": false, "signed": true, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": null, "payload_len": 72, "payload": "111111111111111111111111111111111111111111111111111111111111111100000000000000052222222222222222222222222222222222222222222222222222222222222222" }
+    },
+    {
+      "name": "noise-msg-addressed-reserved-bit-ignored",
+      "note": "0x03 NOISE_MSG : bit reserve 5 (0x20) pose sur le fil en plus d'ADDRESSED+RELAY_OK. synthese/05:80 - ignore a la reception, pas motif de rejet (retour de revue #63, point de Paul : cet ex-vecteur reject contredisait la spec, qui promet la compatibilite ascendante avec un futur bit v1.1). flags attendus = 0x09, bit reserve masque.",
+      "hex": "010307290000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0000",
+      "expect": { "version": 1, "type": 3, "type_name": "NoiseMsg", "ttl": 7, "flags": 9, "addressed": true, "signed": false, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": "bbbbbbbbbbbbbbbb", "payload_len": 0, "payload": "" }
     }
   ],
   "reject": [
-    { "name": "bad-version", "hex": "020307090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0000", "reject": "version 0x02 != PROTO_VERSION (1)" },
-    { "name": "unknown-type", "hex": "010007090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0000", "reject": "type 0x00 : hors 0x01..0x0D" },
-    { "name": "reserved-flag-set", "hex": "010307290000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0000", "reject": "flags : bit reserve 5 pose (0x20)" },
+    { "name": "bad-version", "hex": "020307090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0002cafe", "reject": "version 0x02 != PROTO_VERSION (1)" },
+    { "name": "unknown-type", "hex": "010007090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb0002cafe", "reject": "type 0x00 : hors 0x01..0x0D" },
     { "name": "payload-len-mismatch", "hex": "010307090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb001001020304", "reject": "payload_len = 16 mais 4 octets de payload disponibles" },
     { "name": "truncated-header", "hex": "01030709000001910000", "reject": "en-tete tronque : 10 octets < 30 (paquet adresse)" },
     { "name": "signed-without-signature", "hex": "010102020000019100000000aaaaaaaaaaaaaaaa000401020304", "reject": "SIGNED pose mais paquet trop court pour 64 octets de signature" }

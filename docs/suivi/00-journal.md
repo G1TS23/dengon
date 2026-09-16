@@ -10,6 +10,94 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-16 — `protocol::{consts, types}` : revue de POWLAIR sur la PR #63 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/protocol/types.rs`,
+`crates/dengon-core/tests/{protocol_vectors.rs,vectors_v0.json}`, `Cargo.toml`
+**Lot :** Lot 0 — Fondations (issue #8, US-108). Branche `contract/US-108-protocol-types`.
+
+### Fait
+- 6 points de @POWLAIR, les 2 premiers marqués prioritaires avant le gel du
+  contrat, tous vérifiés avant correction :
+  1. **Garde de longueur fausse de 2 octets** dans `is_rejected()`
+     (`tests/protocol_vectors.rs`) — `HEADER_LEN_BROADCAST`/`_ADDRESSED`
+     incluent déjà les 2 octets de `payload_len`
+     (`tailles_den_tete_coherentes`), donc `raw.len() < hdr + 2` exigeait 2
+     octets de trop. Corrigé en `raw.len() < hdr`. Reproduit : la garde
+     buguée fait échouer `accept_vectors_are_structurally_consistent` sur un
+     paquet valide de `payload_len = 0` (confirmé après avoir ajouté un tel
+     vecteur pour le point 3, voir plus bas).
+  2. **`Flags::has_reserved()` inatteignable hors du module** — aucun
+     constructeur public ne pouvait poser un bit 5-7 (`empty()`, les
+     constantes, `union`/`from_bits_truncate` masquent tous
+     `RESERVED_MASK`). Ajouté `Flags::from_bits_raw(bits: u8) -> Self`, qui
+     préserve les bits verbatim (réservé au diagnostic — le décodage normal
+     reste `from_bits_truncate`).
+  3. **« bit réservé posé ⇒ rejet » contredit `synthese/05:80`** (« ignoré à
+     la réception »). `Header::flags_are_consistent()` ne vérifie plus
+     `!has_reserved()` ; `is_rejected()` (test) ne rejette plus sur ce bit.
+     Le vecteur `reject` `reserved-flag-set` est devenu un vecteur `accept`
+     (`noise-msg-addressed-reserved-bit-ignored`, flags bruts `0x29` →
+     masqués `0x09`). `accept`: 7→8, `reject`: 6→5 ; assertions de comptage
+     ajustées.
+  4. **`GossipPush` retiré de `is_always_signed()`** — `synthese/05:122` le
+     dit non signé (payload = paquets déjà signés individuellement).
+  5. **2 vecteurs broadcast non relayables** (`announce-broadcast-signed`,
+     `log-attest-broadcast-signed`) — `RELAY_OK` absent avec TTL 2-3,
+     incohérent avec `synthese/05:203`. Ajouté (`flags` `0x02`→`0x0a`).
+  6. **`is_addressed()` devient `Option<bool>`** (`None` = `Fragment`,
+     hérite de l'adressage du paquet transporté, `synthese/05:123`) — avant,
+     le test d'intégration court-circuitait `Fragment` avec un
+     `if pt != Fragment` pour contourner un `bool` qui ne pouvait pas
+     représenter ce troisième cas.
+- Activé `cast_possible_truncation`/`cast_sign_loss`/`cast_possible_wrap`
+  dans `[workspace.lints.clippy]` (`Cargo.toml`) : commentés « à activer avec
+  `protocol` (US-108) » — c'est cette US. Un seul site touché (`i as u8` dans
+  un test → `u8::try_from(i).unwrap()`).
+- 2 points « hors diff » de Paul **non traités cette session**, documentés
+  dans `modules/dengon-core.md` (Limites connues) : `timestamp_ms` des
+  vecteurs figé hors tolérance anti-rejeu, `expect.msg_id` absent. Décision :
+  relèvent du design du codec (US-201), pas d'un ajustement de constante —
+  mieux traités avec le décodeur qui en aura l'usage réel.
+
+### Pourquoi / décisions
+- **`has_reserved()` reste un diagnostic, pas retiré** : utile en
+  observabilité (`pkt.rejected`? à trancher en US-201), juste plus utilisé
+  pour rejeter — la doc du champ est corrigée pour ne plus prétendre le
+  contraire de la spec.
+- **`is_addressed()` en `Option<bool>` plutôt qu'un enum à 3 variantes** :
+  `Option` porte exactement la sémantique voulue (« connu » vs « hérite »)
+  sans ajouter de type.
+
+### Écarts vs conception
+- Aucun nouveau — les points 3-6 rapprochent le code de `synthese/05`, ils ne
+  s'en écartent pas.
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- PR #63 : les 6 points + l'activation des lints `cast_*` traités, vérifiés,
+  commit + push à faire.
+- Fiche module mise à jour : `modules/dengon-core.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                                exit 0
+$ cargo build --workspace --all-targets --locked                            exit 0
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   exit 0
+$ cargo check -p dengon-core --no-default-features --locked                 exit 0
+$ cargo test --workspace --all-features --locked
+  dengon-core (lib) : 15 passed ; protocol_vectors : 3 passed ; sœurs : OK
+$ cargo test --workspace --all-features --locked --doc                      exit 0
+```
+- Garde de longueur buguée réintroduite temporairement (`sed`) : confirmé que
+  `accept_vectors_are_structurally_consistent` échoue sur le nouveau vecteur
+  `noise-msg-addressed-reserved-bit-ignored` (30 octets, exactement `hdr`) —
+  exactement le « mirror bug » signalé par Paul (payload_len faible rejeté à
+  tort). Fichier restauré, retesté vert.
+
 ---
 
 ## 2026-09-10 — `protocol::{consts, types}` + vecteurs de conformité v0 (US-108)
