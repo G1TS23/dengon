@@ -302,6 +302,60 @@ la suite ne vérifie pas » du module doc, et le docstring de
 **Pour aller plus loin :** PR #65, revue de G1TS23 du 2026-09-11.
 
 ---
+### Cible « tier 3 » et `-Z build-std` — quand `core` n'est pas livré compilé
+
+**C'est quoi :** Rust classe ses cibles en 3 niveaux. Une cible **tier 3** est
+supportée par le compilateur mais **personne ne distribue de `core`/`alloc`
+précompilés** pour elle. Il faut donc les rebâtir depuis les sources à chaque
+projet, via `-Z build-std=core,alloc` — une option *nightly*.
+**Pourquoi dans dengon :** `xtensa-esp32-none-elf` est tier 3, et n'existe même
+pas dans le Rust amont : seul le **fork d'Espressif** (installé par `espup`) la
+connaît. D'où une toolchain `esp` séparée, en plus de la 1.98.1 figée par
+`rust-toolchain.toml`.
+**Piège / surprise :** `rustup target add xtensa-esp32-none-elf` ne marchera
+jamais sur la toolchain du dépôt — le message d'erreur ne dit pas qu'il faut un
+autre compilateur. Et `espup install` pèse **1,9 Go** : à prévoir dans la CI si
+on veut y compiler le firmware un jour.
+**Où c'est utilisé :** spike US-101 (crate jetable, hors dépôt) ; à reprendre en
+US-307. Voir [`spikes/US-101-cross-compile-xtensa.md`](spikes/US-101-cross-compile-xtensa.md) §3.
+**Pour aller plus loin :** <https://docs.esp-rs.org/book/>
+
+### Les features Cargo sont **additives** — on ne peut pas en retirer une
+
+**C'est quoi :** quand une crate A dépend de B avec `features = ["std"]`, aucun
+utilisateur de A ne peut désactiver ce `std`. Cargo *unifie* les features
+demandées par tout le graphe : elles ne peuvent que s'ajouter. `default-features
+= false` ne retire que les features **par défaut**, jamais celles explicitement
+demandées par une dépendance intermédiaire.
+**Pourquoi dans dengon :** c'est ce qui rend `snow` 0.9.6 **définitivement**
+incompatible `no_std` : son manifeste écrit `rand_core = { features = ["std",
+"getrandom"] }` en dur. Aucun réglage de notre côté n'y change quoi que ce soit.
+La 0.10.0 a dû rendre ces dépendances optionnelles pour que ça devienne possible.
+**Piège / surprise :** on perd facilement une heure à essayer des combinaisons de
+features avant de comprendre que la réponse est dans le `Cargo.toml` **de la
+dépendance**. Le réflexe qui fait gagner du temps : lire
+`~/.cargo/registry/src/*/<crate>-<version>/Cargo.toml` **avant** de tâtonner.
+**Où c'est utilisé :** [`spikes/US-101-cross-compile-xtensa.md`](spikes/US-101-cross-compile-xtensa.md) §5.
+
+### `no_std` : ce qui disparaît, et ce que le compilateur ne dira pas
+
+**C'est quoi :** sans système d'exploitation, la bibliothèque standard n'existe
+pas. Restent `core` (le langage) et, si on fournit un allocateur, `alloc`
+(`Vec`, `Box`, `String`). Il faut déclarer soi-même un `#[global_allocator]` et
+un `#[panic_handler]`.
+**Pourquoi dans dengon :** le relais ESP32 embarque `libdengon_core.a` en
+`no_std + alloc` (`docs/synthese/08-relais-esp32.md:71`), et `dengon-core` porte
+déjà le `#![cfg_attr(not(feature = "std"), no_std)]` posé par US-104.
+**Piège / surprise :** deux pièges non détectés par le compilateur.
+1. **Le code non appelé est élagué.** Déclarer une dépendance ne prouve rien : si
+   on ne l'appelle pas depuis un symbole exporté, l'archive ne la contient pas et
+   on croit avoir « compilé » du vide. Vérifier au `nm`.
+2. **L'aléa devient un problème d'exécution.** Sans OS, pas de `/dev/urandom` :
+   `getrandom` échoue *à la compilation* (tant mieux), mais une crate qui rend sa
+   source d'aléa optionnelle — comme `snow` 0.10 — **compile** puis échoue *au
+   runtime*. Le firmware doit fournir son propre RNG matériel.
+**Où c'est utilisé :** [`spikes/US-101-cross-compile-xtensa.md`](spikes/US-101-cross-compile-xtensa.md) §4-5.
+
 
 Sujets probables (d'après la conception) — à traiter quand on les rencontre :
 
@@ -318,3 +372,78 @@ Sujets probables (d'après la conception) — à traiter quand on les rencontre 
 - UniFFI : comment un cœur Rust est appelé depuis Kotlin.
 - TimescaleDB : hypertable, rétention, agrégats continus.
 - MQTT : QoS, topics, mTLS.
+
+### SonarCloud : Security Rating vs Security Hotspots Reviewed
+
+**C'est quoi :** deux conditions de Quality Gate distinctes. `Security
+Rating` = pire sévérité parmi les issues de type **Vulnerability**
+(bugs de sécurité avérés, ex. obfuscation désactivée, cleartext traffic
+ambigu, dépendances non verrouillées). `Security Hotspots Reviewed` = %
+de **Security Hotspots** (code sensible à trier manuellement, ex. usage de
+crypto, permissions) qui ont été revus — gate séparée.
+**Pourquoi dans dengon :** la PR #56 (squelette Android, US-109) a été
+bloquée par `Security Rating on New Code = C`. Chercher dans les
+Hotspots aurait été une perte de temps : il fallait l'onglet
+`Vulnerabilities` / filtre `types=VULNERABILITY` de l'API
+`/api/issues/search`.
+**Piège / surprise :** le nom de la gate ne dit pas explicitement
+« Vulnerabilities » — facile de confondre avec les Hotspots qui, eux,
+demandent une revue humaine plutôt qu'un vrai fix de code.
+**Où c'est utilisé :** `android/app/build.gradle.kts` (release
+`isMinifyEnabled`), `android/app/src/main/AndroidManifest.xml`
+(`usesCleartextTraffic`), `android/build.gradle.kts` (dependency locking).
+**Pour aller plus loin :** `https://sonarcloud.io/api/issues/search?componentKeys=<projet>&pullRequest=<n>&types=VULNERABILITY`.
+
+### Gradle : dependency locking vs dependency verification
+
+**C'est quoi :** deux mécanismes Gradle différents, souvent confondus.
+**Dependency locking** (`gradle.lockfile`, `resolutionStrategy
+.activateDependencyLocking()`) fige les versions **résolues** d'un
+sous-projet pour la reproductibilité (utile surtout avec des versions
+dynamiques, `1.+`). **Dependency verification**
+(`gradle/verification-metadata.xml`, `--write-verification-metadata`)
+enregistre des **checksums** de tout ce que Gradle télécharge, pour
+l'intégrité (détecter un artefact corrompu/remplacé) — et ça couvre aussi
+la résolution des **plugins**, que le locking ne touche pas.
+**Pourquoi dans dengon :** le `gradle.lockfile` de `:app` ne suffisait pas
+à faire disparaître `text:S8569` (Sonar) sur `android/build.gradle.kts` —
+c'est le fichier racine où sont déclarés les plugins (AGP, Kotlin), résolus
+*avant* que les blocs `subprojects{}` (et donc le locking) s'appliquent.
+**Piège / surprise :** les deux mécanismes ont des fichiers différents mais
+tous deux qualifiés de « lock file » en langage courant — la doc Sonar
+elle-même les traite comme équivalents (« gradle.lockfile **or**
+verification-metadata.xml ») alors qu'ils ne couvrent pas le même
+périmètre de résolution.
+**Où c'est utilisé :** `android/app/gradle.lockfile` (locking),
+`android/gradle/verification-metadata.xml` (verification, régénéré via
+`./gradlew --write-verification-metadata sha256 <tasks>`).
+**Pour aller plus loin :** doc Gradle « Verifying dependencies » et
+« Locking dependency versions ».
+
+### `--write-verification-metadata` n'échoue jamais — piège du cache chaud
+
+**C'est quoi :** en mode écriture (`./gradlew --write-verification-metadata
+sha256 <tasks>`), Gradle **enregistre** les checksums de ce qu'il résout
+pendant ce build précis, il ne **vérifie** rien. Si un artefact est déjà
+présent dans `~/.gradle/caches/modules-2` (résolu lors d'un run antérieur,
+avant l'ajout de la vérification), sa checksum peut manquer sans que la
+commande échoue ou avertisse.
+**Pourquoi dans dengon :** relevé en revue de la PR #56 —
+`gradle/verification-metadata.xml` ne contenait que le `.pom` de
+`org.junit:junit-bom` (5.9.2/5.9.3), pas le `.module` (Gradle Module
+Metadata, préféré par Gradle depuis la version 6 dès qu'il existe). Sur un
+clone frais où la vérification s'applique **réellement** (mode normal, pas
+`--write-verification-metadata`), le build échouait dès la configuration
+(`Dependency verification failed for configuration ':classpath'`) —
+invisible sur le poste où le fichier avait été généré, parce que ce
+`.module` y était déjà en cache.
+**Piège / surprise :** régénérer `verification-metadata.xml` « ça marche »
+localement ne prouve rien tant que le `GRADLE_USER_HOME` n'est pas
+repassé à froid — le seul test fiable est de vider
+`~/.gradle/caches/modules-2` (ou d'utiliser un `GRADLE_USER_HOME` vide)
+avant de régénérer, sinon le fichier peut être incomplet à l'insu de son
+auteur et casser seulement sur la machine de quelqu'un d'autre (ou la
+future CI).
+**Où c'est utilisé :** `android/gradle/verification-metadata.xml`.
+**Pour aller plus loin :** doc Gradle « Gradle Module Metadata » — pourquoi
+`.module` est préféré à `.pom` quand les deux sont publiés.

@@ -18,7 +18,7 @@
 | `dengon-sim` | simulateur multi-nœuds | squelette : lib + bin, graine fixe déclarée | 3 % | [dengon-sim](modules/dengon-sim.md) |
 | `dengon-verify` | binaire de vérif de journal chaîné (A-5 / B-5) | squelette : enum `Verdict` (Ok/Broken/Fork/Gap) | 3 % | [dengon-verify](modules/dengon-verify.md) |
 | `dengon-ffi` | bindings UniFFI | squelette : `lib` + `cdylib`, `version()` | 3 % | [dengon-ffi](modules/dengon-ffi.md) |
-| App Android | Kotlin + Compose | — | 0 % | — |
+| App Android | Kotlin + Compose | squelette : Compose + `MeshForegroundService` (`foregroundServiceType="connectedDevice"`) + permissions BLE à l'exécution + notification permanente. Pas de vraie logique BLE (GATT). | 15 % (US-109 fait ; US-213/214/215 restent) | [android-app](modules/android-app.md) |
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
 | Dashboard `api` | FastAPI + SQLite + SSE (A-5) | — | 0 % | — |
 | Dashboard `web` | page légère + SSE (A-5) | — | 0 % | — |
@@ -43,3 +43,4 @@
 | `.gitattributes` — `merge=union` sur les fichiers de suivi append | **présent** (US-115) | — |
 | GitGuardian + SonarCloud | applications GitHub installées, statut sur chaque PR | — |
 | Hook Conventional Commits | actif (`.githooks/commit-msg`) | — |
+| Toolchain Xtensa (`espup`, cible `xtensa-esp32-none-elf`) | validée par le **Spike A** le 10/09 : les briques crypto compilent en `no_std` — B-1 tranchée « tout en Rust » | [spikes/US-101](spikes/US-101-cross-compile-xtensa.md) |
