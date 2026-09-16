@@ -43,3 +43,4 @@
 | `.gitattributes` — `merge=union` sur les fichiers de suivi append | **présent** (US-115) | — |
 | GitGuardian + SonarCloud | applications GitHub installées, statut sur chaque PR | — |
 | Hook Conventional Commits | actif (`.githooks/commit-msg`) | — |
+| Toolchain Xtensa (`espup`, cible `xtensa-esp32-none-elf`) | validée par le **Spike A** le 10/09 : les briques crypto compilent en `no_std` — B-1 tranchée « tout en Rust » | [spikes/US-101](spikes/US-101-cross-compile-xtensa.md) |
