@@ -26,4 +26,17 @@ def db_path() -> Path:
 
 def max_batch_bytes() -> int:
     """Taille maximale acceptée pour le corps d'un ``POST /ingest/batch``."""
-    return int(os.environ.get(MAX_BATCH_BYTES_ENV_VAR, DEFAULT_MAX_BATCH_BYTES))
+    raw = os.environ.get(MAX_BATCH_BYTES_ENV_VAR)
+    if raw is None:
+        return DEFAULT_MAX_BATCH_BYTES
+    try:
+        return int(raw)
+    except ValueError as exc:
+        # Sans ce garde-fou, une valeur malformée (ex. "2MB") ne casse rien au
+        # démarrage : elle fait planter chaque POST /ingest/batch avec un 500,
+        # puisque max_batch_bytes() est relue à chaque requête (retour de
+        # revue #59, round 2). Échouer tout de suite et fort est plus lisible
+        # qu'un 500 par requête sans rapport apparent avec la config.
+        raise RuntimeError(
+            f"{MAX_BATCH_BYTES_ENV_VAR}={raw!r} n'est pas un entier valide"
+        ) from exc

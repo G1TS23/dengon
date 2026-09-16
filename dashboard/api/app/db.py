@@ -10,7 +10,11 @@ s'applique dans une transaction ``BEGIN IMMEDIATE`` (les instructions DDL *et*
 l'enregistrement dans ``schema_migrations`` réussissent ou échouent ensemble),
 et la présence de la version est revérifiée sous verrou — deux processus qui
 démarrent en même temps (``uvicorn --workers N``) n'appliquent pas la migration
-deux fois.
+deux fois. « Sûr » signifie : jamais appliquée deux fois, jamais à moitié
+appliquée — pas « démarre toujours ». Si le verrou reste tenu plus longtemps
+que ``busy_timeout`` (5 s), ``BEGIN IMMEDIATE`` lève ``sqlite3.OperationalError``
+et le worker échoue à démarrer plutôt que de continuer sur un état incertain ;
+la levée n'est pas rattrapée ici, volontairement (retour de revue #59, round 2).
 """
 
 from __future__ import annotations
@@ -75,7 +79,16 @@ def run_migrations(conn: sqlite3.Connection) -> list[int]:
 
         # BEGIN IMMEDIATE : prend le verrou d'écriture tout de suite, donc un
         # second processus attend ici puis reverra la version comme appliquée.
+        # Volontairement HORS du try/except ci-dessous : si le verrou n'est
+        # pas obtenu avant busy_timeout, aucune transaction n'est ouverte, donc
+        # rien à ROLLBACK — l'y inclure lèverait une seconde OperationalError
+        # ("no transaction is active") qui masquerait la vraie cause. Dans ce
+        # cas (verrou tenu > 5 s, deux workers démarrés en même temps par
+        # exemple), le worker échoue à démarrer plutôt que de continuer sur un
+        # état incertain — comportement voulu, pas un bug (retour de revue
+        # #59, round 2 : la levée n'était pas documentée comme volontaire).
         conn.execute("BEGIN IMMEDIATE")
+
         try:
             if version in _applied_versions(conn):  # revérification sous verrou
                 conn.execute("ROLLBACK")

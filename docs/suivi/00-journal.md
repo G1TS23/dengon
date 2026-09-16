@@ -10,6 +10,98 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-16 — `dashboard/api` : 8 points d'OswinFreyr (round 2) + 2 de POWLAIR sur la PR #59
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,db,config}.py`, `dashboard/api/tests/test_api.py`,
+`.github/workflows/dashboard.yml`, `docs/suivi/02-avancement.md`, `docs/suivi/modules/_index.md`
+**Lot :** US-110 (suite), Sprint 1
+
+### Fait
+- Les 5 points du round 1 (11/09) étaient déjà traités (commit `92813de`),
+  mais **8 nouveaux points d'@OswinFreyr** (revue du 11/09 13:09, jamais
+  traités depuis) et **2 points de @POWLAIR** (revue du 15/09 22:33) restaient
+  ouverts sur la PR #59 — signalés par Olivier, qui avait vu le commentaire de
+  Paul sans savoir où en était la PR.
+- Les 8 points d'Oswin, tous reproduits avant correction :
+  1. **CI** — `.github/workflows/dashboard.yml` filtrait par chemin au niveau
+     du déclencheur (`on.pull_request.paths`), même piège déjà corrigé sur
+     `core.yml`. Corrigé : filtre `dorny/paths-filter` + `if:` par step,
+     comme `core.yml`.
+  2. **`max_batch_bytes()` sans garde sur `int()`** — une valeur malformée de
+     `DENGON_DASHBOARD_MAX_BATCH_BYTES` (ex. `"2MB"`) faisait planter chaque
+     `POST /ingest/batch` en 500. Corrigé : `RuntimeError` explicite, appelée
+     une fois dans `lifespan` pour échouer au démarrage plutôt qu'au premier
+     appel. Reproduit : confirmé l'échec au démarrage avec le fix.
+  3. **`RecursionError` non rattrapée** sur JSON très imbriqué — reproduit en
+     isolant `json.loads` : il faut ~10000 niveaux (pas les 2000 suggérés)
+     pour ~20 Ko de corps. Ajoutée à la clause 400.
+  4. **`sqlite3.ProgrammingError` non rattrapée** — course `conn.close()` du
+     `lifespan` vs écriture en cours sur le threadpool. Reproduit en fermant
+     `app.state.db_conn` avant un POST (500 sans le fix, 503 avec). Ajoutée à
+     la clause 503.
+  5. **`BEGIN IMMEDIATE` hors try/except**, contredisant le docstring de
+     sûreté en concurrence de `db.py`. Choix : le laisser volontairement hors
+     du `try/except` de rollback (l'y inclure lèverait une seconde erreur
+     masquant la première) et corriger le docstring plutôt que d'avaler
+     l'erreur.
+  6. **Corps trop gros non vidé du flux** avant le 413 (fast-path
+     `Content-Length`) — risque de coupure de connexion keep-alive côté
+     uvicorn/h11. Corrigé : `async for _ in request.stream(): pass` avant de
+     lever.
+  7. **`docs/02-avancement.md`** annonçait 8 tests, il y en avait 16 (19
+     après cette session). Corrigé.
+  8. **`docs/modules/_index.md`** avait deux lignes « pas encore de fiche »
+     contradictoires entre elles et avec l'index au-dessus (Android et
+     dashboard-api ont déjà leur fiche). Fusionnées en une ligne correcte.
+- Les 2 points de Paul, tous les deux sur les tests eux-mêmes :
+  1. Les deux tests de taille passaient par httpx qui pose toujours
+     `Content-Length` : seul le fast-path était exercé, jamais la boucle de
+     comptage en flux (le cas malveillant réel — `Content-Length` absent ou
+     mensonger). Ajouté : un test avec un générateur en contenu, qui force
+     l'encodage chunked chez httpx (pas de `Content-Length`).
+  2. `test_concurrent_writes_are_not_lost` ne prouvait que l'unicité d'uuid4,
+     pas l'absence de perte réelle. Ajouté : un vrai `SELECT COUNT(*)` après
+     les 20 écritures concurrentes ; même vérification ajoutée au test de
+     rejet pour taille (aucune ligne stockée).
+
+### Pourquoi / décisions
+- **`max_batch_bytes()` reste relue à chaque requête** (pas de cache) même
+  après l'ajout de la validation au démarrage : l'appel dans `lifespan` ne
+  sert qu'à valider tôt, pas à figer la valeur — cohérent avec le choix
+  documenté de `config.py`.
+- **`BEGIN IMMEDIATE` reste hors du `try/except`** plutôt que d'ajouter un
+  `except OperationalError: raise` qui n'aurait rien changé au comportement
+  — corriger la documentation était le vrai correctif, pas le code.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (même famille de bugs — validation défensive avant tout
+  calcul qui peut planter — que la relecture round 2 de la PR #60, déjà
+  consignée dans `04-apprentissages.md`).
+
+### État après cette session
+- PR #59 : les 8+2 points traités, vérifiés, commit + push à faire.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour (19 tests).
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev ruff check .
+All checks passed!
+$ uv run --extra dev pytest -q
+19 passed
+```
+- Chaque bug (config malformée, RecursionError, ProgrammingError) reproduit
+  d'abord sans le fix (import direct / monkeypatch / fermeture manuelle de la
+  connexion), confirmé absent après.
+- YAML de `dashboard.yml` validé par un parse `pyyaml` (pas de run CI réel
+  local possible pour `dorny/paths-filter`, qui dépend de l'API GitHub Actions).
+
+---
+
 ## 2026-09-11 — `dashboard/api` : retours de revue d'OswinFreyr sur la PR #59
 
 **Auteur :** Claude (Sonnet 5)

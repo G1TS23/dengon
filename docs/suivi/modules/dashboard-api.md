@@ -4,7 +4,7 @@
 en HTTPS, et servir plus tard le parcours + l'état de chaque message.
 **Correspond à la conception :** [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §2 (architecture), §3 (ingestion), §11.2 (schéma cible).
-**Dernière mise à jour :** 2026-09-11
+**Dernière mise à jour :** 2026-09-16
 **État :** esquisse — squelette **permissif** (US-110). `/healthz` + `/ingest/batch`
 qui stocke le JSON brut. Aucune validation, aucune signature, aucune projection.
 
@@ -38,7 +38,7 @@ dashboard/api/
     main.py             — app FastAPI ; lifespan → migrations + connexion partagée ; routes /healthz et /ingest/batch
   tests/
     conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan
-    test_api.py          — 16 tests (voir plus bas)
+    test_api.py          — 19 tests (voir plus bas)
 ```
 
 ## Concepts / types importants
@@ -143,21 +143,62 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   de revue #59) : les deux réglaient le même délai (5000 ms = 5.0 s), un des
   deux était mort et aurait pu diverger silencieusement d'un futur
   changement de l'autre.
+- **`max_batch_bytes()` validée une fois au démarrage** (`lifespan`), en plus
+  d'être relue à chaque requête (retour de revue #59, round 2) : une valeur
+  malformée de `DENGON_DASHBOARD_MAX_BATCH_BYTES` (ex. `"2MB"`) échoue tout de
+  suite au démarrage plutôt que de faire planter chaque `POST /ingest/batch`
+  avec un 500 sans rapport apparent avec la config.
+- **`RecursionError` ajoutée à la clause d'exception 400** de `ingest_batch`
+  (retour de revue #59, round 2) : un JSON très imbriqué fait planter
+  `json.loads` par dépassement de la pile Python plutôt que de lever
+  `JSONDecodeError` — reproduit en local, il faut ~10000 niveaux (pas 2000)
+  pour un corps de ~20 Ko. Sans le fix : 500 brut au lieu du 400 attendu pour
+  un corps invalide.
+- **`sqlite3.ProgrammingError` ajoutée à la clause 503** (retour de revue
+  #59, round 2) : si `conn.close()` (arrêt du `lifespan`) entre en course
+  avec une écriture encore en cours sur le threadpool, SQLite lève
+  `ProgrammingError` ("Cannot operate on a closed database"), pas
+  `OperationalError` — reproduit en fermant `app.state.db_conn` avant un
+  `POST`.
+- **`BEGIN IMMEDIATE` des migrations volontairement hors du `try/except`
+  qui fait `ROLLBACK`** (retour de revue #59, round 2) : si le verrou n'est
+  pas obtenu avant `busy_timeout`, aucune transaction n'est ouverte — y
+  inclure `BEGIN IMMEDIATE` lèverait une seconde erreur ("no transaction is
+  active") qui masquerait la vraie cause. Le docstring du module est corrigé
+  en conséquence : « sûr » veut dire jamais appliquée deux fois / jamais à
+  moitié, pas « démarre toujours ».
+- **`_read_limited_body` vide le flux avant de lever `_BodyTooLarge`** sur le
+  fast-path `Content-Length` (retour de revue #59, round 2) : sans ça, le
+  corps trop volumineux reste non lu sur la connexion au moment du 413, ce
+  qui peut forcer uvicorn/h11 à couper la connexion keep-alive au lieu de
+  livrer la réponse proprement.
+- **`.github/workflows/dashboard.yml` : filtre de chemin déplacé du
+  déclencheur vers un `if:` de job** (`dorny/paths-filter`, retour de revue
+  #59, round 2) — même piège documenté et déjà corrigé pour `core.yml`
+  (`docs/suivi/03-ecarts-conception.md`) : un filtre `on.pull_request.paths`
+  empêche GitHub de créer un check du tout pour une PR hors `dashboard/**`,
+  qui resterait bloquée sur « En attente » si ce check devient requis.
 
 ## Tests
 
-- `tests/test_api.py` — **16 tests** : `/healthz` ; objet arbitraire (202,
+- `tests/test_api.py` — **19 tests** : `/healthz` ; objet arbitraire (202,
   `event_count` = 3) ; tableau nu ; corps **verbatim** en base ; non-JSON → 400 ;
-  **JSON non-UTF-8 → 400** ; **corps trop gros → 413** / **dans la limite → 202** ;
+  **JSON non-UTF-8 → 400** ; **JSON très imbriqué (10000 niveaux) → 400, pas
+  500** ; **corps trop gros → 413** (fast-path `Content-Length`, avec preuve
+  qu'aucune ligne n'est stockée) / **idem en chunked sans `Content-Length`**
+  (le cas malveillant réel — le premier test seul n'exerçait que le
+  fast-path, retour de revue #59, round 2) / **dans la limite → 202** ;
   **une seule connexion ouverte pour 5 écritures** (compteur sur `connect()`
-  monkeypatché) ; **20 écritures concurrentes sans collision ni perte**
-  (`ThreadPoolExecutor`) ; **base verrouillée → 503 + `Retry-After`** ;
-  migrations appliquées une fois ; **migrations idempotentes après DDL partiel** ;
-  3 formes de payload paramétrées.
+  monkeypatché) ; **20 écritures concurrentes sans collision ni perte**,
+  vérifié par un vrai `SELECT COUNT(*)` (pas seulement l'unicité des
+  `batch_id`, retour de revue #59, round 2) ; **base verrouillée → 503 +
+  `Retry-After`** ; **connexion fermée sous une écriture → 503 +
+  `Retry-After`** (pas 500) ; migrations appliquées une fois ; **migrations
+  idempotentes après DDL partiel** ; 3 formes de payload paramétrées.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .`, `uv run ruff format --check .` et `uv run pytest` →
-  **16 passed** (vérifié le 2026-09-11). Test de concurrence rejoué 5 fois de
-  suite sans échec.
+  `uv run ruff check .` et `uv run pytest` → **19 passed** (vérifié le
+  2026-09-16). Chaque nouveau bug (RecursionError, ProgrammingError) reproduit
+  d'abord en isolant le code sans le fix, confirmé absent avec.
 
 ## Limites connues / TODO
 

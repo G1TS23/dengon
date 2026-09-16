@@ -36,6 +36,12 @@ class _BodyTooLarge(Exception):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Appelée ici uniquement pour valider la config tôt : une variable
+    # d'environnement malformée fait échouer le démarrage plutôt que chaque
+    # POST /ingest/batch un par un (retour de revue #59, round 2). La valeur
+    # elle-même n'est pas mise en cache — max_batch_bytes() est relue à
+    # chaque requête, comme documenté dans config.py.
+    max_batch_bytes()
     conn = connect()
     run_migrations(conn)
     # Connexion unique, réutilisée pour toutes les écritures (retour de revue
@@ -89,10 +95,17 @@ async def _read_limited_body(request: Request, limit: int) -> bytes:
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
-            if int(content_length) > limit:
-                raise _BodyTooLarge
+            trop_gros = int(content_length) > limit
         except ValueError:
-            pass  # en-tête non numérique : on se fie au comptage réel ci-dessous
+            trop_gros = False  # en-tête non numérique : on se fie au comptage réel ci-dessous
+        if trop_gros:
+            # Vider le flux avant de lever : sans ça, le corps reste non lu
+            # sur la connexion au moment du 413, ce qui peut forcer
+            # uvicorn/h11 à couper la connexion keep-alive plutôt que de
+            # livrer la réponse proprement (retour de revue #59, round 2).
+            async for _ in request.stream():
+                pass
+            raise _BodyTooLarge
 
     morceaux: list[bytes] = []
     total = 0
@@ -176,14 +189,21 @@ async def ingest_batch(request: Request) -> JSONResponse:
             request.client.host if request.client else None,
             request.headers.get("content-type"),
         )
-    except (UnicodeDecodeError, json.JSONDecodeError):
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+        # RecursionError : un JSON très imbriqué (ex. `"["*2000 + "]"*2000`,
+        # quelques Ko) fait planter json.loads sans lever JSONDecodeError —
+        # c'est un corps invalide du point de vue de l'API, pas une panne
+        # serveur (retour de revue #59, round 2).
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"error": "corps invalide : un document JSON UTF-8 est attendu"},
         )
-    except sqlite3.OperationalError:
-        # SQLite n'a qu'un écrivain : sous deux flush simultanés, le perdant
-        # échoue après le busy_timeout. Le nœud doit retenter.
+    except (sqlite3.OperationalError, sqlite3.ProgrammingError):
+        # OperationalError : SQLite n'a qu'un écrivain, le perdant d'un flush
+        # concurrent échoue après le busy_timeout. ProgrammingError : la
+        # connexion a été fermée sous nos pieds (lifespan en cours d'arrêt
+        # pendant qu'une écriture tournait encore sur le threadpool — retour
+        # de revue #59, round 2). Dans les deux cas, le nœud doit retenter.
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             content={"error": "stockage momentanément occupé, réessayer"},

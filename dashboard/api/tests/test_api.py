@@ -56,6 +56,22 @@ def test_ingest_rejects_non_json(client):
     assert response.status_code == 400
 
 
+def test_ingest_rejects_deeply_nested_json(client):
+    # json.loads (accélérateur C) recourt à la pile Python au-delà d'une
+    # certaine profondeur d'imbrication et lève RecursionError, pas
+    # JSONDecodeError — vérifié en local : 10000 niveaux la déclenchent (2000
+    # ne suffisent pas), pour un corps de ~20 Ko (retour de revue #59, round
+    # 2). Sans le fix, cette requête remonte un 500 brut au lieu du 400
+    # attendu pour un corps invalide.
+    body = ("[" * 10_000 + "]" * 10_000).encode()
+    response = client.post(
+        "/ingest/batch",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+
+
 def test_ingest_rejects_non_utf8_json(client):
     # JSON valide mais encodé en UTF-16 : json.loads l'accepterait, mais le
     # stocker en texte le corromprait (retour de revue #59, point 1).
@@ -70,7 +86,11 @@ def test_ingest_rejects_non_utf8_json(client):
 
 def test_ingest_rejects_body_over_max_size(client, monkeypatch):
     # Garde-fou mémoire : un corps plus grand que la limite configurée est
-    # rejeté sans être stocké (retour de revue #59, point 1).
+    # rejeté sans être stocké (retour de revue #59, point 1). httpx pose
+    # toujours Content-Length pour du contenu `bytes` : ce test n'exerce que
+    # le fast-path Content-Length, pas la boucle de comptage en flux — voir
+    # test_ingest_rejects_chunked_body_over_max_size ci-dessous pour le cas
+    # malveillant réel (retour de revue #59, round 2, point de Paul).
     monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "16")
     response = client.post(
         "/ingest/batch",
@@ -78,6 +98,43 @@ def test_ingest_rejects_body_over_max_size(client, monkeypatch):
         headers={"content-type": "application/json"},
     )
     assert response.status_code == 413
+
+    from app.db import connect
+
+    conn = connect()
+    count = conn.execute("SELECT COUNT(*) AS n FROM raw_batches").fetchone()["n"]
+    conn.close()
+    assert count == 0, "un corps rejeté pour taille ne doit laisser aucune ligne"
+
+
+def test_ingest_rejects_chunked_body_over_max_size(client, monkeypatch):
+    # Cas malveillant réel : Content-Length absent (chunked) ou mensonger, la
+    # seule protection est alors le comptage dans `async for morceau in
+    # request.stream()`. Un contenu `bytes` chez httpx pose toujours
+    # Content-Length ; passer un générateur force l'encodage chunked, donc
+    # exerce vraiment cette boucle (retour de revue #59, round 2, point de
+    # Paul — les deux tests de taille précédents ne passaient que par le
+    # fast-path Content-Length).
+    monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "16")
+
+    def _morceaux():
+        yield b'{"events": ['
+        yield b"1, 2, 3, 4, 5, 6, 7, 8, 9"
+        yield b"]}"
+
+    response = client.post(
+        "/ingest/batch",
+        content=_morceaux(),
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+
+    from app.db import connect
+
+    conn = connect()
+    count = conn.execute("SELECT COUNT(*) AS n FROM raw_batches").fetchone()["n"]
+    conn.close()
+    assert count == 0
 
 
 def test_ingest_accepts_body_within_max_size(client, monkeypatch):
@@ -114,6 +171,20 @@ def test_a_single_connection_is_reused_for_all_writes(tmp_path, monkeypatch):
     assert len(ouvertures) == 1, "une seule connexion doit être ouverte pour les 5 écritures"
 
 
+def test_ingest_returns_503_when_connection_closed_under_a_write(client):
+    # Course entre l'arrêt du lifespan (ferme app.state.db_conn dans son
+    # `finally`) et une écriture encore en cours sur le threadpool : seul
+    # sqlite3.OperationalError était rattrapé, pas sqlite3.ProgrammingError
+    # ("Cannot operate on a closed database"), qui remontait un 500 brut au
+    # lieu du 503 attendu (retour de revue #59, round 2). Reproduit ici sans
+    # vraie course : fermer la connexion partagée avant le POST suffit à
+    # produire la même ProgrammingError.
+    client.app.state.db_conn.close()
+    response = client.post("/ingest/batch", json={"events": []})
+    assert response.status_code == 503
+    assert response.headers.get("Retry-After") == "1"
+
+
 def test_concurrent_writes_are_not_lost(client):
     # La connexion partagée + le verrou doivent tenir sous des écritures
     # concurrentes issues du threadpool (retour de revue #59, points 2 et 3).
@@ -127,7 +198,18 @@ def test_concurrent_writes_are_not_lost(client):
 
     assert all(r.status_code == 202 for r in reponses)
     batch_ids = {r.json()["batch_id"] for r in reponses}
-    assert len(batch_ids) == 20, "pas de collision d'id, pas de batch perdu"
+    assert len(batch_ids) == 20, "pas de collision d'id (uuid4 unique, pas une preuve à elle seule)"
+
+    # La vraie preuve qu'aucune écriture n'a été perdue : 20 lignes en base,
+    # pas seulement 20 batch_id distincts renvoyés par l'API (retour de revue
+    # #59, round 2, point de Paul — uuid4 est unique par construction, ça ne
+    # dit rien sur le nombre de lignes réellement insérées sous concurrence).
+    from app.db import connect
+
+    conn = connect()
+    stored = conn.execute("SELECT COUNT(*) AS n FROM raw_batches").fetchone()["n"]
+    conn.close()
+    assert stored == 20, "20 requêtes acceptées doivent laisser 20 lignes, pas moins"
 
 
 def test_ingest_returns_503_when_storage_is_locked(client, monkeypatch):
