@@ -9,6 +9,149 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+---
+
+## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
+
+**Auteur :** Paul Claverie + Claude (Opus 5)
+**Périmètre :** `firmware/dengon-relay/` (créé : `CMakeLists.txt`,
+`sdkconfig.defaults`, `README.md`, `main/CMakeLists.txt`, `main/main.c`,
+`main/dengon_gatt.{h,c}`, `main/dengon_peer_id.{h,c}`),
+`.github/workflows/firmware.yml`, `.gitignore`, `docs/suivi/`.
+**Lot :** US-114 (issue #14), Sprint 1, jalon J0. Branche
+`chore/US-114-squelette-firmware-dengon-relay`.
+
+### Fait
+
+- Créé le projet ESP-IDF `firmware/dengon-relay`, premier code embarqué du
+  dépôt. Il compile, il annonce le service `dengon`, il ne relaie rien.
+- `main/dengon_gatt.c` : les trois UUID de la décision C-2 et la table GATT —
+  service primaire, `CHAR_RX` en write-sans-réponse, `CHAR_TX` en notify avec
+  son `val_handle` (sans lui, l'US-220 n'aurait aucun moyen d'émettre). Pas de
+  troisième caractéristique ACK, pas de CCCD déclaré à la main.
+- `main/main.c` : séquence d'initialisation (NVS → NimBLE → callbacks → table
+  GATT → démarrage du host), annonce dans `sync_cb`, réarmement de l'annonce à
+  la déconnexion, journalisation du MTU négocié.
+- `main/dengon_peer_id.c` : bouchon d'identité, `SHA-256(MAC eFuse)[0..8]`.
+- `sdkconfig.defaults` versionné : cible esp32, NimBLE, Bluedroid coupé, BLE
+  seul, rôles central et observateur **désactivés**, MTU préféré 517,
+  partitionnement `SINGLE_APP_LARGE`.
+- `.github/workflows/firmware.yml` : build dans l'image Docker officielle
+  épinglée par digest, filtrage des chemins **dans le job** comme `core.yml`,
+  empreinte mémoire dans le résumé du job, binaires publiés en artefact.
+- `.gitignore` : section firmware (`build/`, `sdkconfig`, `managed_components/`),
+  avec la raison pour chaque règle.
+- Suivi : fiche `modules/firmware-relay.md` (qui contient la note d'onboarding
+  exigée par le critère n°4), 5 écarts, 3 apprentissages, 9 termes de glossaire,
+  lignes d'avancement et d'index.
+
+### Pourquoi / décisions
+
+- **Docker plutôt qu'une installation locale d'ESP-IDF.** ~2 Go d'outils, et
+  surtout la garantie que la CI et le poste compilent avec le même compilateur.
+  L'image est épinglée par digest, comme les actions GitHub le sont par SHA.
+- **Le digest à épingler est celui de l'index, pas celui d'une plateforme.**
+  Erreur évitée de justesse : `docker manifest inspect --verbose` affiche
+  d'abord l'entrée `linux/amd64` (`sha256:6e2800a6…`). L'épingler aurait cassé
+  le build sur toute machine arm64. Le bon digest est celui que renvoie
+  `docker buildx imagetools inspect --format '{{.Manifest.Digest}}'`
+  (`sha256:a9231d06…`), et c'est aussi celui que rapporte `docker pull`.
+- **Rôles central et observateur coupés.** Le périmètre de l'US devient
+  vérifiable par la machine : le firmware ne *peut pas* scanner, donc il ne peut
+  pas empiéter sur l'US-220.
+- **`-Werror` sur le seul composant `main`.** Un `-Werror` global casserait la
+  compilation des composants ESP-IDF, qui portent leurs propres avertissements
+  assumés. Ainsi « build propre sans warning bloquant » devient une garantie
+  machine sur notre code, et seulement sur lui.
+- **`SINGLE_APP_LARGE` posé tout de suite** plutôt qu'au moment où ça coincera :
+  changer de table de partitions oblige à réécrire toute la flash de chaque
+  carte déjà déployée. Avec 1,5 Mo, il reste 69 % de libre après ce squelette,
+  de quoi absorber `libdengon_core.a` en US-307.
+- **Nom d'annonce en réponse de scan** : le paquet principal est saturé à
+  30 octets sur 31 par ce que la conception impose (Flags 3 + UUID 128 bits 18 +
+  manufacturer data 9). Il n'y avait littéralement pas la place.
+
+### Écarts vs conception
+
+Cinq, tous consignés dans
+[`03-ecarts-conception.md`](03-ecarts-conception.md) :
+
+- arborescence `main/` et non `src/transport_nimble.c` — la ligne 87 de
+  `04-architecture.md` est contredite par le §5 du même fichier, et aucun outil
+  ESP-IDF ne comprend un `src/` à la racine ;
+- nom d'annonce `dengon-relay-XXXX`, inventé ici faute de spécification, et
+  relégué en réponse de scan faute de place ;
+- manufacturer data de 7 octets et non 5 : le champ AD `0xFF` exige un Company
+  ID que `docs/powl/03` §6.1 a oublié — vraie erreur de spec, à corriger ;
+- octet `flags` de l'annonce : bitfield défini ici, la conception le nomme sans
+  le définir ;
+- `peerID` bouchonné sur la MAC eFuse au lieu de `SHA-256(pub_static)` — levée
+  en US-307.
+
+### Appris
+
+Trois notions ajoutées à [`04-apprentissages.md`](04-apprentissages.md) :
+`BLE_UUID128_INIT` attend du little-endian (et l'erreur est totalement
+silencieuse) ; les 31 octets d'un paquet d'annonce BLE, et pourquoi le nom finit
+en réponse de scan ; `sdkconfig.defaults` n'est lu qu'une fois.
+
+### État après cette session
+
+- **Ce qui marche :** le projet compile proprement dans Docker, sans aucun
+  warning, et produit un binaire flashable de 463,5 Ko. La configuration
+  effective est conforme (NimBLE, pas de Bluedroid, rôles restreints, MTU 517).
+  La CI `firmware` est écrite.
+- **Ce qui manque :** rien n'a tourné sur une carte. Les critères d'acceptation
+  n°2 (annonce visible) et n°3 (capture nRF Connect) de l'US-114 **restent
+  ouverts** — voir la section Vérification.
+- Fiche module créée : [modules/firmware-relay.md](modules/firmware-relay.md)
+  (elle porte la note d'onboarding du critère n°4).
+- `01-etat-du-code.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ docker buildx imagetools inspect espressif/idf:v5.5.5 --format '{{.Manifest.Digest}}'
+sha256:a9231d0697ab8f7517cc072e93b7c83e04907bfbfba80b6440d7dbbf90665cf2
+
+$ docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo" \
+    -w /repo/firmware/dengon-relay espressif/idf:v5.5.5@sha256:a9231d06... idf.py build
+Project build complete.
+dengon-relay.bin binary size 0x73dd0 bytes. Smallest app partition is 0x177000 bytes.
+0x103230 bytes (69%) free.
+(recompilation forcée de main.c, dengon_gatt.c, dengon_peer_id.c : 0 warning, 0 erreur)
+
+$ ... idf.py size
+IRAM  98407 o (75,08 %)   DRAM 25824 o (20,73 %, 98756 o restants)
+Total image size: 474461 bytes
+
+$ grep -E "NIMBLE_ENABLED|BLUEDROID|ROLE_|PREFERRED_MTU" sdkconfig
+CONFIG_BT_NIMBLE_ENABLED=y ; aucun CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y ; ROLE_CENTRAL et ROLE_OBSERVER absents (= n)
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
+
+$ python3 (relecture des 3 tableaux BLE_UUID128_INIT, inversés octet par octet)
+OK dengon_svc_uuid    -> 6d656e67-2d64-656e-676f-6e2d76310000
+OK dengon_chr_rx_uuid -> 6d656e67-2d64-656e-676f-6e2d76310001
+OK dengon_chr_tx_uuid -> 6d656e67-2d64-656e-676f-6e2d76310002
+(= exactement les valeurs de docs/powl/03 §2)
+
+$ python3 -c "yaml.safe_load(open('.github/workflows/firmware.yml'))"
+YAML valide
+```
+
+- **N'a PAS pu être vérifié : tout ce qui exige la carte.** Le firmware n'a
+  jamais été flashé, donc l'annonce BLE, le nom `dengon-relay-XXXX`, le
+  manufacturer data, le MTU réellement négocié et la visibilité dans nRF Connect
+  ne sont **pas prouvés**. Cause : sous WSL2, aucun périphérique USB n'est
+  visible côté Linux sans `usbipd-win`, et cet outil n'est pas installé sur la
+  machine Windows (vérifié : pas de `/mnt/c/Program Files/usbipd-win/`, et
+  l'interop Windows est désactivée dans cette WSL, donc impossible de l'installer
+  depuis Linux). La procédure complète est écrite dans la fiche du module.
+- **Le workflow `firmware` n'a jamais tourné** : il n'existe que localement, sa
+  validation se limite à un contrôle de syntaxe YAML. Son premier vrai run aura
+  lieu à l'ouverture de la PR.
+
 
 ---
 
