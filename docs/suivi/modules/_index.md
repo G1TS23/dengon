@@ -31,6 +31,7 @@ d'organisation §10.3 point 3).
 | `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | esquisse | 2026-09-09 |
 | `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-25 |
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
+| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **contrat v0 gelé** (US-106) | 2026-09-20 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
