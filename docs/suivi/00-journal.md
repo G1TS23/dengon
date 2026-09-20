@@ -10,6 +10,99 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-20 — US-111 : squelette `dashboard/web` (liste + détail, données bidon)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/web/` (nouveau : `index.html`, `style.css`,
+`data.js`, `app.js`)
+**Lot :** US-111, Sprint 1 (S1, 08→14/09, en retard — pris le 20/09) — Must,
+aucune dépendance
+
+### Fait
+- Créé `dashboard/web/` : page statique avec deux écrans (liste des messages
+  suivis, détail = timeline des sauts), routés par hash (`#/message/<id>`),
+  sans framework ni build.
+- `data.js` : données bidon (`window.DENGON_DASHBOARD_DATA`), forme alignée
+  sur le schéma SQLite du dashboard (`docs/synthese/09-dashboard-et-donnees.md`
+  §11.2, tables `messages`/`message_hops`) — 5 messages couvrant les statuts
+  `queued`/`in_flight`/`delivered`/`expired`/`unknown`, dont un sans aucun
+  saut connu et un saut avec `rssi`/`fanout` absents (données partielles,
+  critère d'acceptation de l'US-111).
+- `style.css` : mobile-first (cible 360 px), variables CSS clair/sombre
+  (`prefers-color-scheme`), grille `auto-fill` pour la liste (se réorganise
+  seule en plus large sans media query dédiée).
+- `app.js` : rendu par petites fonctions DOM (pas d'innerHTML de gabarits),
+  routage par `hashchange`, gestion explicite des valeurs manquantes
+  (`texteOuTiret` — attention au piège `valeur || "—"` qui aurait aussi
+  effacé les `0` légitimes, comme `fanout: 0`).
+
+### Pourquoi / décisions
+- **`data.js` en `<script src>`, pas un `.json` chargé en `fetch`** :
+  critère d'acceptation « aucun appel réseau — la page s'ouvre en `file://` » ;
+  `fetch()`/`XHR` d'un fichier local est bloqué par CORS dans la plupart des
+  navigateurs en `file://`, un `<script>` classique ne l'est pas.
+- **Statuts alignés sur `docs/synthese/07-cycle-de-vie-et-statuts.md`**
+  (`queued`/`in_flight`/`delivered`/`read`/`expired`) plutôt que les
+  catégories simplifiées de la première esquisse
+  (`docs/olivier/dashboard.md` §9) : `docs/synthese/` est la conception
+  retenue, et son schéma dashboard (§11.2) réutilise déjà ce vocabulaire.
+- **Pas de compteur « nœuds actifs »** : `docs/olivier/dashboard.md` §3 le
+  liste comme souhaité mais explicitement **non tranché** (deux options
+  ouvertes, aucune choisie). L'afficher avec une valeur bidon aurait fait
+  croire qu'une question de conception encore ouverte était réglée.
+- Détails complets et autres décisions (routage par hash, timestamps en UTC
+  pour des captures d'écran reproductibles) dans
+  `docs/suivi/modules/dashboard-web.md`.
+
+### Écarts vs conception
+- Aucun structurant. Le choix de vocabulaire de statuts (ci-dessus) réconcilie
+  deux documents de conception entre eux (`olivier/` vs `synthese/`), ce n'est
+  pas un écart par rapport à la conception retenue.
+
+### Appris
+- Rien de nouveau technique ; confirmation du piège classique JS
+  `valeur || defaut` qui efface aussi les zéros légitimes — évité ici en
+  comparant explicitement à `null`/`undefined`.
+
+### État après cette session — ⚠️ vérification visuelle (CSS/mise en page) non faite
+
+**Aucun navigateur disponible dans cet environnement** : l'extension Claude
+in Chrome a été proposée puis déclinée par l'utilisateur pour cette session ;
+aucun binaire Chrome/Edge trouvé (chemins standards, registre `App Paths`).
+Pour compenser partiellement, `app.js`/`data.js` ont été **réellement
+exécutés** sous Node.js contre un DOM minimal reconstitué à la main
+(`createElement`/`appendChild`/`innerHTML`/`hashchange` uniquement — script
+jetable, non commité) : chargement des données, rendu de la liste (5
+messages), navigation vers un détail à 3 sauts, cas `unknown` sans aucun
+saut, id inconnu de la démo, retour à la liste — **aucune exception,
+sortie texte conforme à ce qui était attendu** (dates UTC correctes, `—`
+partout où une donnée est absente, `fanout: 0` bien affiché comme `0` et non
+comme `—`). Ça élimine la classe d'erreurs « bug de logique JS / faute de
+frappe dans un nom de classe » (vérifié aussi par recoupement automatique
+classes JS ↔ sélecteurs CSS). Ce qui **reste** non vérifié, parce qu'un DOM
+reconstitué à la main ne rend aucun CSS : la mise en page réelle, le rendu à
+360 px, les couleurs. Le critère « rendu correct sur mobile 360 px » + la
+capture d'écran demandée par le DoR (n°7) **restent à faire** avant de
+considérer l'US-111 close. Décision prise avec l'utilisateur : ouvrir la PR
+avec ce gap documenté plutôt que d'attendre.
+
+Fiche module créée : `modules/dashboard-web.md` (même avertissement en tête).
+`modules/_index.md` mis à jour. `02-avancement.md` **non touché**
+volontairement (PR en vol, cf. son propre en-tête).
+
+### Vérification (commandes réellement exécutées)
+```
+$ node dom-shim-test.js   # script jetable, non commité — voir description ci-dessus
+=== data.js chargé, messages: 5 ===
+[5 écrans rendus : liste, détail (3 sauts), détail "unknown" (0 saut),
+ id inconnu, retour liste]
+OK — aucune exception levée pendant les 5 rendus.
+```
+- **Non vérifié** : rendu CSS réel, mise en page à 360 px, apparence
+  visuelle — aucun navigateur disponible. **Reste à faire avant de clore
+  l'US-111** : ouvrir `dashboard/web/index.html` dans un navigateur, vérifier
+  à 360 px, capture d'écran dans la PR.
+
 ---
 
 ## 2026-09-16 — Suite de conformité : la règle 2 de la déconnexion brutale n'était pas testée (revue PR #65)
