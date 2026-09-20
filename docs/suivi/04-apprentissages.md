@@ -447,3 +447,53 @@ future CI).
 **Où c'est utilisé :** `android/gradle/verification-metadata.xml`.
 **Pour aller plus loin :** doc Gradle « Gradle Module Metadata » — pourquoi
 `.module` est préféré à `.pom` quand les deux sont publiés.
+
+### `isReturnDefaultValues = true` fait taire les API Android en test, pas les exécuter
+
+**C'est quoi :** sans Robolectric, un test JVM pur ne peut pas exécuter le
+vrai code du framework Android (`android.jar` fourni au classpath de test est
+un bouchon dont chaque méthode lève par défaut). `unitTests
+.isReturnDefaultValues = true` (`app/build.gradle.kts`) remplace ce lever
+d'exception par un **retour silencieux** de la valeur par défaut du type de
+retour (`null` pour un objet, `0`/`false` pour un primitif).
+**Pourquoi dans dengon :** en écrivant le bouchon `DengonIdentity` (US-106),
+la première version du QR code utilisait `android.util.Base64.encodeToString`.
+Un test d'aller-retour (encoder puis décoder) aurait **passé silencieusement**
+en comparant deux valeurs dérivées de `null` — ou aurait produit un NPE
+confus, selon l'endroit — sans jamais exercer le vrai algorithme.
+**Piège / surprise :** ce n'est pas un échec bruyant : `isReturnDefaultValues`
+existe justement pour qu'un code qui *appelle accidentellement* une API
+Android ne fasse pas planter tous les tests JVM purs du projet. Ça veut dire
+qu'un test peut être vert **pour la mauvaise raison** — il faut se demander,
+pour chaque appel à une classe `android.*` dans du code testé en JVM pur, si
+le test l'exerce réellement ou observe juste sa valeur par défaut.
+**Parade :** n'utiliser des API `android.*` que dans du code qui ne sera
+testé qu'en instrumenté/Robolectric ; sinon, écrire l'équivalent en Kotlin/
+Java pur (ici : un encodeur/décodeur base64url à la main).
+**Où c'est utilisé :** `android/.../ffi/DengonNodeStub.kt` (repéré avant
+d'écrire le test, pas après un échec silencieux) ; réglage source :
+`android/app/build.gradle.kts`.
+
+### UniFFI en mode UDL : le contrat vit dans un fichier séparé, pas dans les macros
+
+**C'est quoi :** UniFFI a deux façons de décrire une interface FFI : des
+macros procédurales (`#[uniffi::export]` directement sur le code Rust) ou un
+fichier `.udl` séparé, lu par `build.rs`
+(`uniffi::generate_scaffolding("src/x.udl")`) puis inclus dans `lib.rs`
+(`uniffi::include_scaffolding!("x")`). Le `.udl` déclare les types
+(`dictionary`, `enum`, `[Enum] interface` pour un enum à données associées,
+`[Error] enum`, `interface` pour un objet avec état) ; le Rust doit fournir
+des types du **même nom**, avec les **mêmes champs**, mais reste du Rust
+ordinaire (pas d'attribut spécial dessus).
+**Pourquoi dans dengon :** la DoR de l'US-106 impose explicitement un fichier
+`.udl` (pas les macros) — c'est un contrat qu'on veut pouvoir lire et geler
+sans lire le code Rust qui l'implémente.
+**Piège / surprise :** le scaffolding généré ne produit **que** le pont côté
+Rust (fonctions `extern "C"`) — pas les classes Kotlin. Ça, c'est une
+commande séparée (`uniffi-bindgen generate`, avec la feature `"bindgen"`/`
+"cli"`), volontairement pas activée ici : l'US-106 ne demande qu'un bouchon
+Kotlin écrit à la main, pas une génération réelle (ça viendra avec l'US-302).
+**Où c'est utilisé :** `crates/dengon-ffi/src/dengon.udl`, `build.rs`,
+`src/lib.rs`.
+**Pour aller plus loin :** doc officielle UniFFI, section « UDL » vs
+« Procedural macros ».

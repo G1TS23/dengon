@@ -24,7 +24,7 @@ d'onboarding de l'area `process` (§10.3 point 3).
 | `dengon-node` | [dengon-node.md](dengon-node.md) | esquisse | 2026-09-09 |
 | `dengon-sim` | [dengon-sim.md](dengon-sim.md) | esquisse | 2026-09-09 |
 | `dengon-verify` | [dengon-verify.md](dengon-verify.md) | esquisse | 2026-09-09 |
-| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | esquisse | 2026-09-09 |
+| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **contrat v0 gelé** (US-106) | 2026-09-20 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
 
