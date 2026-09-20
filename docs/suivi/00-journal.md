@@ -10,6 +10,68 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-20 — US-103 : correction revue PR #67 (négociation CCCD/notifications)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/spike/HelloMeshCentral.kt`,
+`HelloMeshPeripheral.kt`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Traité la revue `CHANGES_REQUESTED` de la PR #67
+  (`pullrequestreview-5178818352`) : la négociation des notifications CCCD
+  avait de bonnes chances d'échouer au test réel sur deux téléphones, pour
+  deux raisons cumulées.
+- **Central (`HelloMeshCentral.onServicesDiscovered`)** : `g.writeCharacteristic(rx)`
+  était appelé juste après `g.writeDescriptor(cccd)`, sans attendre la fin de
+  cette opération. `BluetoothGatt` ne met **pas** les opérations en file
+  d'attente : lancer une deuxième opération pendant qu'une première est en
+  vol échoue en général silencieusement. Fix : `rx` gardé en propriété de
+  classe (`rxCharacteristicRef`), écriture de `CHAR_RX` déplacée dans
+  `onDescriptorWrite(...)`, déclenchée seulement après confirmation de
+  l'écriture du CCCD.
+- **Peripheral (`HelloMeshPeripheral.serverCallback`)** : `onDescriptorWriteRequest`
+  n'était pas implémenté. Le central écrit le CCCD en `WRITE_TYPE_DEFAULT`
+  (avec accusé ATT) ; sans `sendResponse()` côté serveur, l'écriture ne se
+  termine jamais proprement (timeout ATT, notifications jamais réellement
+  activées). Fix : ajout de l'override, réponse `GATT_SUCCESS` envoyée
+  systématiquement quand `responseNeeded`.
+
+### Pourquoi / décisions
+- Fix minimal pour un spike, conforme à la suggestion du relecteur — pas de
+  refactor plus large (pas de file d'attente générique des opérations GATT,
+  ce sera à traiter proprement dans `AndroidTransport`, US-213).
+
+### Écarts vs conception
+- Aucun nouvel écart ; corrige un bug d'implémentation, pas un choix de
+  conception.
+
+### Appris
+- `BluetoothGatt` (Android) ne sérialise pas ses opérations lui-même
+  (`write*`, `read*`, `requestMtu`, `discoverServices`…) : chaque opération
+  suivante doit être déclenchée depuis le callback de fin de la précédente,
+  sous peine d'échec silencieux (`writeCharacteristic` renvoie `false` sans
+  exception). Piège BLE Android classique — noté dans
+  `docs/suivi/04-apprentissages.md`.
+
+### État après cette session
+- `./gradlew compileDebugKotlin` et `testDebugUnitTest` passent après le
+  correctif. Le protocole de mesure manuelle (`docs/suivi/modules/android-app.md`
+  « Spike C ») reste **non exécuté** — toujours aucun appareil Android
+  physique disponible dans cet environnement.
+- Correctif à pousser sur la branche de la PR #67 pour re-demande de revue.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+```
+
+---
+
 ## 2026-09-11 — US-103 : correction SonarCloud (complexité cognitive `MainActivity.onCreate`)
 
 **Auteur :** Claude (Sonnet 5)

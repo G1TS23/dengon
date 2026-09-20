@@ -40,6 +40,7 @@ class HelloMeshCentral(
     private var connectedAtMs = 0L
     private var writeStartedAtMs = 0L
     private var negotiatedMtu: Int? = null
+    private var rxCharacteristicRef: BluetoothGattCharacteristic? = null
 
     private fun log(message: String) = mainHandler.post { onLog(message) }
 
@@ -111,18 +112,28 @@ class HelloMeshCentral(
                 return
             }
 
+            rxCharacteristicRef = rx
             g.setCharacteristicNotification(tx, true)
             val cccd = tx.getDescriptor(HelloMeshConstants.CCCD_UUID)
             if (cccd != null) {
                 cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                 g.writeDescriptor(cccd)
+            } else {
+                log("Descripteur CCCD introuvable sur CHAR_TX — spike interrompu")
             }
+        }
 
+        // BluetoothGatt ne met pas en file les opérations : il faut attendre la fin
+        // de l'écriture du CCCD avant de lancer l'écriture RX, sous peine d'échec
+        // silencieux de la seconde opération.
+        override fun onDescriptorWrite(g: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (descriptor.uuid != HelloMeshConstants.CCCD_UUID) return
+            log("CCCD écrit (status=$status) — écriture de ${HelloMeshConstants.PAYLOAD_20_BYTES.size} octets sur CHAR_RX…")
+            val rx = rxCharacteristicRef ?: return
             rx.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
             rx.value = HelloMeshConstants.PAYLOAD_20_BYTES
             writeStartedAtMs = System.currentTimeMillis()
             g.writeCharacteristic(rx)
-            log("Écriture de ${HelloMeshConstants.PAYLOAD_20_BYTES.size} octets sur CHAR_RX…")
         }
 
         @Suppress("OVERRIDE_DEPRECATION") // 2-arg onCharacteristicChanged : API 33+, gardé pour minSdk 26

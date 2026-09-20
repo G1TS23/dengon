@@ -137,6 +137,24 @@ class HelloMeshPeripheral(
             log("MTU négocié côté peripheral : $mtu octets")
         }
 
+        // Le central écrit le CCCD en WRITE_TYPE_DEFAULT (avec accusé ATT) : sans
+        // sendResponse, l'écriture ne se termine jamais côté client et les
+        // notifications ne sont jamais réellement activées.
+        override fun onDescriptorWriteRequest(
+            device: BluetoothDevice,
+            requestId: Int,
+            descriptor: BluetoothGattDescriptor,
+            preparedWrite: Boolean,
+            responseNeeded: Boolean,
+            offset: Int,
+            value: ByteArray,
+        ) {
+            if (responseNeeded) {
+                gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
+            }
+            log("Descripteur CCCD écrit par le central (requestId=$requestId)")
+        }
+
         @Suppress("DEPRECATION") // characteristic.value : API dépréciée en 33+, gardée pour compat minSdk 26
         override fun onCharacteristicWriteRequest(
             device: BluetoothDevice,

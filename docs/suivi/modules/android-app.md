@@ -7,7 +7,7 @@ requis pour un nœud mesh (US-109).
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109.
-**Dernière mise à jour :** 2026-09-11
+**Dernière mise à jour :** 2026-09-20
 **État :** esquisse (squelette du service de fond ; pas de logique BLE réelle
 dans l'app elle-même — voir « Spike C » ci-dessous pour le code GATT jetable
 qui dérisque `AndroidTransport`)
@@ -132,6 +132,18 @@ réimplémentera le double rôle proprement (dynamique, tie-break par
   équivalent côté serveur GATT pour relire la valeur après coup — la carte
   de résultat du peripheral affiche donc `n/a` sur ce champ. C'est le
   résultat mesuré côté **central** qui fait foi.
+
+**Correction post-revue (PR #67, 2026-09-20) — séquencement CCCD/écriture :**
+`BluetoothGatt` ne met pas ses opérations en file d'attente ; lancer
+`writeCharacteristic` pendant qu'un `writeDescriptor` (activation du CCCD)
+est encore en vol échoue silencieusement. `HelloMeshCentral` déclenche
+maintenant l'écriture de `CHAR_RX` depuis `onDescriptorWrite(...)` (fin
+confirmée de l'écriture du CCCD), plus juste après l'avoir lancée.
+Symétriquement, `HelloMeshPeripheral` implémente désormais
+`onDescriptorWriteRequest` (`sendResponse(GATT_SUCCESS)`), sans quoi
+l'écriture du CCCD par le central (en `WRITE_TYPE_DEFAULT`, avec accusé ATT)
+ne se termine jamais côté serveur. Voir `docs/suivi/00-journal.md`, entrée du
+2026-09-20, et `04-apprentissages.md`.
 
 ### Protocole de mesure manuelle (à exécuter sur 2 appareils réels)
 
