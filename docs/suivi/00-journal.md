@@ -206,6 +206,65 @@ BUILD SUCCESSFUL (R8/minify actifs, aucune règle proguard custom nécessaire)
 - **Non vérifié, ne peut pas l'être ici** : les 4 critères d'acceptation
   matériels (échange réel 20 octets, MTU négocié réel, timing réel, matrice
   d'appareils). Nécessite 2 téléphones Android physiques.
+## 2026-09-25 — US-111 : vérification visuelle à 360 px (clôture)
+
+**Auteur :** Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/` uniquement (fiche `dashboard-web`, index des
+modules, avancement, captures `docs/suivi/assets/us-111/`) — aucun code
+modifié
+**Lot :** US-111, Sprint 1 — dernier critère d'acceptation restant après le
+merge de la PR #70
+
+### Fait
+- Rendu réel de `dashboard/web/index.html` vérifié dans Chromium à 360 px de
+  large, ouvert en `file://` : liste, détail à 4 sauts (`b1c8e2f3…`), message
+  `unknown` sans saut (`9a0f1122…`), id inconnu (`deadbeef`).
+- 4 captures ajoutées dans `docs/suivi/assets/us-111/`, pour la PR et
+  l'oral.
+- Fiche `dashboard-web` : avertissement « non vérifié » remplacé par le
+  résultat ; état passé à « fait ». Ligne `Dashboard web` de
+  `02-avancement.md` mise à jour (elle indiquait encore 0 % alors que la PR
+  #70 est sur `main`).
+
+### Pourquoi / décisions
+- Pas de Chrome/Edge sur la machine, mais les navigateurs de Playwright sont
+  déjà téléchargés dans `~/AppData/Local/ms-playwright/` : utilisés
+  directement en ligne de commande (`--screenshot`), sans installer de
+  paquet.
+- Première tentative avec le Chromium headless complet (`--headless=new`) :
+  captures rognées à droite. En cause, la largeur de fenêtre minimale
+  (~500 px) de ce mode, pas le CSS : le texte se coupait à ~500 px. Refait
+  avec `chrome-headless-shell`, qui respecte 360 px : aucun débordement.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rien de nouveau dans `04-apprentissages.md` (piège outillage noté ci-dessus
+  et dans la fiche du module)
+
+### État après cette session
+- Les 4 critères d'acceptation de l'US-111 sont vérifiés.
+- Non vérifié : le mode sombre à 360 px (vu seulement à ~500 px avec le
+  Chromium complet, couleurs sombres correctement appliquées).
+- Rectification de l'entrée précédente (SonarCloud) : elle dit les cas
+  « testés à la main dans le navigateur ». Aucun rendu navigateur n'avait
+  été fait avant cette session.
+- Fiche(s) module mise(s) à jour : `modules/dashboard-web.md`,
+  `modules/_index.md`
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ chrome-headless-shell.exe --disable-gpu --hide-scrollbars --window-size=360,1000     --virtual-time-budget=1500 --screenshot=us111-liste.png file:///…/dashboard/web/index.html
+  (idem avec #/message/b1c8e2f309a7d4c1, #/message/9a0f11223344aabb, #/message/deadbeef)
+→ 4 PNG de 360 px de large, relus visuellement : rendu conforme
+```
+- Pas sur un vrai téléphone : largeur mobile simulée par la taille de
+  fenêtre.
+
+---
+
 ## 2026-09-25 — Correctifs SonarCloud sur `dashboard/web/app.js` (PR #70, US-111)
 
 **Auteur :** Claude (Sonnet 5)

@@ -21,7 +21,7 @@
 | App Android | Kotlin + Compose | squelette : Compose + `MeshForegroundService` (`foregroundServiceType="connectedDevice"`) + permissions BLE à l'exécution + notification permanente. Pas de vraie logique BLE (GATT). | 15 % (US-109 fait ; US-213/214/215 restent) | [android-app](modules/android-app.md) |
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
 | Dashboard `api` | FastAPI + SQLite + SSE (A-5) | — | 0 % | — |
-| Dashboard `web` | page légère + SSE (A-5) | — | 0 % | — |
+| Dashboard `web` | page légère + SSE (A-5) | **squelette livré** (US-111) : page statique liste + détail (timeline des sauts), données bidon, aucun appel réseau, rendu vérifié à 360 px. Pas d'API ni de SSE (US-217/US-219) | 15 % | [dashboard-web](modules/dashboard-web.md) |
 | Contrats (`contracts/`) | schémas d'événements + fixtures golden | — | 0 % | — |
 | Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | — | 0 % | — |
 

@@ -27,7 +27,7 @@ d'onboarding de l'area `process` (§10.3 point 3).
 | `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | esquisse | 2026-09-09 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
-| `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | esquisse (US-111) | 2026-09-20 |
+| `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
 
 Pas encore de fiche (le composant n'existe pas) : firmware `dengon-relay`,
 dashboard `api`.
