@@ -7,8 +7,50 @@ requis pour un nœud mesh (US-109).
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109.
-**Dernière mise à jour :** 2026-09-09
-**État :** esquisse (squelette du service de fond ; pas de logique BLE réelle)
+**Dernière mise à jour :** 2026-09-25
+**État :** esquisse (squelette du service de fond ; pas de logique BLE réelle
+dans l'app elle-même — voir « Spike C » ci-dessous pour le code GATT jetable
+qui dérisque `AndroidTransport`)
+
+## Onboarding (US-103)
+
+**Builder :**
+```
+cd android && ./gradlew assembleDebug
+```
+Nécessite un SDK Android local (`local.properties` → `sdk.dir`, non
+versionné, voir `local.properties.example` si présent sinon créer le
+fichier). APK debug dans `app/build/outputs/apk/debug/app-debug.apk`.
+
+**Tester :**
+```
+./gradlew testDebugUnitTest    # tests unitaires JVM, rapides
+./gradlew assembleRelease      # build release (minify/shrink R8 actifs)
+```
+Pas de test instrumenté (émulateur/appareil) dans le dépôt pour l'instant —
+tout ce qui touche au BLE réel se vérifie **manuellement** sur un appareil
+(voir « Spike C » ci-dessous).
+
+**Trois pièges rencontrés (à ne pas refaire) :**
+1. **`.gitignore` du wrapper Gradle** : `!gradle/wrapper/gradle-wrapper.jar`
+   n'est ancré qu'à la racine d'un dépôt Git ; pour un module non-racine
+   (`android/`), il faut `!**/gradle/wrapper/gradle-wrapper.jar` sinon le
+   `.jar` du wrapper n'est jamais versionné et `./gradlew` échoue sur un
+   clone frais.
+2. **`gradle/verification-metadata.xml` régénéré sur un `GRADLE_USER_HOME`
+   déjà chaud** : le fichier peut sembler correct localement (le build passe)
+   mais être en fait incomplet — un artefact déjà en cache n'est jamais
+   re-téléchargé ni re-checksummé pendant `--write-verification-metadata`.
+   Toujours régénérer après avoir vidé `~/.gradle/caches/modules-2`, sinon un
+   clone frais (ou la future CI) casse au premier build. Détail complet :
+   `04-apprentissages.md`.
+3. **`foregroundServiceType` doit être déclaré deux fois** : dans
+   `AndroidManifest.xml` (`android:foregroundServiceType="connectedDevice"`
+   sur le `<service>`) **et** dans le code
+   (`ServiceCompat.startForeground(..., FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)`).
+   Oublier l'un des deux ne provoque pas d'erreur de compilation — le service
+   se fait juste tuer par le système peu après l'extinction de l'écran, ce
+   qui ne se voit qu'au test manuel des 5 minutes.
 
 ## À quoi ça sert
 
@@ -39,6 +81,12 @@ android/
       ble/
         BlePermissions.kt        — liste des permissions requises selon Build.VERSION.SDK_INT
         MeshForegroundService.kt — service de fond, notification permanente, foregroundServiceType=connectedDevice
+        spike/                   — code JETABLE du Spike C (US-103), à supprimer après la décision
+          HelloMeshConstants.kt    — SERVICE_UUID/CHAR_RX/CHAR_TX/MTU visé (docs/powl/03-network-protocol.md §2, §6)
+          HelloMeshPeripheral.kt   — BluetoothGattServer + BluetoothLeAdvertiser
+          HelloMeshCentral.kt      — BluetoothLeScanner + BluetoothGatt (client)
+          HelloMeshSpikeScreen.kt  — écran de debug Compose (accessible depuis MainActivity)
+          SpikeResult.kt           — chiffres mesurés (MTU, timings, appareil)
     src/test/java/com/dengon/app/ble/
       BlePermissionsTest.kt  — test unitaire minimal (JVM, sans Robolectric)
 ```
@@ -51,6 +99,118 @@ android/
 | `BlePermissions.required()` | `app/src/main/java/com/dengon/app/ble/BlePermissions.kt:17` | Retourne le tableau de permissions à demander : `BLUETOOTH_SCAN/CONNECT/ADVERTISE` sur API 31+, `ACCESS_FINE_LOCATION` en dessous, `+POST_NOTIFICATIONS` sur API 33+. |
 | `BlePermissions.allGranted()` | `app/src/main/java/com/dengon/app/ble/BlePermissions.kt:29` | Vérifie si toutes les permissions requises sont déjà accordées. |
 | `MainActivity` | `app/src/main/java/com/dengon/app/MainActivity.kt:29` | `ComponentActivity` Compose : lance la demande de permissions (`RequestMultiplePermissions`), démarre `MeshForegroundService` via `ContextCompat.startForegroundService` dès qu'elles sont accordées, bouton Démarrer/Arrêter pour le test manuel. |
+| `HelloMeshPeripheral` | `ble/spike/HelloMeshPeripheral.kt:38` | Publie `SERVICE_UUID` (`BluetoothGattServer` + `BluetoothLeAdvertiser`), expose `CHAR_RX`/`CHAR_TX`, fait l'écho de ce qu'il reçoit. |
+| `HelloMeshCentral` | `ble/spike/HelloMeshCentral.kt:31` | Scanne `SERVICE_UUID`, se connecte, négocie le MTU (517 visé), écrit 20 o sur `CHAR_RX`, mesure le round-trip de l'écho sur `CHAR_TX`. |
+| `HelloMeshSpikeScreen` | `ble/spike/HelloMeshSpikeScreen.kt:41` | Écran Compose de debug (bouton dédié dans `MainActivity`) : bascule manuelle Central/Peripheral, journal en direct, carte de résultat (MTU, temps). |
+
+## Spike C — hello mesh (US-103)
+
+**But :** dérisquer le double rôle GATT Android avant `AndroidTransport`
+(US-213) et **mesurer le MTU réellement négocié** sur du matériel réel — la
+mesure dimensionne `FRAG_SIZE`/la fragmentation protocole (US-201/US-202).
+Timebox annoncée : 1 jour. Le résultat sert de go/no-go pour A-1 (voir
+`docs/synthese/01-sujets-a-trancher.md` §A-1).
+
+**Code jetable** (DoD §7.2, type Spike) : tout `ble/spike/` est voué à être
+**supprimé** une fois la décision actée — ce n'est pas la logique BLE finale
+de l'app, c'est un harnais de mesure. `AndroidTransport` (US-213)
+réimplémentera le double rôle proprement (dynamique, tie-break par
+`peerID`), pas en repartant de ce code.
+
+**Simplifications volontaires par rapport à `docs/powl/03-network-protocol.md`
+§6.1 :**
+- Rôle choisi **manuellement** dans l'écran de debug (bouton « Peripheral »
+  ou « Central ») plutôt que la règle anti-boucle par comparaison de
+  `peerID` : `dengon-core` n'a pas encore d'identité de nœud (US-205), donc
+  pas de `peerID` à comparer.
+- Un seul échange mesuré par lancement (le scan s'arrête au premier pair
+  trouvé) : suffisant pour le critère d'acceptation (« deux téléphones
+  échangent 20 octets »), pas besoin de gérer plusieurs pairs simultanés
+  pour ce spike.
+- Le MTU négocié n'est lisible que côté **central** (`onMtuChanged` du
+  `BluetoothGattCallback`) : l'API Android n'expose pas de callback
+  équivalent côté serveur GATT pour relire la valeur après coup — la carte
+  de résultat du peripheral affiche donc `n/a` sur ce champ. C'est le
+  résultat mesuré côté **central** qui fait foi.
+
+**Correction post-revue (PR #67, 2026-09-20) — séquencement CCCD/écriture :**
+`BluetoothGatt` ne met pas ses opérations en file d'attente ; lancer
+`writeCharacteristic` pendant qu'un `writeDescriptor` (activation du CCCD)
+est encore en vol échoue silencieusement. `HelloMeshCentral` déclenche
+maintenant l'écriture de `CHAR_RX` depuis `onDescriptorWrite(...)` (fin
+confirmée de l'écriture du CCCD), plus juste après l'avoir lancée.
+Symétriquement, `HelloMeshPeripheral` implémente désormais
+`onDescriptorWriteRequest` (`sendResponse(GATT_SUCCESS)`), sans quoi
+l'écriture du CCCD par le central (en `WRITE_TYPE_DEFAULT`, avec accusé ATT)
+ne se termine jamais côté serveur. Voir `docs/suivi/00-journal.md`, entrée du
+2026-09-20, et `04-apprentissages.md`.
+
+### Protocole de mesure manuelle (à exécuter sur 2 appareils réels)
+
+1. Installer l'APK debug sur les deux téléphones (`./gradlew installDebug`
+   ou copier `app-debug.apk`), accorder les permissions BLE demandées au
+   lancement.
+2. Sur l'écran principal, taper **« Spike C : hello mesh (debug) »**.
+3. Sur le téléphone A : taper **Peripheral**. Sur le téléphone B : taper
+   **Central** (dans les ~30 s qui suivent, le temps que l'advertising
+   démarre).
+4. Relever sur l'écran du téléphone **B** (central, seul côté où le MTU est
+   lisible) : MTU négocié, temps scan→connexion, temps connexion→échange.
+   Noter le modèle/version des **deux** appareils (visibles en haut de
+   l'écran, sur chaque téléphone).
+5. Répéter avec au moins un autre couple de modèles/versions si possible
+   (matrice d'appareils demandée par le critère d'acceptation).
+6. Reporter les chiffres dans le tableau ci-dessous, dater, et mettre à jour
+   `docs/synthese/01-sujets-a-trancher.md` §A-1 (statut du Spike C) +
+   `docs/suivi/00-journal.md` (nouvelle entrée, ne pas éditer celle-ci).
+
+### Résultats mesurés
+
+**🟡 Partiellement exécuté** le 2026-09-25 : un seul appareil Android
+disponible (pas de second Android sous la main), donc le protocole officiel
+« 2 téléphones Android » n'a pas pu être suivi à la lettre. Test de repli fait
+à la place : le rôle **Peripheral** tourné sur l'Android, avec un **iPhone**
+en central via nRF Connect for Mobile (iOS) — un appareil physiquement
+distinct, donc sans le problème classique « un téléphone ne peut pas
+détecter ses propres annonces BLE » qui aurait invalidé un test sur un seul
+appareil.
+
+**Ce qui est confirmé :**
+- Annonce BLE démarrée avec succès côté système (`BLE_GAP: ADV_SET_START`
+  dans `logcat`, après un cycle stop/restart lié à la navigation dans l'UI).
+- Détection et connexion réussies depuis nRF Connect (iOS), en filtrant par
+  `SERVICE_UUID` (l'annonce n'inclut volontairement pas de nom d'appareil,
+  `setIncludeDeviceName(false)` — HelloMeshPeripheral.kt:102).
+- Table GATT lisible depuis nRF Connect : `CHAR_RX` (write) et `CHAR_TX`
+  (notify) présentes avec les bons UUID.
+- **Échange bout-en-bout réussi** : écriture manuelle des 20 octets ASCII
+  (`hello mesh dengon!!!`) sur `CHAR_RX` depuis nRF Connect → écho reçu en
+  notification sur `CHAR_TX` (comportement de `onCharacteristicWriteRequest`,
+  HelloMeshPeripheral.kt:174-177).
+
+**Ce qui n'a PAS pu être mesuré :** le **MTU négocié**. iOS/CoreBluetooth
+n'expose aucune API permettant à l'app (ni donc à nRF Connect côté iOS) de
+déclencher ou d'afficher la négociation MTU côté central — contrairement à
+Android (`BluetoothGatt.requestMtu()`), c'est une limitation de la
+plateforme, pas de l'app ou de la manipulation. nRF Connect pour iOS n'a donc
+pas l'écran « Request MTU » présent sur sa version Android. Cette mesure
+suppose deux appareils **Android**, comme prévu par le protocole d'origine.
+
+**Donc, sur les 4 critères d'acceptation de l'issue #3 :**
+- [x] « 2 appareils échangent 20 octets » — **démontré**, avec la réserve
+  qu'un des deux appareils (iPhone) n'exécute pas notre code
+  (`HelloMeshCentral`), seulement un scanner BLE générique.
+- [ ] « MTU réel négocié mesuré » — toujours pas fait, bloqué par la
+  limitation iOS ci-dessus. Nécessite un second Android.
+- [ ] « Temps scan → connexion → échange mesuré » — non chronométré lors de
+  ce test (fait à la main, sans instrumentation).
+- [ ] « Matrice d'appareils testés » — un seul couple, et un des deux n'est
+  pas dans la plateforme cible (iOS, pas Android).
+
+| Date | Appareil (central) | Appareil (peripheral) | Android | MTU négocié | Scan→connexion | Connexion→échange |
+|---|---|---|---|---|---|---|
+| 2026-09-25 | iPhone 13 Pro Max (iOS 27.2 beta, nRF Connect) — *pas notre code, scanner générique* | Samsung Galaxy A16 (SM-A165F) | 16 (SDK 36) | non mesurable (limitation iOS) | non chronométré | non chronométré |
+| _à remplir_ | *(Android central réel)* | | | | | |
 
 ## Flux principal (exemple)
 
@@ -162,6 +322,16 @@ android/
 - SDK Android installé localement pour vérifier le build de cette session,
   mais **pas dans le dépôt** (outillage machine ; chaque poste/CI devra
   installer le sien, ou la CI Android future s'en chargera).
+- **Spike C (US-103) exécuté partiellement (2026-09-25)** : l'échange BLE
+  bout-en-bout est démontré (Android Peripheral ↔ iPhone/nRF Connect
+  central), mais 3 des 4 critères d'acceptation de l'issue #3 restent
+  ouverts — MTU réel non mesurable avec un central iOS (limitation
+  CoreBluetooth, pas de notre code), timing non chronométré, matrice
+  d'appareils incomplète (un seul couple, pas 100 % Android). Voir « Spike
+  C » ci-dessus pour le détail et le protocole restant à exécuter avec un
+  **second Android**, et `docs/suivi/00-journal.md` pour le compte-rendu.
+  Tant que ce n'est pas fait, US-103 ne peut pas être clos ni le go/no-go
+  A-1 confirmé.
 
 ## Pour l'oral
 

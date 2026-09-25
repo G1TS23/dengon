@@ -448,6 +448,33 @@ future CI).
 **Pour aller plus loin :** doc Gradle « Gradle Module Metadata » — pourquoi
 `.module` est préféré à `.pom` quand les deux sont publiés.
 
+### `BluetoothGatt` Android : les opérations ne sont pas mises en file d'attente
+
+**C'est quoi :** sur une même connexion GATT, `BluetoothGatt` (côté client)
+n'accepte qu'**une opération asynchrone à la fois** (`writeCharacteristic`,
+`readCharacteristic`, `writeDescriptor`, `requestMtu`, `discoverServices`…).
+Le framework ne fait **pas** de file d'attente interne : il attend que le
+callback de l'opération en cours revienne avant d'en accepter une nouvelle
+sur la même connexion.
+**Pourquoi dans dengon :** dans le Spike C (US-103), `HelloMeshCentral`
+enchaînait `g.writeDescriptor(cccd)` (activation des notifications) puis
+`g.writeCharacteristic(rx)` sans attendre la fin du premier — relevé en
+revue de la PR #67.
+**Piège / surprise :** l'échec de la deuxième opération est **silencieux** :
+pas d'exception, `writeCharacteristic` renvoie simplement `false` (ou
+l'opération est ignorée). Sans logguer la valeur de retour, ça ressemble à
+un blocage côté matériel plutôt qu'à un bug de séquencement. La bonne
+pratique est de chaîner chaque opération GATT **depuis le callback de fin**
+de la précédente (`onDescriptorWrite` → déclenche `writeCharacteristic`,
+etc.), ou de maintenir sa propre file. Symétrique côté serveur GATT
+(`BluetoothGattServer`) : toute écriture avec accusé (`WRITE_TYPE_DEFAULT`)
+attend un `sendResponse()` explicite ; sans lui, l'écriture ne se termine
+jamais proprement côté client (timeout ATT).
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ble/spike/HelloMeshCentral.kt`
+(`onDescriptorWrite`), `HelloMeshPeripheral.kt` (`onDescriptorWriteRequest`).
+**Pour aller plus loin :** doc Android « BluetoothGatt » — section sur le
+séquencement des opérations ; issue tracker AOSP historique sur ce
+comportement (recherche « BluetoothGatt operation already in progress »).
 ---
 
 ### `BLE_UUID128_INIT` attend du little-endian — un UUID inversé compile très bien

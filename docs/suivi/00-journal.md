@@ -9,6 +9,57 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-25 — US-103 : Spike C exécuté partiellement (Android + iPhone)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md` (section « Spike C »),
+aucun code modifié
+**Lot :** US-103, Sprint 1
+
+### Fait
+- Préparé l'environnement de build Android sur macOS : installé le nouvel
+  outil unifié **Android CLI** de Google (`curl ... install.sh`, différent de
+  l'ancien `sdkmanager`), SDK installé dans `~/Library/Android/sdk`
+  (`platform-tools`, `platforms;android-34`, `build-tools;34.0.0`),
+  `android/local.properties` créé.
+- Corrigé deux bugs bloquants trouvés en cours de route (voir PR #72,
+  branche séparée, hors périmètre de cette entrée) : `gradlew` committé sans
+  bit exécutable, `verification-metadata.xml` sans checksum `aapt2` pour
+  macOS.
+- Build (`./gradlew assembleDebug`) réussi sur la branche `feat/US-103-
+  SpikeC-HelloMesh`, APK installé via `adb` sur un Samsung Galaxy A16
+  (SM-A165F, Android 16 / SDK 36) branché en USB.
+- Rôle **Peripheral** lancé sur l'Android. Faute d'un second appareil
+  Android, testé avec un **iPhone 13 Pro Max (iOS 27.2 beta)** faisant
+  office de central via **nRF Connect for Mobile**, plutôt que sur le même
+  téléphone (qui ne peut pas détecter ses propres annonces BLE — limitation
+  matérielle classique, pas un bug de l'app).
+- Confirmé : annonce démarrée côté système (`BLE_GAP: ADV_SET_START` en
+  `logcat`), détection + connexion réussies depuis nRF Connect (filtre par
+  `SERVICE_UUID`, l'annonce n'incluant pas de nom d'appareil), table GATT
+  correcte, et **écho bout-en-bout réussi** : write manuel des 20 octets
+  ASCII sur `CHAR_RX` → notification reçue en écho sur `CHAR_TX`.
+- **MTU non mesurable** : recherché l'écran « Request MTU » de nRF Connect
+  sur iOS, introuvable — vérifié par recherche web que CoreBluetooth (iOS)
+  n'expose aucune API pour déclencher/lire la négociation MTU côté central,
+  contrairement à Android. Ce n'est donc pas un problème de manipulation.
+
+### Pourquoi / décisions
+- Le test croisé Android/iPhone n'est pas le protocole officiel (qui demande
+  2 Android), mais il apporte une vraie preuve fonctionnelle indépendante
+  (deux radios BLE distinctes, un scanner générique qui n'est pas notre
+  code) en attendant un second appareil Android.
+
+### Écarts vs conception
+- Aucun — test partiel documenté comme tel, pas une clôture de l'US.
+
+### État après cette session
+- 1 des 4 critères d'acceptation de l'issue #3 démontré (« 2 appareils
+  échangent 20 octets », avec réserve sur le central non-Android). Les 3
+  autres (MTU, timing, matrice d'appareils) restent ouverts — nécessitent un
+  second téléphone Android. US-103 reste ouverte.
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
@@ -153,6 +204,202 @@ YAML valide
   lieu à l'ouverture de la PR.
 
 
+## 2026-09-20 — US-103 : correction revue PR #67 (négociation CCCD/notifications)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/spike/HelloMeshCentral.kt`,
+`HelloMeshPeripheral.kt`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Traité la revue `CHANGES_REQUESTED` de la PR #67
+  (`pullrequestreview-5178818352`) : la négociation des notifications CCCD
+  avait de bonnes chances d'échouer au test réel sur deux téléphones, pour
+  deux raisons cumulées.
+- **Central (`HelloMeshCentral.onServicesDiscovered`)** : `g.writeCharacteristic(rx)`
+  était appelé juste après `g.writeDescriptor(cccd)`, sans attendre la fin de
+  cette opération. `BluetoothGatt` ne met **pas** les opérations en file
+  d'attente : lancer une deuxième opération pendant qu'une première est en
+  vol échoue en général silencieusement. Fix : `rx` gardé en propriété de
+  classe (`rxCharacteristicRef`), écriture de `CHAR_RX` déplacée dans
+  `onDescriptorWrite(...)`, déclenchée seulement après confirmation de
+  l'écriture du CCCD.
+- **Peripheral (`HelloMeshPeripheral.serverCallback`)** : `onDescriptorWriteRequest`
+  n'était pas implémenté. Le central écrit le CCCD en `WRITE_TYPE_DEFAULT`
+  (avec accusé ATT) ; sans `sendResponse()` côté serveur, l'écriture ne se
+  termine jamais proprement (timeout ATT, notifications jamais réellement
+  activées). Fix : ajout de l'override, réponse `GATT_SUCCESS` envoyée
+  systématiquement quand `responseNeeded`.
+
+### Pourquoi / décisions
+- Fix minimal pour un spike, conforme à la suggestion du relecteur — pas de
+  refactor plus large (pas de file d'attente générique des opérations GATT,
+  ce sera à traiter proprement dans `AndroidTransport`, US-213).
+
+### Écarts vs conception
+- Aucun nouvel écart ; corrige un bug d'implémentation, pas un choix de
+  conception.
+
+### Appris
+- `BluetoothGatt` (Android) ne sérialise pas ses opérations lui-même
+  (`write*`, `read*`, `requestMtu`, `discoverServices`…) : chaque opération
+  suivante doit être déclenchée depuis le callback de fin de la précédente,
+  sous peine d'échec silencieux (`writeCharacteristic` renvoie `false` sans
+  exception). Piège BLE Android classique — noté dans
+  `docs/suivi/04-apprentissages.md`.
+
+### État après cette session
+- `./gradlew compileDebugKotlin` et `testDebugUnitTest` passent après le
+  correctif. Le protocole de mesure manuelle (`docs/suivi/modules/android-app.md`
+  « Spike C ») reste **non exécuté** — toujours aucun appareil Android
+  physique disponible dans cet environnement.
+- Correctif à pousser sur la branche de la PR #67 pour re-demande de revue.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+```
+
+---
+
+## 2026-09-11 — US-103 : correction SonarCloud (complexité cognitive `MainActivity.onCreate`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/MainActivity.kt`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Analyse SonarCloud sur la PR #67 (`feat/US-103-SpikeC-HelloMesh` → `main`) :
+  `kotlin:S3776`, « Refactor this method to reduce its Cognitive Complexity
+  from 16 to the 15 allowed. », sur `MainActivity.onCreate` (ligne 41).
+- Extrait tout le contenu du bloc `setContent { ... }` (branchement
+  Central/Peripheral, `LaunchedEffect` de démarrage auto du service,
+  bascule démarrer/arrêter) dans une nouvelle fonction `@Composable`
+  `DengonApp`, appelée depuis `onCreate` avec `permissionsGranted` et
+  des références de méthode (`::startMeshService`, `::stopMeshService`)
+  en paramètres. `onCreate` ne contient plus de branchement, seulement
+  l'appel à `setContent`.
+
+### Pourquoi / décisions
+- Complexité cognitive comptée par imbrication : les lambdas `if`/`else`
+  du bloc `setContent` (démarrage auto, bascule service, écran spike)
+  étaient toutes imbriquées **dans** `onCreate`. Les déplacer dans une
+  fonction composable dédiée les fait compter dans une complexité
+  séparée (sous le seuil), sans changer le comportement.
+- Pas de changement fonctionnel : mêmes callbacks, même état
+  (`serviceRunning`, `showSpike`), simple extraction de méthode.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (extraction de méthode standard pour réduire la
+  complexité cognitive Sonar sur du code Compose).
+
+### État après cette session
+- `./gradlew compileDebugKotlin`, `assembleDebug` et `testDebugUnitTest`
+  passent après le refactor.
+- Correction poussée sur la branche de la PR #67 ; à re-vérifier sur
+  SonarCloud après ré-analyse.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+```
+
+---
+
+## 2026-09-11 — US-103 : code du Spike C (« hello mesh »), non exécuté faute de matériel
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/spike/` (nouveau,
+5 fichiers), `MainActivity.kt`, `docs/suivi/modules/android-app.md`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Implémenté le harnais de mesure du Spike C : `HelloMeshPeripheral`
+  (`BluetoothGattServer` + `BluetoothLeAdvertiser`, publie `SERVICE_UUID`,
+  expose `CHAR_RX`/`CHAR_TX`) et `HelloMeshCentral` (`BluetoothLeScanner` +
+  `BluetoothGatt` client, négocie le MTU, écrit 20 octets, mesure le
+  round-trip de l'écho), conformes aux UUID et au MTU visé de
+  `docs/powl/03-network-protocol.md` §2 et §6.
+- Écran de debug Compose `HelloMeshSpikeScreen` (bouton dédié dans
+  `MainActivity`) : bascule manuelle Central/Peripheral, journal en direct,
+  carte de résultat (MTU, temps scan→connexion, temps connexion→échange,
+  modèle d'appareil).
+- Rôle choisi manuellement plutôt que par la règle anti-boucle
+  `peerID` du protocole : `dengon-core` n'a pas encore d'identité de nœud —
+  simplification assumée et documentée dans le code et la fiche module.
+- Code marqué explicitement **jetable** (commentaires + fiche module) : à
+  supprimer après la décision go/no-go, `AndroidTransport` (US-213)
+  réimplémentera le double rôle proprement.
+- Rédigé le protocole de mesure manuelle (étapes à suivre sur 2 téléphones)
+  et un tableau de résultats à remplir dans
+  `docs/suivi/modules/android-app.md`.
+- Note d'onboarding `android/` créée dans la même fiche (build, test, 3
+  pièges réels rencontrés depuis US-109) — critère d'acceptation US-103
+  indépendant du matériel, donc réalisable ici.
+
+### Pourquoi / décisions
+- **Pas d'accès à 2 téléphones Android dans cet environnement** : contrainte
+  dure de l'issue #3 (US-103). Décidé avec l'utilisateur de préparer le code
+  + le protocole de mesure maintenant, et de **ne pas fabriquer de chiffres**
+  — les 4 critères d'acceptation qui exigent une mesure réelle restent
+  explicitement non cochés, à exécuter et consigner par l'utilisateur.
+- Écran de debug intégré à `android/app` (plutôt qu'un module Gradle séparé) :
+  plus simple à installer sur 2 appareils pour un spike d'1 jour, cohérent
+  avec la portée « code jetable » du DoD §7.2 (un dossier à supprimer plutôt
+  qu'un module à désinscrire du `settings.gradle.kts`).
+- MTU non lisible côté peripheral (API Android ne l'expose pas après coup à
+  ce niveau) : c'est le résultat côté central qui fait foi, documenté dans
+  la fiche module plutôt que de complexifier le peripheral pour le retrouver.
+
+### Écarts vs conception
+- Aucun sur la conception retenue (`docs/synthese/`) : les simplifications
+  (rôle manuel, un seul échange par lancement) sont des choix de portée du
+  **spike**, pas de l'implémentation finale `AndroidTransport` — documentées
+  comme telles dans le code et la fiche module, pas dans
+  `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau ajouté à `04-apprentissages.md` cette session (assemblage
+  d'API BLE déjà documentées par `docs/powl/03-network-protocol.md`, pas de
+  piège Gradle/Sonar inédit).
+
+### État après cette session
+- `./gradlew assembleDebug`, `testDebugUnitTest` et `assembleRelease`
+  passent avec le nouveau code (`ble/spike/`).
+- **Critères d'acceptation US-103 non satisfaits** : les 4 qui exigent une
+  mesure réelle sur 2 téléphones restent à faire — voir
+  `docs/suivi/modules/android-app.md` §« Spike C » pour le protocole exact
+  à suivre et le tableau à remplir.
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+  (section Onboarding + section Spike C ajoutées).
+- 01-etat-du-code.md mis à jour : non (pointeur seul, pas de changement
+  d'avancement tant que le spike n'a pas produit de résultat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL (1 avertissement de dépréciation, corrigé ensuite avec @Suppress)
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew assembleRelease --console=plain
+BUILD SUCCESSFUL (R8/minify actifs, aucune règle proguard custom nécessaire)
+```
+- **Non vérifié, ne peut pas l'être ici** : les 4 critères d'acceptation
+  matériels (échange réel 20 octets, MTU négocié réel, timing réel, matrice
+  d'appareils). Nécessite 2 téléphones Android physiques.
 ## 2026-09-25 — US-111 : vérification visuelle à 360 px (clôture)
 
 **Auteur :** Claude (Opus 5.5)
