@@ -225,6 +225,30 @@ fn reject_vectors_each_violate_a_rule() {
 }
 
 #[test]
+fn accept_vectors_with_ttl_above_1_have_relay_ok() {
+    // Retour de revue #63 round 2, point d'OswinFreyr : un paquet avec
+    // `ttl > 1` mais sans `RELAY_OK` ne serait jamais relayé (synthese/05
+    // §6.1 — règle de relais `RELAY_OK && ttl > 1`), et mourrait donc au
+    // premier saut. Ce test empêche qu'un futur vecteur reproduise
+    // l'incohérence trouvée sur "ack-addressed" (flags=1 avec ttl=7).
+    let doc: Value = serde_json::from_str(VECTORS_JSON).expect("JSON invalide");
+    let accept = doc["accept"].as_array().expect("champ accept");
+
+    for v in accept {
+        let name = v["name"].as_str().unwrap();
+        let raw = hex(v["hex"].as_str().unwrap());
+        let ttl = raw[2];
+        let flags = Flags::from_bits_truncate(raw[3]);
+        if ttl > 1 {
+            assert!(
+                flags.contains(Flags::RELAY_OK),
+                "{name}: ttl={ttl} > 1 mais RELAY_OK absent — ce paquet mourrait au premier saut"
+            );
+        }
+    }
+}
+
+#[test]
 fn inventory_a_le_type_0x0d() {
     // AC US-108 : numéro attribué à INVENTORY.
     assert_eq!(PacketType::Inventory.to_u8(), 0x0D);

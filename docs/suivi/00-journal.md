@@ -10,6 +10,54 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-25 — `protocol::{consts, types}` : revue round 2 d'OswinFreyr sur la PR #63 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/tests/vectors_v0.json`,
+`crates/dengon-core/tests/protocol_vectors.rs`
+**Lot :** US-108, Sprint 1
+
+### Fait
+- Traité le point de la revue round 2 d'Oswin : le vecteur `ack-addressed`
+  portait `flags: 1` (`ADDRESSED` seul) avec `ttl: 7`, alors que
+  `synthese/05` §6.1 classe `ACK` en *directed traffic* (relais déterministe
+  `ttl-1`, règle `RELAY_OK && ttl > 1`). Corrigé en `flags: 9`
+  (`ADDRESSED | RELAY_OK`), octet de flags `01` → `09` dans le `hex`.
+- Ajouté un test de régression `accept_vectors_with_ttl_above_1_have_relay_ok`
+  (suggestion d'Oswin) : vérifie sur **tous** les vecteurs `accept` que
+  `ttl > 1 ⇒ RELAY_OK`. Vérifié qu'il attrape bien le bug (réintroduit
+  temporairement `flags: 1`/`hex` d'origine, le nouveau test échoue avec un
+  message explicite ; restauré ensuite).
+
+### Pourquoi / décisions
+- Sans `RELAY_OK`, un ACK à TTL 7 émis par un nœud à plusieurs sauts du
+  destinataire mourrait au premier relais qui ne le concerne pas — la
+  livraison de l'accusé de réception échouerait silencieusement pour tout
+  message multi-saut.
+
+### Écarts vs conception
+- Aucun — correction d'une incohérence entre le vecteur de test et la
+  conception, pas une déviation de la conception elle-même.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core --test protocol_vectors
+running 4 tests
+test reject_vectors_each_violate_a_rule ... ok
+test inventory_a_le_type_0x0d ... ok
+test accept_vectors_with_ttl_above_1_have_relay_ok ... ok
+test accept_vectors_are_structurally_consistent ... ok
+test result: ok. 4 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+(vert, 0 warning)
+```
+
+---
+
 ## 2026-09-16 — `protocol::{consts, types}` : revue de POWLAIR sur la PR #63 (US-108)
 
 **Auteur :** Claude (Sonnet 5)

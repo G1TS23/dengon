@@ -18,9 +18,9 @@
     },
     {
       "name": "ack-addressed",
-      "note": "0x05 ACK : adresse, non signe (dans une session Noise).",
-      "hex": "010507010000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb00081122334455667788",
-      "expect": { "version": 1, "type": 5, "type_name": "Ack", "ttl": 7, "flags": 1, "addressed": true, "signed": false, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": "bbbbbbbbbbbbbbbb", "payload_len": 8, "payload": "1122334455667788" }
+      "note": "0x05 ACK : adresse, non signe (dans une session Noise), RELAY_OK (synthese/05 §6.1 - ACK est du directed traffic, relais deterministe ttl-1 ; retour de revue #63 round 2, point d'OswinFreyr - sans ce bit, un ACK a TTL 7 ne serait jamais relaye).",
+      "hex": "010507090000019100000000aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb00081122334455667788",
+      "expect": { "version": 1, "type": 5, "type_name": "Ack", "ttl": 7, "flags": 9, "addressed": true, "signed": false, "fragment": false, "sender_id": "aaaaaaaaaaaaaaaa", "recipient_id": "bbbbbbbbbbbbbbbb", "payload_len": 8, "payload": "1122334455667788" }
     },
     {
       "name": "sealed-envelope-broadcast-signed",
