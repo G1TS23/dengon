@@ -153,6 +153,227 @@ YAML valide
   lieu à l'ouverture de la PR.
 
 
+## 2026-09-25 — `protocol::{consts, types}` : revue round 2 d'OswinFreyr sur la PR #63 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/tests/vectors_v0.json`,
+`crates/dengon-core/tests/protocol_vectors.rs`
+**Lot :** US-108, Sprint 1
+
+### Fait
+- Traité le point de la revue round 2 d'Oswin : le vecteur `ack-addressed`
+  portait `flags: 1` (`ADDRESSED` seul) avec `ttl: 7`, alors que
+  `synthese/05` §6.1 classe `ACK` en *directed traffic* (relais déterministe
+  `ttl-1`, règle `RELAY_OK && ttl > 1`). Corrigé en `flags: 9`
+  (`ADDRESSED | RELAY_OK`), octet de flags `01` → `09` dans le `hex`.
+- Ajouté un test de régression `accept_vectors_with_ttl_above_1_have_relay_ok`
+  (suggestion d'Oswin) : vérifie sur **tous** les vecteurs `accept` que
+  `ttl > 1 ⇒ RELAY_OK`. Vérifié qu'il attrape bien le bug (réintroduit
+  temporairement `flags: 1`/`hex` d'origine, le nouveau test échoue avec un
+  message explicite ; restauré ensuite).
+
+### Pourquoi / décisions
+- Sans `RELAY_OK`, un ACK à TTL 7 émis par un nœud à plusieurs sauts du
+  destinataire mourrait au premier relais qui ne le concerne pas — la
+  livraison de l'accusé de réception échouerait silencieusement pour tout
+  message multi-saut.
+
+### Écarts vs conception
+- Aucun — correction d'une incohérence entre le vecteur de test et la
+  conception, pas une déviation de la conception elle-même.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core --test protocol_vectors
+running 4 tests
+test reject_vectors_each_violate_a_rule ... ok
+test inventory_a_le_type_0x0d ... ok
+test accept_vectors_with_ttl_above_1_have_relay_ok ... ok
+test accept_vectors_are_structurally_consistent ... ok
+test result: ok. 4 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+(vert, 0 warning)
+```
+
+---
+
+## 2026-09-16 — `protocol::{consts, types}` : revue de POWLAIR sur la PR #63 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/protocol/types.rs`,
+`crates/dengon-core/tests/{protocol_vectors.rs,vectors_v0.json}`, `Cargo.toml`
+**Lot :** Lot 0 — Fondations (issue #8, US-108). Branche `contract/US-108-protocol-types`.
+
+### Fait
+- 6 points de @POWLAIR, les 2 premiers marqués prioritaires avant le gel du
+  contrat, tous vérifiés avant correction :
+  1. **Garde de longueur fausse de 2 octets** dans `is_rejected()`
+     (`tests/protocol_vectors.rs`) — `HEADER_LEN_BROADCAST`/`_ADDRESSED`
+     incluent déjà les 2 octets de `payload_len`
+     (`tailles_den_tete_coherentes`), donc `raw.len() < hdr + 2` exigeait 2
+     octets de trop. Corrigé en `raw.len() < hdr`. Reproduit : la garde
+     buguée fait échouer `accept_vectors_are_structurally_consistent` sur un
+     paquet valide de `payload_len = 0` (confirmé après avoir ajouté un tel
+     vecteur pour le point 3, voir plus bas).
+  2. **`Flags::has_reserved()` inatteignable hors du module** — aucun
+     constructeur public ne pouvait poser un bit 5-7 (`empty()`, les
+     constantes, `union`/`from_bits_truncate` masquent tous
+     `RESERVED_MASK`). Ajouté `Flags::from_bits_raw(bits: u8) -> Self`, qui
+     préserve les bits verbatim (réservé au diagnostic — le décodage normal
+     reste `from_bits_truncate`).
+  3. **« bit réservé posé ⇒ rejet » contredit `synthese/05:80`** (« ignoré à
+     la réception »). `Header::flags_are_consistent()` ne vérifie plus
+     `!has_reserved()` ; `is_rejected()` (test) ne rejette plus sur ce bit.
+     Le vecteur `reject` `reserved-flag-set` est devenu un vecteur `accept`
+     (`noise-msg-addressed-reserved-bit-ignored`, flags bruts `0x29` →
+     masqués `0x09`). `accept`: 7→8, `reject`: 6→5 ; assertions de comptage
+     ajustées.
+  4. **`GossipPush` retiré de `is_always_signed()`** — `synthese/05:122` le
+     dit non signé (payload = paquets déjà signés individuellement).
+  5. **2 vecteurs broadcast non relayables** (`announce-broadcast-signed`,
+     `log-attest-broadcast-signed`) — `RELAY_OK` absent avec TTL 2-3,
+     incohérent avec `synthese/05:203`. Ajouté (`flags` `0x02`→`0x0a`).
+  6. **`is_addressed()` devient `Option<bool>`** (`None` = `Fragment`,
+     hérite de l'adressage du paquet transporté, `synthese/05:123`) — avant,
+     le test d'intégration court-circuitait `Fragment` avec un
+     `if pt != Fragment` pour contourner un `bool` qui ne pouvait pas
+     représenter ce troisième cas.
+- Activé `cast_possible_truncation`/`cast_sign_loss`/`cast_possible_wrap`
+  dans `[workspace.lints.clippy]` (`Cargo.toml`) : commentés « à activer avec
+  `protocol` (US-108) » — c'est cette US. Un seul site touché (`i as u8` dans
+  un test → `u8::try_from(i).unwrap()`).
+- 2 points « hors diff » de Paul **non traités cette session**, documentés
+  dans `modules/dengon-core.md` (Limites connues) : `timestamp_ms` des
+  vecteurs figé hors tolérance anti-rejeu, `expect.msg_id` absent. Décision :
+  relèvent du design du codec (US-201), pas d'un ajustement de constante —
+  mieux traités avec le décodeur qui en aura l'usage réel.
+
+### Pourquoi / décisions
+- **`has_reserved()` reste un diagnostic, pas retiré** : utile en
+  observabilité (`pkt.rejected`? à trancher en US-201), juste plus utilisé
+  pour rejeter — la doc du champ est corrigée pour ne plus prétendre le
+  contraire de la spec.
+- **`is_addressed()` en `Option<bool>` plutôt qu'un enum à 3 variantes** :
+  `Option` porte exactement la sémantique voulue (« connu » vs « hérite »)
+  sans ajouter de type.
+
+### Écarts vs conception
+- Aucun nouveau — les points 3-6 rapprochent le code de `synthese/05`, ils ne
+  s'en écartent pas.
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- PR #63 : les 6 points + l'activation des lints `cast_*` traités, vérifiés,
+  commit + push à faire.
+- Fiche module mise à jour : `modules/dengon-core.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                                exit 0
+$ cargo build --workspace --all-targets --locked                            exit 0
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   exit 0
+$ cargo check -p dengon-core --no-default-features --locked                 exit 0
+$ cargo test --workspace --all-features --locked
+  dengon-core (lib) : 15 passed ; protocol_vectors : 3 passed ; sœurs : OK
+$ cargo test --workspace --all-features --locked --doc                      exit 0
+```
+- Garde de longueur buguée réintroduite temporairement (`sed`) : confirmé que
+  `accept_vectors_are_structurally_consistent` échoue sur le nouveau vecteur
+  `noise-msg-addressed-reserved-bit-ignored` (30 octets, exactement `hdr`) —
+  exactement le « mirror bug » signalé par Paul (payload_len faible rejeté à
+  tort). Fichier restauré, retesté vert.
+
+---
+
+## 2026-09-10 — `protocol::{consts, types}` + vecteurs de conformité v0 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/protocol/` (nouveau), `src/lib.rs`,
+`Cargo.toml`, `Cargo.lock`, `crates/dengon-core/tests/` (nouveau),
+`docs/suivi/{00-journal, 02-avancement, 03-ecarts, modules/dengon-core, modules/_index}`.
+**Lot :** Lot 0 — Fondations (issue #8, US-108). Branche
+`contract/US-108-protocol-types`, prise après le merge de US-104 (workspace).
+
+### Fait
+- **`protocol::consts`** — ~35 constantes transcrites de `synthese/05` §2 :
+  version, UUIDs GATT, TTL (`TTL_DEFAULT=7`, clamp densité), jitter de relais,
+  seen-set, fragmentation, `MSG_TTL_S`, `FLOOD_MAX_PER_MIN_PEER=20`, budget de
+  copies (v2), `PAD_BUCKETS`, périodes d'ANNOUNCE, tolérance d'horodatage,
+  tailles de champ d'en-tête (`HEADER_LEN_BROADCAST=22`, `_ADDRESSED=30`,
+  `PEER_ID_LEN=8`, `MSG_ID_LEN=32`, `SIGNATURE_LEN=64`). 5 tests.
+- **`protocol::types`** :
+  - `PacketType` (`#[repr(u8)]`, `0x01`–`0x0D`). **`Inventory = 0x0D`** — numéro
+    figé (AC US-108). `from_u8`/`to_u8`, `is_mvp()` (les `GOSSIP_*` `0x06`–`0x08`
+    sont v2), `is_always_signed()`, `is_addressed()`.
+  - `Flags` (newtype `u8`) : `ADDRESSED/SIGNED/FRAGMENT/RELAY_OK/PADDED` +
+    `RESERVED_MASK`. `from_bits_truncate`, `contains`, `has_reserved`, `BitOr`.
+    Pas de crate `bitflags`.
+  - `Header` (en-tête **décodé**, champs seulement) : `header_len()`,
+    `wire_len()`, `flags_are_consistent()`. La (dé)sérialisation est US-201.
+  - `AppFrameKind` (L4 : `Message`, `Ack`, `ReadReceipt` v2, `Profile` post-MVP),
+    `AckStatus` (`Delivered=2`, `Read=3` v2). Alias `PeerId`/`MsgId`/`Signature`.
+  - 7 tests (discriminants contigus, `from_u8`∘`to_u8`, périmètre MVP, bits,
+    `Header`, frames L4).
+- **`tests/vectors_v0.json`** — 7 vecteurs `accept` (announce, noise_msg, ack,
+  sealed_envelope, inventory, fragment, log_attest) + 6 vecteurs `reject`
+  (mauvaise version, type inconnu, bit réservé, `payload_len` incohérent,
+  en-tête tronqué, `SIGNED` sans signature). `tests/protocol_vectors.rs` — 3
+  tests : cohérence structurelle des `accept` via `protocol::{consts, types}`,
+  chaque `reject` viole une règle, `Inventory` = `0x0D`.
+- **`src/lib.rs`** : `PROTOCOL_VERSION` devient un **alias** de
+  `protocol::consts::PROTO_VERSION` (les crates sœurs l'utilisent comme test de
+  liaison — US-104). Doc du module `protocol` ajoutée.
+
+### Pourquoi / décisions
+- **Types livrés sans `codec`** (US-201) : c'est l'objet de l'US-108 — `sync::*`
+  (US-209) peut s'écrire contre `PacketType`/`Flags`/`Header` sans attendre la
+  sérialisation.
+- **`Header.recipient_id: Option<PeerId>`** (pas `PeerId` + booléen) → l'invariant
+  « présent ⇔ `ADDRESSED` » est vérifiable.
+- **Bitfield maison** : 5 bits, API figée, une dépendance de moins.
+- **Vecteurs en JSON neutre**, dans `crates/dengon-core/tests/` faute de
+  `contracts/` sur `main` (voir écarts). Test **structurel** seulement (pas de
+  décodeur).
+
+### Écarts vs conception
+Deux, consignés dans `03-ecarts-conception.md` (2026-09-10) :
+- vecteurs dans `crates/dengon-core/tests/` au lieu de `contracts/packet/`
+  (dossier `contracts/` pas encore sur `main`) — déplacement prévu ;
+- `serde_json` en dev-dependency de `dengon-core` (lecture des vecteurs ;
+  aucun effet `no_std`).
+
+### Appris
+- **`allow-unwrap-in-tests` / `allow-expect-in-tests` du `clippy.toml` ne
+  couvrent PAS les crates de `tests/`** (compilées à part, hors `#[cfg(test)]`) :
+  il faut un `#![allow(clippy::unwrap_used, clippy::expect_used)]` en tête du
+  fichier de test intégré.
+
+### État après cette session
+- `cargo test -p dengon-core` → 14 tests lib + 3 intégration, verts. Toutes les
+  crates sœurs passent (alias `PROTOCOL_VERSION`). `no_std` OK, `fmt` OK,
+  `clippy -D warnings` OK.
+- `protocol::codec` (US-201) peut démarrer : il branchera `decode()` sur
+  `tests/vectors_v0.json` et comparera à `expect`.
+- Fiche `modules/dengon-core.md` mise à jour ; `_index` et `02-avancement` idem.
+- **Contrat à annoncer « gelé »** au point d'équipe (DoD §7.2, type contrat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                   exit 0
+$ cargo build --workspace --all-targets --locked               exit 0
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   exit 0
+$ cargo check -p dengon-core --no-default-features --locked     exit 0
+$ cargo test --workspace --all-features --locked
+  dengon-core (lib) : 14 passed ; protocol_vectors : 3 passed ; sœurs : OK
+$ cargo test --workspace --all-features --locked --doc          exit 0
+```
+
 ## 2026-09-25 — US-111 : vérification visuelle à 360 px (clôture)
 
 **Auteur :** Claude (Opus 5.5)
