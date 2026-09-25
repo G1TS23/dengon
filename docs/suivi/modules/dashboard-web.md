@@ -6,37 +6,29 @@ bidon.
 **Correspond à la conception :** [`docs/olivier/dashboard.md`](../../olivier/dashboard.md)
 §3, §4, §8, §9 ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §5 (« Parcours d'un message »), §11.2 (schéma SQLite `messages`/`message_hops`).
-**Dernière mise à jour :** 2026-09-25
-**État :** esquisse (US-111) — page statique, données en dur, aucun appel
+**Dernière mise à jour :** 2026-09-25 (vérification visuelle)
+**État :** fait (US-111) — page statique, données en dur, aucun appel
 réseau. Pas encore branchée sur l'API (US-217, US-219).
 
-## ⚠️ Vérification visuelle (CSS/mise en page) — non faite dans cette session
+## Vérification visuelle à 360 px — faite le 2026-09-25
 
 Le critère d'acceptation de l'US-111 demande un « rendu correct sur mobile
-(largeur 360 px) » et sa stratégie de test est une « vérification manuelle sur
-mobile + capture d'écran dans la PR ». **Aucun navigateur n'était disponible
-dans l'environnement où ce code a été écrit** : l'extension Claude in Chrome a
-été déclinée, et aucun binaire Chrome/Edge n'a été trouvé sur la machine (ni
-dans les chemins standards, ni dans le registre `App Paths`).
+(largeur 360 px) », vérifié manuellement avec capture d'écran (DoR n°7). À
+l'écriture du code (2026-09-20), aucun navigateur n'était utilisable :
+`app.js`/`data.js` avaient seulement été exécutés sous Node.js contre un DOM
+reconstitué à la main (0 exception sur 5 écrans, aucune classe CSS orpheline).
 
-Pour compenser partiellement, `app.js`/`data.js` ont été **réellement
-exécutés** (pas juste relus) sous Node.js, contre un DOM minimal reconstitué
-à la main (`createElement`/`appendChild`/`innerHTML`/`hashchange`, script
-jetable non commité) : chargement des données, rendu de la liste,
-navigation vers un détail à plusieurs sauts, cas `unknown` sans aucun saut,
-id inconnu de la démo, retour à la liste. **Zéro exception, sortie texte
-conforme** (dates UTC correctes, `—` partout où une donnée manque, `fanout: 0`
-affiché comme `0` et non comme `—`). Complété par un recoupement automatique
-(`grep`) entre les classes générées par `app.js` et les sélecteurs de
-`style.css` : aucune classe orpheline des deux côtés. Ça couvre la classe de
-bugs « logique JS incorrecte / faute de frappe dans un nom de classe ».
+**Le 2026-09-25**, le rendu réel a été vérifié avec le Chromium
+`chrome-headless-shell` (build 1217) déjà installé par Playwright dans
+`~/AppData/Local/ms-playwright/`, en ouvrant `index.html` via `file://` dans
+une fenêtre de 360 px de large. Résultat conforme sur les 4 écrans : aucun
+débordement horizontal, badges de statut visibles et colorés, `—` sur les
+champs absents, message `unknown` sans saut et id inconnu affichés proprement.
+Captures : [`../assets/us-111/`](../assets/us-111/).
 
-Ce qui **reste** non vérifié, parce qu'un DOM reconstitué à la main ne rend
-aucun CSS : la mise en page réelle, le rendu à 360 px, les couleurs, le
-comportement de la grille `auto-fill`. Reste à faire avant de clore
-l'US-111 : ouvrir `dashboard/web/index.html` dans un navigateur (double-clic,
-ou `file://.../index.html`), vérifier à 360 px de large (DevTools → mode
-appareil), et joindre une capture d'écran à la PR.
+Limite : le mode sombre n'a été vu qu'avec le Chromium headless complet, qui
+impose une largeur de fenêtre minimale d'environ 500 px (captures rognées, non
+conservées) ; les couleurs sombres s'appliquent bien, mais pas à 360 px.
 
 ## À quoi ça sert
 
@@ -126,13 +118,11 @@ CORS).
   vérification manuelle (DoR n°7). `app.js`/`data.js` exécutés une fois sous
   Node.js contre un DOM reconstitué à la main (script jetable, non commité) :
   0 exception sur 5 écrans (liste, détail à sauts, détail sans saut, id
-  inconnu, retour liste), sortie texte conforme à l'attendu — voir
-  l'avertissement en tête de fiche pour le détail. Ça couvre la logique ;
-  **le rendu CSS réel dans un navigateur n'est pas vérifié** dans cette
-  session — aucun navigateur disponible (extension Claude in Chrome
-  déclinée, aucun binaire Chrome/Edge trouvé).
-- **À faire avant de clore l'US-111** : ouvrir la page dans un navigateur,
-  vérifier à 360 px de large, capture d'écran dans la PR.
+  inconnu, retour liste), sortie texte conforme à l'attendu.
+- **Rendu réel à 360 px (2026-09-25)** : vérifié dans Chromium
+  (`chrome-headless-shell`, `--window-size=360,…`, `file://`), 4 captures
+  dans [`../assets/us-111/`](../assets/us-111/) — voir la section
+  « Vérification visuelle » en tête de fiche.
 - **SonarCloud (PR #70, 2026-09-25)** : 3 *code smells* `MINOR` signalés sur
   `app.js` (`javascript:S7781`, `S7750`, `S6594`) et corrigés — voir le
   journal du 2026-09-25. Comportement inchangé, pas de nouveau test ajouté
@@ -140,8 +130,8 @@ CORS).
 
 ## Limites connues / TODO
 
-- Rendu jamais vérifié dans un vrai navigateur (voir avertissement en tête de
-  fiche) — bloquant pour clore le DoR de l'US-111.
+- Mode sombre non vérifié à 360 px (seulement à ~500 px, voir en tête de
+  fiche).
 - Pas de branchement sur l'API réelle (US-217/US-219) : tout est en dur dans
   `data.js`.
 - Pas de rafraîchissement automatique (SSE) — hors périmètre de l'US-111,
