@@ -13,7 +13,7 @@
 | Composant | Prévu (conception) | Réel | Avancement | Fiche |
 |---|---|---|---|---|
 | `dengon-core` | crate Rust : protocol, crypto, store, sync, ledger, observability | squelette : bascule `no_std`, `PROTOCOL_VERSION`, 2 tests | 5 % | [dengon-core](modules/dengon-core.md) |
-| `dengon-ble` | trait Transport + impl btleplug | squelette : aucune API, 1 test de liaison | 3 % | [dengon-ble](modules/dengon-ble.md) |
+| `dengon-ble` | trait Transport + impl btleplug | **contrat livré** (US-105) : `Transport`, `MockTransport`, suite de conformité (12 cas). Pas d'implémentation radio | 40 % | [dengon-ble.md](modules/dengon-ble.md) |
 | `dengon-node` | binaire CLI (nœud headless) | squelette : `main` affiche sa version | 3 % | [dengon-node](modules/dengon-node.md) |
 | `dengon-sim` | simulateur multi-nœuds | squelette : lib + bin, graine fixe déclarée | 3 % | [dengon-sim](modules/dengon-sim.md) |
 | `dengon-verify` | binaire de vérif de journal chaîné (A-5 / B-5) | squelette : enum `Verdict` (Ok/Broken/Fork/Gap) | 3 % | [dengon-verify](modules/dengon-verify.md) |
@@ -22,6 +22,8 @@
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
 | Dashboard `api` | FastAPI + SQLite + SSE (A-5) | squelette : `/healthz` + `/ingest/batch` permissif, migrations, 19 tests (US-110, PR #59) | ~10 % | [dashboard-api](modules/dashboard-api.md) |
 | Dashboard `web` | page légère + SSE (A-5) | — | 0 % | — |
+| Dashboard `api` | FastAPI + SQLite + SSE (A-5) | — | 0 % | — |
+| Dashboard `web` | page légère + SSE (A-5) | **squelette livré** (US-111) : page statique liste + détail (timeline des sauts), données bidon, aucun appel réseau, rendu vérifié à 360 px. Pas d'API ni de SSE (US-217/US-219) | 15 % | [dashboard-web](modules/dashboard-web.md) |
 | Contrats (`contracts/`) | schémas d'événements + fixtures golden | — | 0 % | — |
 | Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | — | 0 % | — |
 
