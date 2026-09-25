@@ -7,7 +7,7 @@ requis pour un nœud mesh (US-109).
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109.
-**Dernière mise à jour :** 2026-09-20
+**Dernière mise à jour :** 2026-09-25
 **État :** esquisse (squelette du service de fond ; pas de logique BLE réelle
 dans l'app elle-même — voir « Spike C » ci-dessous pour le code GATT jetable
 qui dérisque `AndroidTransport`)
@@ -166,16 +166,51 @@ ne se termine jamais côté serveur. Voir `docs/suivi/00-journal.md`, entrée du
 
 ### Résultats mesurés
 
-**⚠️ Non exécuté** : aucun appareil Android physique disponible dans
-l'environnement où ce code a été écrit (contrainte dure de l'issue). Les
-critères d'acceptation « deux téléphones échangent 20 octets », « MTU
-négocié mesuré », « temps d'établissement mesuré » et « matrice d'appareils »
-**ne sont donc pas encore satisfaits** — voir `docs/suivi/00-journal.md` et
-« Limites connues / TODO » ci-dessous.
+**🟡 Partiellement exécuté** le 2026-09-25 : un seul appareil Android
+disponible (pas de second Android sous la main), donc le protocole officiel
+« 2 téléphones Android » n'a pas pu être suivi à la lettre. Test de repli fait
+à la place : le rôle **Peripheral** tourné sur l'Android, avec un **iPhone**
+en central via nRF Connect for Mobile (iOS) — un appareil physiquement
+distinct, donc sans le problème classique « un téléphone ne peut pas
+détecter ses propres annonces BLE » qui aurait invalidé un test sur un seul
+appareil.
+
+**Ce qui est confirmé :**
+- Annonce BLE démarrée avec succès côté système (`BLE_GAP: ADV_SET_START`
+  dans `logcat`, après un cycle stop/restart lié à la navigation dans l'UI).
+- Détection et connexion réussies depuis nRF Connect (iOS), en filtrant par
+  `SERVICE_UUID` (l'annonce n'inclut volontairement pas de nom d'appareil,
+  `setIncludeDeviceName(false)` — HelloMeshPeripheral.kt:102).
+- Table GATT lisible depuis nRF Connect : `CHAR_RX` (write) et `CHAR_TX`
+  (notify) présentes avec les bons UUID.
+- **Échange bout-en-bout réussi** : écriture manuelle des 20 octets ASCII
+  (`hello mesh dengon!!!`) sur `CHAR_RX` depuis nRF Connect → écho reçu en
+  notification sur `CHAR_TX` (comportement de `onCharacteristicWriteRequest`,
+  HelloMeshPeripheral.kt:174-177).
+
+**Ce qui n'a PAS pu être mesuré :** le **MTU négocié**. iOS/CoreBluetooth
+n'expose aucune API permettant à l'app (ni donc à nRF Connect côté iOS) de
+déclencher ou d'afficher la négociation MTU côté central — contrairement à
+Android (`BluetoothGatt.requestMtu()`), c'est une limitation de la
+plateforme, pas de l'app ou de la manipulation. nRF Connect pour iOS n'a donc
+pas l'écran « Request MTU » présent sur sa version Android. Cette mesure
+suppose deux appareils **Android**, comme prévu par le protocole d'origine.
+
+**Donc, sur les 4 critères d'acceptation de l'issue #3 :**
+- [x] « 2 appareils échangent 20 octets » — **démontré**, avec la réserve
+  qu'un des deux appareils (iPhone) n'exécute pas notre code
+  (`HelloMeshCentral`), seulement un scanner BLE générique.
+- [ ] « MTU réel négocié mesuré » — toujours pas fait, bloqué par la
+  limitation iOS ci-dessus. Nécessite un second Android.
+- [ ] « Temps scan → connexion → échange mesuré » — non chronométré lors de
+  ce test (fait à la main, sans instrumentation).
+- [ ] « Matrice d'appareils testés » — un seul couple, et un des deux n'est
+  pas dans la plateforme cible (iOS, pas Android).
 
 | Date | Appareil (central) | Appareil (peripheral) | Android | MTU négocié | Scan→connexion | Connexion→échange |
 |---|---|---|---|---|---|---|
-| _à remplir_ | | | | | | |
+| 2026-09-25 | iPhone 13 Pro Max (iOS 27.2 beta, nRF Connect) — *pas notre code, scanner générique* | Samsung Galaxy A16 (SM-A165F) | 16 (SDK 36) | non mesurable (limitation iOS) | non chronométré | non chronométré |
+| _à remplir_ | *(Android central réel)* | | | | | |
 
 ## Flux principal (exemple)
 
@@ -287,14 +322,16 @@ négocié mesuré », « temps d'établissement mesuré » et « matrice d'appar
 - SDK Android installé localement pour vérifier le build de cette session,
   mais **pas dans le dépôt** (outillage machine ; chaque poste/CI devra
   installer le sien, ou la CI Android future s'en chargera).
-- **Spike C (US-103) écrit mais non exécuté** : `ble/spike/` compile et
-  `assembleDebug`/`assembleRelease`/`testDebugUnitTest` passent, mais aucun
-  appareil Android physique disponible dans l'environnement où ce code a
-  été écrit — impossible de produire les chiffres exigés par les critères
-  d'acceptation (MTU réel, timing, matrice d'appareils). Voir « Spike C »
-  ci-dessus pour le protocole de mesure à exécuter, et
-  `docs/suivi/00-journal.md` pour le détail. Tant que ce n'est pas fait,
-  US-103 ne peut pas être clos ni le go/no-go A-1 confirmé.
+- **Spike C (US-103) exécuté partiellement (2026-09-25)** : l'échange BLE
+  bout-en-bout est démontré (Android Peripheral ↔ iPhone/nRF Connect
+  central), mais 3 des 4 critères d'acceptation de l'issue #3 restent
+  ouverts — MTU réel non mesurable avec un central iOS (limitation
+  CoreBluetooth, pas de notre code), timing non chronométré, matrice
+  d'appareils incomplète (un seul couple, pas 100 % Android). Voir « Spike
+  C » ci-dessus pour le détail et le protocole restant à exécuter avec un
+  **second Android**, et `docs/suivi/00-journal.md` pour le compte-rendu.
+  Tant que ce n'est pas fait, US-103 ne peut pas être clos ni le go/no-go
+  A-1 confirmé.
 
 ## Pour l'oral
 

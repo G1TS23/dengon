@@ -89,6 +89,17 @@ résolution.
   matrice d'appareils) restent à produire manuellement avant de considérer
   le Spike C réussi ; protocole de mesure dans
   `docs/suivi/modules/android-app.md` §« Spike C ».
+  **Spike C, mise à jour (2026-09-25)** : exécuté **partiellement**, faute
+  d'un second Android — rôle Peripheral testé sur un Samsung Galaxy A16 avec
+  un iPhone 13 Pro Max (nRF Connect) en central de repli. Échange BLE
+  bout-en-bout confirmé (annonce, connexion, écriture + écho), mais le MTU
+  réel **n'a pas pu être mesuré** : iOS/CoreBluetooth n'expose aucune API de
+  négociation MTU côté central, à la différence d'Android — limitation de
+  plateforme, pas de manipulation. Timing et matrice d'appareils toujours pas
+  produits. **Le Spike C n'est donc toujours pas considéré réussi** : il
+  manque un vrai second appareil Android pour les 3 critères restants (MTU,
+  timing, matrice). Détail dans `docs/suivi/00-journal.md`, entrée du
+  2026-09-25.
 
 ### A-2. Un seul moteur `dengon-core` ou deux implémentations ?
 

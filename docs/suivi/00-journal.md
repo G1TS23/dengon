@@ -9,6 +9,57 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-25 — US-103 : Spike C exécuté partiellement (Android + iPhone)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md` (section « Spike C »),
+aucun code modifié
+**Lot :** US-103, Sprint 1
+
+### Fait
+- Préparé l'environnement de build Android sur macOS : installé le nouvel
+  outil unifié **Android CLI** de Google (`curl ... install.sh`, différent de
+  l'ancien `sdkmanager`), SDK installé dans `~/Library/Android/sdk`
+  (`platform-tools`, `platforms;android-34`, `build-tools;34.0.0`),
+  `android/local.properties` créé.
+- Corrigé deux bugs bloquants trouvés en cours de route (voir PR #72,
+  branche séparée, hors périmètre de cette entrée) : `gradlew` committé sans
+  bit exécutable, `verification-metadata.xml` sans checksum `aapt2` pour
+  macOS.
+- Build (`./gradlew assembleDebug`) réussi sur la branche `feat/US-103-
+  SpikeC-HelloMesh`, APK installé via `adb` sur un Samsung Galaxy A16
+  (SM-A165F, Android 16 / SDK 36) branché en USB.
+- Rôle **Peripheral** lancé sur l'Android. Faute d'un second appareil
+  Android, testé avec un **iPhone 13 Pro Max (iOS 27.2 beta)** faisant
+  office de central via **nRF Connect for Mobile**, plutôt que sur le même
+  téléphone (qui ne peut pas détecter ses propres annonces BLE — limitation
+  matérielle classique, pas un bug de l'app).
+- Confirmé : annonce démarrée côté système (`BLE_GAP: ADV_SET_START` en
+  `logcat`), détection + connexion réussies depuis nRF Connect (filtre par
+  `SERVICE_UUID`, l'annonce n'incluant pas de nom d'appareil), table GATT
+  correcte, et **écho bout-en-bout réussi** : write manuel des 20 octets
+  ASCII sur `CHAR_RX` → notification reçue en écho sur `CHAR_TX`.
+- **MTU non mesurable** : recherché l'écran « Request MTU » de nRF Connect
+  sur iOS, introuvable — vérifié par recherche web que CoreBluetooth (iOS)
+  n'expose aucune API pour déclencher/lire la négociation MTU côté central,
+  contrairement à Android. Ce n'est donc pas un problème de manipulation.
+
+### Pourquoi / décisions
+- Le test croisé Android/iPhone n'est pas le protocole officiel (qui demande
+  2 Android), mais il apporte une vraie preuve fonctionnelle indépendante
+  (deux radios BLE distinctes, un scanner générique qui n'est pas notre
+  code) en attendant un second appareil Android.
+
+### Écarts vs conception
+- Aucun — test partiel documenté comme tel, pas une clôture de l'US.
+
+### État après cette session
+- 1 des 4 critères d'acceptation de l'issue #3 démontré (« 2 appareils
+  échangent 20 octets », avec réserve sur le central non-Android). Les 3
+  autres (MTU, timing, matrice d'appareils) restent ouverts — nécessitent un
+  second téléphone Android. US-103 reste ouverte.
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
