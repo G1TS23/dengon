@@ -18,6 +18,8 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **peerID** | Identifiant court (8 octets) d'un nœud = début du hash de sa clé publique. Stable, pseudonyme. |
 | **msgID** | Identifiant d'un paquet = hash de son contenu. Sert à dédupliquer et à suivre. |
 | **msg_uuid** | Identifiant d'un **message applicatif**, stable de bout en bout (le `msgID` peut changer si le paquet est re-scellé). |
+| **msg_log_id** | `hex(SHA-256(msgID)[0..16])` : version **hachée et raccourcie** du `msgID`, utilisée uniquement côté dashboard/journal — anti-corrélation, jamais le `msgID` ni le `msg_uuid` en clair. |
+| **node_id** (dashboard) | Identifiant **pseudonyme stable** d'un nœud côté dashboard (`relay-3f2a9c`, `client-9c1d40`), différent du code anonyme *par message* d'`docs/olivier/dashboard.md` §6 — les deux modèles coexistent dans la conception, `docs/synthese/` retient le `node_id` stable pour permettre la vérification du journal chaîné par appareil (A-7). |
 | **Noise (XX / X)** | Cadre standard pour établir un canal chiffré. `XX` = session bidirectionnelle authentifiée ; `X` = message scellé à sens unique vers une clé connue. |
 | **Forward secrecy** | Propriété : voler une clé aujourd'hui ne permet pas de déchiffrer les messages d'hier. |
 | **Ed25519 / X25519** | Ed25519 = signatures (prouver qui parle). X25519 = accord de clés (établir un secret partagé). Même courbe (Curve25519), usages différents. |
