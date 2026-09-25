@@ -28,6 +28,10 @@ d'organisation §10.3 point 3).
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
+| `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
+
+Pas encore de fiche (le composant n'existe pas) :
+dashboard `api` et `web`.
 | `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
 
 Pas encore de fiche (le composant n'existe pas) : application Android, firmware

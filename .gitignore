@@ -258,6 +258,33 @@ cmake-build-*/
 CMakeFiles/
 CMakeCache.txt
 
+# ===== Firmware ESP-IDF (firmware/dengon-relay) =====
+# `build/` est déjà avalé par la règle générique du même nom plus haut, mais on
+# l'ancre ici pour que la règle reste lisible depuis le firmware.
+firmware/*/build/
+
+# `sdkconfig` est GÉNÉRÉ à partir de sdkconfig.defaults et des réglages faits en
+# `idf.py menuconfig`. Le versionner produirait un diff illisible de ~1500
+# lignes à chaque montée de version d'ESP-IDF, et surtout il MASQUERAIT
+# sdkconfig.defaults : ESP-IDF ne relit les valeurs par défaut que si
+# `sdkconfig` est absent. La configuration qui fait foi est donc
+# sdkconfig.defaults — et lui EST versionné.
+firmware/*/sdkconfig
+firmware/*/sdkconfig.old
+
+# Dépendances tirées par le gestionnaire de composants d'ESP-IDF : l'équivalent
+# de node_modules/, reconstruit et jamais édité à la main.
+firmware/*/managed_components/
+
+# En revanche `dependencies.lock` DEVRA être versionné le jour où un
+# idf_component.yml apparaîtra — même raisonnement que Cargo.lock (US-104) : un
+# build embarqué non reproductible n'est pas auditable. Ne pas l'ajouter ici.
+#
+# ⚠ Piège pour l'US-307 : la règle `*.a` de la section C / C++ ci-dessus
+# ignorerait silencieusement components/dengon_core_ffi/libdengon_core.a. Si
+# cette archive doit être versionnée, il faudra la ré-autoriser explicitement
+# (`!firmware/*/components/**/*.a`).
+
 # ===== Bases de données / data locale =====
 *.sqlite
 *.sqlite3

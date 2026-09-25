@@ -516,3 +516,85 @@ PR #60. Ajouter `required` au schéma du validateur a permis de supprimer la
 boucle : une seule vérification, native, au lieu de deux qui doivent rester
 synchronisées.
 **Où c'est utilisé :** `contracts/tools/validate.py::_payload_validator`.
+### `BLE_UUID128_INIT` attend du little-endian — un UUID inversé compile très bien
+
+**C'est quoi :** NimBLE range les UUID 128 bits dans un tableau de 16 octets
+`ble_uuid128_t.value[]`, stocké **à l'envers de la forme textuelle**. Sa propre
+fonction `ble_uuid_to_str()` le prouve : elle réimprime `value[15]`, puis
+`value[14]`, jusqu'à `value[0]`. Donc pour écrire `6d656e67-…-0000` dans un
+`BLE_UUID128_INIT(...)`, on saisit les octets **de droite à gauche**.
+
+**Pourquoi dans dengon :** les trois UUID du service `dengon` sont figés par la
+décision C-2 et doivent correspondre **exactement** entre le firmware, l'app
+Android et `dengon-core`. Un octet dans le mauvais sens et les deux moitiés du
+maillage ne se voient tout simplement pas.
+
+**Piège / surprise :** l'erreur est **totalement silencieuse**. Recopier la
+chaîne de gauche à droite compile, link, boote et annonce — un UUID inversé que
+seul un scanner BLE révèle, et encore, à condition de le lire caractère par
+caractère. Aucun outil de la chaîne ne peut aider : pour le compilateur, ce sont
+seize octets valides. Deux garde-fous retenus : (1) un contrôle visuel — le
+**dernier** octet de chaque tableau vaut `0x6d`, le `m` de `meng`, et le
+**premier** est le discriminant `0x00`/`0x01`/`0x02` ; (2) le callback
+`gatts_register_cb` imprime au démarrage les UUID tels que NimBLE les a
+réellement enregistrés, ce qui déplace la vérification du scanner vers le
+moniteur série. Détail amusant : ces UUID ne sont pas aléatoires, ce sont
+14 octets d'ASCII (`meng-dengon-v1`) suivis de 2 octets de discriminant — ce qui
+rend l'inversion lisible à l'œil nu une fois qu'on le sait.
+
+**Où c'est utilisé :** `firmware/dengon-relay/main/dengon_gatt.c`, les trois
+constantes en tête de fichier.
+
+**Pour aller plus loin :** `mynewt-nimble/nimble/host/src/ble_uuid.c`, fonction
+`ble_uuid_to_str()`.
+
+---
+
+### Un paquet d'annonce BLE tient dans 31 octets, et le dépassement se voit à l'exécution
+
+**C'est quoi :** une annonce BLE 4.x transporte au plus **31 octets** de données,
+découpés en champs `longueur ‖ type ‖ valeur` — donc 2 octets de surcoût par
+champ. Un second paquet de 31 octets, la **réponse de scan**, est envoyé à la
+demande : un scanner qui voit une annonce `ADV_IND` émet un `SCAN_REQ` et reçoit
+ce complément.
+
+**Pourquoi dans dengon :** ce que la conception impose sature déjà le budget —
+Flags (3) + liste complète d'UUID 128 bits (18) + manufacturer data (9) =
+**30 octets sur 31**. Le nom de l'appareil ne tenait pas : il est parti en
+réponse de scan. L'UUID de service, lui, devait impérativement rester dans le
+paquet principal, puisque c'est sur lui que les pairs filtrent leur scan.
+
+**Piège / surprise :** le dépassement n'est **pas** détecté à la compilation.
+`ble_gap_adv_set_fields()` renvoie `BLE_HS_EMSGSIZE` (`0x0C`) au démarrage, et
+si l'on ne teste pas son code de retour, la carte se contente de ne jamais
+annoncer — sans le moindre message. L'exemple officiel `bleprph` met un
+`tx_pwr_lvl` dans le paquet principal : ces 3 octets sont exactement ceux qui
+nous manquaient. L'ESP32 étant en Bluetooth 4.2, l'*extended advertising* de
+BLE 5 (jusqu'à 255 octets) n'est pas une porte de sortie.
+
+**Où c'est utilisé :** `firmware/dengon-relay/main/main.c`, fonction
+`dengon_advertise()`.
+
+---
+
+### `sdkconfig.defaults` n'est lu que si `sdkconfig` n'existe pas
+
+**C'est quoi :** un projet ESP-IDF a deux fichiers de configuration.
+`sdkconfig.defaults` est écrit à la main et versionné ; `sdkconfig` est
+**généré** au premier build à partir des defaults, puis modifié par
+`idf.py menuconfig`. C'est `sdkconfig` que lit la compilation.
+
+**Pourquoi dans dengon :** toute la configuration qui fait foi — host NimBLE
+plutôt que Bluedroid, rôles BLE, MTU préféré, table de partitions — vit dans
+`sdkconfig.defaults`, le seul des deux qui soit versionné.
+
+**Piège / surprise :** la génération n'a lieu **qu'une fois**. Corriger une
+ligne de `sdkconfig.defaults` après un premier build ne produit **aucun effet**,
+et surtout **aucun avertissement** : on relit son fichier dix fois en cherchant
+la faute de frappe. Remède : `idf.py fullclean`, ou supprimer `sdkconfig`. Le
+corollaire est plus vicieux : un réglage fait en `menuconfig` atterrit dans
+`sdkconfig`, qui est dans le `.gitignore` — il marche sur votre machine, et
+nulle part ailleurs, CI comprise.
+
+**Où c'est utilisé :** `firmware/dengon-relay/sdkconfig.defaults` (l'avertissement
+est en tête du fichier), rappelé dans `docs/suivi/modules/firmware-relay.md`.
