@@ -20,7 +20,7 @@ d'organisation §10.3 point 3).
 | Module | Fiche | État | Dernière mise à jour |
 |---|---|---|---|
 | `dengon-core` | [dengon-core.md](dengon-core.md) | esquisse | 2026-09-09 |
-| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |
+| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-16 |
 | `dengon-node` | [dengon-node.md](dengon-node.md) | esquisse | 2026-09-09 |
 | `dengon-sim` | [dengon-sim.md](dengon-sim.md) | esquisse | 2026-09-09 |
 | `dengon-verify` | [dengon-verify.md](dengon-verify.md) | esquisse | 2026-09-09 |
@@ -28,8 +28,9 @@ d'organisation §10.3 point 3).
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
+| `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
 
 Pas encore de fiche (le composant n'existe pas) : application Android, firmware
 `dengon-relay`, dashboard `api` (fiche sur la branche PR #59) et `web`.
 Pas encore de fiche (le composant n'existe pas) : firmware `dengon-relay`,
-dashboard `api` et `web`.
+dashboard `api`.
