@@ -10,6 +10,107 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-25 — Réponse à la revue PR #69 (US-106) + correctifs SonarCloud PR #70 (US-111)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-ffi/src/lib.rs` (branche `feat/US-106-ffi-contract-v0`,
+PR #69), `android/app/src/main/java/com/dengon/app/ffi/DengonNodeStub.kt` +
+`android/app/src/test/java/com/dengon/app/ffi/DengonNodeStubTest.kt` (idem),
+`dashboard/web/app.js` (branche `chore/US-111-squelette-dashboard-web`, PR #70)
+**Lot :** US-106 (Sprint 1) et US-111 (Sprint 2) — pas de nouveau lot, réponse
+à des retours sur du travail déjà livré
+
+### Fait
+- Passage en revue des PR ouvertes (`gh pr list --author @me`) : PR #69
+  (`CHANGES_REQUESTED`), PR #70 et #67 (`APPROVED`).
+- **PR #69** — traité les 3 points bloquants du commentaire de revue
+  (`crates/dengon-ffi/src/lib.rs`), à la main, **sans `cargo`** (voir
+  Vérification ci-dessous) :
+  - Ajouté `#![allow(unused_qualifications, clippy::empty_line_after_doc_comments)]`
+    à côté de `#![allow(unsafe_code)]` (lints déclenchés par le scaffolding
+    généré par `uniffi::include_scaffolding!`, pas par notre code).
+  - Reformaté à la main ce que `cargo fmt` aurait changé : variante
+    `NodeEvent::StatusChanged` sur plusieurs lignes (largeur > seuil
+    `struct_variant_width` de `use_small_heuristics = "Default"`), et les
+    chaînes `.get(...).ok_or(...)?[.to_vec()]` / `match state.conversations
+    .iter_mut().find(...)` cassées sur plusieurs lignes (largeur > seuil
+    `chain_width`), conformément à `crates/rustfmt.toml`.
+  - `super::version()` → `version()` dans le test (qualification inutile,
+    `use super::*;` déjà en scope) ; `pending_events.drain(..).collect()` →
+    `std::mem::take(&mut self.lock_state().pending_events)`.
+  - **`Cargo.lock` toujours pas régénéré** : ça exige un vrai `cargo build`,
+    impossible dans cet environnement (voir Vérification). Reste le seul
+    point bloquant restant côté Rust, déjà documenté dans la description de
+    la PR #69.
+  - **Bug Kotlin réel** (`DengonNodeStub.kt`, `DengonIdentity.fromQrCode`) :
+    un payload tronqué (ex. `"dengon:v1:"`) plantait avec
+    `IndexOutOfBoundsException` au lieu de lever `DengonException` comme le
+    promet le contrat (`[Throws=DengonError] identity_from_qr_code` dans le
+    `.udl`). Ajouté un bornage explicite (`payload.isEmpty()`, puis
+    `payload.size < offset + pseudoLen + 2*KEY_LEN`) qui lève
+    `DengonException`, symétrique au `.get(...).ok_or(...)` côté Rust.
+    Test de régression ajouté (`DengonNodeStubTest.kt`) et vérifié vert.
+- **PR #70** — corrigé les 3 *code smells* SonarCloud (`MINOR`, tous dans
+  `dashboard/web/app.js`, interrogés via l'API publique
+  `sonarcloud.io/api/issues/search?componentKeys=G1TS23_dengon&pullRequest=70`) :
+  `statut.replace(/_/g, "-")` → `statut.replaceAll("_", "-")` (l.72),
+  `DATA.messages.filter(...)[0]` → `DATA.messages.find(...)` (l.163),
+  `hash.match(/^#\/message\/(.+)$/)` → `/^#\/message\/(.+)$/.exec(hash)`
+  (l.217). PR #67 : 0 issue SonarCloud ouverte.
+
+### Pourquoi / décisions
+- Corrections Rust faites à la main plutôt qu'avec `cargo fmt`/`clippy` :
+  cette machine n'a **aucun toolchain Rust installé** (déjà signalé dans la
+  description de la PR #69 comme condition de l'environnement où la PR a été
+  codée à l'origine — même limite ici). Les changements sont donc du
+  **best-effort documenté**, à confirmer par quelqu'un avec `cargo` avant de
+  considérer les points fmt/clippy réellement clos.
+- Pas de commit/push : `CLAUDE.md` interdit de committer sans demande
+  explicite. Les fichiers modifiés sont laissés dans l'arbre de travail sur
+  chacune des deux branches (`feat/US-106-ffi-contract-v0`,
+  `chore/US-111-squelette-dashboard-web`) pour relecture avant commit.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rien de nouveau (voir 04-apprentissages.md pour la note existante sur
+  l'absence de toolchain Rust côté US-106, toujours valable)
+
+### État après cette session
+- PR #69 : reste bloquée sur `Cargo.lock` (nécessite un `cargo build` réel)
+  et sur la vérification effective de `cargo fmt --check` /
+  `cargo clippy -D warnings` — les correctifs Rust ci-dessus n'ont pas pu
+  être compilés localement.
+- PR #70 : les 3 issues SonarCloud `MINOR` corrigées, à repousser pour
+  qu'un nouveau scan confirme.
+- Fiche(s) module mise(s) à jour : aucune (pas de changement de forme/API,
+  seulement fmt/clippy/bugfix)
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh pr list --author "@me" --state all --json number,reviewDecision
+PR #69 CHANGES_REQUESTED, #70 et #67 APPROVED
+
+$ curl -s "https://sonarcloud.io/api/issues/search?componentKeys=G1TS23_dengon&pullRequest=70&resolved=false"
+3 issues MINOR (javascript:S7781, S7750, S6594) — confirmées corrigées par relecture du diff
+
+$ cd android && ./gradlew testDebugUnitTest --tests "com.dengon.app.ffi.DengonNodeStubTest"
+BUILD SUCCESSFUL — 6/6 tests (dont le nouveau test de régression fromQrCode)
+
+$ cd android && ./gradlew assembleDebug
+BUILD SUCCESSFUL
+```
+- **Pas exécuté / pas possible** : `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo build --workspace`, `cargo test -p dengon-ffi` — `cargo` absent de
+  cette machine (`command not found`, pas de `rustup`/`cargo.exe` trouvé sur
+  le système). Les correctifs `lib.rs` sont donc **non compilés**, à vérifier
+  avant de merger la PR #69.
+
+---
+
 ## 2026-09-20 — US-106 : contrat `dengon-ffi` v0 (UDL) + bouchon Kotlin
 
 **Auteur :** Claude (Sonnet 5)

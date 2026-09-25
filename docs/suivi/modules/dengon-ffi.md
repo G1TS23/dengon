@@ -2,16 +2,16 @@
 
 **Rôle en une phrase :** le pont qui permet à l'application Android, écrite en Kotlin, d'appeler le cœur écrit en Rust.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §3 et §5 ; [`docs/powl/09-data-model.md`](../../powl/09-data-model.md) §1/§3 (formats QR, code de vérification).
-**Dernière mise à jour :** 2026-09-20
-**État :** **contrat v0 gelé** (US-106) — UDL + bouchon Kotlin. Pas encore branché sur `dengon-core` (US-301/US-302).
+**Dernière mise à jour :** 2026-09-25
+**État :** **contrat v0 gelé** (US-106) — UDL + bouchon Kotlin. Pas encore branché sur `dengon-core` (US-301/US-302). Retours de revue PR #69 traités le 2026-09-25 (voir journal), sauf `Cargo.lock`.
 
-## ⚠️ Vérification côté Rust — non faite dans cette session
+## ⚠️ Vérification côté Rust — toujours pas faite (2 sessions de suite, aucune n'a `cargo`)
 
 Cette crate ajoute une dépendance externe réelle (`uniffi`) pour la première
-fois du workspace. L'environnement où l'US-106 a été codée **n'a aucun
-toolchain Rust installé** (`cargo`/`rustc` absents) — contrainte dure de la
-session, comme l'absence d'appareil Android pour le Spike C (US-103).
-Conséquences concrètes :
+fois du workspace. **Aucune des machines utilisées jusqu'ici pour ce module
+n'a de toolchain Rust installé** (`cargo`/`rustc`/`rustup` absents) — même
+contrainte le 2026-09-20 (écriture initiale) et le 2026-09-25 (réponse à la
+revue PR #69). Conséquences concrètes :
 
 - `Cargo.lock` **n'a pas été régénéré**. `cargo build --locked` (job `core`
   de la CI) va très probablement échouer avec *"the lock file … needs to be
@@ -19,11 +19,14 @@ Conséquences concrètes :
   surprise à corriger en catastrophe. **Prochaine étape obligatoire avant
   merge** : quelqu'un avec `cargo` installé lance `cargo build --workspace`
   une fois à la racine, ce qui régénère `Cargo.lock`, puis commit/push.
-- `cargo fmt --check` et `cargo clippy -D warnings` n'ont **pas** pu être
-  exécutés sur `crates/dengon-ffi/`. Le code a été écrit et relu à la main en
-  visant `crates/rustfmt.toml` (max_width 100, etc.) et
-  `[workspace.lints]` (pas d'`unwrap`/`expect` hors test, `Debug` sur tout
-  type public, etc.), mais rien ne remplace un run réel.
+- `cargo fmt --check` et `cargo clippy -D warnings` n'ont **toujours pas** pu
+  être exécutés sur `crates/dengon-ffi/`. Le 2026-09-25, les 3 points fmt/
+  clippy signalés par la revue de la PR #69 ont été corrigés **à la main**
+  (variante `NodeEvent::StatusChanged` multi-lignes, chaînes `.get()/.find()`
+  cassées selon `crates/rustfmt.toml`, `super::version()` → `version()`,
+  `drain(..).collect()` → `std::mem::take`, `#![allow(unused_qualifications,
+  clippy::empty_line_after_doc_comments)]` ajouté pour le scaffolding généré)
+  — mais **non compilés/vérifiés**, toujours en attente d'un run `cargo` réel.
 - L'API exacte d'UniFFI `0.28.3` (version choisie *volontairement* : plus
   ancienne et beaucoup mieux documentée dans les sources publiques que les
   versions `0.31`/`0.32` disponibles sur crates.io en 2026, dont
@@ -133,20 +136,29 @@ en tête de fiche).
   `ByteArray`, dont l'égalité structurelle par défaut compare l'identité de
   l'objet, pas le contenu. `equals`/`hashCode` sont réécrits à la main
   (`contentEquals`/`contentHashCode`).
+- **`DengonIdentity.fromQrCode` (Kotlin) borne explicitement la taille du
+  payload avant d'indexer** (`payload.isEmpty()`, puis
+  `payload.size < offset + pseudoLen + 2*KEY_LEN`), et lève `DengonException`
+  plutôt que de laisser passer une `IndexOutOfBoundsException` — corrigé le
+  2026-09-25 suite à la revue PR #69 (un payload tronqué, ex. QR mal scanné,
+  plantait sans lever le type d'erreur promis par le contrat). Symétrique au
+  `.get(...).ok_or(DengonError::Internal)` déjà utilisé côté Rust.
 
 ## Tests
 
 - **Rust** (`cargo test -p dengon-ffi`) : 5 tests dans `src/lib.rs` — version,
   aller-retour base64url, aller-retour QR, symétrie du code de vérification,
-  `send_message`/`poll_events`/`on_peer_connected`. **Non exécutés dans cette
-  session** (pas de `cargo` disponible) — voir l'avertissement en tête de
-  fiche.
-- **Kotlin** (`cd android && ./gradlew testDebugUnitTest`) : 5 tests dans
+  `send_message`/`poll_events`/`on_peer_connected`. **Toujours pas exécutés**
+  (pas de `cargo` disponible, ni le 2026-09-20 ni le 2026-09-25) — voir
+  l'avertissement en tête de fiche.
+- **Kotlin** (`cd android && ./gradlew testDebugUnitTest`) : 6 tests dans
   `DengonNodeStubTest` — conversation canned visible sans appel préalable,
   envoi de message + événement `PeerConnected`, `pollEvents` ne renvoie
   chaque événement qu'une fois, aller-retour QR, symétrie du code de
-  vérification. **Réellement exécutés** : `BUILD SUCCESSFUL`,
-  `tests="5" skipped="0" failures="0" errors="0"`
+  vérification, et (ajouté le 2026-09-25 suite à la revue PR #69)
+  `fromQrCode` lève `DengonException` sur un payload tronqué au lieu de
+  planter. **Réellement exécutés** : `BUILD SUCCESSFUL`,
+  `tests="6" skipped="0" failures="0" errors="0"`
   (`app/build/test-results/testDebugUnitTest/TEST-com.dengon.app.ffi.DengonNodeStubTest.xml`).
   `./gradlew assembleDebug` passe aussi (pas de régression sur le reste de
   l'app).
@@ -155,9 +167,11 @@ en tête de fiche).
 
 - **`Cargo.lock` non régénéré** — voir l'avertissement en tête de fiche.
   Bloquant pour la CI `core` tant que quelqu'un avec `cargo` ne l'a pas
-  régénéré.
-- `cargo fmt`/`cargo clippy -D warnings` non exécutés sur `dengon-ffi` dans
-  cette session.
+  régénéré. Deux sessions de suite sans `cargo` disponible (2026-09-20 et
+  2026-09-25).
+- `cargo fmt`/`cargo clippy -D warnings` toujours pas exécutés sur
+  `dengon-ffi` : les 3 correctifs demandés en revue (PR #69) ont été
+  appliqués à la main le 2026-09-25 mais restent **non compilés**.
 - Aucun branchement réel sur `dengon-core` : tout est en mémoire, canned. Le
   vrai FFI (bindings UniFFI générés, remplaçant le bouchon Kotlin) arrive
   avec US-302 ; l'API réelle (`send_message`/`poll_events`/... branchés sur

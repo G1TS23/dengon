@@ -143,8 +143,19 @@ object DengonIdentity {
         require(qrCode.startsWith(QR_PREFIX)) { "QR code dengon invalide (préfixe manquant)" }
         val payload = decodeBase64Url(qrCode.removePrefix(QR_PREFIX))
 
+        // Bornage explicite avant indexation, comme côté Rust
+        // (`payload.get(...).ok_or(DengonError::Internal)`) : un payload
+        // tronqué (QR mal scanné/corrompu) doit lever `DengonException`,
+        // le type promis par le contrat (`[Throws=DengonError]` dans le
+        // `.udl`), pas planter avec une `IndexOutOfBoundsException`.
+        if (payload.isEmpty()) {
+            throw DengonException("QR code dengon invalide (payload vide)")
+        }
         val pseudoLen = payload[0].toInt() and 0xFF
         var offset = 1
+        if (payload.size < offset + pseudoLen + 2 * KEY_LEN) {
+            throw DengonException("QR code dengon invalide (payload tronqué)")
+        }
         val pseudo = String(payload, offset, pseudoLen, Charsets.UTF_8)
         offset += pseudoLen
         val pubStatic = payload.copyOfRange(offset, offset + KEY_LEN)
