@@ -98,13 +98,19 @@ pub struct Conversation {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeEvent {
-    MessageReceived { message: Message },
+    MessageReceived {
+        message: Message,
+    },
     StatusChanged {
         msg_uuid: String,
         status: MessageStatus,
     },
-    PeerConnected { peer_id: String },
-    PeerDisconnected { peer_id: String },
+    PeerConnected {
+        peer_id: String,
+    },
+    PeerDisconnected {
+        peer_id: String,
+    },
 }
 
 /// Erreurs de la surface FFI. `Internal` couvre le v0 (contenu peu détaillé
@@ -207,7 +213,9 @@ impl DengonNode {
         let mut state = self.lock_state();
         if !state.connected_peers.iter().any(|p| p == &peer_id) {
             state.connected_peers.push(peer_id.clone());
-            state.pending_events.push(NodeEvent::PeerConnected { peer_id });
+            state
+                .pending_events
+                .push(NodeEvent::PeerConnected { peer_id });
         }
     }
 
@@ -275,7 +283,9 @@ pub fn identity_qr_code(identity: Identity) -> String {
 }
 
 pub fn identity_from_qr_code(qr_code: String) -> Result<Identity, DengonError> {
-    let encoded = qr_code.strip_prefix("dengon:v1:").ok_or(DengonError::Internal)?;
+    let encoded = qr_code
+        .strip_prefix("dengon:v1:")
+        .ok_or(DengonError::Internal)?;
     let payload = decode_base64url(encoded)?;
 
     let pseudo_len = usize::from(*payload.first().ok_or(DengonError::Internal)?);
@@ -295,8 +305,8 @@ pub fn identity_from_qr_code(qr_code: String) -> Result<Identity, DengonError> {
         .ok_or(DengonError::Internal)?
         .to_vec();
 
-    let pseudo = String::from_utf8(pseudo_bytes.to_vec())
-        .map_err(|_utf8_err| DengonError::Internal)?;
+    let pseudo =
+        String::from_utf8(pseudo_bytes.to_vec()).map_err(|_utf8_err| DengonError::Internal)?;
     let peer_id = to_hex(&pub_static[..8]);
 
     Ok(Identity {
@@ -467,9 +477,9 @@ mod tests {
         let msg_uuid = node.send_message("bob".to_owned(), "salut".to_owned())?;
 
         let evenements = node.poll_events();
-        let a_vu_bob_connecte = evenements.iter().any(|event| {
-            matches!(event, NodeEvent::PeerConnected { peer_id } if peer_id == "bob")
-        });
+        let a_vu_bob_connecte = evenements
+            .iter()
+            .any(|event| matches!(event, NodeEvent::PeerConnected { peer_id } if peer_id == "bob"));
         assert!(a_vu_bob_connecte);
 
         let messages = node.list_messages("conv-bob".to_owned());
