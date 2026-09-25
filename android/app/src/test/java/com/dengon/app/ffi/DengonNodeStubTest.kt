@@ -1,6 +1,7 @@
 package com.dengon.app.ffi
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -58,6 +59,13 @@ class DengonNodeStubTest {
         val decoded = DengonIdentity.fromQrCode(qr)
 
         assertEquals(identity, decoded)
+    }
+
+    @Test
+    fun `fromQrCode leve DengonException sur un payload tronque au lieu de planter`() {
+        assertThrows(DengonException::class.java) {
+            DengonIdentity.fromQrCode("dengon:v1:")
+        }
     }
 
     @Test

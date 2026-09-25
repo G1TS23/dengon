@@ -28,6 +28,10 @@
 //! livrés par l'US-106.
 
 #![allow(unsafe_code)]
+// Le scaffolding généré par `uniffi::include_scaffolding!` ci-dessous déclenche
+// ces deux lints ; ils s'appliquent à toute la crate car le code généré est
+// inclus tel quel (pas de fichier séparé sur lequel cibler l'allow).
+#![allow(unused_qualifications, clippy::empty_line_after_doc_comments)]
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -95,7 +99,10 @@ pub struct Conversation {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeEvent {
     MessageReceived { message: Message },
-    StatusChanged { msg_uuid: String, status: MessageStatus },
+    StatusChanged {
+        msg_uuid: String,
+        status: MessageStatus,
+    },
     PeerConnected { peer_id: String },
     PeerDisconnected { peer_id: String },
 }
@@ -174,7 +181,11 @@ impl DengonNode {
         };
         state.messages.push(message.clone());
 
-        match state.conversations.iter_mut().find(|conv| conv.conv_id == conv_id) {
+        match state
+            .conversations
+            .iter_mut()
+            .find(|conv| conv.conv_id == conv_id)
+        {
             Some(conv) => conv.last_message = Some(message),
             None => state.conversations.push(Conversation {
                 conv_id,
@@ -189,7 +200,7 @@ impl DengonNode {
     }
 
     pub fn poll_events(&self) -> Vec<NodeEvent> {
-        self.lock_state().pending_events.drain(..).collect()
+        std::mem::take(&mut self.lock_state().pending_events)
     }
 
     pub fn on_peer_connected(&self, peer_id: String) {
@@ -270,11 +281,19 @@ pub fn identity_from_qr_code(qr_code: String) -> Result<Identity, DengonError> {
     let pseudo_len = usize::from(*payload.first().ok_or(DengonError::Internal)?);
     let mut offset = 1;
 
-    let pseudo_bytes = payload.get(offset..offset + pseudo_len).ok_or(DengonError::Internal)?;
+    let pseudo_bytes = payload
+        .get(offset..offset + pseudo_len)
+        .ok_or(DengonError::Internal)?;
     offset += pseudo_len;
-    let pub_static = payload.get(offset..offset + 32).ok_or(DengonError::Internal)?.to_vec();
+    let pub_static = payload
+        .get(offset..offset + 32)
+        .ok_or(DengonError::Internal)?
+        .to_vec();
     offset += 32;
-    let pub_sign = payload.get(offset..offset + 32).ok_or(DengonError::Internal)?.to_vec();
+    let pub_sign = payload
+        .get(offset..offset + 32)
+        .ok_or(DengonError::Internal)?
+        .to_vec();
 
     let pseudo = String::from_utf8(pseudo_bytes.to_vec())
         .map_err(|_utf8_err| DengonError::Internal)?;
@@ -404,7 +423,7 @@ mod tests {
 
     #[test]
     fn la_version_expose_le_numero_de_protocole() {
-        assert!(super::version().contains("protocole v1"));
+        assert!(version().contains("protocole v1"));
     }
 
     #[test]
