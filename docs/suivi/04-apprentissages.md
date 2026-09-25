@@ -275,6 +275,33 @@ documentation GitHub « Using third-party actions ».
 
 ---
 
+### Un docstring qui énumère ce qu'il vérifie est une mesure de couverture
+
+**C'est quoi :** quand un test porte un commentaire du type « vérifie les points
+1, 4 et 5 du contrat », ce commentaire devient comparable à la liste des règles
+du contrat. Le trou de couverture se lit alors à l'œil nu, sans instrumenter
+quoi que ce soit — bien avant qu'un rapport `llvm-cov` puisse aider, puisque
+celui-ci mesure des **lignes exécutées**, pas des **règles vérifiées**.
+
+**Pourquoi dans dengon :** c'est exactement comme ça que la revue de la PR #65 a
+trouvé que la règle 2 du contrat de déconnexion brutale n'était testée nulle
+part. Le corps de la PR affirmait « vérifié par `cas_deconnexion_brutale` » ; le
+docstring de ce cas disait « vérifie les points 1, 4 et 5 ». Les deux phrases se
+contredisaient dans le même dépôt, et la couverture de lignes était à 100 % sur
+ce fichier — elle ne pouvait rien y voir.
+
+**Piège / surprise :** l'énumération doit être **maintenue**, sinon elle ment et
+devient pire qu'absente. Le corollaire utile : quand une règle n'est
+délibérément pas testée, l'écrire noir sur blanc (ici le point 3, les fragments
+partiels, que `MockTransport` ne peut pas simuler) vaut mieux qu'un cas vide qui
+passe au vert sans rien prouver.
+
+**Où c'est utilisé :** `crates/dengon-ble/src/conformance.rs`, section « Ce que
+la suite ne vérifie pas » du module doc, et le docstring de
+`cas_deconnexion_brutale`.
+**Pour aller plus loin :** PR #65, revue de G1TS23 du 2026-09-11.
+
+---
 ### Cible « tier 3 » et `-Z build-std` — quand `core` n'est pas livré compilé
 
 **C'est quoi :** Rust classe ses cibles en 3 niveaux. Une cible **tier 3** est
