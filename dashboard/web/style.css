@@ -1,0 +1,302 @@
+/* Squelette du dashboard (US-111). Mobile-first : les règles de base ciblent
+   360 px (critère d'acceptation) ; la grille de la liste se réorganise
+   toute seule sur un écran plus large (auto-fill), sans media query dédiée. */
+
+:root {
+  color-scheme: light dark;
+
+  --fond: #f7f7f8;
+  --fond-carte: #ffffff;
+  --bordure: #d9d9de;
+  --texte: #1c1c1f;
+  --texte-discret: #62626b;
+  --lien: #2b5fd9;
+
+  --statut-queued: #a86a00;
+  --statut-queued-fond: #fdf0d5;
+  --statut-in-flight: #1a56b0;
+  --statut-in-flight-fond: #e2ecfb;
+  --statut-delivered: #1a7a3d;
+  --statut-delivered-fond: #e1f3e6;
+  --statut-read: #106b6b;
+  --statut-read-fond: #dcf3f2;
+  --statut-expired: #8a1f1f;
+  --statut-expired-fond: #fbe4e4;
+  --statut-inconnu: #55555d;
+  --statut-inconnu-fond: #e7e7ea;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fond: #1b1b1e;
+    --fond-carte: #232326;
+    --bordure: #3a3a40;
+    --texte: #f0f0f2;
+    --texte-discret: #a3a3ad;
+    --lien: #8ab4ff;
+
+    --statut-queued-fond: #3a2c0c;
+    --statut-in-flight-fond: #14263f;
+    --statut-delivered-fond: #12321d;
+    --statut-read-fond: #0f2c2c;
+    --statut-expired-fond: #3a1414;
+    --statut-inconnu-fond: #2c2c30;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding-block: 16px;
+  background: var(--fond);
+  color: var(--texte);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.page {
+  max-width: 880px;
+  margin: 0 auto;
+  padding-inline: 16px;
+}
+
+header.entete-app {
+  margin-bottom: 16px;
+}
+
+header.entete-app h1 {
+  font-size: 1.25rem;
+  margin: 0 0 4px;
+}
+
+.bandeau-portee {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--statut-inconnu-fond);
+  border: 1px solid var(--bordure);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  color: var(--texte-discret);
+}
+
+a {
+  color: var(--lien);
+}
+
+.retour {
+  display: inline-block;
+  margin-bottom: 12px;
+  text-decoration: none;
+  font-size: 0.9rem;
+}
+
+.retour:hover {
+  text-decoration: underline;
+}
+
+.compteur {
+  color: var(--texte-discret);
+  font-size: 0.85rem;
+  margin: 0 0 12px;
+}
+
+.liste-messages {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.carte-message {
+  display: block;
+  border: 1px solid var(--bordure);
+  border-radius: 10px;
+  background: var(--fond-carte);
+  padding: 12px 14px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.carte-message:hover,
+.carte-message:focus-visible {
+  border-color: var(--lien);
+}
+
+.carte-message__entete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.id-message {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+}
+
+.id-message--grand {
+  font-size: 1.05rem;
+  word-break: break-all;
+}
+
+.id-noeud {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+}
+
+.statut {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.statut--queued {
+  color: var(--statut-queued);
+  background: var(--statut-queued-fond);
+}
+
+.statut--in-flight {
+  color: var(--statut-in-flight);
+  background: var(--statut-in-flight-fond);
+}
+
+.statut--delivered {
+  color: var(--statut-delivered);
+  background: var(--statut-delivered-fond);
+}
+
+.statut--read {
+  color: var(--statut-read);
+  background: var(--statut-read-fond);
+}
+
+.statut--expired {
+  color: var(--statut-expired);
+  background: var(--statut-expired-fond);
+}
+
+.statut--unknown,
+.statut--inconnu {
+  color: var(--statut-inconnu);
+  background: var(--statut-inconnu-fond);
+}
+
+.carte-message__meta,
+.detail__meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.carte-message__meta dt,
+.detail__meta dt {
+  color: var(--texte-discret);
+  font-weight: 400;
+}
+
+.carte-message__meta dd,
+.detail__meta dd {
+  margin: 0;
+}
+
+.detail__entete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.detail__meta {
+  margin-bottom: 20px;
+  padding: 12px 14px;
+  background: var(--fond-carte);
+  border: 1px solid var(--bordure);
+  border-radius: 10px;
+}
+
+.titre-section {
+  font-size: 1rem;
+  margin: 0 0 10px;
+}
+
+.vide {
+  color: var(--texte-discret);
+  font-size: 0.9rem;
+}
+
+.sauts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sauts__item {
+  position: relative;
+  display: flex;
+  gap: 12px;
+  padding-bottom: 18px;
+  padding-left: 4px;
+}
+
+.sauts__item::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: 18px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--bordure);
+}
+
+.sauts__item--dernier::before {
+  display: none;
+}
+
+.sauts__point {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--lien);
+  background: var(--fond-carte);
+  margin-top: 2px;
+}
+
+.sauts__contenu {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sauts__ligne1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.sauts__heure {
+  color: var(--texte-discret);
+  font-size: 0.8rem;
+}
+
+.sauts__kind {
+  font-size: 0.88rem;
+  margin-bottom: 2px;
+}
+
+.sauts__detail {
+  color: var(--texte-discret);
+  font-size: 0.8rem;
+}

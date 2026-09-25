@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>dengon · suivi</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div class="page">
+  <header class="entete-app">
+    <h1>dengon · suivi</h1>
+    <p class="bandeau-portee">
+      Vue <strong>partielle</strong> du réseau : seuls les nœuds qui ont eu du
+      Wi-Fi remontent leurs événements. Ne montre jamais le contenu d'un
+      message, son destinataire, ni l'identité réelle d'un appareil — voir
+      <code>docs/olivier/dashboard.md</code> §4.
+      Squelette US-111 : données bidon ci-dessous, aucun appel réseau.
+    </p>
+  </header>
+
+  <main id="app"><!-- rempli par app.js selon #/message/&lt;id&gt; --></main>
+</div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
