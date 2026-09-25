@@ -153,6 +153,461 @@ YAML valide
   lieu à l'ouverture de la PR.
 
 
+## 2026-09-25 — `contracts/events` : revue « round 4 » d'OswinFreyr sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/events/envelope.schema.json`,
+`contracts/events/batch.schema.json`, `contracts/tools/catalogue.py`,
+`contracts/events/payloads.schema.json` (régénéré)
+**Lot :** US-107, Sprint 1
+
+### Fait
+- **`node_id` (et `subject_node`, même motif dupliqué dans `catalogue.py`)**
+  n'avait ni `minLength` ni `maxLength` — même trou que celui déjà fermé sur
+  `event_id`/`prev_hash`/HEX16/32/64 : le moteur regex de `jsonschema`
+  (Python `re`) fait correspondre `$` juste avant un `\n` final, donc
+  `"relay-abcdef\n"` passait le pattern seul. **Premier essai insuffisant** :
+  ajouter `minLength: 12, maxLength: 40` (comme suggéré en revue) ne ferme
+  PAS le trou pour un motif à préfixes de longueurs différentes (`relay-`
+  vs `client-`) — `"relay-abcdef\n"` (13 caractères) reste dans la plage et
+  se confond avec un `node_id` `client-` valide de longueur 13. Vérifié le
+  problème avec `jsonschema` avant de corriger pour de bon : `anyOf` à deux
+  branches, chacune avec `minLength == maxLength` (12 pour `relay-`, 13 pour
+  `client-`) et partie hexadécimale fixée à 6 (tous les exemples réels en
+  utilisent exactement 6). Reverifié après coup : les deux variantes
+  `\n` sont maintenant rejetées.
+- **Champs texte libres sans borne** (`fw_version`, `reset_reason`,
+  `subsystem`, `app_version`, `ssid`×2) : ajouté `TEXT64`/`SSID` dans
+  `catalogue.py` (64 générique, 32 pour `ssid` — limite Wi-Fi réelle).
+- **`events` sans `maxItems`** dans `batch.schema.json` : ajouté `maxItems:
+  1000`, indépendant de la limite en octets de l'API (#59).
+- `payloads.schema.json` régénéré (`build_fixtures.py`), les 20 fixtures
+  restent valides sans modification (les valeurs réelles tiennent déjà dans
+  les nouvelles bornes).
+
+### Pourquoi / décisions
+- Le premier réflexe (`minLength`/`maxLength` en plage) suffit pour un motif
+  à longueur strictement fixe (HEX16/32/64) mais pas pour un motif à
+  plusieurs préfixes de longueurs différentes — leçon à retenir pour tout
+  futur champ du même genre.
+
+### Écarts vs conception
+- Aucun.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run python3 tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+
+$ uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check .
+All checks passed!
+
+# Vérification directe du trou refermé (script ad hoc, jsonschema réel) :
+# "relay-abcdef\n" et "client-abcdef\n" -> rejetés (avant : acceptés)
+# "relay-abcdef" / "client-abcdef" -> toujours acceptés
+```
+
+---
+
+## 2026-09-16 — `contracts/events` : revue « round 3 » de POWLAIR sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{catalogue,validate}.py`, `contracts/events/envelope.schema.json`,
+`contracts/events/payloads.schema.json` (généré), `.github/workflows/contracts.yml`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- 5 points de @POWLAIR (revue « round 3 », 15/09 22:31), tous vérifiés avant
+  correction :
+  1. **`name` non contraint par aucun schéma** — un `name` hors catalogue
+     passait `envelope`, `batch` et `payloads.schema.json` (toutes les
+     clauses `if (name==X) then` d'un `allOf` sont vacuellement vraies pour
+     un `X` inconnu), seul le `CATALOGUE` Python le rejetait. Corrigé :
+     `payloads_json_schema()` ajoute `"properties": {"name": {"enum":
+     sorted(CATALOGUE)}}` à la racine. Reproduit : `"pkt.seeen"` (faute de
+     frappe) passait les 3 schémas avant, rejeté par `payloads.schema.json`
+     après.
+  2. **`prev_hash` absent de l'enveloppe stricte** — `integrity.chain_broken`
+     ne pouvait pas être dérivé, `synthese/09` en dépend pourtant. Ajouté en
+     `properties` (HEX64), **optionnel** (pas de producteur avant US-208, pas
+     de fixture ne le porte) — écart consigné.
+  3. **`NaN` fait planter l'outil** — `json.loads` accepte `NaN`/`Infinity`
+     par défaut, `canonical_json()` (`allow_nan=False`) les refuse. Corrigé :
+     chargement des fixtures avec `parse_constant` qui lève, capturé par
+     fixture → entrée d'`errors`, plus de traceback. Reproduit :
+     `ttl_in: NaN` tuait `main()` avant le fix (message trompeur côté
+     signature ou traceback nue selon le chemin), rapport propre après.
+  4. **`e["name"]` en accès direct → `KeyError`** dans
+     `_check_catalogue_coverage`, avant l'impression du rapport. Corrigé en
+     `e.get("name")` + filtre `isinstance(e, dict)`. Deux voisins signalés
+     dans le même commentaire, corrigés aussi : un élément non-objet dans
+     `"events"` (`AttributeError` dans `_check_event`, corrigé par un garde
+     `isinstance(event, dict)` en tête de fonction) et `sig` non-str
+     (`TypeError` non couverte dans `_check_signature`, ajoutée à la clause
+     d'exception).
+  5. **CI (`contracts.yml`) — filtre au niveau du trigger**, même piège que
+     `core.yml`/`dashboard.yml`. Corrigé : `dorny/paths-filter` + `if:` par
+     step.
+- Tous les crashs reproduits en mutant une copie de travail d'une fixture
+  réelle (jamais committée), confirmés absents avec le fix, fixture restaurée
+  (`git diff --stat` vide sur `events/fixtures/` à la fin).
+
+### Pourquoi / décisions
+- **`prev_hash` reste optionnel**, pas `required` : le rendre obligatoire
+  casserait le contrat sans qu'aucun producteur (US-208) n'existe encore pour
+  le remplir. La possibilité de transit est acquise, la vérification
+  bout-en-bout ne l'est pas — écart documenté plutôt que rendu required par
+  precaution.
+- **`name` fermé par `enum`, pas par une regex plus stricte** : une
+  comparaison de chaîne exacte contre le catalogue est plus forte qu'un motif
+  — elle referme aussi, incidemment, le trou `\n`-final resté ouvert sur
+  `name` depuis le round 2 (dette assumée, `03-ecarts-conception.md`).
+
+### Écarts vs conception
+- `prev_hash` optionnel — nouvelle entrée dans `03-ecarts-conception.md`
+  (2026-09-16).
+- Note ajoutée à l'entrée existante sur le piège `\n`-final : le trou côté
+  `name` est refermé par l'`enum`, celui côté `node_id` reste ouvert.
+
+### Appris
+- Rien de nouveau — même famille de bugs (validation défensive avant tout
+  calcul qui peut planter) que les rounds précédents, déjà consignée dans
+  `04-apprentissages.md`.
+
+### État après cette session
+- PR #60 : les 5 points traités, vérifiés, fixtures régénérées à l'identique
+  (aucun diff), commit + push + merge de `main` à faire.
+- Fiche module mise à jour : `modules/contracts-events.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run --no-build python tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+$ git diff --stat -- events/     # seuls envelope.schema.json et payloads.schema.json changent
+$ uv run --no-build ruff check .
+All checks passed!
+$ uv run --no-build python tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+```
+- Chaque bug (NaN, name inconnu, event non-objet, sig non-str, name absent)
+  reproduit en mutant `events/fixtures/01-pkt-seen.json` en place, confirmé
+  absent après restauration (`git diff` vide sur `fixtures/`).
+
+---
+
+## 2026-09-11 — `contracts/events` : relecture approfondie d'OswinFreyr sur la PR #60 (round 2)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{validate,catalogue}.py`,
+`contracts/events/{envelope,batch,payloads}.schema.json`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/04-apprentissages.md`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- @OswinFreyr a retesté la branche dans un `git worktree` séparé (Python 3.13,
+  deps installées sans `uv`) après le round 1 : les 5 premiers points sont
+  confirmés corrigés (`validate.py`/`build_fixtures.py` rejoués, régénération
+  byte-identique). En relisant plus en profondeur, il a trouvé 4 points
+  supplémentaires, tous vérifiés dans le code avant correction :
+  1. **`seq` en overflow (`>= 2**64`)** : `_valid_seq()` du round 1 ne
+     vérifiait qu'un plancher (`>= 0`), pas de plafond ;
+     `seq.to_bytes(8, "big")` lève `OverflowError` au-delà de `2**64`.
+     Reproduit (`event_id("x", 2**64)` → `OverflowError: int too big to
+     convert`), corrigé : `_valid_seq` vérifie aussi `< 2**64`.
+  2. **`node_id: null`** : `event.get("node_id", "")` ne couvre que la clé
+     **absente**, pas une clé présente à `null` — `event_id(None, seq)` lève
+     `AttributeError`. Reproduit, corrigé : `node_id` doit être une `str`
+     avant tout calcul, sinon `errors`.
+  3. **`payload` non-objet** (ex. une liste) : `_check_event` faisait
+     `payload.items()` sans vérifier le type. Reproduit
+     (`AttributeError: 'list' object has no attribute 'items'`), corrigé :
+     type vérifié avant toute manipulation.
+  4. **Motifs hex/sig ancrés avec `$`, qui matche avant un `\n` final en
+     Python** (`re`, pas `re.MULTILINE`) : `"<16 hex>\n"` (17 caractères)
+     passait `HEX16`. Reproduit en isolant le regex, puis en mutant une
+     fixture de travail (jamais committée). **Pas corrigé avec `\Z`** (la
+     suggestion du round 1) : `\Z` est une extension Python absente d'ECMA
+     262, la norme visée par `pattern` en JSON Schema — l'introduire dans
+     des schémas censés rester neutres en langage serait un contre-sens.
+     Corrigé avec `minLength`/`maxLength` à côté de `pattern` (mot-clé JSON
+     Schema standard) sur les champs de longueur **fixe** seulement
+     (`HEX16`/`32`/`64`, `event_id`, `batch_id`, `sig`). Les motifs
+     **ouverts** (`node_id`, `name`) restent vulnérables — dette assumée,
+     documentée dans `03-ecarts-conception.md`, impact jugé faible (aucun
+     calcul ne plante dessus, contrairement aux 3 points précédents).
+  - Deux nits non bloquants également corrigés : boucle manuelle sur
+    `spec["required"]` remplacée par le `required` natif du schéma ; chaque
+    fixture n'est plus lue/parsée qu'une fois par `main()` (avant : 3 fois).
+- Rebuild complet : `payloads.schema.json` régénéré (`build_fixtures.py`)
+  après les changements de `catalogue.py` — diff limité au fichier généré,
+  les 20 fixtures restent byte-identiques (régénération déterministe
+  confirmée une nouvelle fois).
+
+### Pourquoi / décisions
+- **`minLength`/`maxLength` plutôt que `\Z`** : décision structurante de
+  cette entrée. `\Z` aurait été la correction la plus rapide (celle
+  suggérée), mais elle aurait fait fuiter une dépendance Python dans un
+  artefact dont toute la raison d'être est d'être consommable par n'importe
+  quel langage. `minLength`/`maxLength` obtient le même résultat sans ce
+  compromis, au prix de ne fonctionner que sur des champs de longueur fixe.
+- **`node_id`/`name` non corrigés pareil, assumé plutôt que forcé** : pas de
+  borne haute naturelle pour ces deux motifs, et l'impact réel est nul
+  (aucun crash, juste une strictness manquante) — mieux vaut le documenter
+  explicitly que d'introduire une extension Python pour fermer un trou à
+  faible risque.
+
+### Écarts vs conception
+- Un nouveau, dans `03-ecarts-conception.md` : le piège `$`/`\n` sur
+  `node_id`/`name` non corrigé (dette assumée).
+
+### Appris
+- `$` en regex Python matche avant un `\n` final (piège pour un `pattern`
+  JSON Schema censé suivre ECMA 262) ; `required` de JSON Schema remplace une
+  vérification manuelle. Les deux ajoutés à `04-apprentissages.md`.
+
+### État après cette session
+- Les 4 nouveaux points + 2 nits de la relecture d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/contracts-events.md](modules/contracts-events.md)
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run python3 tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+$ git status --short events/fixtures/        # vide : régénération byte-identique
+
+$ uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check . && uv run ruff format --check tools/catalogue.py tools/validate.py
+All checks passed!
+
+# Reproduction des 3 crashes, un par un, sur une fixture mutée (jamais
+# committée), restaurée après chaque essai :
+seq = 2**64        → rapport propre (« seq invalide »), plus de traceback
+node_id = null     → rapport propre (« node_id invalide »), plus de traceback
+payload = [...]    → rapport propre (« payload invalide (list) »), plus de traceback
+msg_log_id + "\n"  → rapport propre (« is too long »), passait avant le fix
+```
+
+---
+
+
+
+## 2026-09-11 — `contracts/events` : retours de revue d'OswinFreyr sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{validate,catalogue}.py`, `contracts/events/batch.schema.json`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/04-apprentissages.md`,
+`docs/synthese/09-dashboard-et-donnees.md`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- 5 points relevés en revue par @OswinFreyr, tous vérifiés dans le code avant
+  correction :
+  1. **`validate.py:118` — crash non géré sur `seq` invalide.**
+     `event_id(node_id, event.get("seq", -1))` appelle `seq.to_bytes(8,
+     "big")` : `OverflowError` si négatif, `AttributeError` si pas un entier.
+     `_check_schema` avait déjà signalé le problème dans `errors`, mais le
+     script continuait quand même et plantait avec une traceback brute au
+     lieu du rapport attendu. **Reproduit** en mettant `seq = -1` dans une
+     fixture (copie de travail, jamais committée) : confirmé le crash exact
+     décrit, puis confirmé le rapport propre une fois corrigé. `seq` validé
+     (entier, pas un bool, ≥ 0) avant tout calcul d'`event_id`.
+  2. **`catalogue.py` — `pkt.seen.rssi` optionnel alors que `powl/08` et
+     `synthese/09` le listent sans `?`.** Vérifié : c'est la doc de
+     conception qui est en retard, pas le contrat — `TransportEvent::
+     PeerConnected.rssi` (US-105) est déjà `Option<i16>` pour la même
+     raison (RSSI pas toujours fourni côté transport). Écart consigné,
+     `synthese/09` corrigé (`rssi?`).
+  3. **Apprentissages non propagés** — l'entrée de journal US-107 mentionnait
+     deux notions réelles (`referencing.Registry`, longueur de signature
+     Ed25519 en base64) sans les ajouter à `04-apprentissages.md` (règle 5,
+     `CLAUDE.md`). Ajoutées.
+  4. **Motif `node_id` dupliqué** dans `batch.schema.json`,
+     `envelope.schema.json#/$defs/node_id` et `catalogue.py`. Le premier
+     référence maintenant le second via `$ref` (draft 2020-12 autorise `$ref`
+     à côté d'autres mots-clés comme `description`). Le doublon Python
+     (`subject_node`) reste — pas de `$ref` possible entre un module Python
+     et un fichier JSON Schema — mais nommé (`NODE_ID_PATTERN`) plutôt que
+     recopié.
+  5. **Perf, non bloquant** — `_check_payload_vs_catalogue` reconstruisait un
+     `Draft202012Validator` à chaque événement. Mis en cache par nom
+     (`_payload_validators`).
+- `uv run ruff check .` propre, `validate.py` toujours vert sur les 20
+  fixtures réelles après les 5 correctifs.
+
+### Pourquoi / décisions
+- **`rssi` reste optionnel** (pas aligné sur « requis ») : je préfère corriger
+  la doc de conception plutôt que le contrat, parce que j'ai une raison
+  technique déjà actée ailleurs dans le dépôt (US-105) pour laquelle
+  l'exiger serait faux, pas juste une paresse à corriger la conception.
+- **`$ref` seulement côté JSON Schema**, pas de tentative de faire lire le
+  fichier `.json` depuis `catalogue.py` au moment de l'import pour extraire
+  le motif : ça introduirait un couplage fragile (ordre d'import, chemin
+  relatif) pour économiser une ligne dupliquée.
+
+### Écarts vs conception
+- Un nouveau, décrit dans `03-ecarts-conception.md` : `pkt.seen.rssi`
+  optionnel (point 2 ci-dessus).
+
+### Appris
+- Rien de nouveau cette session — les deux apprentissages ajoutés
+  aujourd'hui dataient de la session précédente (US-107 initiale), juste pas
+  encore propagés (point 3 ci-dessus).
+
+### État après cette session
+- Les 5 points de la revue d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/contracts-events.md](modules/contracts-events.md)
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run python tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check .
+All checks passed!
+
+# Reproduction du crash sans le fix (git stash sur validate.py, seq=-1
+# injecté dans une copie de 01-pkt-seen.json, jamais committée) :
+OverflowError: can't convert negative int to unsigned
+
+# Avec le fix, même fixture mutée :
+✗ 4 problème(s) :
+  - schéma batch — -1 is less than the minimum of 0
+  - signature invalide : Signature was forged or corrupt
+  - batch_id ≠ hex(SHA-256(canonical_json(events)))
+  - seq invalide (-1) : event_id non vérifiable
+# Fixture restaurée (git checkout --) avant de committer.
+```
+
+---
+
+## 2026-09-09 — Contrat des événements d'observabilité + 20 fixtures golden (US-107)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/` (nouveau), `.github/workflows/contracts.yml`,
+`docs/suivi/modules/contracts-events.md` (créée), `_index.md`,
+`01-etat-du-code.md`, `03-ecarts-conception.md`.
+**Lot :** Lot 0 — Fondations (issue #7, US-107). Branche
+`contract/US-107-enveloppe-evenement`, prise « en attendant les review » de la
+PR #59 (US-110).
+
+### Fait
+- **`contracts/events/`** :
+  - `envelope.schema.json`, `batch.schema.json` — JSON Schema draft 2020-12,
+    **stricts** (`additionalProperties: false`) pour l'enveloppe et le batch
+    `POST /ingest/batch`.
+  - `payloads.schema.json` — contraintes de `payload` par nom d'événement,
+    **généré** depuis `tools/catalogue.py` (un `allOf` de `if name==X then …`).
+  - `CANONICAL.md` — **fait foi** : forme canonique du JSON signé (clés triées,
+    séparateurs compacts, UTF-8) + procédure de signature Ed25519 d'un batch.
+  - `test-signing-key.json` — clé Ed25519 de test (graine déterministe,
+    publique, jamais de prod).
+  - `fixtures/*.json` — **20 batches** valides et signés, couvrant **28 noms
+    d'événements** (tout le périmètre MVP : `msg.read` / `read.observed` et les
+    `integrity.*` / `node.clock_skew` dérivés sont explicitement exclus).
+- **`contracts/tools/`** : `catalogue.py` (source lisible + helpers
+  `canonical_json` / `event_id`), `build_fixtures.py` (génère fixtures +
+  `payloads.schema.json`), `validate.py` (schéma + payload vs catalogue +
+  cohérence `event_id`/`node_id` + **signature Ed25519** + **redaction** +
+  fraîcheur du schéma généré + couverture du catalogue).
+- **`contracts/pyproject.toml` + `uv.lock`** : outillage `uv` (jsonschema,
+  pynacl, referencing ; ruff en dev), cohérent avec `dashboard/api`.
+- **`.github/workflows/contracts.yml`** : `ruff` + « fixtures régénérées à
+  l'identique » (`git diff --exit-code`) + `validate.py`, filtré
+  `paths: contracts/**`, actions épinglées au SHA, `uv --no-build`.
+
+### Pourquoi / décisions
+- **`contracts/` en dossier top-level** : artefact neutre en langage, consommé
+  par `dashboard/` (Python) **et** `crates/` (Rust) **et** le firmware (C).
+  Écart mineur au layout de `docs/synthese/04` §5 — consigné.
+- **Un seul `sig` par batch** (et non par événement) : c'est ce que montre
+  l'exemple de `docs/synthese/09` §9 ; l'intégrité fine vient du journal chaîné
+  (`seq` + `prev_hash`), `event_id` fait la déduplication.
+- **`msg_log_id` = 16 hex (8 octets)** : les docs se contredisent (`[0..16]`
+  vs « 16 o » vs `[:16]`), le seul exemple concret fait 16 hex. Réconciliation
+  consignée dans `03-ecarts-conception.md`.
+- **Fixtures générées puis committées** (pas régénérées en CI) : un diff montre
+  toute dérive ; la CI vérifie que la régénération ne bouge rien.
+- **Catalogue en module Python** (`catalogue.py`) comme source, `.schema.json`
+  dérivé : évite de maintenir un gros JSON Schema à la main, garde une source
+  unique.
+
+### Écarts vs conception
+- `contracts/` ajouté au layout du dépôt — `03-ecarts-conception.md`.
+- Longueur de `msg_log_id` tranchée à 8 octets — `03-ecarts-conception.md`.
+- Rien d'autre : les schémas transcrivent `docs/powl/08` et `docs/synthese/09`
+  §9 sans les contredire.
+
+### Appris
+- **JSON Schema `$ref` relatif + `jsonschema` Python** : depuis la 4.18, la
+  résolution passe par un `referencing.Registry` qu'il faut peupler à la main
+  (`Resource.from_contents`) — l'ancien `RefResolver` est déprécié. Enregistrer
+  la ressource **et** sous son `$id` **et** sous son nom de fichier.
+- **Ed25519 = 64 octets de signature → 88 caractères base64** terminés par
+  `==` (pattern de schéma `^[A-Za-z0-9+/]{86}==$`).
+
+### État après cette session
+- `contracts/events/` : contrat complet, `validate.py` vert, 20 fixtures
+  prêtes à être consommées par US-208 (core) et US-217 (dashboard).
+- Fiche `modules/contracts-events.md` créée ; `_index.md` et
+  `01-etat-du-code.md` à jour.
+- **Contrat à annoncer « gelé »** au point d'équipe (DoD §7.2, type contrat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv sync
+$ uv run python tools/build_fixtures.py
+  20 fixtures écrites, 28 noms d'événements couverts.
+$ uv run python tools/validate.py
+  ✓ 20 fixtures valides — 28 noms d'événements couverts.
+$ uv run ruff check .
+  All checks passed!
+$ uv run python tools/build_fixtures.py && git diff --stat -- events/
+  (aucun diff — régénération stable)
+```
+- La CI `contracts` n'a pas encore tourné : à l'ouverture de la PR.
+
+### Retours de revue de Paul (2026-09-10)
+
+Branche resynchronisée sur `main` (US-104 + US-115). Conflit `docs/suivi/`
+résolu à la main (idem PR #59). Cinq retours, tous traités :
+
+1. **`payloads.schema.json` généré mais jamais exercé** — `validate.py`
+   validait les `payload` contre le `CATALOGUE` en mémoire et ne vérifiait que
+   l'égalité fichier ↔ régénération. Le schéma JSON que US-217 va **consommer**
+   n'était jamais confronté aux fixtures. Ajouté : chaque `{name, payload}` de
+   fixture est aussi validé contre `payloads.schema.json`. Négatif vérifié
+   (champ requis retiré → rejeté par les deux voies).
+2. **`conv_hash` non réconcilié comme `msg_log_id`** — l'entrée
+   `03-ecarts-conception.md` ne couvrait que `msg_log_id`. Élargie à **tous les
+   identifiants pseudonymes tronqués** (`msg_log_id`, `conv_hash`,
+   `from_peer`/`peer`/`to_peer`) : règle unique = 8 premiers octets → 16 hex.
+   `CANONICAL.md` §3 mis à jour dans le même sens.
+3. **`canonical_json` sans `allow_nan=False`** — le snippet « fait foi » et
+   `catalogue.py` émettaient `NaN`/`Infinity` (JSON invalide) au lieu de lever.
+   `allow_nan=False` ajouté aux deux ; règle du tableau §1 reformulée
+   (« la sérialisation lève une erreur »).
+4. **Discipline des nombres pour Rust** — `CANONICAL.md` §1 : ajout du piège
+   `f64` (un entier resérialisé en `2.0` casse la signature) et de la consigne
+   de désérialiser les champs numériques du catalogue en entier.
+5. **Broutille : `batch_id` jamais recontrôlé** — `validate.py` recalcule
+   `hex(SHA-256(canonical_json(events)))` et le compare. Négatif vérifié.
+
+Au passage, 3 *code smells* SonarCloud sur `validate.py` (complexité cognitive
+21 > 15, `if` imbriqué, littéral `"(global)"` ×3) : la fonction est éclatée en
+petits `_check_*`, constante `GLOBAL`, `if` fusionné.
+
+```
+$ uv run ruff check .   → All checks passed!
+$ uv run python tools/build_fixtures.py && git diff --exit-code -- events/   → stable
+$ uv run python tools/validate.py   → ✓ 20 fixtures valides — 28 noms couverts.
+```
 ## 2026-09-25 — US-111 : vérification visuelle à 360 px (clôture)
 
 **Auteur :** Claude (Opus 5.5)
