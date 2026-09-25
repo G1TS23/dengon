@@ -1,0 +1,77 @@
+# ---------------------------------------------------------------------------
+# sdkconfig.defaults — la configuration du firmware, VERSIONNÉE.
+#
+# ⚠ PIÈGE N°1 D'ESP-IDF : ce fichier n'est lu QUE lorsque `sdkconfig` n'existe
+#   pas encore. Si vous modifiez une ligne ici alors qu'un build a déjà eu lieu,
+#   IL NE SE PASSE RIEN — silencieusement, sans le moindre avertissement.
+#   Remède : `idf.py fullclean` (ou supprimer `sdkconfig`), puis rebuild.
+#
+#   Corollaire : `idf.py menuconfig` écrit dans `sdkconfig`, qui n'est PAS
+#   versionné. Un réglage fait en menuconfig et non reporté ici est perdu pour
+#   tout le monde sauf vous — y compris pour la CI.
+#
+# Références : docs/synthese/08-relais-esp32.md §2-3 (matériel et pile),
+#              docs/powl/03-network-protocol.md §6 (rôle BLE, MTU).
+# ---------------------------------------------------------------------------
+
+# --- 1. Cible matérielle : ESP32-WROOM-32E (Xtensa LX6, 4 Mo flash, 0 PSRAM) --
+CONFIG_IDF_TARGET="esp32"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Le partitionnement par défaut n'accorde que 1 Mo à l'application. Le binaire
+# NimBLE + mbedTLS en frôle déjà la limite, et l'US-307 y ajoutera
+# libdengon_core.a. On prend tout de suite le schéma « large » (1,5 Mo de
+# factory) : rebasculer plus tard obligerait à réécrire toute la flash de chaque
+# carte déjà déployée. Et l'erreur « app partition is too small » n'arrive
+# qu'APRÈS une compilation complète.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# --- 2. Bluetooth : contrôleur BLE seul, host NimBLE -------------------------
+# ⚠ Le host par défaut d'ESP-IDF est Bluedroid (components/bt/Kconfig). Il faut
+#   DEUX lignes : activer NimBLE ne désactive pas Bluedroid tout seul. Symptôme
+#   si on l'oublie : « host/ble_hs.h: No such file or directory », un message
+#   qui ne mentionne jamais Bluedroid.
+# NimBLE est le host retenu par la conception : ~40 à 100 Ko de RAM et ~50 % de
+# flash de moins que Bluedroid (docs/synthese/10-benchmarks-mvp-tests.md §…).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=y
+
+# BLE seul : le BR/EDR de l'ESP32 ne sert à rien à dengon et coûte ~100 Ko.
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y
+CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
+CONFIG_BTDM_CTRL_MODE_BTDM=n
+CONFIG_BTDM_CTRL_BLE_MAX_CONN=3
+
+# --- 3. Rôles NimBLE : périphérique seul pour CETTE US -----------------------
+# US-220 rebasculera CENTRAL et OBSERVER à `y` pour le rôle GATT double décrit
+# par docs/powl/03-network-protocol.md §6.1. Les couper ici rend le périmètre de
+# l'US-114 vérifiable par la machine : le firmware est techniquement incapable
+# de scanner, il ne peut donc pas déborder sur l'US suivante.
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+
+# --- 4. GATT / ATT -----------------------------------------------------------
+# docs/powl/03 §6.3 : négocier ATT_MTU = 517, repli automatique sur 23.
+# BT_NIMBLE_MAX_CONNECTIONS doit rester <= BTDM_CTRL_BLE_MAX_CONN, sinon le host
+# réclame au contrôleur plus de liens qu'il n'en a — échec à l'exécution, pas à
+# la compilation.
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=517
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=3
+# Un MTU de 517 chaîne plusieurs mbufs par PDU : les 12 blocs par défaut
+# suffisent pour un lien, pas pour trois.
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=24
+
+# --- 5. GAP ------------------------------------------------------------------
+# Écrasé à l'exécution par ble_svc_gap_device_name_set(), qui y ajoute le
+# suffixe tiré du peerID. Cette valeur ne sert donc qu'avant le premier boot.
+CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="dengon-relay"
+
+# --- 6. Journalisation -------------------------------------------------------
+# INFO au stade du squelette : on veut LIRE dans `idf.py monitor` les UUID
+# réellement enregistrés et le MTU réellement négocié — c'est la preuve
+# textuelle des critères d'acceptation. À redescendre à WARNING en US-308,
+# quand le budget flash comptera.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
