@@ -69,7 +69,7 @@
   }
 
   function classeStatut(statut) {
-    return "statut statut--" + (STATUT_LABEL[statut] ? statut.replace(/_/g, "-") : "inconnu");
+    return "statut statut--" + (STATUT_LABEL[statut] ? statut.replaceAll("_", "-") : "inconnu");
   }
 
   function el(tag, attrs, enfants) {
@@ -160,9 +160,9 @@
   }
 
   function renderDetail(msgLogId) {
-    var message = DATA.messages.filter(function (m) {
+    var message = DATA.messages.find(function (m) {
       return m.msg_log_id === msgLogId;
-    })[0];
+    });
 
     var retour = el("a", { class: "retour", href: "#/", text: "← Retour à la liste" });
 
@@ -214,7 +214,7 @@
 
   function route() {
     var hash = window.location.hash;
-    var correspondance = hash.match(/^#\/message\/(.+)$/);
+    var correspondance = /^#\/message\/(.+)$/.exec(hash);
     var racine = document.getElementById("app");
     racine.innerHTML = "";
     racine.appendChild(correspondance ? renderDetail(decodeURIComponent(correspondance[1])) : renderListe());

@@ -6,7 +6,7 @@ bidon.
 **Correspond à la conception :** [`docs/olivier/dashboard.md`](../../olivier/dashboard.md)
 §3, §4, §8, §9 ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §5 (« Parcours d'un message »), §11.2 (schéma SQLite `messages`/`message_hops`).
-**Dernière mise à jour :** 2026-09-20
+**Dernière mise à jour :** 2026-09-25
 **État :** esquisse (US-111) — page statique, données en dur, aucun appel
 réseau. Pas encore branchée sur l'API (US-217, US-219).
 
@@ -133,6 +133,10 @@ CORS).
   déclinée, aucun binaire Chrome/Edge trouvé).
 - **À faire avant de clore l'US-111** : ouvrir la page dans un navigateur,
   vérifier à 360 px de large, capture d'écran dans la PR.
+- **SonarCloud (PR #70, 2026-09-25)** : 3 *code smells* `MINOR` signalés sur
+  `app.js` (`javascript:S7781`, `S7750`, `S6594`) et corrigés — voir le
+  journal du 2026-09-25. Comportement inchangé, pas de nouveau test ajouté
+  (déjà couvert par l'exécution Node.js manuelle décrite ci-dessus).
 
 ## Limites connues / TODO
 

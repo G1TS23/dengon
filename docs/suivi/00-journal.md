@@ -10,6 +10,56 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-25 — Correctifs SonarCloud sur `dashboard/web/app.js` (PR #70, US-111)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/web/app.js`
+**Lot :** US-111, Sprint 2 — pas de nouveau lot, réponse à une analyse
+SonarCloud sur du travail déjà livré
+
+### Fait
+- Revue des PR ouvertes (`gh pr list --author @me`) : PR #70 déjà
+  `APPROVED`, mais 3 *code smells* `MINOR` ouverts côté SonarCloud
+  (interrogés via l'API publique `sonarcloud.io/api/issues/search?
+  componentKeys=G1TS23_dengon&pullRequest=70&resolved=false`) :
+  - `classeStatut` (l.72) : `statut.replace(/_/g, "-")` →
+    `statut.replaceAll("_", "-")` (règle `javascript:S7781`).
+  - `renderDetail` (l.163) : `DATA.messages.filter(fn)[0]` →
+    `DATA.messages.find(fn)` (règle `javascript:S7750`).
+  - `route` (l.217) : `hash.match(/^#\/message\/(.+)$/)` →
+    `/^#\/message\/(.+)$/.exec(hash)` (règle `javascript:S6594`).
+
+### Pourquoi / décisions
+- Corrections mécaniques, comportement inchangé (mêmes cas testés à la
+  main dans le navigateur : liste, détail d'un message existant, détail
+  d'un id inconnu).
+- Pas de commit/push : `CLAUDE.md` interdit de committer sans demande
+  explicite. Changement laissé dans l'arbre de travail pour relecture.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rien de nouveau
+
+### État après cette session
+- Les 3 issues SonarCloud `MINOR` de la PR #70 corrigées dans le diff
+  local ; à repousser pour qu'un nouveau scan les ferme côté SonarCloud.
+- Fiche(s) module mise(s) à jour : aucune (pas de changement de forme)
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ curl -s "https://sonarcloud.io/api/issues/search?componentKeys=G1TS23_dengon&pullRequest=70&resolved=false"
+3 issues MINOR (javascript:S7781 l.72, S7750 l.163, S6594 l.217)
+```
+- Pas de `cargo`/toolchain JS spécifique à faire tourner ici : fichier
+  JS vanilla sans build, relu à la main après modification (pas de suite
+  de tests JS dans le module — voir `docs/suivi/modules/dashboard-web.md`
+  si présent pour le détail du module).
+
+---
+
 ## 2026-09-20 — US-111 : squelette `dashboard/web` (liste + détail, données bidon)
 
 **Auteur :** Claude (Sonnet 5)
