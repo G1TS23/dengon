@@ -1,0 +1,78 @@
+name: dashboard
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard/api
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Nécessaire au filtre de chemins sur les événements push.
+          fetch-depth: 0
+
+      # Filtrage DANS le job, pas via `on.pull_request.paths` : un filtre au
+      # niveau du déclencheur empêche GitHub de créer un check run du tout
+      # pour une PR qui ne touche pas dashboard/**, qui resterait bloquée sur
+      # « En attente » si ce check devient requis (même piège que core.yml,
+      # voir docs/suivi/03-ecarts-conception.md — retour de revue #59, round 2).
+      - name: Détecter les changements dashboard/api
+        id: filtre
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            api:
+              - 'dashboard/**'
+              - '.github/workflows/dashboard.yml'
+
+      - name: Aucun changement dashboard/api
+        if: steps.filtre.outputs.api != 'true'
+        run: |
+          {
+            echo '### api — ignoré'
+            echo
+            echo "Aucun fichier dashboard/api modifié : les étapes uv sont sautées."
+            echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        if: steps.filtre.outputs.api == 'true'
+        with:
+          version: "0.9.25"
+          enable-cache: true
+      - name: Installer depuis le lock (échoue si uv.lock est périmé)
+        if: steps.filtre.outputs.api == 'true'
+        # --no-build : wheels seulement, aucun script de build de dépendance.
+        # --no-install-project : les tests importent `app` depuis les sources
+        # (voir tests/conftest.py), inutile de construire le paquet local.
+        run: uv sync --frozen --extra dev --no-install-project --no-build
+      - name: Lint (ruff)
+        if: steps.filtre.outputs.api == 'true'
+        run: uv run --no-sync --no-build ruff check .
+      - name: Tests (pytest)
+        if: steps.filtre.outputs.api == 'true'
+        run: uv run --no-sync --no-build pytest
+      - name: Le paquet s'installe (packages = ["app"] à jour dans pyproject.toml)
+        if: steps.filtre.outputs.api == 'true'
+        # Les tests importent `app` via sys.path (tests/conftest.py), pas via
+        # une installation du paquet — donc `packages = ["app"]` dans
+        # pyproject.toml n'est vérifié par rien d'autre : un sous-paquet
+        # ajouté sous app/ sans mise à jour de cette liste romprait
+        # l'installation réelle sans que le reste de la CI le voie (retour de
+        # revue #59, round 4, point d'OswinFreyr). Construit le wheel et
+        # vérifie qu'il contient bien les modules réels, indépendamment du
+        # raccourci sys.path des tests.
+        run: |
+          uv build --wheel -o /tmp/dashboard-api-dist
+          for module in app/__init__.py app/main.py app/config.py app/db.py app/migrations.py; do
+            python3 -m zipfile -l /tmp/dashboard-api-dist/*.whl | grep -q "$module" || {
+              echo "::error::$module absent du wheel construit — packages/pyproject.toml périmé"
+              exit 1
+            }
+          done
