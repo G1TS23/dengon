@@ -47,6 +47,12 @@ publish = false
 [workspace.dependencies]
 dengon-core = { path = "crates/dengon-core", version = "0.1.0" }
 dengon-ble  = { path = "crates/dengon-ble", version = "0.1.0" }
+# Version EXACTE (pas de caret) : même logique que rust-toolchain.toml — une
+# montée de version d'UniFFI est une PR volontaire, pas un `cargo update`
+# silencieux. default-features = false retire "cargo-metadata" (inutile ici,
+# on n'invoque jamais `uniffi-bindgen` en CLI) ; dengon-ffi ajoute la feature
+# "build" seulement sur sa dépendance de build.
+uniffi = { version = "=0.28.3", default-features = false }
 
 # ---------------------------------------------------------------------------
 # Lints centralisés (Cargo >= 1.74). C'est la « configuration clippy

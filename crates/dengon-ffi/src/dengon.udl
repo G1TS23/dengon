@@ -1,0 +1,87 @@
+// Contrat FFI v0 de dengon (US-106) — voir docs/synthese/04-architecture.md §5
+// et docs/powl/09-data-model.md §1/§3 pour les types miroirs.
+//
+// Couverture minimale exigée par l'US-106 : send_message, poll_events,
+// on_peer_connected, identité + QR. Le reste de la façade `api`
+// (mark_read, etc. — voir docs/powl/02-architecture.md) arrive avec le vrai
+// FFI (US-301/US-302).
+//
+// GELÉ une fois annoncé en point d'équipe (DoR US-106) : ajouter un champ
+// après coup demande une réunion, pas un commit.
+
+namespace dengon {
+    // Identité + QR (docs/synthese/06-securite.md).
+    Identity generate_identity(string pseudo);
+    string identity_qr_code(Identity identity);
+
+    [Throws=DengonError]
+    Identity identity_from_qr_code(string qr_code);
+
+    // Code de vérification 60 chiffres (« safety number »), même valeur des
+    // deux côtés quel que soit l'ordre des arguments.
+    string verification_code(Identity local, Identity remote);
+};
+
+dictionary Identity {
+    string peer_id;
+    string pseudo;
+    sequence<u8> pub_static;
+    sequence<u8> pub_sign;
+};
+
+enum MessageStatus {
+    "Queued",
+    "InFlight",
+    "Delivered",
+    "Read",
+    "Expired",
+    "Cancelled",
+};
+
+dictionary Message {
+    string msg_uuid;
+    string conv_id;
+    string author_peer_id;
+    string body;
+    boolean outgoing;
+    u64 sent_ms;
+    MessageStatus status;
+};
+
+dictionary Conversation {
+    string conv_id;
+    string peer_id;
+    string peer_pseudo;
+    Message? last_message;
+    u32 unread_count;
+};
+
+[Enum]
+interface NodeEvent {
+    MessageReceived(Message message);
+    StatusChanged(string msg_uuid, MessageStatus status);
+    PeerConnected(string peer_id);
+    PeerDisconnected(string peer_id);
+};
+
+[Error]
+enum DengonError {
+    "UnknownPeer",
+    "NotConnected",
+    "Internal",
+};
+
+interface DengonNode {
+    constructor(Identity identity);
+
+    [Throws=DengonError]
+    string send_message(string dest_peer_id, string body);
+
+    sequence<NodeEvent> poll_events();
+
+    void on_peer_connected(string peer_id);
+
+    sequence<Conversation> list_conversations();
+
+    sequence<Message> list_messages(string conv_id);
+};

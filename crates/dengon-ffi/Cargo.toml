@@ -18,6 +18,13 @@ crate-type = ["lib", "cdylib"]
 
 [dependencies]
 dengon-core = { workspace = true }
+uniffi = { workspace = true }
+
+[build-dependencies]
+# Feature "build" : seule celle-ci ajoute `uniffi::generate_scaffolding`,
+# utilisée par build.rs. Pas besoin de "cli"/"bindgen" (génération Kotlin) :
+# ça reste hors périmètre de l'US-106 (US-302 générera les bindings Kotlin).
+uniffi = { workspace = true, features = ["build"] }
 
 [lints]
 workspace = true

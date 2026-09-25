@@ -307,6 +307,41 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-20 — `dengon-ffi` v0 (US-106) : identité/QR/code de vérification sans vraie cryptographie
+
+- **Prévu :** [`docs/synthese/06-securite.md`](../synthese/06-securite.md)
+  décrit `peer_id = SHA-256(pub_static)[0..8]`, des clés X25519/Ed25519
+  réelles, un QR `dengon:v1:<base64url(...)>` avec de vraies clés publiques,
+  et un code de vérification 60 chiffres dérivé de
+  `SHA-512(min(fpA,fpB)‖max(fpA,fpB))`.
+- **Réel :** `crates/dengon-ffi/src/lib.rs` (`generate_identity`,
+  `verification_code`) et `android/.../ffi/DengonNodeStub.kt`
+  (`DengonIdentity`) produisent des octets **déterministes mais non
+  cryptographiques** (XOR du pseudo pour les « clés », FNV-1a pour le code de
+  vérification). Le format (types, `dengon:v1:` + base64url, 12 groupes de 5
+  chiffres) est bien celui de la conception ; le contenu ne l'est pas.
+- **Raison :** l'US-106 est un contrat FFI (`.udl` + bouchon), pas l'US
+  crypto. `dengon-core::identity`/`crypto` n'existent pas encore (US-108,
+  US-203, US-205, tous en sprint 2/S2). Or la DoR de l'US-106 exige un
+  bouchon qui **renvoie des valeurs typées exploitables par l'UI**
+  (US-214/US-215) dès maintenant — attendre la vraie crypto aurait bloqué
+  tout le sprint 2 côté Android sur le sprint 2 côté Rust, exactement ce que
+  le contrat gelé est censé éviter.
+- **Conséquences :** le format des types FFI est stable et peut être
+  développé contre dès maintenant. Le **contenu** des identités/codes générés
+  aujourd'hui est sans valeur de sécurité et **change complètement** quand
+  `identity`/`crypto` seront branchés (US-108/US-203/US-205 puis US-301/302) —
+  aucun test ni donnée canned actuelle ne doit être considéré comme un
+  vecteur de test cryptographique. Les implémentations Rust et Kotlin sont
+  volontairement **indépendantes** (pas le même algorithme, pas le même
+  résultat numérique pour la même identité) : documenté en commentaire des
+  deux côtés pour éviter la confusion le jour où on les compare.
+- **Doc de conception mise à jour ?** non — `06-securite.md` reste la cible
+  réelle. Le point est documenté dans `modules/dengon-ffi.md` et l'entrée de
+  journal du 2026-09-20.
+
+---
+
 ### `TransportConfig` et `LinkId` sont inventés ici, sans référence de conception
 
 - **Conception :** `04-architecture.md` §3 **les nomme** dans la signature du
