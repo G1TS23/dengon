@@ -156,6 +156,118 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-16 — Arborescence du firmware : `main/`, pas `src/transport_nimble.c`
+
+- **Prévu :** [`docs/synthese/04-architecture.md`](../synthese/04-architecture.md)
+  ligne 87 place l'implémentation NimBLE du trait `Transport` dans
+  `firmware/dengon-relay/src/transport_nimble.c`.
+- **Réel :** `firmware/dengon-relay/main/` (`main.c`, `dengon_gatt.c`,
+  `dengon_peer_id.c`), avec un `CMakeLists.txt` à la racine du projet et un
+  autre dans `main/`.
+- **Raison :** c'est la convention ESP-IDF, et elle n'est pas négociable :
+  `idf.py`, `project.cmake` et `idf_component_register` supposent tous un
+  composant nommé `main`. Un dossier `src/` à la racine d'un projet ESP-IDF
+  n'est compris par aucun outil de la chaîne. Le **même fichier** de conception
+  se contredit d'ailleurs : son §5 (lignes 148-151) décrit déjà
+  `main/` + `components/dengon_core_ffi/`. La ligne 87 est la coquille.
+- **Conséquences :** aucune sur le fond — le trait `Transport` reste le contrat.
+  L'US-220 écrira son `transport_nimble.c` dans `main/`, et l'US-307 posera
+  `libdengon_core.a` dans `components/dengon_core_ffi/` comme le prévoit le §5.
+- **Doc de conception mise à jour ?** non — une ligne d'un tableau récapitulatif
+  contredite par le §5 du même document. Signalé ici et dans la fiche du module.
+
+---
+
+### 2026-09-16 — Nom d'annonce BLE : inventé ici, et relégué en réponse de scan
+
+- **Prévu :** rien. Aucun document de conception ne spécifie le *local name*
+  annoncé par l'ESP32. `docs/powl/03-network-protocol.md` §6.1 ne décrit que
+  l'UUID de service et le manufacturer data.
+- **Réel :** `dengon-relay-XXXX`, où `XXXX` est la forme hexadécimale des deux
+  premiers octets du peerID, émis dans la **réponse de scan** et non dans le
+  paquet d'annonce principal.
+- **Raison :** le paquet d'annonce est limité à 31 octets et il est déjà saturé
+  par ce que la conception impose : Flags (3) + liste complète d'UUID 128 bits
+  (18) + manufacturer data (9) = **30 octets**. Il ne reste pas la place d'un
+  nom. Le reléguer en réponse de scan ne coûte rien : un scanner émet un
+  `SCAN_REQ` sur une annonce `ADV_IND` et affiche le nom malgré tout. Le suffixe
+  distingue deux cartes posées côte à côte — indispensable dès l'US-220.
+- **Conséquences :** l'UUID de service reste dans le paquet principal, donc le
+  filtrage de scan des pairs (§6.1) fonctionne sans devoir interroger chaque
+  annonceur. En revanche, tout ajout futur au paquet principal fera échouer
+  `ble_gap_adv_set_fields` avec `BLE_HS_EMSGSIZE` — **à l'exécution**.
+- **Doc de conception mise à jour ?** non, pas encore : à remonter dans
+  `docs/powl/03` §6.1 quand l'US-220 figera le format d'annonce pour de bon.
+
+---
+
+### 2026-09-16 — Manufacturer data : 7 octets et non 5, à cause du Company ID
+
+- **Prévu :** `docs/powl/03-network-protocol.md` §6.1 décrit un *manufacturer
+  data* valant `peerID[0..4] ‖ flags`, soit **5 octets**.
+- **Réel :** 7 octets — `Company ID (2) ‖ peerID[0..4] (4) ‖ flags (1)`, avec
+  `Company ID = 0xFFFF`.
+- **Raison :** le champ AD de type `0xFF` du Core Bluetooth **exige** un
+  identifiant de fabricant sur ses deux premiers octets, et NimBLE ne préfixe
+  rien : il émet tel quel le tampon qu'on lui donne. Sans Company ID, certains
+  analyseurs rejettent le champ ou décalent leur lecture de deux octets.
+  `0xFFFF` est l'identifiant que le Bluetooth SIG réserve aux tests et à l'usage
+  interne : c'est le seul choix légitime tant que le projet n'a pas d'identifiant
+  attribué.
+- **Conséquences :** le budget d'annonce passe à 30 octets sur 31 (voir l'écart
+  précédent). Tout code qui décodera ce champ — l'application Android en
+  US-213, le `transport_nimble.c` en US-220 — doit sauter les **deux premiers**
+  octets pour retrouver le `peerID[0..4]` de la conception.
+- **Doc de conception mise à jour ?** non, pas encore ; à corriger dans
+  `docs/powl/03` §6.1, car l'omission y est une vraie erreur de spécification,
+  pas un choix.
+
+---
+
+### 2026-09-16 — Octet `flags` de l'annonce : bitfield défini faute de spécification
+
+- **Prévu :** `docs/powl/03-network-protocol.md` §6.1 nomme un octet `flags`
+  dans le manufacturer data, sans jamais en définir les bits.
+- **Réel :** bitfield posé dans `firmware/dengon-relay/main/main.c` —
+  `0x01` RELAY (nœud d'infrastructure fixe), `0x02` COURIER (porte des
+  enveloppes en dépôt), `0x04` ACCEPTS_CONN (accepte les connexions GATT),
+  `0x08` HAS_UPLINK (dispose d'un lien IP vers le VPS), bits 4 à 7 réservés.
+  Le squelette émet `0x05` (RELAY | ACCEPTS_CONN).
+- **Raison :** il fallait bien émettre un octet. Les quatre bits retenus sont
+  ceux qui servent au filtrage de scan décrit par la conception : distinguer un
+  relais d'un téléphone, et savoir avant de se connecter si le pair acceptera.
+- **Conséquences :** c'est un contrat **de fait** entre le firmware et
+  l'application Android. À ne pas confondre avec les `flags` du paquet de
+  couche 3 (`docs/powl/03` §3.1), qui n'ont aucun rapport — la collision de nom
+  est un piège en soi. Tant que l'US-213 et l'US-220 n'ont pas repris ces
+  valeurs, rien ne les vérifie.
+- **Doc de conception mise à jour ?** non, pas encore ; à remonter dans
+  `docs/powl/03` §6.1 dès que l'US-220 s'en sert.
+
+---
+
+### 2026-09-16 — `peerID` bouchonné sur la MAC eFuse au lieu de la clé statique
+
+- **Prévu :** `docs/powl/03-network-protocol.md` §3 —
+  `peerID = SHA-256(pub_static)[0..8]`.
+- **Réel :** `SHA-256(MAC eFuse d'usine)[0..8]`, dans
+  `firmware/dengon-relay/main/dengon_peer_id.c`.
+- **Raison :** `pub_static` n'existe pas encore. La génération de la paire
+  Ed25519/X25519 et son stockage en NVS chiffrée sont l'US-307. Le squelette a
+  besoin d'un identifiant qui soit seulement stable d'un redémarrage à l'autre
+  et distinct d'une carte à l'autre, pour remplir le manufacturer data et le nom
+  d'annonce : la MAC d'usine remplit ces deux conditions.
+- **Conséquences :** **ce n'est pas une identité cryptographique.** Une adresse
+  MAC est publique et prédictible ; rien ne doit s'en servir pour authentifier
+  quoi que ce soit. Le risque réel est qu'on l'oublie : l'avertissement est en
+  tête de `dengon_peer_id.h`, répété dans la fiche du module.
+  **Condition de levée : US-307**, qui doit remplacer l'implémentation sans
+  toucher à l'interface `dengon_peer_id_get()`.
+- **Doc de conception mise à jour ?** non — la conception est juste, c'est
+  l'implémentation qui est provisoire.
+
+---
+
 ### Piège de `.gitignore` repéré mais **non corrigé** (dette assumée)
 
 - Ligne `bin/` (section .NET, non ancrée) → ignorerait `crates/*/src/bin/` le

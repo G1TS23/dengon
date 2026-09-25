@@ -13,13 +13,22 @@ conflit de merge). L'état réel se lit ici :
 
 ## Résumé (1 ligne)
 
-Lot 0 en cours (fondations & spikes). **Aucun composant applicatif n'est encore
-sur `main`.**
+Lot 0 en cours (fondations & spikes). Les **premiers squelettes applicatifs**
+existent : app Android (US-109, sur `main`) et firmware ESP32 (US-114, en PR).
+Aucun des deux ne fait encore quoi que ce soit de fonctionnel.
 
 ## Commandes utiles
 
 _(à enrichir quand il y aura du code : comment builder, lancer, tester chaque
 partie — voir aussi la note d'onboarding en tête de chaque fiche `modules/`.)_
+
+```bash
+# Firmware ESP32 — build dans l'image Docker épinglée, depuis la racine du dépôt.
+# Flash, moniteur et pièges : docs/suivi/modules/firmware-relay.md
+IDF=espressif/idf:v5.5.5@sha256:a9231d0697ab8f7517cc072e93b7c83e04907bfbfba80b6440d7dbbf90665cf2
+docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp \
+  -v "$PWD:/repo" -w /repo/firmware/dengon-relay "$IDF" idf.py build
+```
 
 ```bash
 # Labels du dépôt vs fichier versionné
