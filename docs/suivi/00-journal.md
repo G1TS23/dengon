@@ -9,6 +9,43 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-25 — Répartition Sprint 2 entre Paul, Oswin et Olivier
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/repartition-sprint2.md` (nouveau), assignation
+GitHub des 24 issues `sprint:s2`
+**Lot :** planification, pas de code
+
+### Fait
+- Extrait et croisé les 24 issues Sprint 2 (points, dépendances, jalons) :
+  80 points au total, dont **42 concentrés sur `core-rust` seul**, tous
+  `Must`/jalon J1 (déjà 7 jours de retard).
+- Décidé de répartir `core-rust` entre les 3 personnes plutôt que de le
+  laisser au seul CODEOWNER de `/crates/` (Paul) — injouable sinon.
+- Répartition posée : Paul (crypto/identity/sync routing+inventory/firmware,
+  26 pts), Oswin (Android/protocole L2-L3/sync status+courier/sim, 26 pts),
+  Olivier (dashboard/stockage+observabilité/docs, 28 pts).
+- Détail complet, y compris le raisonnement et les dépendances issue par
+  issue, dans `docs/suivi/repartition-sprint2.md`.
+
+### Pourquoi / décisions
+- `sync::routing`/`inventory` (Paul) et `sync::status`/`courier` (Oswin)
+  sont coupés entre deux personnes alors que les 4 modules s'articulent
+  étroitement — friction identifiée et documentée, **à trancher en réunion**
+  avant que chacun parte de son côté (voir le document, §3).
+- US-213 (Android, Oswin) dépend formellement de US-103, qui n'est
+  toujours pas close (voir entrée précédente du 25/09) — bloqueur transverse
+  documenté, pas caché.
+
+### Écarts vs conception
+- Aucun — décision de process, pas de conception technique.
+
+### État après cette session
+- Issues assignées sur GitHub. **À valider par Paul et Oswin**, notamment le
+  point de friction `sync::` — ce n'est pas une décision unilatérale
+  définitive.
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
