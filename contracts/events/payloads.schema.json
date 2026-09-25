@@ -122,7 +122,18 @@
             "properties": {
               "subject_node": {
                 "type": "string",
-                "pattern": "^(relay|client)-[0-9a-f]{6,}$"
+                "anyOf": [
+                  {
+                    "pattern": "^relay-[0-9a-f]{6}$",
+                    "minLength": 12,
+                    "maxLength": 12
+                  },
+                  {
+                    "pattern": "^client-[0-9a-f]{6}$",
+                    "minLength": 13,
+                    "maxLength": 13
+                  }
+                ]
               },
               "root": {
                 "type": "string",
@@ -173,7 +184,8 @@
                 "minimum": 0
               },
               "app_version": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 64
               }
             },
             "required": [
@@ -1004,10 +1016,12 @@
             "type": "object",
             "properties": {
               "fw_version": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 64
               },
               "reset_reason": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 64
               },
               "secure_boot": {
                 "type": "boolean"
@@ -1108,7 +1122,8 @@
             "type": "object",
             "properties": {
               "subsystem": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 64
               },
               "action": {
                 "enum": [
@@ -1143,7 +1158,8 @@
             "type": "object",
             "properties": {
               "ssid": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 32
               },
               "duration_s": {
                 "type": "integer",
@@ -1171,7 +1187,8 @@
             "type": "object",
             "properties": {
               "ssid": {
-                "type": "string"
+                "type": "string",
+                "maxLength": 32
               },
               "duration_s": {
                 "type": "integer",

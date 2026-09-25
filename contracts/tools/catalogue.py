@@ -32,11 +32,35 @@ HEX32 = {"type": "string", "pattern": "^[0-9a-f]{32}$", "minLength": 32, "maxLen
 # racine de journal (SHA-256)
 HEX64 = {"type": "string", "pattern": "^[0-9a-f]{64}$", "minLength": 64, "maxLength": 64}
 UINT = {"type": "integer", "minimum": 0}
-# Même motif que $defs/node_id de events/envelope.schema.json (référencé aussi
+# Même forme que $defs/node_id de events/envelope.schema.json (référencé aussi
 # par batch.schema.json via $ref) — dupliqué ici parce que ce module est
 # Python, pas JSON Schema, donc ne peut pas faire de $ref vers ce fichier.
-NODE_ID_PATTERN = r"^(relay|client)-[0-9a-f]{6,}$"
+# anyOf avec longueur EXACTE par branche (12 pour relay-, 13 pour client-),
+# pas une simple plage minLength/maxLength : le moteur regex de jsonschema
+# (Python re) fait correspondre `$` juste avant un `\n` final, donc une
+# plage large laisserait passer "relay-abcdef\n" (13 caractères) en le
+# confondant avec un node_id client- valide de longueur 13. Avec une
+# longueur exacte par branche, ce caractère en trop fait échouer les DEUX
+# branches. Partie hexadécimale fixée à 6 (tous les exemples réels en
+# utilisent exactement 6) plutôt que laissée ouverte : une longueur
+# variable rend cette fermeture impossible (retour de revue #60 round 4,
+# point d'OswinFreyr — vérifié avec jsonschema après un premier essai
+# min/maxLength seul, insuffisant).
+NODE_ID = {
+    "type": "string",
+    "anyOf": [
+        {"pattern": r"^relay-[0-9a-f]{6}$", "minLength": 12, "maxLength": 12},
+        {"pattern": r"^client-[0-9a-f]{6}$", "minLength": 13, "maxLength": 13},
+    ],
+}
 PKT_TYPE = {"type": "integer", "minimum": 1, "maximum": 13}  # types de paquets, synthese/05 §4
+# Champs texte libres (pas de format fixe) : bornés pour ne pas laisser un
+# nœud buggé ou malveillant pousser plusieurs Mo dans un seul champ jusqu'au
+# stockage (retour de revue #60 round 4, point d'OswinFreyr). 64 = large
+# marge pour une chaîne de version/raison ; SSID borné à 32, la limite
+# Wi-Fi réelle (norme 802.11).
+TEXT64 = {"type": "string", "maxLength": 64}
+SSID = {"type": "string", "maxLength": 32}
 SIZE_BUCKET = {"enum": [256, 512, 1024, 2048]}
 RSSI = {"type": "integer", "minimum": -120, "maximum": 0}
 
@@ -178,7 +202,7 @@ CATALOGUE: dict[str, dict] = {
     "attest.observed": {
         "required": ["subject_node", "root", "height"],
         "props": {
-            "subject_node": {"type": "string", "pattern": NODE_ID_PATTERN},
+            "subject_node": NODE_ID,
             "root": HEX64,
             "height": UINT,
         },
@@ -187,8 +211,8 @@ CATALOGUE: dict[str, dict] = {
     "relay.boot": {
         "required": ["fw_version", "reset_reason", "secure_boot", "flash_enc"],
         "props": {
-            "fw_version": {"type": "string"},
-            "reset_reason": {"type": "string"},
+            "fw_version": TEXT64,
+            "reset_reason": TEXT64,
             "secure_boot": {"type": "boolean"},
             "flash_enc": {"type": "boolean"},
         },
@@ -217,16 +241,16 @@ CATALOGUE: dict[str, dict] = {
     },
     "relay.wifi_up": {
         "required": [],
-        "props": {"ssid": {"type": "string"}, "duration_s": UINT},
+        "props": {"ssid": SSID, "duration_s": UINT},
     },
     "relay.wifi_down": {
         "required": [],
-        "props": {"ssid": {"type": "string"}, "duration_s": UINT},
+        "props": {"ssid": SSID, "duration_s": UINT},
     },
     "relay.overloaded": {
         "required": ["subsystem", "action"],
         "props": {
-            "subsystem": {"type": "string"},
+            "subsystem": TEXT64,
             "action": {"enum": ["drop_pkt", "refuse_envelope", "evict_cache"]},
         },
     },
@@ -236,7 +260,7 @@ CATALOGUE: dict[str, dict] = {
             "msgs_sent": UINT,
             "msgs_recv": UINT,
             "peers_seen": UINT,
-            "app_version": {"type": "string"},
+            "app_version": TEXT64,
         },
     },
 }

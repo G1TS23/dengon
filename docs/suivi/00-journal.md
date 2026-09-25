@@ -10,6 +10,65 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-25 — `contracts/events` : revue « round 4 » d'OswinFreyr sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/events/envelope.schema.json`,
+`contracts/events/batch.schema.json`, `contracts/tools/catalogue.py`,
+`contracts/events/payloads.schema.json` (régénéré)
+**Lot :** US-107, Sprint 1
+
+### Fait
+- **`node_id` (et `subject_node`, même motif dupliqué dans `catalogue.py`)**
+  n'avait ni `minLength` ni `maxLength` — même trou que celui déjà fermé sur
+  `event_id`/`prev_hash`/HEX16/32/64 : le moteur regex de `jsonschema`
+  (Python `re`) fait correspondre `$` juste avant un `\n` final, donc
+  `"relay-abcdef\n"` passait le pattern seul. **Premier essai insuffisant** :
+  ajouter `minLength: 12, maxLength: 40` (comme suggéré en revue) ne ferme
+  PAS le trou pour un motif à préfixes de longueurs différentes (`relay-`
+  vs `client-`) — `"relay-abcdef\n"` (13 caractères) reste dans la plage et
+  se confond avec un `node_id` `client-` valide de longueur 13. Vérifié le
+  problème avec `jsonschema` avant de corriger pour de bon : `anyOf` à deux
+  branches, chacune avec `minLength == maxLength` (12 pour `relay-`, 13 pour
+  `client-`) et partie hexadécimale fixée à 6 (tous les exemples réels en
+  utilisent exactement 6). Reverifié après coup : les deux variantes
+  `\n` sont maintenant rejetées.
+- **Champs texte libres sans borne** (`fw_version`, `reset_reason`,
+  `subsystem`, `app_version`, `ssid`×2) : ajouté `TEXT64`/`SSID` dans
+  `catalogue.py` (64 générique, 32 pour `ssid` — limite Wi-Fi réelle).
+- **`events` sans `maxItems`** dans `batch.schema.json` : ajouté `maxItems:
+  1000`, indépendant de la limite en octets de l'API (#59).
+- `payloads.schema.json` régénéré (`build_fixtures.py`), les 20 fixtures
+  restent valides sans modification (les valeurs réelles tiennent déjà dans
+  les nouvelles bornes).
+
+### Pourquoi / décisions
+- Le premier réflexe (`minLength`/`maxLength` en plage) suffit pour un motif
+  à longueur strictement fixe (HEX16/32/64) mais pas pour un motif à
+  plusieurs préfixes de longueurs différentes — leçon à retenir pour tout
+  futur champ du même genre.
+
+### Écarts vs conception
+- Aucun.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run python3 tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+
+$ uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check .
+All checks passed!
+
+# Vérification directe du trou refermé (script ad hoc, jsonschema réel) :
+# "relay-abcdef\n" et "client-abcdef\n" -> rejetés (avant : acceptés)
+# "relay-abcdef" / "client-abcdef" -> toujours acceptés
+```
+
+---
+
 ## 2026-09-16 — `contracts/events` : revue « round 3 » de POWLAIR sur la PR #60
 
 **Auteur :** Claude (Sonnet 5)

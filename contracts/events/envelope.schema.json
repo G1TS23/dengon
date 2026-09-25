@@ -29,7 +29,9 @@
     "name": {
       "type": "string",
       "pattern": "^[a-z]+\\.[a-z_]+$",
-      "description": "<domaine>.<action> en snake_case. Restreint au catalogue MVP par payloads.schema.json."
+      "minLength": 3,
+      "maxLength": 64,
+      "description": "<domaine>.<action> en snake_case. Restreint au catalogue MVP par payloads.schema.json. minLength/maxLength en plus du pattern : le moteur regex de jsonschema (Python re) fait correspondre `$` juste avant un `\\n` final, donc `\"msg.queued\\n\"` passerait le seul pattern (même trou que node_id ci-dessous — retour de revue #60 round 4, point d'OswinFreyr ; contrairement à node_id, ce champ est déjà re-vérifié via l'enum de payloads.schema.json par validate.py, mais le schéma seul reste trop permissif pour un futur consommateur direct)."
     },
     "payload": {
       "type": "object",
@@ -46,8 +48,20 @@
   "$defs": {
     "node_id": {
       "type": "string",
-      "pattern": "^(relay|client)-[0-9a-f]{6,}$",
-      "description": "Pseudonyme stable, non rattachable à une personne (C-4)."
+      "description": "Pseudonyme stable, non rattachable à une personne (C-4). Tous les exemples réels (docs/powl/08, fixtures golden) utilisent exactement 6 hex : la partie hexadécimale est donc fixée à 6 plutôt que laissée ouverte ({6,}), pour permettre une longueur EXACTE par branche ci-dessous plutôt qu'une simple plage — nécessaire pour fermer le trou du `$` (voir note). Si un futur besoin réclame une longueur variable, revoir ce point en réunion (contrat gelé).",
+      "anyOf": [
+        {
+          "pattern": "^relay-[0-9a-f]{6}$",
+          "minLength": 12,
+          "maxLength": 12
+        },
+        {
+          "pattern": "^client-[0-9a-f]{6}$",
+          "minLength": 13,
+          "maxLength": 13
+        }
+      ],
+      "$comment": "minLength == maxLength sur CHAQUE branche (12 pour relay-, 13 pour client-), pas juste une plage 12-40 : le moteur regex de jsonschema (Python re) fait correspondre `$` juste avant un `\\n` final, donc une plage large (ex. 12-40) laisserait passer \"relay-abcdef\\n\" (13 caractères, dans la plage) en le confondant avec un node_id client- valide de longueur 13. Avec une longueur exacte par branche, ce même 13ᵉ caractère fait échouer les DEUX branches (le pattern relay- exige 12, le pattern client- exige le préfixe \"client-\"). Retour de revue #60 round 4, point d'OswinFreyr — vérifié en re-testant explicitement ce cas avec jsonschema après le premier essai (min/maxLength seuls, insuffisant)."
     }
   }
 }
