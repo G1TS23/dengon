@@ -4,10 +4,58 @@ import sqlite3
 import pytest
 
 
+def _apply_migrations_in_subprocess(db_path: str, start_barrier, result_queue) -> None:
+    """Cible d'un process séparé (voir `test_migrations_are_safe_across_processes`).
+
+    Fonction de haut niveau, pas une fermeture : `multiprocessing` avec la
+    méthode de démarrage `spawn` (défaut sur macOS) exige une cible picklable,
+    donc importable par son nom — une closure ne le serait pas. Le résultat
+    passe par une `Queue` plutôt qu'une valeur de retour : avec `Process` (pas
+    `Pool`), rien ne récupère la valeur de retour de la cible.
+    """
+    import os
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    os.environ["DENGON_DASHBOARD_DB"] = db_path
+
+    from app.db import connect, run_migrations
+
+    conn = connect()
+    try:
+        start_barrier.wait(timeout=10)  # aligne les N process avant BEGIN IMMEDIATE
+        run_migrations(conn)
+        result_queue.put(None)
+    except Exception as exc:  # noqa: BLE001 — remonté au process parent via la queue, pas une trace
+        result_queue.put(repr(exc))
+    finally:
+        conn.close()
+
+
 def test_healthz(client):
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_startup_fails_fast_on_malformed_max_batch_bytes(tmp_path, monkeypatch):
+    # config.max_batch_bytes() lève RuntimeError sur une valeur malformée,
+    # mais rien ne garantissait que cette levée remontait bien AU DÉMARRAGE
+    # (via l'appel dans lifespan()) plutôt que d'être silencieusement
+    # avalée quelque part entre lifespan() et TestClient — seul le
+    # comportement de config.py était couvert, pas l'intégration avec le
+    # démarrage de l'app (retour de revue #59, round 4, point d'OswinFreyr).
+    monkeypatch.setenv("DENGON_DASHBOARD_DB", str(tmp_path / "startup.db"))
+    monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "2MB")
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with pytest.raises(RuntimeError, match="2MB"):
+        with TestClient(app):
+            pass
 
 
 def test_ingest_accepts_arbitrary_object(client):
@@ -172,14 +220,14 @@ def test_a_single_connection_is_reused_for_all_writes(tmp_path, monkeypatch):
 
 
 def test_ingest_returns_503_when_connection_closed_under_a_write(client):
-    # Course entre l'arrêt du lifespan (ferme app.state.db_conn dans son
+    # Course entre l'arrêt du lifespan (ferme app.state.db dans son
     # `finally`) et une écriture encore en cours sur le threadpool : seul
     # sqlite3.OperationalError était rattrapé, pas sqlite3.ProgrammingError
     # ("Cannot operate on a closed database"), qui remontait un 500 brut au
     # lieu du 503 attendu (retour de revue #59, round 2). Reproduit ici sans
     # vraie course : fermer la connexion partagée avant le POST suffit à
     # produire la même ProgrammingError.
-    client.app.state.db_conn.close()
+    client.app.state.db.close()
     response = client.post("/ingest/batch", json={"events": []})
     assert response.status_code == 503
     assert response.headers.get("Retry-After") == "1"
@@ -249,6 +297,46 @@ def test_migrations_idempotent_after_partial_apply(tmp_path, monkeypatch):
     assert run_migrations(conn) == [1]  # se termine proprement grâce à IF NOT EXISTS
     assert [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")] == [1]
     conn.close()
+
+
+def test_migrations_are_safe_across_processes(tmp_path, monkeypatch):
+    # La docstring de db.py affirme que run_migrations() est sûr sous
+    # `uvicorn --workers N` (plusieurs PROCESS, pas juste plusieurs threads
+    # dans le même process) : jusqu'ici, seul `test_concurrent_writes_are_not_
+    # lost` couvrait la concurrence, en multi-thread. Ce test lance de vrais
+    # process OS séparés pour vérifier l'affirmation elle-même (retour de
+    # revue #59, round 4, point d'OswinFreyr).
+    import multiprocessing
+
+    db_path = str(tmp_path / "multiproc.db")
+    ctx = multiprocessing.get_context("spawn")
+    n_workers = 5
+    start_barrier = ctx.Barrier(n_workers)
+    result_queue = ctx.Queue()
+
+    worker_args = (db_path, start_barrier, result_queue)
+    processes = [
+        ctx.Process(target=_apply_migrations_in_subprocess, args=worker_args)
+        for _ in range(n_workers)
+    ]
+    for p in processes:
+        p.start()
+    for p in processes:
+        p.join(timeout=30)
+
+    assert all(not p.is_alive() for p in processes), "un process n'a pas terminé à temps"
+    results = [result_queue.get_nowait() for _ in range(n_workers)]
+    assert results == [None] * n_workers, (
+        f"un des {n_workers} process a échoué au lieu d'attendre sous busy_timeout : {results}"
+    )
+
+    monkeypatch.setenv("DENGON_DASHBOARD_DB", db_path)
+    from app.db import connect
+
+    conn = connect()
+    versions = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")]
+    conn.close()
+    assert versions == [1], "la migration ne doit être enregistrée qu'une seule fois, pas dupliquée"
 
 
 @pytest.mark.parametrize("payload", [{"events": []}, [], {"a": 1}])

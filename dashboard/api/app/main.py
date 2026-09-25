@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import sqlite3
-import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -27,7 +26,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from .config import max_batch_bytes
-from .db import connect, run_migrations
+from .db import LockedConnection, connect, run_migrations
 
 
 class _BodyTooLarge(Exception):
@@ -43,17 +42,25 @@ async def lifespan(app: FastAPI):
     # chaque requête, comme documenté dans config.py.
     max_batch_bytes()
     conn = connect()
-    run_migrations(conn)
-    # Connexion unique, réutilisée pour toutes les écritures (retour de revue
-    # #59, point 3) : ouvrir une connexion par batch (fichier + 3 PRAGMA)
-    # devient un coût redondant dès qu'un flush réel arrive. `db_lock`
-    # sérialise l'accès depuis le threadpool — voir `db.connect()`.
-    app.state.db_conn = conn
-    app.state.db_lock = threading.Lock()
+    # LockedConnection couple connexion et verrou dès l'ouverture (retour de
+    # revue #59, round 4, point d'OswinFreyr — voir db.py) : `db.close()`
+    # ferme la connexion sous-jacente, donc un seul chemin de fermeture,
+    # que run_migrations() réussisse ou non.
+    db = LockedConnection(conn)
     try:
+        # run_migrations() DANS le try : si une migration échoue (ex.
+        # OperationalError après busy_timeout avec plusieurs workers), conn
+        # doit quand même être fermée, pas fuiter — c'était le cas avant
+        # (retour de revue #59, round 4, point d'OswinFreyr : `connect()` et
+        # `run_migrations()` étaient hors du try/finally).
+        run_migrations(conn)
+        # Connexion unique, réutilisée pour toutes les écritures (retour de
+        # revue #59, point 3) : ouvrir une connexion par batch (fichier + 3
+        # PRAGMA) devient un coût redondant dès qu'un flush réel arrive.
+        app.state.db = db
         yield
     finally:
-        conn.close()
+        db.close()
 
 
 app = FastAPI(
@@ -112,14 +119,31 @@ async def _read_limited_body(request: Request, limit: int) -> bytes:
     async for morceau in request.stream():
         total += len(morceau)
         if total > limit:
+            # Même raison que la branche Content-Length ci-dessus : vider le
+            # reste du flux avant de lever, sinon la connexion garde du corps
+            # non lu au moment du 413 (retour de revue #59, round 4, point
+            # d'OswinFreyr — cette branche-ci avait été oubliée par le fix du
+            # round 2, qui ne couvrait que la branche Content-Length).
+            # Starlette marque le flux consommé (`_stream_consumed`) dès que
+            # le dernier message ASGI (`more_body=False`) est reçu, AVANT même
+            # de le céder à ce `async for` — si tout le corps est arrivé en un
+            # seul message (courant avec un petit corps, y compris dans les
+            # tests), le flux est donc déjà entièrement consommé ici et
+            # rappeler `request.stream()` lève `RuntimeError("Stream
+            # consumed")`. C'est le signal qu'il n'y a justement plus rien à
+            # vider, pas une vraie erreur.
+            try:
+                async for _ in request.stream():
+                    pass
+            except RuntimeError:
+                pass
             raise _BodyTooLarge
         morceaux.append(morceau)
     return b"".join(morceaux)
 
 
 def _store_raw_batch(
-    conn: sqlite3.Connection,
-    lock: threading.Lock,
+    db: LockedConnection,
     batch_id: str,
     body_utf8: str,
     event_count: int | None,
@@ -129,22 +153,20 @@ def _store_raw_batch(
     """Insère un batch brut sur la connexion partagée de l'app.
 
     `sqlite3.Connection` n'est pas sûre en accès concurrent depuis plusieurs
-    threads : `lock` sérialise les écritures issues du threadpool. Ce n'est
-    pas une limite de SQLite lui-même (WAL, un seul écrivain de toute façon),
-    juste une protection de l'objet Python.
+    threads : `LockedConnection.execute()` sérialise les écritures issues du
+    threadpool. Ce n'est pas une limite de SQLite lui-même (WAL, un seul
+    écrivain de toute façon), juste une protection de l'objet Python.
     """
-    with lock:
-        conn.execute(
-            "INSERT INTO raw_batches "
-            "(batch_id, received_ms, remote_addr, content_type, event_count, body) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (batch_id, int(time.time() * 1000), remote_addr, content_type, event_count, body_utf8),
-        )
+    db.execute(
+        "INSERT INTO raw_batches "
+        "(batch_id, received_ms, remote_addr, content_type, event_count, body) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (batch_id, int(time.time() * 1000), remote_addr, content_type, event_count, body_utf8),
+    )
 
 
 def _decode_parse_and_store(
-    conn: sqlite3.Connection,
-    lock: threading.Lock,
+    db: LockedConnection,
     raw: bytes,
     remote_addr: str | None,
     content_type: str | None,
@@ -166,25 +188,31 @@ def _decode_parse_and_store(
     parsed = json.loads(text)
     event_count = _guess_event_count(parsed)
     batch_id = str(uuid.uuid4())
-    _store_raw_batch(conn, lock, batch_id, text, event_count, remote_addr, content_type)
+    _store_raw_batch(db, batch_id, text, event_count, remote_addr, content_type)
     return batch_id, event_count
 
 
 @app.post("/ingest/batch", status_code=status.HTTP_202_ACCEPTED)
 async def ingest_batch(request: Request) -> JSONResponse:
+    # Lue une seule fois dans une variable locale (retour de revue #59, round
+    # 4, point d'OswinFreyr) : appelée deux fois avant, le message d'erreur du
+    # 413 pouvait annoncer une limite différente de celle réellement
+    # appliquée si la variable d'environnement changeait entre les deux
+    # lectures (fenêtre étroite, mais un test qui monkeypatche entre les deux
+    # l'aurait révélé).
+    limite = max_batch_bytes()
     try:
-        raw = await _read_limited_body(request, max_batch_bytes())
+        raw = await _read_limited_body(request, limite)
     except _BodyTooLarge:
         return JSONResponse(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-            content={"error": f"corps trop volumineux (max {max_batch_bytes()} octets)"},
+            content={"error": f"corps trop volumineux (max {limite} octets)"},
         )
 
     try:
         batch_id, event_count = await run_in_threadpool(
             _decode_parse_and_store,
-            request.app.state.db_conn,
-            request.app.state.db_lock,
+            request.app.state.db,
             raw,
             request.client.host if request.client else None,
             request.headers.get("content-type"),

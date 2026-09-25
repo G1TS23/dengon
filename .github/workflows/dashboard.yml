@@ -58,3 +58,21 @@ jobs:
       - name: Tests (pytest)
         if: steps.filtre.outputs.api == 'true'
         run: uv run --no-sync --no-build pytest
+      - name: Le paquet s'installe (packages = ["app"] à jour dans pyproject.toml)
+        if: steps.filtre.outputs.api == 'true'
+        # Les tests importent `app` via sys.path (tests/conftest.py), pas via
+        # une installation du paquet — donc `packages = ["app"]` dans
+        # pyproject.toml n'est vérifié par rien d'autre : un sous-paquet
+        # ajouté sous app/ sans mise à jour de cette liste romprait
+        # l'installation réelle sans que le reste de la CI le voie (retour de
+        # revue #59, round 4, point d'OswinFreyr). Construit le wheel et
+        # vérifie qu'il contient bien les modules réels, indépendamment du
+        # raccourci sys.path des tests.
+        run: |
+          uv build --wheel -o /tmp/dashboard-api-dist
+          for module in app/__init__.py app/main.py app/config.py app/db.py app/migrations.py; do
+            python3 -m zipfile -l /tmp/dashboard-api-dist/*.whl | grep -q "$module" || {
+              echo "::error::$module absent du wheel construit — packages/pyproject.toml périmé"
+              exit 1
+            }
+          done

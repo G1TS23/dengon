@@ -4,7 +4,7 @@
 en HTTPS, et servir plus tard le parcours + l'état de chaque message.
 **Correspond à la conception :** [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §2 (architecture), §3 (ingestion), §11.2 (schéma cible).
-**Dernière mise à jour :** 2026-09-16
+**Dernière mise à jour :** 2026-09-25
 **État :** esquisse — squelette **permissif** (US-110). `/healthz` + `/ingest/batch`
 qui stocke le JSON brut. Aucune validation, aucune signature, aucune projection.
 
@@ -38,7 +38,7 @@ dashboard/api/
     main.py             — app FastAPI ; lifespan → migrations + connexion partagée ; routes /healthz et /ingest/batch
   tests/
     conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan
-    test_api.py          — 19 tests (voir plus bas)
+    test_api.py          — 21 tests (voir plus bas)
 ```
 
 ## Concepts / types importants
@@ -48,13 +48,15 @@ dashboard/api/
 | `db_path()` | `app/config.py` | chemin du fichier SQLite, lu depuis l'env à chaque appel (pas de cache → tests simples) |
 | `max_batch_bytes()` | `app/config.py` | taille max acceptée pour `/ingest/batch`, lue depuis l'env à chaque appel (défaut 2 MiB) |
 | `MIGRATIONS` | `app/migrations.py` | liste `(version, nom, [instructions])` ; littéraux du module (pas de fichier lu), versionnés, embarqués, sans I/O disque ; chaque `CREATE` en `IF NOT EXISTS` |
-| `connect()` | `app/db.py` | connexion SQLite : `isolation_level=None` (transactions explicites), `check_same_thread=False` (réutilisée depuis le threadpool), `WAL`, `busy_timeout=5000`, `foreign_keys=ON` |
-| `run_migrations(conn)` | `app/db.py` | applique les migrations manquantes ; ensemble déjà-appliquées calculé une fois avant la boucle ; chaque migration dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou rien), revérification **fraîche** de la version sous verrou → sûr avec `uvicorn --workers N` ; idempotent |
-| `lifespan` | `app/main.py` | au démarrage : ouvre **une** connexion, migre, la garde sur `app.state.db_conn` + `app.state.db_lock` (fermée à l'arrêt) |
+| `connect()` | `app/db.py` | connexion SQLite : `isolation_level=None` (transactions explicites), `check_same_thread=False` (réutilisée depuis le threadpool), `busy_timeout=5000` **posé avant** `WAL` (voir décisions), `foreign_keys=ON` |
+| `_set_wal_mode_with_retry()` | `app/db.py` | bascule en WAL avec re-tentatives manuelles courtes — `busy_timeout` seul ne protège pas ce PRAGMA de façon fiable (voir décisions) |
+| `LockedConnection` | `app/db.py` | couple connexion SQLite et verrou dans un seul objet (`execute()`/`close()`) — remplace les attributs séparés `db_conn`/`db_lock` (voir décisions) |
+| `run_migrations(conn)` | `app/db.py` | applique les migrations manquantes ; ensemble déjà-appliquées calculé une fois avant la boucle ; chaque migration dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou rien), revérification **fraîche** de la version sous verrou → sûr avec `uvicorn --workers N`, **vérifié avec de vrais process OS** (voir Tests) ; idempotent |
+| `lifespan` | `app/main.py` | au démarrage : ouvre **une** connexion (dans le `try`, voir décisions), migre, la garde sur `app.state.db` (`LockedConnection`, fermée à l'arrêt) |
 | `GET /healthz` | `app/main.py` | route **sync** → threadpool FastAPI ; renvoie `{"status": "ok"}` |
 | `_guess_event_count()` | `app/main.py` | devine le nombre d'événements (`[...]` ou `{"events": [...]}`) sans imposer de schéma ; `None` sinon, jamais de rejet |
-| `_read_limited_body()` | `app/main.py` | lit `request.stream()` par morceaux, coupe dès que `max_batch_bytes()` est dépassé (`Content-Length` en fast-path, comptage réel sinon) |
-| `_store_raw_batch()` | `app/main.py` | insertion sur la connexion **partagée** de l'app, sous `db_lock` |
+| `_read_limited_body()` | `app/main.py` | lit `request.stream()` par morceaux, coupe dès que `max_batch_bytes()` est dépassé (`Content-Length` en fast-path, comptage réel sinon) ; vide le flux restant avant de lever dans les **deux** branches |
+| `_store_raw_batch()` | `app/main.py` | insertion via `LockedConnection.execute()` |
 | `_decode_parse_and_store()` | `app/main.py` | décode UTF-8 + `json.loads` + stockage, **en un seul aller-retour threadpool** — le décodage/parsing est le travail CPU dominant d'un gros batch, pas juste l'INSERT |
 | `POST /ingest/batch` | `app/main.py` | lit le corps borné (413 si trop gros) → `run_in_threadpool(_decode_parse_and_store, …)` → `202` ; `400` si UTF-8/JSON invalide, `503` + `Retry-After` si la base est verrouillée |
 
@@ -63,13 +65,13 @@ dashboard/api/
 ```
 un nœud : POST /ingest/batch   body = {"events":[{...},{...}]}
   main.ingest_batch (async)
-    raw = await _read_limited_body(request, max_batch_bytes())  → 413 si trop gros
-    await run_in_threadpool(_decode_parse_and_store, conn, lock, raw, ...)
+    raw = await _read_limited_body(request, limite)   → 413 si trop gros
+    await run_in_threadpool(_decode_parse_and_store, db, raw, ...)
        text = raw.decode("utf-8")          → UnicodeDecodeError → 400
        parsed = json.loads(text)           → JSONDecodeError → 400
        event_count = 2                     (_guess_event_count)
        batch_id = uuid4()
-       _store_raw_batch(conn, lock, ...)   → INSERT sous le verrou, connexion partagée
+       _store_raw_batch(db, ...)           → INSERT via LockedConnection (verrou + connexion couplés)
           └─ sqlite3.OperationalError ?    → 503 + Retry-After: 1
   → 202  {"stored": true, "batch_id": "...", "event_count": 2}
 ```
@@ -130,9 +132,10 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   laisser sur la boucle d'événements aurait annulé l'intérêt du passage en
   thread pour `/healthz`.
 - **Connexion SQLite unique, réutilisée** (retour de revue #59) : ouverte au
-  démarrage (`lifespan`), stockée sur `app.state.db_conn`. Ouvrir un fichier
-  + poser 3 `PRAGMA` à chaque `POST` est un coût redondant sous charge
-  réelle. `check_same_thread=False` + `threading.Lock` (`app.state.db_lock`)
+  démarrage (`lifespan`), stockée sur `app.state.db` (`LockedConnection`
+  depuis le round 4, voir plus bas). Ouvrir un fichier + poser les `PRAGMA` à
+  chaque `POST` est un coût redondant sous charge réelle.
+  `check_same_thread=False` + le verrou de `LockedConnection`
   parce que la connexion est maintenant utilisée depuis le threadpool, donc
   depuis un thread différent de celui qui l'a ouverte — le verrou protège
   l'objet Python `Connection`, pas SQLite (qui ne fait qu'un écrivain de
@@ -158,8 +161,8 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   #59, round 2) : si `conn.close()` (arrêt du `lifespan`) entre en course
   avec une écriture encore en cours sur le threadpool, SQLite lève
   `ProgrammingError` ("Cannot operate on a closed database"), pas
-  `OperationalError` — reproduit en fermant `app.state.db_conn` avant un
-  `POST`.
+  `OperationalError` — reproduit en fermant `app.state.db` avant un
+  `POST` (`app.state.db_conn` avant le round 4).
 - **`BEGIN IMMEDIATE` des migrations volontairement hors du `try/except`
   qui fait `ROLLBACK`** (retour de revue #59, round 2) : si le verrou n'est
   pas obtenu avant `busy_timeout`, aucune transaction n'est ouverte — y
@@ -178,10 +181,50 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   (`docs/suivi/03-ecarts-conception.md`) : un filtre `on.pull_request.paths`
   empêche GitHub de créer un check du tout pour une PR hors `dashboard/**`,
   qui resterait bloquée sur « En attente » si ce check devient requis.
+- **`connect()` pose `busy_timeout` AVANT `journal_mode = WAL`, avec
+  re-tentatives manuelles sur ce dernier** (retour de revue #59, round 4,
+  point d'OswinFreyr — révélé en écrivant un vrai test multi-process) :
+  basculer en WAL prend un verrou distinct du verrou d'écriture habituel, et
+  `busy_timeout` ne le protège pas de façon fiable — plusieurs process qui
+  ouvrent le même fichier neuf en même temps (`uvicorn --workers N` au tout
+  premier démarrage) peuvent chacun lever `sqlite3.OperationalError:
+  database is locked` ici, même avec `busy_timeout` déjà réglé. Piège SQLite
+  connu, résolu par une courte boucle de re-tentative (`_set_wal_mode_with_retry`,
+  20 × 50 ms).
+- **`LockedConnection` remplace `app.state.db_conn` + `app.state.db_lock`**
+  (retour de revue #59, round 4, point d'OswinFreyr) : l'invariant « jamais
+  la connexion sans le verrou » n'existait qu'en commentaire — une future
+  route (US-217) aurait pu appeler `db_conn.execute(...)` directement en
+  oubliant le verrou. `execute()` est maintenant la seule façon d'utiliser la
+  connexion depuis l'extérieur du module, le verrou est tenu structurellement.
+- **`connect()`/`run_migrations()` déplacés dans le `try` du `lifespan`**
+  (retour de revue #59, round 4, point d'OswinFreyr) : avant, une migration
+  qui échoue (ex. `OperationalError` après `busy_timeout`) laissait la
+  connexion fuiter, `conn.close()` n'étant jamais atteint.
+- **`_read_limited_body` vide aussi le flux dans la branche de comptage réel
+  (sans `Content-Length`)** (retour de revue #59, round 4, point
+  d'OswinFreyr) : le fix du round 2 ne couvrait que la branche
+  `Content-Length` ; l'oubli laissait la connexion avec du corps non lu au
+  moment du 413 dans le cas chunked/malveillant, justement celui que ce
+  garde-fou vise en premier lieu.
+- **`max_batch_bytes()` lue une seule fois par requête** dans une variable
+  locale (retour de revue #59, round 4, point d'OswinFreyr) : appelée deux
+  fois avant (une pour la limite, une pour le message d'erreur), un
+  changement de la variable d'environnement entre les deux aurait pu faire
+  annoncer une limite différente de celle réellement appliquée.
+- **CI `dashboard.yml` : étape de build du wheel ajoutée**, en plus des tests
+  qui importent `app` via `sys.path` (retour de revue #59, round 4, point
+  d'OswinFreyr) : `packages = ["app"]` de `pyproject.toml` n'était vérifié par
+  rien — un sous-paquet ajouté sous `app/` sans mise à jour de cette liste
+  romprait l'installation réelle sans que la CI le voie. Vérifié en ajoutant
+  volontairement un sous-module non déclaré : absent du wheel construit,
+  l'étape l'aurait détecté.
 
 ## Tests
 
-- `tests/test_api.py` — **19 tests** : `/healthz` ; objet arbitraire (202,
+- `tests/test_api.py` — **21 tests** : `/healthz` ; **démarrage refusé sur
+  `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé** (`RuntimeError` propagée par
+  `lifespan`, retour de revue #59, round 4) ; objet arbitraire (202,
   `event_count` = 3) ; tableau nu ; corps **verbatim** en base ; non-JSON → 400 ;
   **JSON non-UTF-8 → 400** ; **JSON très imbriqué (10000 niveaux) → 400, pas
   500** ; **corps trop gros → 413** (fast-path `Content-Length`, avec preuve
@@ -194,10 +237,13 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   `batch_id`, retour de revue #59, round 2) ; **base verrouillée → 503 +
   `Retry-After`** ; **connexion fermée sous une écriture → 503 +
   `Retry-After`** (pas 500) ; migrations appliquées une fois ; **migrations
-  idempotentes après DDL partiel** ; 3 formes de payload paramétrées.
+  idempotentes après DDL partiel** ; **migrations sûres avec de vrais process
+  OS** (5 `multiprocessing.Process`, pas juste des threads — retour de revue
+  #59, round 4, point d'OswinFreyr : a révélé le bug de `busy_timeout`/`WAL`
+  documenté plus haut) ; 3 formes de payload paramétrées.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .` et `uv run pytest` → **19 passed** (vérifié le
-  2026-09-16). Chaque nouveau bug (RecursionError, ProgrammingError) reproduit
+  `uv run ruff check .` et `uv run pytest` → **21 passed** (vérifié le
+  2026-09-25). Chaque nouveau bug (RecursionError, ProgrammingError) reproduit
   d'abord en isolant le code sans le fix, confirmé absent avec.
 
 ## Limites connues / TODO

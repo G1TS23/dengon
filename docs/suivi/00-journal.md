@@ -10,6 +10,81 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-25 — `dashboard/api` : 8 points d'OswinFreyr (round 4) sur la PR #59
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,db}.py`, `dashboard/api/tests/test_api.py`,
+`.github/workflows/dashboard.yml`, `docs/suivi/modules/{dashboard-api,_index}.md`
+**Lot :** US-110, Sprint 1
+
+### Fait
+1. **`_read_limited_body` ne vidait pas le flux dans la branche de comptage
+   réel** (sans `Content-Length`) avant de lever `_BodyTooLarge` — seule la
+   branche `Content-Length` le faisait depuis le round 2. Corrigé
+   symétriquement, avec gestion du cas où Starlette a déjà marqué le flux
+   consommé (`RuntimeError("Stream consumed")` si tout le corps est arrivé
+   en un seul message ASGI — pas une vraie erreur dans ce cas).
+2. **Fuite de connexion si une migration échoue au démarrage** :
+   `connect()`/`run_migrations()` étaient hors du `try/finally` qui ferme la
+   connexion. Déplacés dans le `try`.
+3. **CI n'installait jamais le paquet réel** (`--no-install-project`, tests
+   important `app` via `sys.path`) : `packages = ["app"]` de `pyproject.toml`
+   n'était vérifié par rien. Ajouté une étape qui construit le wheel et
+   vérifie son contenu — testé en ajoutant volontairement un sous-module non
+   déclaré, correctement détecté comme absent.
+4. **Affirmation de sûreté multi-process non testée** (`run_migrations` sous
+   `uvicorn --workers N`) : seul un test multi-thread existait. Ajouté
+   `test_migrations_are_safe_across_processes` (5 vrais `multiprocessing.
+   Process`, `spawn`). **Ce test a révélé un vrai bug non vu en revue** :
+   `connect()` posait `busy_timeout` APRÈS `journal_mode = WAL`, et même
+   remis dans le bon ordre, `busy_timeout` ne protège pas ce PRAGMA de façon
+   fiable sous contention (piège SQLite connu, reproduit de façon fiable en
+   isolant le problème dans un script autonome). Corrigé avec
+   `_set_wal_mode_with_retry` (re-tentatives manuelles courtes). 10/10
+   exécutions stables après le fix, contre des échecs fréquents avant.
+5. **Invariant « jamais `db_conn` sans `db_lock` » seulement en commentaire** :
+   remplacé les deux attributs séparés par `LockedConnection`, qui couple
+   connexion et verrou — `execute()` est la seule façon de toucher la
+   connexion depuis l'extérieur du module.
+6. **Pas de test pour le rejet au démarrage d'un
+   `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé** : ajouté
+   `test_startup_fails_fast_on_malformed_max_batch_bytes`.
+7. **Date incohérente** entre `modules/_index.md` (2026-09-10) et
+   `dashboard-api.md` (2026-09-16) : les deux alignées sur 2026-09-25.
+8. **`max_batch_bytes()` appelée deux fois** dans `ingest_batch` : lue une
+   seule fois dans `limite`.
+
+Point examiné et écarté : remplacer le verrou de `db.py` par `INSERT OR
+IGNORE` casserait l'application unique des migrations (déjà tranché au round
+précédent, reconfirmé).
+
+### Pourquoi / décisions
+- Le point 4 illustre pourquoi Oswin a raison de demander un test qui prouve
+  l'affirmation plutôt que de l'accepter telle quelle : le test lui-même a
+  trouvé un bug que la revue de code seule n'avait pas vu.
+
+### Écarts vs conception
+- Aucun.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run ruff check .
+All checks passed!
+
+$ uv run pytest
+21 passed
+
+$ uv build --wheel -o /tmp/dashboard-api-dist  # simulation de la nouvelle étape CI
+Successfully built .../dengon_dashboard_api-0.1.0-py3-none-any.whl
+# vérifié : app/__init__.py, main.py, config.py, db.py, migrations.py tous présents
+# vérifié aussi qu'un sous-module ajouté sans déclaration est bien détecté absent
+
+$ for i in $(seq 1 10); do uv run pytest tests/test_api.py::test_migrations_are_safe_across_processes -q; done
+# 10/10 passed (échouait ~1 fois sur 3 avant le fix busy_timeout/WAL)
+```
+
+---
+
 ## 2026-09-16 — `dashboard/api` : 8 points d'OswinFreyr (round 2) + 2 de POWLAIR sur la PR #59
 
 **Auteur :** Claude (Sonnet 5)
