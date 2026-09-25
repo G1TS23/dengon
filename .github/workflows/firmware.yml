@@ -1,0 +1,146 @@
+# ---------------------------------------------------------------------------
+# Workflow `firmware` — compilation du relais ESP32 (firmware/dengon-relay).
+# Référence : US-114, docs/synthese/08-relais-esp32.md §3.
+#
+# Le build passe par l'image Docker officielle `espressif/idf`, ÉPINGLÉE PAR
+# DIGEST — exactement la même commande qu'en local (voir
+# docs/suivi/modules/firmware-relay.md). Aucun ESP-IDF n'est installé sur le
+# runner : la chaîne de compilation embarquée pèse ~2 Go d'outils, et sa
+# reproductibilité vaut mieux qu'une installation script par script.
+#
+# Pourquoi `docker run` plutôt que `container:` au niveau du job : le checkout
+# et dorny/paths-filter tournent alors nativement (Node du runner), et surtout
+# la ligne de commande reste copiable telle quelle par un humain. Le digest joue
+# le même rôle qu'un SHA de commit pour une action tierce — un tag est mutable.
+#
+# ⚠ DEUX RÈGLES À NE PAS CASSER (identiques à core.yml)
+#
+# 1. Le filtrage par chemin est fait DANS le job, jamais via
+#    `on.pull_request.paths`. Avec un filtre au niveau du déclencheur, GitHub ne
+#    démarre pas du tout le workflow sur une PR qui ne touche pas firmware/ :
+#    aucun check n'est créé, et la PR resterait bloquée sur « Expected —
+#    Waiting for status to be reported » le jour où `firmware` entrera dans les
+#    checks requis de `main`. Or la plupart des PR de ce projet ne touchent que
+#    docs/.
+#
+# 2. Les actions tierces sont épinglées sur un SHA de commit complet, avec le
+#    numéro de version en commentaire à droite. Pour mettre à jour : relire le
+#    diff de l'action, puis changer SHA et commentaire ensemble.
+#
+# `firmware` n'est PAS encore un check requis de `main` (la liste est
+# core / sim / audit / cross-vectors). Pour l'y ajouter après le merge, répéter
+# la liste COMPLÈTE : l'API PATCH remplace le tableau `contexts`, elle ne
+# l'enrichit pas.
+# ---------------------------------------------------------------------------
+name: firmware
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: firmware-${{ github.ref }}
+  # On n'annule jamais un run sur main : il fait foi pour l'historique.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  # Une seule source de vérité pour l'image, partagée avec la fiche de suivi.
+  # Rafraîchir le digest :
+  #   docker buildx imagetools inspect espressif/idf:v5.5.5 --format '{{.Manifest.Digest}}'
+  # ⚠ Prendre le digest de l'INDEX (ce que renvoie la commande ci-dessus), pas
+  #   celui d'un manifeste de plateforme : `docker manifest inspect --verbose`
+  #   affiche d'abord l'entrée linux/amd64, et l'épingler casserait sur arm64.
+  IDF_IMAGE: espressif/idf:v5.5.5@sha256:a9231d0697ab8f7517cc072e93b7c83e04907bfbfba80b6440d7dbbf90665cf2
+
+jobs:
+  firmware:
+    name: firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nécessaire au filtre de chemins sur les événements push, et à
+          # `git describe`, dont idf.py tire PROJECT_VER.
+          fetch-depth: 0
+
+      - name: Détecter les changements firmware
+        id: filtre
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            firmware:
+              - 'firmware/**'
+              - '.github/workflows/firmware.yml'
+
+      - name: Aucun changement firmware
+        if: steps.filtre.outputs.firmware != 'true'
+        run: |
+          {
+            echo '### firmware — ignoré'
+            echo
+            echo "Aucun fichier de firmware/ modifié : le build ESP-IDF est sauté."
+            echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- 1. Compilation ---------------------------------------------------
+      # -u $(id -u):$(id -g) : sans cela, build/ appartient à root et les étapes
+      #   suivantes ne peuvent plus le lire. En local, c'est aussi ce qui évite
+      #   un arbre de travail impossible à nettoyer sans sudo.
+      # -e HOME=/tmp : l'uid injecté n'existe pas dans le /etc/passwd de
+      #   l'image, donc il n'a pas de home ; le gestionnaire de composants IDF
+      #   en exige un.
+      # On monte le dépôt ENTIER, pas seulement firmware/ : idf.py lit .git pour
+      # PROJECT_VER, et l'US-307 aura besoin de crates/.
+      - name: Compiler (idf.py build)
+        if: steps.filtre.outputs.firmware == 'true'
+        run: |
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            -w /repo/firmware/dengon-relay \
+            "${IDF_IMAGE}" \
+            idf.py build
+
+      # --- 2. Empreinte mémoire ---------------------------------------------
+      # Pas de seuil bloquant : sur un squelette le chiffre n'a pas de sens. Il
+      # sert de point de départ au budget mémoire de
+      # docs/synthese/08-relais-esp32.md §5 (520 Ko de SRAM, sans PSRAM), que
+      # l'US-308 devra tenir. La courbe sera visible avant le mur.
+      - name: Empreinte flash et RAM dans le résumé du job
+        if: steps.filtre.outputs.firmware == 'true'
+        run: |
+          {
+            echo '### Empreinte (idf.py size)'
+            echo
+            echo '```'
+            docker run --rm -u "$(id -u):$(id -g)" -e HOME=/tmp \
+              -v "${GITHUB_WORKSPACE}:/repo" -w /repo/firmware/dengon-relay \
+              "${IDF_IMAGE}" idf.py size
+            echo '```'
+            echo
+            echo "_Budget cible : docs/synthese/08-relais-esp32.md §5. Pas encore bloquant._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # L'artefact n'est pas décoratif : il permet de flasher une carte depuis
+      # Windows sans rejouer le build, ce qui est le plan de repli quand usbipd
+      # ne remonte pas le port série dans WSL2.
+      - name: Publier les binaires
+        if: steps.filtre.outputs.firmware == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dengon-relay-bin
+          path: |
+            firmware/dengon-relay/build/dengon-relay.bin
+            firmware/dengon-relay/build/dengon-relay.elf
+            firmware/dengon-relay/build/bootloader/bootloader.bin
+            firmware/dengon-relay/build/partition_table/partition-table.bin
+            firmware/dengon-relay/build/flash_args
+          retention-days: 14
+          if-no-files-found: error
