@@ -47,6 +47,15 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **TimescaleDB** | Extension PostgreSQL optimisée pour les données horodatées (le flux d'événements). |
 | **ESP-IDF / NimBLE** | ESP-IDF = SDK officiel de l'ESP32. NimBLE = pile Bluetooth légère utilisée dans le firmware. |
 | **PSRAM** | Mémoire vive supplémentaire de certains ESP32 (WROVER) ; nécessaire pour nos tampons. |
+| **GAP / GATT** | Les deux moitiés du BLE. GAP = se faire voir et se connecter (annonce, découverte). GATT = la structure des données une fois connecté (services et caractéristiques). |
+| **Advertising** (annonce) | Petit paquet radio qu'un appareil BLE émet en boucle pour signaler son existence. Limité à **31 octets**, ce qui contraint tout ce qu'on peut y mettre. |
+| **Scan response** (réponse de scan) | Second paquet de 31 octets, envoyé seulement si un scanner le demande. Sert de rallonge à l'annonce : c'est là qu'on met le nom du relais, faute de place. |
+| **Manufacturer data** | Champ libre d'une annonce BLE, réservé aux données propres au constructeur. Doit commencer par un identifiant de fabricant sur 2 octets ; dengon utilise `0xFFFF`, réservé aux tests. |
+| **Caractéristique** (*characteristic*) | Une valeur exposée par un service GATT, avec ses permissions. Le service `dengon` en a deux : `RX` (on écrit dedans) et `TX` (elle notifie). |
+| **ATT MTU** | Taille maximale d'un message GATT. Négociée à la connexion : 517 octets visés, 23 au pire. En dessous, il faut fragmenter. |
+| **CCCD** (`0x2902`) | Petit interrupteur attaché à une caractéristique notifiable : c'est en l'écrivant qu'un pair s'abonne aux notifications. NimBLE l'ajoute tout seul. |
+| **`sdkconfig` / `sdkconfig.defaults`** | Configuration d'un projet ESP-IDF. Les `defaults` sont écrits à la main et versionnés ; `sdkconfig` en est **généré une seule fois**, et c'est lui que lit la compilation. |
+| **usbipd** | Passerelle qui expose un périphérique USB de Windows à WSL2. Sans elle, aucune carte ESP32 n'est visible depuis Linux — donc pas de flash. |
 | **DoR** (*Definition of Ready*) | Les 8 conditions pour qu'une issue entre dans un sprint (§6) : livrable nommé, critères vérifiables, référence documentaire, dépendances fermées, contrat disponible, estimation, stratégie de test, contrainte dure. |
 | **DoD** (*Definition of Done*) | Les 8 conditions pour qu'une PR soit fusionnable (§7.1), plus des ajouts par type d'US (§7.2). |
 | **Issue form** | Formulaire d'issue GitHub décrit en YAML (champs typés, certains obligatoires), par opposition au template Markdown qu'on peut soumettre vide. |
