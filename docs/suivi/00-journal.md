@@ -153,6 +153,288 @@ YAML valide
   lieu à l'ouverture de la PR.
 
 
+## 2026-09-25 — US-112 : revue round 2 d'OswinFreyr sur la PR #66
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+description de la PR #66
+**Lot :** US-112, Sprint 1
+
+### Fait
+- **`06-securite.md` §3, condition 1** : la citation « à épingler
+  explicitement au moment d'ajouter la crypto (US-108) » était fausse —
+  US-108 ne pose que les types/constantes de trame (PR #63), sans toucher à
+  `snow`. Corrigé en **US-204**, l'US qui introduit réellement Noise `XX`/`X`.
+- **`06-securite.md` §3, condition 2** et **`00-contexte-global.md` A-3/B-1** :
+  la citation « (US-307) » pour le `CryptoResolver` sur `esp_fill_random()`
+  était également fausse — vérifié le corps complet des issues #45 (US-307,
+  ne couvre que `libdengon_core.a` + `cbindgen`) et #46 (US-308, tâches
+  FreeRTOS + `Store`) : **aucune des deux ne mentionne le resolver**. Reformulé
+  en gap explicite plutôt que de pointer une US qui ne le couvre pas, avec
+  recommandation de l'ajouter aux critères d'acceptation de l'une des deux
+  avant S3.
+- **`06-securite.md` §5.1, ligne `messages.body`** : formulation « clair une
+  fois déchiffré par l'app, jamais chiffré XChaCha20 sur le fil » pouvait se
+  lire à l'envers (comme si la colonne n'était pas chiffrée au repos, alors
+  que c'est exactement B-3). Reformulé pour lever l'ambiguïté.
+- **Description de la PR #66** : le tableau et la checklist affirmaient
+  encore « résultat du Spike A pas encore connu », alors que PR #64 (mergée
+  le 11/09) l'a intégré depuis le début de cette PR. Mis à jour.
+
+### Pourquoi / décisions
+- Les deux mauvaises citations d'US (US-108, US-307) auraient pu faire
+  manquer l'épinglage de version de `snow` et l'implémentation du
+  `CryptoResolver` au bon moment du sprint 3 — exactement le risque que ces
+  notes existent pour éviter.
+
+### Écarts vs conception
+- Aucun — corrections de citations et de formulation, pas de changement de
+  décision.
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 <script de résolution des liens relatifs>
+9/9 liens résolvent
+```
+
+---
+
+## 2026-09-16 — US-112 : revue de POWLAIR sur la PR #66
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+`docs/suivi/03-ecarts-conception.md`
+**Lot :** US-112 (suite), Sprint 1
+
+### Fait
+- 6 points de @POWLAIR sur la PR #66, tous vérifiés avant correction :
+  1. **§3 conditionnel alors que PR #64 est mergée** (2026-09-11T12:48:04Z,
+     commit `b8fae88`) — le texte « en revue, pas encore mergée » et « à
+     figer sans conditionnel dès que la PR merge » (tête de fichier, §3, et
+     C-11 dans `00-contexte-global.md`) partaient tels quels sur `main`.
+     Corrigé : conditionnel retiré partout, renvoi vers
+     `docs/suivi/spikes/US-101-cross-compile-xtensa.md`. La ligne A-3/B-1
+     (`00-contexte-global.md:50`), aussi encore au conditionnel, corrigée au
+     passage (repérée par Paul comme « hors diff » mais même cause racine).
+  2. **« tels quels » contredit le spike** — le rapport répond OUI à deux
+     conditions (`snow` ≥ 0.10.0 ; le firmware doit fournir l'aléa via un
+     `CryptoResolver` sur `esp_fill_random()`, `getrandom` étant indisponible
+     sur xtensa), §3 ne reprenait que la première. Corrigé : les deux
+     conditions citées, la seconde (qualité de l'aléa d'un handshake Noise)
+     étant la seule qui relève vraiment d'un doc sécurité.
+  3. **Ancre cassée** (`06-securite.md:9`) — le lien vers D-1 pointait
+     `#d-1-...-clés-brutes-ou-empreintes` alors que le slug GitHub réel du
+     titre `### D-1. Entrée du code de vérification : clés brutes ou
+     empreintes ?` porte un double tiret (le `:` du titre) et un tiret final
+     (le `?`) : `#d-1-...-vérification--clés-brutes-ou-empreintes-`. Corrigé
+     avec le slug exact fourni par Paul.
+  4. **§5.1 : 3 des 4 colonnes de `noise_sessions` non classées** — seule
+     `state` figurait, `peer_id`/`established_ms`/`tx_count` manquaient
+     (et `identity.id`, colonne fixe non listée non plus). Ajoutés en
+     « clair » avec justification, cohérent avec le patron des autres tables.
+  5. **`gossip_cache.packet` classé « clair » alors que 3ᵉ cas de la
+     taxonomie du §5.1** — ce sont des paquets L3 relayés donc déjà scellés,
+     même raisonnement que `outbox.packet`/`held_envelopes.packet`. Reclassé
+     en « déjà chiffré (protocole) », `msg_id`/`cached_ms` restant en clair.
+  6. **Journal : « Écarts vs conception : Aucun » mais la PR revendique deux
+     divergences vs `powl/09`** (`-- clair local uniquement` sur
+     `messages.body` superseded par B-3 ; `priv_static`/`priv_sign`
+     reclassés Keystore) — les deux entrées du 2026-09-11 pour US-112
+     disaient toutes deux « Aucun ». Le contenu de `06-securite.md` était
+     correct dès l'origine ; seul le suivi était en faute. Nouvelle entrée
+     ajoutée dans `03-ecarts-conception.md` (append-only : les deux entrées
+     du 11/09 ne sont pas modifiées, la nouvelle entrée les rectifie).
+
+### Pourquoi / décisions
+- **Deux corrections regroupées dans une seule entrée d'écart** (point 6)
+  plutôt que deux entrées séparées : même cause (US-112 antérieure à B-3),
+  même conséquence (rien à corriger dans le contenu, seulement dans le
+  journal) — les séparer aurait dupliqué le contexte sans clarifier.
+
+### Écarts vs conception
+- Voir `03-ecarts-conception.md`, entrée 2026-09-16 (rectification des deux
+  entrées du 2026-09-11 pour US-112).
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- PR #66 : les 6 points traités, vérifiés, commit + push à faire.
+- Pas de fiche module (US-112 reste un travail de documentation transverse).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 - <<'EOF'
+# résout chaque lien relatif de docs/synthese/06-securite.md vers un fichier réel
+EOF
+→ tous OK après merge de main (le lien vers docs/suivi/spikes/US-101-...
+  n'existait pas encore sur cette branche avant merge)
+$ gh pr view 64 --json state,mergedAt,mergeCommit
+→ state: MERGED, mergedAt: 2026-09-11T12:48:04Z, commit b8fae88
+```
+- Slug D-1 non vérifié par un outil (pas de renderer Markdown/GitHub local
+  disponible) — repris tel que calculé et fourni par Paul dans sa revue,
+  cohérent avec l'algorithme github-slugger documenté (minuscules, ponctuation
+  retirée hors espaces/tirets, espaces consécutifs → tirets consécutifs).
+
+---
+
+## 2026-09-11 — US-112 : rectification après un commentaire manqué de POWLAIR
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+`docs/synthese/09-dashboard-et-donnees.md`
+**Lot :** US-112 (suite), Sprint 1
+
+### Fait
+- **Erreur de process** : l'entrée précédente (ci-dessous) a été écrite sans
+  vérifier les commentaires de l'issue #12 au préalable. Paul (POWLAIR) y
+  avait laissé, ~15 min avant le début de cette session de travail, un
+  commentaire détaillé signalant une branche locale non poussée
+  (`docs/trancher-sujets-ouverts`, commit `ac062fc`) qui couvrait déjà une
+  partie des critères de l'US, plus deux vraies coquilles trouvées dans
+  `09-dashboard-et-donnees.md`. Repéré seulement quand l'utilisateur a
+  demandé si ce commentaire avait été vu — réponse honnête : non.
+- Comparé le contenu déjà écrit dans la PR #66 à ce que le commentaire de
+  Paul décrit : le §5.1 (mapping des colonnes chiffrées) n'est **pas**
+  couvert par sa branche (son tableau des critères ne le mentionne pas) —
+  pas de doublon sur ce point. En revanche deux choses manquaient :
+  1. Le **résultat du Spike A** existe déjà : [PR #64](https://github.com/G1TS23/dengon/pull/64)
+     (US-101, en revue), conclusion **OUI** (`snow` 0.10 cross-compile pour
+     xtensa). §3 et l'en-tête de `06-securite.md`, et la ligne C-11 de
+     `00-contexte-global.md`, mis à jour pour pointer dessus au lieu de
+     rester sur « en cours ».
+  2. **Deux vraies incohérences** dans `09-dashboard-et-donnees.md` (prose vs
+     SQL du même fichier) : `quarantined` manquait dans la liste des
+     couleurs de statut (l. 86, présent dans le `CHECK` l. 419, D-5) ;
+     `rejected_sig` manquait dans la liste des verdicts d'intégrité (l. 93,
+     présent dans le `CHECK` l. 433, D-4). Corrigées.
+- Vérifié indépendamment ces deux points par lecture directe du fichier
+  (pas seulement sur la foi du commentaire de Paul).
+- Répondu sur l'issue #12 pour éviter le travail en double : PR #66 déjà
+  ouverte, contenu complémentaire (pas redondant) avec sa branche locale,
+  pas besoin qu'il la pousse pour ce point précis.
+
+### Pourquoi / décisions
+- Pas de retrait de la PR #66 : le contenu ajouté (mapping §5.1) est
+  original et répond au critère que la branche de Paul ne couvrait pas.
+  Seule la partie « déjà faite ailleurs » a été corrigée/complétée, pas
+  réécrite depuis zéro.
+- Référencer la PR #64 plutôt qu'attendre son merge pour écrire le résultat
+  du Spike A : la PR est ouverte, en revue, son contenu est public et
+  vérifiable — attendre aurait rouvert l'US pour un simple changement de
+  formulation une fois #64 mergée. La mention « pas encore mergée » évite de
+  faire passer un résultat pour définitivement acté.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Vérifier les **commentaires** d'une issue avant de commencer, pas
+  seulement son corps — le process suivi jusqu'ici (lire l'issue, vérifier
+  git status, démarrer) n'incluait pas cette étape. À généraliser aux
+  prochaines US : `gh issue view <n> --comments` avant tout travail.
+
+### État après cette session
+- US-112 : mapping colonnes chiffrées (nouveau, §5.1), Spike A (référencé,
+  PR #64), D-4/D-5 (corrigées dans `09-dashboard-et-donnees.md`) — tous
+  couverts. Reste la relecture croisée (4ᵉ critère), et le passage sans
+  conditionnel du Spike A une fois #64 mergée (pas bloquant pour cette US).
+- Fiche(s) module mise(s) à jour : sans objet (documentation transverse).
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh api repos/G1TS23/dengon/issues/12/comments
+→ commentaire de POWLAIR, 2026-09-11T09:29:33Z, lu en entier
+$ grep -n "online.*stale.*suspect\|ok.*broken.*fork" docs/synthese/09-dashboard-et-donnees.md
+→ confirme les deux endroits où la prose retardait sur le SQL (l. 86, 93)
+  avant correction
+```
+- **Non vérifié** : le contenu exact de la branche locale
+  `docs/trancher-sujets-ouverts` de Paul (jamais poussée, donc invisible
+  depuis cette session) — seule sa description dans le commentaire a pu
+  être exploitée.
+
+---
+
+## 2026-09-11 — US-112 : delta doc sécurité (`docs/synthese/06-securite.md`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`
+**Lot :** US-112, Sprint 1
+
+### Fait
+- `docs/synthese/06-securite.md` existait déjà (créé lors de l'éclatement de
+  `docs/synthese/`) mais portait encore, en tête de fichier, la mention « il
+  ne reste qu'un delta à rédiger » — exactement le contenu que cette US doit
+  produire. Complété plutôt que dupliqué dans un nouveau fichier.
+- Vérifié l'état des trois réconciliations listées par C-11
+  (`01-sujets-a-trancher.md` §D) : D-1 et D-2 étaient **déjà** intégrées dans
+  le corps du fichier (§2, §3) ; D-4 et D-5 étaient **déjà** réconciliées dans
+  `09-dashboard-et-donnees.md` (`-- D-4`, `-- D-5` dans le SQL). Seul
+  manquait vraiment : le **mapping des colonnes chiffrées** champ par champ,
+  et un état explicite du **Spike A** (US-101, toujours ouverte).
+- Ajout §5.1 : table complète des colonnes de `dengon-core::store`
+  (`powl/09-data-model.md` §1), classées en 3 cas — Keystore/Keychain (clés
+  privées), XChaCha20 champ par champ (`messages.body`,
+  `noise_sessions.state`), déjà chiffré par le protocole donc pas de second
+  chiffrement (`outbox.packet`, `held_envelopes.packet`), ou clair
+  (métadonnées, identifiants publics).
+- Ajout d'un état explicite du Spike A en §3 (renvoi à l'issue #1) plutôt
+  qu'un TODO nu.
+- Mis à jour la ligne C-11 de `00-contexte-global.md` (le delta n'est plus
+  "à rédiger", il pointe vers `06-securite.md`).
+- Vérifié : tous les liens relatifs du fichier résolvent vers un fichier
+  existant (script Python, voir ci-dessous) ; cohérent avec B-3/C-11/A-13 de
+  la table de décisions.
+
+### Pourquoi / décisions
+- Compléter le fichier existant plutôt qu'en créer un nouveau : il se
+  présentait déjà explicitement comme le brouillon de ce delta (tête de
+  fichier), créer un second document aurait dupliqué §1-§4 sans raison et
+  cassé le lien que `00-contexte-global.md` (C-11) pointe déjà dessus.
+- Le commentaire `-- clair local uniquement` sur `messages.body` dans
+  `powl/09` (doc figée, non modifiée — `docs/powl/` reste inchangé) est
+  ambigu une fois B-3 tranché ; explicité dans le mapping comme décrivant le
+  contenu (texte déchiffré par l'app), pas l'état de chiffrement au repos —
+  pour éviter qu'un futur lecteur code `store` (US-207) sur cette phrase
+  littérale.
+- `outbox.packet` / `held_envelopes.packet` classés « déjà chiffré » plutôt
+  que « à chiffrer » : ce sont des paquets L3 déjà scellés par Noise avant
+  d'atteindre la base (session ou enveloppe) — un second chiffrement
+  XChaCha20 n'ajoute rien contre le modèle de menace local (vol d'appareil),
+  seulement du CPU. Distinction utile pour ne pas sur-spécifier US-207.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (US-112 est une synthèse de décisions déjà prises, pas une
+  découverte technique).
+
+### État après cette session
+- US-112 : les 3 volets du mapping (Spike A, `recipient_tag`, colonnes
+  chiffrées) sont traités — 2 déjà faits ailleurs, 1 ajouté ici. Ne reste que
+  le **résultat** du Spike A lui-même (dépend de la clôture de l'issue #1,
+  hors périmètre de cette US).
+- Pas de fiche module : US-112 est un travail de documentation transverse,
+  pas un composant du dépôt.
+- 01-etat-du-code.md mis à jour : non (pointeur seul, inchangé).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 - <<'EOF'
+# résout chaque lien relatif de docs/synthese/06-securite.md vers un fichier
+# réel (os.path.isfile), ignore les liens http(s)
+EOF
+→ 7/7 liens internes résolvent (00-contexte-global.md,
+  01-sujets-a-trancher.md ×3, 09-dashboard-et-donnees.md,
+  ../powl/09-data-model.md)
+```
+- **Non fait** : relecture croisée par une autre personne (4ᵉ critère
+  d'acceptation de l'US) — nécessite un passage de Paul ou Tanguy, hors
+  périmètre de cette session.
 ## 2026-09-25 — US-111 : vérification visuelle à 360 px (clôture)
 
 **Auteur :** Claude (Opus 5.5)
