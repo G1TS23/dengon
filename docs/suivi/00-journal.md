@@ -10,6 +10,52 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-25 — US-112 : revue round 2 d'OswinFreyr sur la PR #66
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+description de la PR #66
+**Lot :** US-112, Sprint 1
+
+### Fait
+- **`06-securite.md` §3, condition 1** : la citation « à épingler
+  explicitement au moment d'ajouter la crypto (US-108) » était fausse —
+  US-108 ne pose que les types/constantes de trame (PR #63), sans toucher à
+  `snow`. Corrigé en **US-204**, l'US qui introduit réellement Noise `XX`/`X`.
+- **`06-securite.md` §3, condition 2** et **`00-contexte-global.md` A-3/B-1** :
+  la citation « (US-307) » pour le `CryptoResolver` sur `esp_fill_random()`
+  était également fausse — vérifié le corps complet des issues #45 (US-307,
+  ne couvre que `libdengon_core.a` + `cbindgen`) et #46 (US-308, tâches
+  FreeRTOS + `Store`) : **aucune des deux ne mentionne le resolver**. Reformulé
+  en gap explicite plutôt que de pointer une US qui ne le couvre pas, avec
+  recommandation de l'ajouter aux critères d'acceptation de l'une des deux
+  avant S3.
+- **`06-securite.md` §5.1, ligne `messages.body`** : formulation « clair une
+  fois déchiffré par l'app, jamais chiffré XChaCha20 sur le fil » pouvait se
+  lire à l'envers (comme si la colonne n'était pas chiffrée au repos, alors
+  que c'est exactement B-3). Reformulé pour lever l'ambiguïté.
+- **Description de la PR #66** : le tableau et la checklist affirmaient
+  encore « résultat du Spike A pas encore connu », alors que PR #64 (mergée
+  le 11/09) l'a intégré depuis le début de cette PR. Mis à jour.
+
+### Pourquoi / décisions
+- Les deux mauvaises citations d'US (US-108, US-307) auraient pu faire
+  manquer l'épinglage de version de `snow` et l'implémentation du
+  `CryptoResolver` au bon moment du sprint 3 — exactement le risque que ces
+  notes existent pour éviter.
+
+### Écarts vs conception
+- Aucun — corrections de citations et de formulation, pas de changement de
+  décision.
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 <script de résolution des liens relatifs>
+9/9 liens résolvent
+```
+
+---
+
 ## 2026-09-16 — US-112 : revue de POWLAIR sur la PR #66
 
 **Auteur :** Claude (Sonnet 5)

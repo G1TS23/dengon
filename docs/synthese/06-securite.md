@@ -106,14 +106,20 @@ mergée le 2026-09-11, commit `b8fae88` ; détail complet dans
    dur** (`features = ["std", "getrandom"]`), qui n'a aucun backend pour cette
    cible — échec de compilation. La 0.10.0 rend `getrandom` optionnel derrière
    `use-getrandom` : à épingler explicitement au moment d'ajouter la crypto
-   (US-108).
+   (**US-204**, qui introduit Noise `XX`/`X` — US-108 ne pose que les types et
+   constantes de trame, pas la dépendance `snow`).
 2. **Le firmware doit fournir lui-même l'aléa du handshake Noise.** Sans
    `use-getrandom` (indisponible sur xtensa), `snow` 0.10 compile mais le
    `DefaultResolver::resolve_rng()` renvoie `None` au runtime — un
    `CryptoResolver` maison branché sur `esp_fill_random()` de l'ESP-IDF est
-   nécessaire (US-307). `esp_fill_random()` n'est un vrai TRNG que si le
-   Wi-Fi ou le Bluetooth est actif, ou après `bootloader_random_enable()` — à
-   vérifier en US-307.
+   nécessaire. **Aucune US actuelle ne porte explicitement ce point** :
+   US-307 (`libdengon_core.a` + `cbindgen`) ne couvre que le linkage C, pas
+   l'implémentation du resolver ; US-308 (tâches FreeRTOS + `Store`) ne le
+   mentionne pas non plus (retour de revue #66, point d'OswinFreyr — vérifié
+   sur les deux issues). À ajouter aux critères d'acceptation de US-307 ou
+   US-308 avant S3, sans quoi le point risque d'être oublié. `esp_fill_random()`
+   n'est un vrai TRNG que si le Wi-Fi ou le Bluetooth est actif, ou après
+   `bootloader_random_enable()` — à vérifier au moment de l'implémenter.
 
 La seconde condition est la plus significative pour ce document : c'est elle
 qui porte sur la qualité de l'aléa d'un handshake Noise, donc sur la sécurité
@@ -242,7 +248,7 @@ second chiffrement XChaCha20 n'apporterait rien — cf. `powl/04 §3.1-3.2`).
 | `identity` | `id`, `peer_id`, `pub_static`, `pub_sign`, `pseudo`, `created_ms` | clair | `id` est une clé primaire fixe (`CHECK (id = 1)`, une seule ligne) sans valeur secrète ; le reste public par construction (diffusé dans `ANNOUNCE`/le QR) ou métadonnée non sensible. |
 | `contacts` | `peer_id`, `pub_static`, `pub_sign`, `pseudo`, `verified_at`, `first_seen_ms`, `last_seen_ms`, `key_changed_at`, `blocked` | clair | idem : identité publique du contact + métadonnées locales (§5 al. 2). |
 | `conversations` | toutes | clair | `conv_id` est un hash dérivé des `peer_id` (publics), pas du contenu ; pas de gain de confidentialité à le chiffrer face au modèle de menace (vol d'appareil — le propriétaire connaît déjà ses propres contacts). |
-| `messages` | `body` | **XChaCha20-Poly1305 champ par champ** | c'est *le* « contenu des messages » de B-3 — la colonne que ce delta existe pour trancher. Le commentaire `-- clair local uniquement` de `powl/09` décrit le *contenu* (texte déchiffré, par opposition au fil chiffré), pas l'état de la colonne SQLite : il est **superseded** par B-3, à lire comme « clair une fois déchiffré par l'app, jamais chiffré XChaCha20 sur le fil ». |
+| `messages` | `body` | **XChaCha20-Poly1305 champ par champ** | c'est *le* « contenu des messages » de B-3 — la colonne que ce delta existe pour trancher. Le commentaire `-- clair local uniquement` de `powl/09` décrit le *contenu* (texte déchiffré, par opposition au fil chiffré Noise), pas l'état de la colonne SQLite : il est **superseded** par B-3 — à lire comme « décrit le contenu en clair *après* déchiffrement Noise ; au repos, la colonne est bien chiffrée XChaCha20 (B-3) » (retour de revue #66, point d'OswinFreyr : la formulation précédente pouvait se lire à l'envers, comme si la colonne n'était pas chiffrée au repos). |
 | `messages` | `msg_uuid`, `conv_id`, `direction`, `author_peer_id`, `conv_seq`, `sent_ms`, `received_ms`, `status`, `status_ms`, `read_ms` | clair | métadonnées (§5 al. 2). |
 | `outbox` | `packet` | **déjà chiffré (protocole)**, pas de XChaCha20 supplémentaire | paquet L3 **encodé prêt à émettre** : pour `kind='session'` c'est déjà un `NOISE_MSG` (AEAD ChaCha20-Poly1305) ; pour `kind='envelope'` un `SEALED_ENVELOPE` (Noise `X`). Un second chiffrement XChaCha20 n'ajouterait rien contre le modèle de menace local (vol d'appareil), seulement du CPU. |
 | `outbox` | `msg_uuid`, `dest_peer_id`, `kind`, `attempts`, `first_sent_ms`, `last_sent_ms`, `expires_ms` | clair | métadonnées de file d'attente. |

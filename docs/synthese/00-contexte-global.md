@@ -47,7 +47,7 @@ retransmet à la prochaine occasion.
 | --- | --- | --- |
 | A-1 | App **Android : Kotlin natif + Jetpack Compose** ; iOS (Swift/SwiftUI) en v2, même cœur. Flutter / React Native écartés. | tranché |
 | A-2 | **Un seul cœur Rust `dengon-core`** (`no_std + alloc`), partagé par l'app (UniFFI), le nœud CLI et le firmware (lib C). | tranché |
-| A-3 / B-1 | Crypto : **Noise `XX`** (session) + **Noise `X`** (enveloppes) + **Ed25519** (paquet), **100 % Rust** — Spike A (US-101, PR #64, mergée le 2026-09-11) confirmé : `snow`/`sha2`/`ed25519-dalek` cross-compilent pour xtensa. Repli `trait Crypto` + mbedTLS non activé. Deux conditions : `snow` ≥ 0.10.0, `CryptoResolver` sur `esp_fill_random()` (US-307). | tranché |
+| A-3 / B-1 | Crypto : **Noise `XX`** (session) + **Noise `X`** (enveloppes) + **Ed25519** (paquet), **100 % Rust** — Spike A (US-101, PR #64, mergée le 2026-09-11) confirmé : `snow`/`sha2`/`ed25519-dalek` cross-compilent pour xtensa. Repli `trait Crypto` + mbedTLS non activé. Deux conditions : `snow` ≥ 0.10.0 (US-204), `CryptoResolver` sur `esp_fill_random()` (non encore assigné à une US — voir `06-securite.md` §3). | tranché |
 | A-4 | Relais = **ESP32-WROOM-32E** (Freenove, déjà en possession) ; caches ~8× plus petits que WROVER. WROVER seulement si saturation constatée. | tranché |
 | A-5 / B-5 / C-8 | Dashboard = **FastAPI (Python) + SSE + SQLite** + page web légère ; vérif de journal chaîné par le binaire Rust **`dengon-verify`**. Stack Axum/Timescale/MQTT écartée. | tranché |
 | A-6 | Transport nœud → dashboard = **HTTPS POST par batch** (signé). Pas de broker MQTT. | tranché |
