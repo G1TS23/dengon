@@ -10,6 +10,50 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-26 — US-109 : rectification — le test des 5 min avait déjà été fait par Paul
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md`, issue #9, commentaire
+GitHub
+**Lot :** correction de l'entrée du même jour ci-dessous, pas une nouvelle
+manip
+
+### Fait
+- L'entrée ci-dessous (« US-109 : test réel des 5 min écran éteint »)
+  affirme que le test « n'a en réalité jamais été exécuté » avant le 26/09.
+  **C'est faux.** Paul l'a réellement fait et documenté en commentaire de
+  l'issue #9 le **2026-09-16 à 08:03**, sur un **Pixel 8 Pro (Android 17)** :
+  service démarré 09:39:53 (PID 25615), écran éteint 5 min 25 s, revérifié
+  à 09:59:19 — même PID, notification toujours présente. Il notait même une
+  limite honnête (pas de vrai Doze, l'appareil était en charge) et un
+  checksum `aapt2` Linux manquant dans `verification-metadata.xml` (même
+  cause que le checksum macOS trouvé indépendamment le 25/09, PR #72) —
+  régénéré localement par lui mais jamais committé.
+- **Mon erreur** : avant de rouvrir l'issue le 25/09, je n'avais vérifié que
+  `docs/suivi/` (journal + fiche module), pas les **commentaires de l'issue
+  elle-même**, où l'information existait déjà. Le vrai écart n'était donc
+  pas « le test n'a jamais eu lieu » mais « le résultat n'a jamais été
+  reporté dans `docs/suivi/` », un problème bien plus modeste.
+- Fiche `android-app.md` corrigée : le test de Paul (16/09, Pixel 8 Pro) est
+  maintenant la preuve principale ; le mien (26/09, Galaxy A16) s'ajoute
+  comme second appareil plutôt que remplacer le sien — ça donne même un
+  début de matrice d'appareils.
+- Commentaire de correction/excuse posté sur l'issue #9.
+
+### Pourquoi / décisions
+- Cette entrée ne remplace pas la précédente (append-only) — elle la
+  corrige, comme le prescrit l'en-tête de ce fichier.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Avant d'affirmer « ce n'est pas fait », vérifier les commentaires de
+  l'issue GitHub, pas seulement `docs/suivi/` — les deux sont censés être
+  synchronisés mais ne le sont pas toujours en pratique.
+
+---
+
 ## 2026-09-26 — US-109 : test réel des 5 min écran éteint (correction d'un écart de suivi)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

@@ -145,16 +145,22 @@ android/
   avec `~/.gradle/caches/modules-2` vidé (dependency verification
   effectivement testée à froid, pas juste régénérée) → **BUILD SUCCESSFUL**
   (voir `00-journal.md`, entrée « corrections revue PR #56 »).
-- **Fait le 2026-09-26** : test manuel « ≥ 5 min écran éteint sur appareil
-  réel », sur un Samsung Galaxy A16 (SM-A165F, Android 16). Service démarré
-  à 12:14:36, écran éteint, revérifié à 12:21:06 (6 min 30 après le début)
-  via `adb shell dumpsys activity services com.dengon.app` : **même
-  `ServiceRecord` (même PID de process), notification `ONGOING_EVENT`
-  toujours affichée avec le même contenu** — le service n'a pas été tué par
-  le système entre-temps. Ce critère d'acceptation de US-109 avait été coché
-  et l'issue #9 fermée le 2026-09-16 **sans que ce test ait réellement eu
-  lieu** (écart détecté le 2026-09-25, voir `00-journal.md`) ; rouverte puis
-  refermée avec cette preuve.
+- **Fait, sur 2 appareils** : test manuel « ≥ 5 min écran éteint sur
+  appareil réel ».
+  - **2026-09-16, Paul, Pixel 8 Pro (Android 17)** : service démarré
+    09:39:53 (PID 25615, `isForeground=true`), écran éteint 5 min 25 s,
+    revérifié à 09:59:19 — **même PID**, notification permanente toujours
+    présente. Limite notée par Paul : appareil en charge pendant le test, donc
+    jamais entré en Doze réel (voir commentaire de l'issue #9 du 16/09).
+  - **2026-09-26, Olivier, Samsung Galaxy A16 / SM-A165F (Android 16)** :
+    service démarré 12:14:36, écran éteint, revérifié à 12:21:06 (6 min 30) —
+    même `ServiceRecord`/PID, notification `ONGOING_EVENT` toujours affichée.
+  - Ce résultat a bien été obtenu et commenté sur l'issue #9 le 16/09, mais
+    **jamais reporté dans cette fiche ni dans le journal** — d'où une
+    confusion le 25/09 (voir `00-journal.md`, entrée du 26/09, qui corrige
+    l'entrée erronée de la veille). Les deux tests ci-dessus couvrent
+    maintenant un début de matrice d'appareils (2 modèles, 2 versions
+    Android).
 
 ## Limites connues / TODO
 
