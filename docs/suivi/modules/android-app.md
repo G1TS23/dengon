@@ -7,7 +7,7 @@ requis pour un nœud mesh (US-109).
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109.
-**Dernière mise à jour :** 2026-09-09
+**Dernière mise à jour :** 2026-09-26
 **État :** esquisse (squelette du service de fond ; pas de logique BLE réelle)
 
 ## À quoi ça sert
@@ -145,10 +145,22 @@ android/
   avec `~/.gradle/caches/modules-2` vidé (dependency verification
   effectivement testée à froid, pas juste régénérée) → **BUILD SUCCESSFUL**
   (voir `00-journal.md`, entrée « corrections revue PR #56 »).
-- **Non fait** : test manuel « ≥ 5 min écran éteint sur appareil réel »
-  (critère d'acceptation US-109) — aucun appareil Android disponible dans
-  l'environnement où ce squelette a été écrit. Reste à faire avant de
-  clore l'US.
+- **Fait, sur 2 appareils** : test manuel « ≥ 5 min écran éteint sur
+  appareil réel ».
+  - **2026-09-16, Paul, Pixel 8 Pro (Android 17)** : service démarré
+    09:39:53 (PID 25615, `isForeground=true`), écran éteint 5 min 25 s,
+    revérifié à 09:59:19 — **même PID**, notification permanente toujours
+    présente. Limite notée par Paul : appareil en charge pendant le test, donc
+    jamais entré en Doze réel (voir commentaire de l'issue #9 du 16/09).
+  - **2026-09-26, Olivier, Samsung Galaxy A16 / SM-A165F (Android 16)** :
+    service démarré 12:14:36, écran éteint, revérifié à 12:21:06 (6 min 30) —
+    même `ServiceRecord`/PID, notification `ONGOING_EVENT` toujours affichée.
+  - Ce résultat a bien été obtenu et commenté sur l'issue #9 le 16/09, mais
+    **jamais reporté dans cette fiche ni dans le journal** — d'où une
+    confusion le 25/09 (voir `00-journal.md`, entrée du 26/09, qui corrige
+    l'entrée erronée de la veille). Les deux tests ci-dessus couvrent
+    maintenant un début de matrice d'appareils (2 modèles, 2 versions
+    Android).
 
 ## Limites connues / TODO
 
@@ -158,7 +170,6 @@ android/
   squelette de service par le vrai relais.
 - Pas de branchement `dengon-ffi` (bouchon US-106 pas encore fait).
 - Pas de CI Android (`android.yml`) — relève de US-113/US-222.
-- Test manuel des 5 minutes écran éteint non réalisé (voir ci-dessus).
 - SDK Android installé localement pour vérifier le build de cette session,
   mais **pas dans le dépôt** (outillage machine ; chaque poste/CI devra
   installer le sien, ou la CI Android future s'en chargera).
