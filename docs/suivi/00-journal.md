@@ -10,6 +10,53 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-26 — US-207 : AAD manquante sur le chiffrement champ par champ
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/store.rs`
+**Lot :** US-207, Sprint 2 (auto-revue de la PR #76 avant merge, demandée
+explicitement par Olivier — « refaire un tour sur ces dernières PR un peu
+en mode review »)
+
+### Fait
+- Vulnérabilité trouvée en relisant `encrypt_field`/`decrypt_field` de
+  manière adversariale : le chiffrement XChaCha20-Poly1305 ne liait le
+  texte chiffré à **aucun contexte** (ni `msg_uuid`, ni `peer_id`, ni nom
+  de colonne). Un attaquant capable d'écrire directement dans le fichier
+  `.db` (appareil compromis, synchronisation malveillante) aurait donc pu
+  copier le blob chiffré d'une ligne vers une autre — par ex. remplacer
+  le corps chiffré d'un message par celui, chiffré, d'un autre message, ou
+  échanger l'état Noise de deux pairs — et le déchiffrement aurait quand
+  même réussi, puisque l'AEAD n'authentifiait que le texte chiffré
+  lui-même, jamais la ligne à laquelle il est censé appartenir.
+- Corrigé en ajoutant un paramètre `aad` (« additional authenticated
+  data ») à `encrypt_field`/`decrypt_field`, porté par `chacha20poly1305`
+  nativement (`aead::Payload { msg, aad }`) : `identity.priv_static`/
+  `priv_sign` liés à une constante de colonne, `messages.body` lié à
+  `msg_uuid`, `noise_sessions.state` lié à `peer_id`. Un même texte chiffré
+  présenté sous un mauvais contexte échoue désormais explicitement au
+  déchiffrement (`StoreError::Decryption`), au lieu de réussir
+  silencieusement.
+- Nouveau test permanent
+  `un_champ_dechiffre_avec_un_mauvais_contexte_echoue` couvrant ce cas.
+- Vérifié au passage (hypothèses de la revue précédente) : le fichier
+  `-wal` de SQLite ne peut jamais contenir de plaintext, puisque le
+  chiffrement a lieu côté Rust avant que les octets n'atteignent SQLite
+  (aucun risque lié à `journal_mode = WAL`) ; aucun fichier `-wal`/`-shm`
+  résiduel constaté après fermeture de la connexion dans le test sur
+  fichier réel. La clé de chiffrement partagée entre les trois colonnes
+  sensibles reste un choix de simplification documenté (espace de nonce
+  XChaCha20 assez grand), pas un bug. `#[allow(clippy::too_many_arguments)]`
+  sur `set_identity`/`insert_message` reflète 1:1 les colonnes de la
+  table — accepté tel quel.
+
+### Vérification
+- `cargo test -p dengon-core --lib store` : 10 tests, tous verts (incluait
+  déjà le test négatif de la revue précédente + le nouveau).
+- `cargo fmt --all -- --check` : propre.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` :
+  propre.
+
 ## 2026-09-26 — US-207 : `store` — persistance SQLite chiffrée champ par champ
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

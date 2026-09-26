@@ -28,7 +28,7 @@
 
 use std::path::Path;
 
-use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng};
+use chacha20poly1305::aead::{Aead, AeadCore, KeyInit, OsRng, Payload};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rusqlite::{params, Connection};
 
@@ -98,11 +98,33 @@ impl From<rusqlite::Error> for StoreError {
 /// Format stocké : `nonce(24 o) ‖ ciphertext_avec_tag_poly1305`. Le nonce
 /// n'a pas besoin d'être secret, seulement unique par clé — le stocker en
 /// clair à côté du texte chiffré est le fonctionnement normal d'un AEAD.
-fn encrypt_field(key: &[u8; FIELD_KEY_LEN], plaintext: &[u8]) -> Result<Vec<u8>, StoreError> {
+///
+/// `aad` (« additional authenticated data ») lie le texte chiffré à sa
+/// ligne/colonne d'origine (ex. `msg_uuid` pour `messages.body`, `peer_id`
+/// pour `noise_sessions.state`) : sans ça, un attaquant qui peut écrire
+/// directement dans le fichier `.db` (device compromis, sync malveillante)
+/// pourrait copier le blob chiffré d'une ligne vers une autre — par exemple
+/// remplacer le corps d'un message par celui, chiffré, d'un autre message —
+/// et le déchiffrement réussirait quand même, puisque l'AEAD n'authentifie
+/// alors que le texte chiffré lui-même, pas la ligne à laquelle il est
+/// censé appartenir. Avec l'AAD, un tel remplacement change le contexte
+/// authentifié et fait échouer le déchiffrement (voir
+/// `un_champ_dechiffre_avec_un_mauvais_contexte_echoue`).
+fn encrypt_field(
+    key: &[u8; FIELD_KEY_LEN],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, StoreError> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
     let ciphertext = cipher
-        .encrypt(&nonce, plaintext)
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
         .map_err(|_| StoreError::Encryption)?;
     let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
     out.extend_from_slice(&nonce);
@@ -110,8 +132,13 @@ fn encrypt_field(key: &[u8; FIELD_KEY_LEN], plaintext: &[u8]) -> Result<Vec<u8>,
     Ok(out)
 }
 
-/// Déchiffre un champ produit par [`encrypt_field`].
-fn decrypt_field(key: &[u8; FIELD_KEY_LEN], stored: &[u8]) -> Result<Vec<u8>, StoreError> {
+/// Déchiffre un champ produit par [`encrypt_field`]. `aad` doit être
+/// exactement celui utilisé au chiffrement (même contexte de ligne/colonne).
+fn decrypt_field(
+    key: &[u8; FIELD_KEY_LEN],
+    aad: &[u8],
+    stored: &[u8],
+) -> Result<Vec<u8>, StoreError> {
     if stored.len() < NONCE_LEN {
         return Err(StoreError::Decryption);
     }
@@ -119,7 +146,13 @@ fn decrypt_field(key: &[u8; FIELD_KEY_LEN], stored: &[u8]) -> Result<Vec<u8>, St
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     let nonce = XNonce::from_slice(nonce_bytes);
     cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(
+            nonce,
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
         .map_err(|_| StoreError::Decryption)
 }
 
@@ -318,8 +351,8 @@ impl<K: KeySource> Store<K> {
         created_ms: i64,
     ) -> Result<(), StoreError> {
         let key = self.keys.field_key();
-        let priv_static_enc = encrypt_field(&key, priv_static)?;
-        let priv_sign_enc = encrypt_field(&key, priv_sign)?;
+        let priv_static_enc = encrypt_field(&key, b"identity.priv_static", priv_static)?;
+        let priv_sign_enc = encrypt_field(&key, b"identity.priv_sign", priv_sign)?;
         self.conn.execute(
             "INSERT INTO identity (id, peer_id, priv_static, priv_sign, pub_static, pub_sign, pseudo, created_ms)
              VALUES (1, ?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -341,8 +374,8 @@ impl<K: KeySource> Store<K> {
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         let key = self.keys.field_key();
-        let priv_static = decrypt_field(&key, &priv_static_enc)?;
-        let priv_sign = decrypt_field(&key, &priv_sign_enc)?;
+        let priv_static = decrypt_field(&key, b"identity.priv_static", &priv_static_enc)?;
+        let priv_sign = decrypt_field(&key, b"identity.priv_sign", &priv_sign_enc)?;
         Ok((priv_static, priv_sign))
     }
 
@@ -390,7 +423,7 @@ impl<K: KeySource> Store<K> {
         status: &str,
         status_ms: i64,
     ) -> Result<(), StoreError> {
-        let body_enc = encrypt_field(&self.keys.field_key(), body.as_bytes())?;
+        let body_enc = encrypt_field(&self.keys.field_key(), msg_uuid, body.as_bytes())?;
         self.conn.execute(
             "INSERT INTO messages
                 (msg_uuid, conv_id, direction, author_peer_id, conv_seq, body, sent_ms, status, status_ms)
@@ -410,7 +443,7 @@ impl<K: KeySource> Store<K> {
             params![msg_uuid],
             |row| row.get(0),
         )?;
-        let plain = decrypt_field(&self.keys.field_key(), &body_enc)?;
+        let plain = decrypt_field(&self.keys.field_key(), msg_uuid, &body_enc)?;
         String::from_utf8(plain).map_err(|_| StoreError::InvalidUtf8)
     }
 
@@ -422,7 +455,7 @@ impl<K: KeySource> Store<K> {
         state: &[u8],
         established_ms: i64,
     ) -> Result<(), StoreError> {
-        let state_enc = encrypt_field(&self.keys.field_key(), state)?;
+        let state_enc = encrypt_field(&self.keys.field_key(), peer_id, state)?;
         self.conn.execute(
             "INSERT INTO noise_sessions (peer_id, state, established_ms)
              VALUES (?1, ?2, ?3)
@@ -440,7 +473,7 @@ impl<K: KeySource> Store<K> {
             params![peer_id],
             |row| row.get(0),
         )?;
-        decrypt_field(&self.keys.field_key(), &state_enc)
+        decrypt_field(&self.keys.field_key(), peer_id, &state_enc)
     }
 }
 
@@ -534,15 +567,15 @@ mod tests {
         // puisse pas repérer un message répété rien qu'en comparant les
         // octets chiffrés.
         let key = [0x11; FIELD_KEY_LEN];
-        let a = encrypt_field(&key, b"meme texte").expect("chiffrement 1");
-        let b = encrypt_field(&key, b"meme texte").expect("chiffrement 2");
+        let a = encrypt_field(&key, b"ctx", b"meme texte").expect("chiffrement 1");
+        let b = encrypt_field(&key, b"ctx", b"meme texte").expect("chiffrement 2");
         assert_ne!(a, b);
         assert_eq!(
-            decrypt_field(&key, &a).expect("dechiffrement 1"),
+            decrypt_field(&key, b"ctx", &a).expect("dechiffrement 1"),
             b"meme texte"
         );
         assert_eq!(
-            decrypt_field(&key, &b).expect("dechiffrement 2"),
+            decrypt_field(&key, b"ctx", &b).expect("dechiffrement 2"),
             b"meme texte"
         );
     }
@@ -551,9 +584,9 @@ mod tests {
     fn dechiffrer_avec_la_mauvaise_cle_echoue() {
         let bonne_cle = [0x11; FIELD_KEY_LEN];
         let mauvaise_cle = [0x22; FIELD_KEY_LEN];
-        let chiffre = encrypt_field(&bonne_cle, b"secret").expect("chiffrement");
+        let chiffre = encrypt_field(&bonne_cle, b"ctx", b"secret").expect("chiffrement");
         assert!(matches!(
-            decrypt_field(&mauvaise_cle, &chiffre),
+            decrypt_field(&mauvaise_cle, b"ctx", &chiffre),
             Err(StoreError::Decryption)
         ));
     }
@@ -564,11 +597,11 @@ mod tests {
         // seul octet du texte chiffré doit faire échouer le déchiffrement,
         // pas renvoyer un texte corrompu silencieusement.
         let key = [0x11; FIELD_KEY_LEN];
-        let mut chiffre = encrypt_field(&key, b"secret").expect("chiffrement");
+        let mut chiffre = encrypt_field(&key, b"ctx", b"secret").expect("chiffrement");
         let last = chiffre.len() - 1;
         chiffre[last] ^= 0xFF;
         assert!(matches!(
-            decrypt_field(&key, &chiffre),
+            decrypt_field(&key, b"ctx", &chiffre),
             Err(StoreError::Decryption)
         ));
     }
@@ -577,9 +610,31 @@ mod tests {
     fn dechiffrer_un_buffer_tronque_echoue_sans_paniquer() {
         let key = [0x11; FIELD_KEY_LEN];
         assert!(matches!(
-            decrypt_field(&key, &[0u8; 4]),
+            decrypt_field(&key, b"ctx", &[0u8; 4]),
             Err(StoreError::Decryption)
         ));
+    }
+
+    #[test]
+    fn un_champ_dechiffre_avec_un_mauvais_contexte_echoue() {
+        // C'est la protection apportée par l'AAD : un texte chiffré produit
+        // pour une ligne/colonne donnée (ex. le message A) ne se déchiffre
+        // plus correctement si on le présente comme appartenant à un autre
+        // contexte (ex. le message B) — même clé, même texte chiffré, seul
+        // le contexte authentifié change. Empêche un attaquant à écriture
+        // sur le fichier `.db` de copier le blob chiffré d'une ligne vers
+        // une autre sans que ça se voie au déchiffrement.
+        let key = [0x11; FIELD_KEY_LEN];
+        let chiffre_pour_msg_a = encrypt_field(&key, b"msg-a", b"secret").expect("chiffrement");
+        assert!(matches!(
+            decrypt_field(&key, b"msg-b", &chiffre_pour_msg_a),
+            Err(StoreError::Decryption)
+        ));
+        // Avec le bon contexte, ça déchiffre toujours normalement.
+        assert_eq!(
+            decrypt_field(&key, b"msg-a", &chiffre_pour_msg_a).expect("dechiffrement"),
+            b"secret"
+        );
     }
 
     /// Critère d'acceptation US-207 : « après avoir écrit un message connu,

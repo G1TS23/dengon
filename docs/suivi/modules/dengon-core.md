@@ -105,25 +105,36 @@ est que la persistance locale, pas le protocole lui-même.
   chiffrement champ par champ) — `outbox`, `held_envelopes`, `seen_set`,
   `recon_cache`, `ledger`, `ship_cursor` attendent `sync` (US-209..212) et
   `ledger` (US-206) pour avoir un appelant.
+- **AAD ajoutée au chiffrement champ par champ après auto-revue
+  (2026-09-26)** : la version d'origine ne liait le texte chiffré à aucun
+  contexte de ligne/colonne, donc un attaquant à écriture sur le fichier
+  `.db` aurait pu copier le blob chiffré d'une ligne vers une autre (ex.
+  substituer le corps d'un message par celui, chiffré, d'un autre message)
+  sans que le déchiffrement échoue. `encrypt_field`/`decrypt_field`
+  prennent maintenant un `aad` (`identity.priv_static`/`priv_sign` liés à
+  une constante de colonne, `messages.body` à `msg_uuid`,
+  `noise_sessions.state` à `peer_id`) — un texte chiffré présenté sous un
+  mauvais contexte échoue explicitement. Voir `00-journal.md`, entrée
+  dédiée du 2026-09-26.
 
 ## Tests
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
   `PROTOCOL_VERSION`).
-- `src/store.rs`, module `tests` : 9 tests — migrations rejouables sans
+- `src/store.rs`, module `tests` : 10 tests — migrations rejouables sans
   erreur, round-trip identité/message/session Noise (chiffré puis
   déchiffré, on retrouve le texte d'origine), deux chiffrements du même
   texte donnent des octets différents (nonce aléatoire), déchiffrer avec la
   mauvaise clé échoue, déchiffrer une donnée modifiée échoue (garantie
   d'authenticité Poly1305), déchiffrer un buffer tronqué échoue sans
-  paniquer, et le test central du critère d'acceptation : **écrire un
-  message connu sur un vrai fichier `.db`, puis `grep` binaire sur le
-  fichier — le texte en clair n'y est pas**.
-- Commande : `cargo test -p dengon-core` → 11 passés, 0 échec (vérifié le
-  2026-09-26). `cargo clippy --workspace --all-targets --all-features -- -D
-  warnings` et `cargo fmt --all -- --check` verts. `cargo check -p
-  dengon-core --no-default-features --locked` (frontière `no_std`) vert —
-  `store` est bien absent de cette configuration (feature `std` retirée).
+  paniquer, déchiffrer avec un mauvais contexte AAD échoue (protection
+  anti-substitution entre lignes), et le test central du critère
+  d'acceptation : **écrire un message connu sur un vrai fichier `.db`, puis
+  `grep` binaire sur le fichier — le texte en clair n'y est pas**.
+- Commande : `cargo test -p dengon-core --lib store` → 10 passés, 0 échec
+  (vérifié le 2026-09-26, après l'ajout de l'AAD). `cargo clippy
+  --workspace --all-targets --all-features -- -D warnings` et `cargo fmt
+  --all -- --check` verts.
 
 ## Limites connues / TODO
 
