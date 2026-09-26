@@ -7,7 +7,7 @@ requis pour un nœud mesh (US-109).
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109.
-**Dernière mise à jour :** 2026-09-09
+**Dernière mise à jour :** 2026-09-26
 **État :** esquisse (squelette du service de fond ; pas de logique BLE réelle)
 
 ## À quoi ça sert
@@ -145,10 +145,16 @@ android/
   avec `~/.gradle/caches/modules-2` vidé (dependency verification
   effectivement testée à froid, pas juste régénérée) → **BUILD SUCCESSFUL**
   (voir `00-journal.md`, entrée « corrections revue PR #56 »).
-- **Non fait** : test manuel « ≥ 5 min écran éteint sur appareil réel »
-  (critère d'acceptation US-109) — aucun appareil Android disponible dans
-  l'environnement où ce squelette a été écrit. Reste à faire avant de
-  clore l'US.
+- **Fait le 2026-09-26** : test manuel « ≥ 5 min écran éteint sur appareil
+  réel », sur un Samsung Galaxy A16 (SM-A165F, Android 16). Service démarré
+  à 12:14:36, écran éteint, revérifié à 12:21:06 (6 min 30 après le début)
+  via `adb shell dumpsys activity services com.dengon.app` : **même
+  `ServiceRecord` (même PID de process), notification `ONGOING_EVENT`
+  toujours affichée avec le même contenu** — le service n'a pas été tué par
+  le système entre-temps. Ce critère d'acceptation de US-109 avait été coché
+  et l'issue #9 fermée le 2026-09-16 **sans que ce test ait réellement eu
+  lieu** (écart détecté le 2026-09-25, voir `00-journal.md`) ; rouverte puis
+  refermée avec cette preuve.
 
 ## Limites connues / TODO
 
@@ -158,7 +164,6 @@ android/
   squelette de service par le vrai relais.
 - Pas de branchement `dengon-ffi` (bouchon US-106 pas encore fait).
 - Pas de CI Android (`android.yml`) — relève de US-113/US-222.
-- Test manuel des 5 minutes écran éteint non réalisé (voir ci-dessus).
 - SDK Android installé localement pour vérifier le build de cette session,
   mais **pas dans le dépôt** (outillage machine ; chaque poste/CI devra
   installer le sien, ou la CI Android future s'en chargera).
