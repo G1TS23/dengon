@@ -7,24 +7,17 @@
 //! la chaîne en Python (décision B-5).
 //!
 //! Il lira un export de journal accompagné de son `LOG_ATTEST` et rendra l'un
-//! des quatre verdicts de [`Verdict`]. Implémentation : P1.13.
+//! des quatre verdicts de [`Verdict`]. Implémentation complète (lecture de
+//! fichier, `LOG_ATTEST`) : P1.13. `Verdict` et `verify_chain` viennent
+//! maintenant réellement de `dengon-core` (US-206), comme annoncé
+//! ci-dessus — plus de définition dupliquée ici.
 //!
 //! # État
 //!
-//! Squelette livré par l'US-104.
+//! Squelette livré par l'US-104. Branché sur `dengon_core::ledger` par
+//! l'US-206 ; lecture de fichier + `LOG_ATTEST` restent à faire (P1.13).
 
-/// Verdicts rendus par la vérification d'un journal chaîné.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Verdict {
-    /// Chaîne cohérente et signatures valides.
-    Ok,
-    /// Une entrée a été modifiée, ou une signature est invalide.
-    Broken,
-    /// Deux entrées concurrentes revendiquent la même position.
-    Fork,
-    /// Une ou plusieurs positions manquent dans la chaîne.
-    Gap,
-}
+pub use dengon_core::ledger::Verdict;
 
 fn main() {
     println!(

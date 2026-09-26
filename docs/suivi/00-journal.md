@@ -9,6 +9,64 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-26 — US-206 : `ledger` — journal chaîné append-only
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/ledger.rs}`
+(nouveau), `crates/dengon-verify/src/main.rs`, `Cargo.toml` (racine),
+`docs/suivi/modules/{dengon-core,dengon-verify}.md`,
+`docs/suivi/02-avancement.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-206, Sprint 2
+
+### Fait
+- Implémenté `ledger::{Entry, Ledger, Signer, NullSigner, Verdict}` :
+  `append`/`verify_chain`/`export`, hash chaîné SHA-256 avec longueurs
+  préfixées (pas d'ambiguïté de découpage entre champs), détection de trou
+  (`Gap`), de position dupliquée (`Fork`) et de hash incohérent (`Broken`).
+- Signature différée derrière le trait `Signer` (voir
+  `03-ecarts-conception.md`, entrée dédiée) — `crypto` (US-203) est dans le
+  même sprint, la règle du projet interdit la dépendance intra-sprint.
+- `no_std` + `alloc` : `extern crate alloc;` ajouté à `lib.rs` (jusque-là
+  absent faute d'usage), `sha2` en `default-features = false`.
+- 12 tests unitaires + 2 property tests (`proptest`) : toute séquence
+  d'appends reste vérifiable ; corrompre n'importe quelle entrée d'une
+  séquence quelconque est toujours détecté comme `Broken`, jamais accepté
+  silencieusement.
+- « Reprise après redémarrage » démontrée par un aller-retour
+  `Entry::to_bytes`/`from_bytes` (sérialiser, détruire le `Ledger` en
+  mémoire, désérialiser, revérifier la chaîne) — pas de vrai backend de
+  stockage câblé, voir l'écart consigné.
+- `dengon-verify::main` branché sur `dengon_core::ledger::Verdict` (réel)
+  au lieu de sa copie locale, comme l'annonçait déjà `04-architecture.md` §2.
+
+### Pourquoi / décisions
+- Voir `03-ecarts-conception.md`, entrée « `ledger` : signature différée
+  derrière un trait `Signer` (US-206) » pour le détail de la dépendance
+  intra-sprint évitée.
+
+### Écarts vs conception
+- Un écart, documenté : signature non vérifiée par `verify_chain()` pour
+  l'instant (voir ci-dessus).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+14 passed; 0 failed
+
+$ cargo test -p dengon-verify
+1 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(vert, 0 warning)
+
+$ cargo check -p dengon-core --no-default-features --locked
+(vert — frontière no_std)
+```
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
