@@ -520,6 +520,49 @@ seul "docker-desktop" (arrêté) — pas de distro Linux utilisable ici.
   ou `bluer` — recherche documentaire uniquement (README GitHub + docs.rs de
   `btleplug`, citations exactes dans le rapport). Recommandation `bluer` non
   vérifiée empiriquement, voir limites du rapport.
+## 2026-09-26 — US-109 : test réel des 5 min écran éteint (correction d'un écart de suivi)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md`, issue #9, aucun code
+modifié
+**Lot :** US-109, Sprint 1 (correction de suivi)
+
+### Fait
+- En vérifiant l'état des issues Sprint 1 le 25/09, détecté un écart : l'issue
+  #9 (US-109) avait été fermée le 16/09 avec **tous** les critères
+  d'acceptation cochés dans son corps, y compris « Mesuré : le service tourne
+  encore après ≥ 5 min écran éteint sur au moins un appareil réel » — alors
+  que la PR #56 elle-même documentait clairement ce point comme **non fait**
+  (« aucun appareil Android disponible », listé comme TODO bloquant sans
+  issue de suite), et que `docs/suivi/modules/android-app.md` le confirmait
+  encore : « Non fait ... Reste à faire avant de clore l'US. » Aucune entrée
+  de journal ultérieure n'indiquait que ce test avait eu lieu entre-temps.
+- Issue #9 rouverte avec un commentaire expliquant l'écart.
+- Test réellement exécuté le 26/09 sur un Samsung Galaxy A16 (SM-A165F,
+  Android 16) : APK `main` installée via `adb`, service démarré (démarrage
+  automatique à l'octroi des permissions), notification permanente
+  « dengon actif » confirmée présente (`adb shell dumpsys notification`).
+  Écran éteint à 12:14:36, revérifié à 12:21:06 (6 min 30 plus tard) via
+  `adb shell dumpsys activity services com.dengon.app` : **même
+  `ServiceRecord`, même PID de process, notification `ONGOING_EVENT`
+  toujours affichée avec le même contenu** — le service n'a pas été tué par
+  le système.
+- Issue #9 refermée avec cette preuve.
+
+### Pourquoi / décisions
+- Ne pas éditer l'entrée du 16/09 (append-only) : celle-ci n'existe pas
+  telle quelle dans le journal (la fermeture avait été faite directement sur
+  l'issue GitHub, sans entrée de journal correspondante) — c'est justement
+  l'absence d'entrée qui a permis de repérer l'écart en confrontant l'issue
+  à `docs/suivi/`.
+
+### Écarts vs conception
+- Aucun écart de conception — écart de **process** (case cochée sans preuve),
+  corrigé ici.
+
+### État après cette session
+- US-109 réellement complète, avec preuve technique reproductible
+  (commandes `adb` ci-dessus). Issue #9 refermée.
 
 ---
 
