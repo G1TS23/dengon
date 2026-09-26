@@ -110,22 +110,37 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
   `PROTOCOL_VERSION`).
-- `src/ledger.rs`, module `tests` : 12 tests unitaires (chaîne vide valide,
+- `src/ledger.rs`, module `tests` : 13 tests unitaires (chaîne vide valide,
   append→verify_chain toujours Ok, seq consécutives, trou détecté, doublon
-  de seq détecté comme fork, entrée modifiée détectée comme broken,
-  `prev_hash` incohérent détecté, export par plage, reprise après
-  redémarrage par sérialisation, désérialisation d'un buffer tronqué sans
-  panique) + **2 property tests** (`proptest`) : toute séquence d'appends
-  reste vérifiable ; corrompre n'importe quelle entrée d'une séquence
-  quelconque est toujours détecté comme `Broken`.
-- Commande : `cargo test -p dengon-core` → 14 passés, 0 échec (vérifié le
-  2026-09-26). `cargo clippy --workspace --all-targets --all-features -- -D
-  warnings` et `cargo fmt --all -- --check` verts. `cargo check -p
-  dengon-core --no-default-features --locked` (frontière `no_std`) vert.
+  de seq détecté comme fork (adjacent **et** non adjacent — voir
+  « Décisions »), entrée modifiée détectée comme broken, `prev_hash`
+  incohérent détecté, export par plage, reprise après redémarrage par
+  sérialisation, désérialisation d'un buffer tronqué sans panique) +
+  **2 property tests** (`proptest`) : toute séquence d'appends reste
+  vérifiable ; corrompre n'importe quelle entrée d'une séquence quelconque
+  est toujours détecté comme `Broken`.
+- Commande : `cargo test -p dengon-core` → 15 passés, 0 échec (vérifié le
+  2026-09-26, après le correctif `verify_chain` ci-dessous). `cargo clippy
+  --workspace --all-targets --all-features -- -D warnings` et `cargo fmt
+  --all -- --check` verts. `cargo check -p dengon-core --no-default-features
+  --locked` (frontière `no_std`) vert.
 - Couverture non mesurée par un outil (`cargo llvm-cov` pas encore posé dans
   ce sprint) — objectif ≥ 85 % de la DoD §7.2 non vérifié formellement,
   mais chaque branche de `verify_chain` (Ok/Broken/Fork/Gap) a un test
   dédié qui l'exerce explicitement.
+
+## Décisions d'implémentation (correctifs post-écriture)
+
+- **`verify_chain()` corrigé après auto-revue (2026-09-26)** : la version
+  d'origine détectait `Fork`/`Gap` en ne comparant chaque `seq` qu'à celui
+  de l'entrée immédiatement précédente dans le stockage. Une séquence
+  `[0, 1, 2, 1]` (rejeu d'une entrée déjà vue, mais pas juste après
+  l'original) était donc classée à tort `Gap` au lieu de `Fork`. Rien
+  n'était accepté à tort (aucune entrée invalide ne passait comme `Ok`),
+  mais le verdict précis était faux. Réécrit en deux passes : passe 1 sur
+  un `BTreeSet<u64>` des `seq` (détecte `Fork`/`Gap` indépendamment de
+  l'ordre de stockage), passe 2 = la marche de chaîne de hash d'origine
+  (`Broken`). Voir `00-journal.md`, entrée du 2026-09-26 dédiée.
 
 ## Limites connues / TODO
 

@@ -10,6 +10,46 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-26 — US-206 : correctif `verify_chain` (doublon de seq non adjacent)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`
+**Lot :** US-206, Sprint 2 (auto-revue de la PR #75 avant merge, demandée
+explicitement par Olivier — « refaire un tour sur ces dernières PR un peu
+en mode review »)
+
+### Fait
+- Bug trouvé en relisant `verify_chain` de manière adversariale : la
+  détection ne comparait chaque `seq` qu'à celui de l'entrée
+  **immédiatement précédente** dans le stockage. Une séquence
+  `[0, 1, 2, 1]` — un rejeu d'une entrée déjà vue, mais pas juste après
+  l'original (un scénario de fork réaliste : une vieille entrée
+  retransmise plus tard) — était donc classée à tort `Gap` au lieu de
+  `Fork` (le seq max vu était 2, sans jamais détecter le doublon adjacent).
+  Reproduit concrètement avant correction via un test temporaire
+  (`cargo test -p dengon-core scratch_review -- --nocapture` →
+  `verdict pour [0,1,2,1] = Gap`), puis supprimé une fois le correctif
+  vérifié.
+- **Rien n'était accepté à tort** (aucune entrée invalide ne passait comme
+  `Ok`) — mais le verdict précis était faux, ce qui aurait pu induire en
+  erreur un futur diagnostic (« pourquoi un trou alors qu'aucune entrée ne
+  manque vraiment ? »).
+- Réécrit `verify_chain` en deux passes : passe 1 sur un
+  `alloc::collections::BTreeSet<u64>` des `seq` (détecte `Fork`/`Gap`
+  indépendamment de l'ordre de stockage) ; passe 2 = la marche de chaîne de
+  hash originale, dans l'ordre de stockage (`Broken`).
+- Nouveau test permanent `un_doublon_non_adjacent_est_bien_un_fork` couvrant
+  exactement ce cas.
+
+### Vérification
+- `cargo test -p dengon-core` : 15 tests, tous verts (incluait déjà le
+  correctif + le nouveau test).
+- `cargo fmt --all -- --check` : propre.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` :
+  propre.
+- `cargo check -p dengon-core --no-default-features --locked` : compile
+  toujours en `no_std`.
+
 ## 2026-09-26 — US-206 : `ledger` — journal chaîné append-only
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

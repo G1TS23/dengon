@@ -296,17 +296,41 @@ impl<S: Signer> Ledger<S> {
     /// ne prouverait rien). US-305/US-310 brancheront la vérification de
     /// signature ici une fois `crypto` livré.
     pub fn verify_chain(&self) -> Verdict {
-        let mut expected_prev = GENESIS_HASH;
-        let mut prev_seq: Option<u64> = None;
-
+        // Deux passes, volontairement séparées :
+        //
+        // 1. Positions (`seq`) : un doublon est un fork, un trou dans 0..=max
+        //    en est un. Vérifié sur l'ENSEMBLE des `seq`, pas seulement
+        //    contre l'entrée immédiatement précédente — un premier essai qui
+        //    ne comparait qu'à la précédente classait à tort `[0, 1, 2, 1]`
+        //    (rejeu d'une ancienne entrée en fin de chaîne — un vrai cas de
+        //    fork) comme `Gap`, parce que la comparaison ne portait que sur
+        //    l'entrée d'avant (`2`), jamais revue par rapport aux `seq` déjà
+        //    vues plus tôt (`1`, trouvé en relecture de revue). Rien n'était
+        //    accepté à tort dans ce cas (le chaînage de hash ci-dessous
+        //    aurait fini par détecter une incohérence de toute façon), mais
+        //    le verdict précis était faux.
+        //
+        // 2. Chaîne de hash, dans l'ORDRE DE STOCKAGE (`self.entries`), qui
+        //    doit correspondre à l'ordre de production (`append` empile
+        //    dans cet ordre) : une entrée déplacée ou rejouée à la mauvaise
+        //    position casse ce chaînage même si sa `seq` est par ailleurs
+        //    valide.
+        let mut seen = alloc::collections::BTreeSet::new();
+        let mut max_seq: Option<u64> = None;
         for entry in &self.entries {
-            match prev_seq {
-                None if entry.seq != 0 => return Verdict::Gap,
-                Some(prev) if entry.seq == prev => return Verdict::Fork,
-                Some(prev) if entry.seq != prev + 1 => return Verdict::Gap,
-                _ => {}
+            if !seen.insert(entry.seq) {
+                return Verdict::Fork;
             }
+            max_seq = Some(max_seq.map_or(entry.seq, |m| core::cmp::max(m, entry.seq)));
+        }
+        if let Some(max) = max_seq {
+            if seen.len() as u64 != max + 1 {
+                return Verdict::Gap;
+            }
+        }
 
+        let mut expected_prev = GENESIS_HASH;
+        for entry in &self.entries {
             let recomputed = Entry::compute_hash(
                 entry.seq,
                 entry.ts_ms,
@@ -317,9 +341,7 @@ impl<S: Signer> Ledger<S> {
             if recomputed != entry.entry_hash || entry.prev_hash != expected_prev {
                 return Verdict::Broken;
             }
-
             expected_prev = entry.entry_hash;
-            prev_seq = Some(entry.seq);
         }
 
         Verdict::Ok
@@ -390,6 +412,24 @@ mod tests {
         let mut entries = l.entries().to_vec();
         let doublon = entries[0].clone(); // même seq (0) que la première
         entries.insert(1, doublon);
+        let l2 = Ledger::from_entries(entries, NullSigner);
+        assert_eq!(l2.verify_chain(), Verdict::Fork);
+    }
+
+    #[test]
+    fn un_doublon_non_adjacent_est_bien_un_fork() {
+        // Rejoue d'une entrée déjà vue, mais pas juste après l'original :
+        // seq = [0, 1, 2, 1]. Avant la réécriture en deux passes de
+        // `verify_chain`, seule la comparaison au seq immédiatement
+        // précédent était faite, donc ce cas était classé à tort `Gap`
+        // (le seq max était 2 sans jamais avoir vu de doublon adjacent).
+        let mut l = ledger();
+        l.append("a", "{}", 1);
+        l.append("b", "{}", 2);
+        l.append("c", "{}", 3);
+        let mut entries = l.entries().to_vec();
+        let doublon = entries[1].clone(); // seq = 1, déjà présent
+        entries.push(doublon);
         let l2 = Ledger::from_entries(entries, NullSigner);
         assert_eq!(l2.verify_chain(), Verdict::Fork);
     }
