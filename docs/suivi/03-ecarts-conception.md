@@ -327,3 +327,38 @@ _(aucun écart pour l'instant)_
 - **Doc de conception mise à jour ?** Non — ce n'est pas une divergence mais un
   **comblement**. À verser dans `04-architecture.md` §3 si l'équipe veut que la
   conception reste la référence complète du contrat.
+
+---
+
+### `ledger` : signature différée derrière un trait `Signer` (US-206)
+
+- **Conception :** `04-architecture.md` §2 dit `ledger : append(event) ->
+  Entry, verify_chain(), export(range)` — dépend de `crypto`. Chaque entrée
+  du journal (`docs/powl/09-data-model.md` §1) porte un champ `sig` (Ed25519,
+  64 o).
+- **Code :** `crates/dengon-core/src/ledger.rs` — `Ledger<S: Signer>` est
+  paramétré par un trait `Signer` (une méthode `sign(&mut self, message:
+  &[u8]) -> Signature`), pas câblé sur `ed25519-dalek` ou toute autre
+  implémentation concrète. `NullSigner` (signature à zéro) sert de bouchon
+  pour les tests. `verify_chain()` ne vérifie **pas** la signature — il ne
+  vérifie que la chaîne de hash et l'absence de trou/fork.
+- **Pourquoi :** `crypto` (US-203, Ed25519) est dans le **même sprint**
+  (S2) que `ledger` (US-206), et la règle du projet interdit qu'une US
+  dépende d'une autre US du même sprint (`docs/olivier/proposition-organisation-github.md`
+  §5.2). Attendre `crypto` aurait bloqué `ledger` sans raison de fond — les
+  deux US sont attribuées à des personnes différentes ce sprint (voir
+  `docs/suivi/repartition-sprint2.md`) et n'ont aucune raison de se
+  séquencer.
+- **Conséquences :** la **forme** du contrat (un champ `sig` de 64 octets
+  par entrée, une méthode qui vérifie la chaîne) est déjà correcte et
+  stable. Le **contenu** cryptographique ne l'est pas : une entrée signée
+  par `NullSigner` ne prouve rien, et `verify_chain() == Verdict::Ok`
+  aujourd'hui ne garantit **que** l'intégrité du hash-chaînage, pas
+  l'authenticité de l'auteur. Quand `crypto` livrera une vraie
+  implémentation `Signer` (Ed25519), elle se branchera sur `Ledger<S>` sans
+  changer sa forme — et `verify_chain()` devra alors être étendue pour
+  vérifier la signature de chaque entrée, ce qui n'est pas fait ici.
+- **Doc de conception mise à jour ?** Non — la conception reste la cible
+  réelle (signature Ed25519 vérifiée). Le point est documenté ici et dans
+  `modules/dengon-core.md` (« Décisions d'implémentation » et « Limites
+  connues »).

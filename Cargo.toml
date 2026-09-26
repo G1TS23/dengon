@@ -47,6 +47,9 @@ publish = false
 [workspace.dependencies]
 dengon-core = { path = "crates/dengon-core", version = "0.1.0" }
 dengon-ble  = { path = "crates/dengon-ble", version = "0.1.0" }
+# no_std (`default-features = false` retire l'implémentation std du digest,
+# indispensable pour compiler `ledger` (US-206) sur cible ESP32).
+sha2 = { version = "0.10", default-features = false }
 
 # ---------------------------------------------------------------------------
 # Lints centralisés (Cargo >= 1.74). C'est la « configuration clippy

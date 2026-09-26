@@ -9,6 +9,104 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-26 — US-206 : correctif `verify_chain` (doublon de seq non adjacent)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`
+**Lot :** US-206, Sprint 2 (auto-revue de la PR #75 avant merge, demandée
+explicitement par Olivier — « refaire un tour sur ces dernières PR un peu
+en mode review »)
+
+### Fait
+- Bug trouvé en relisant `verify_chain` de manière adversariale : la
+  détection ne comparait chaque `seq` qu'à celui de l'entrée
+  **immédiatement précédente** dans le stockage. Une séquence
+  `[0, 1, 2, 1]` — un rejeu d'une entrée déjà vue, mais pas juste après
+  l'original (un scénario de fork réaliste : une vieille entrée
+  retransmise plus tard) — était donc classée à tort `Gap` au lieu de
+  `Fork` (le seq max vu était 2, sans jamais détecter le doublon adjacent).
+  Reproduit concrètement avant correction via un test temporaire
+  (`cargo test -p dengon-core scratch_review -- --nocapture` →
+  `verdict pour [0,1,2,1] = Gap`), puis supprimé une fois le correctif
+  vérifié.
+- **Rien n'était accepté à tort** (aucune entrée invalide ne passait comme
+  `Ok`) — mais le verdict précis était faux, ce qui aurait pu induire en
+  erreur un futur diagnostic (« pourquoi un trou alors qu'aucune entrée ne
+  manque vraiment ? »).
+- Réécrit `verify_chain` en deux passes : passe 1 sur un
+  `alloc::collections::BTreeSet<u64>` des `seq` (détecte `Fork`/`Gap`
+  indépendamment de l'ordre de stockage) ; passe 2 = la marche de chaîne de
+  hash originale, dans l'ordre de stockage (`Broken`).
+- Nouveau test permanent `un_doublon_non_adjacent_est_bien_un_fork` couvrant
+  exactement ce cas.
+
+### Vérification
+- `cargo test -p dengon-core` : 15 tests, tous verts (incluait déjà le
+  correctif + le nouveau test).
+- `cargo fmt --all -- --check` : propre.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` :
+  propre.
+- `cargo check -p dengon-core --no-default-features --locked` : compile
+  toujours en `no_std`.
+
+## 2026-09-26 — US-206 : `ledger` — journal chaîné append-only
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/ledger.rs}`
+(nouveau), `crates/dengon-verify/src/main.rs`, `Cargo.toml` (racine),
+`docs/suivi/modules/{dengon-core,dengon-verify}.md`,
+`docs/suivi/02-avancement.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-206, Sprint 2
+
+### Fait
+- Implémenté `ledger::{Entry, Ledger, Signer, NullSigner, Verdict}` :
+  `append`/`verify_chain`/`export`, hash chaîné SHA-256 avec longueurs
+  préfixées (pas d'ambiguïté de découpage entre champs), détection de trou
+  (`Gap`), de position dupliquée (`Fork`) et de hash incohérent (`Broken`).
+- Signature différée derrière le trait `Signer` (voir
+  `03-ecarts-conception.md`, entrée dédiée) — `crypto` (US-203) est dans le
+  même sprint, la règle du projet interdit la dépendance intra-sprint.
+- `no_std` + `alloc` : `extern crate alloc;` ajouté à `lib.rs` (jusque-là
+  absent faute d'usage), `sha2` en `default-features = false`.
+- 12 tests unitaires + 2 property tests (`proptest`) : toute séquence
+  d'appends reste vérifiable ; corrompre n'importe quelle entrée d'une
+  séquence quelconque est toujours détecté comme `Broken`, jamais accepté
+  silencieusement.
+- « Reprise après redémarrage » démontrée par un aller-retour
+  `Entry::to_bytes`/`from_bytes` (sérialiser, détruire le `Ledger` en
+  mémoire, désérialiser, revérifier la chaîne) — pas de vrai backend de
+  stockage câblé, voir l'écart consigné.
+- `dengon-verify::main` branché sur `dengon_core::ledger::Verdict` (réel)
+  au lieu de sa copie locale, comme l'annonçait déjà `04-architecture.md` §2.
+
+### Pourquoi / décisions
+- Voir `03-ecarts-conception.md`, entrée « `ledger` : signature différée
+  derrière un trait `Signer` (US-206) » pour le détail de la dépendance
+  intra-sprint évitée.
+
+### Écarts vs conception
+- Un écart, documenté : signature non vérifiée par `verify_chain()` pour
+  l'instant (voir ci-dessus).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+14 passed; 0 failed
+
+$ cargo test -p dengon-verify
+1 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(vert, 0 warning)
+
+$ cargo check -p dengon-core --no-default-features --locked
+(vert — frontière no_std)
+```
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
