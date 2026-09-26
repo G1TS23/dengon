@@ -47,6 +47,17 @@ publish = false
 [workspace.dependencies]
 dengon-core = { path = "crates/dengon-core", version = "0.1.0" }
 dengon-ble  = { path = "crates/dengon-ble", version = "0.1.0" }
+# `store` (US-207) uniquement — ni l'un ni l'autre n'a besoin de no_std :
+# rusqlite ne compile pas sur cible ESP32 de toute façon (docs/synthese/04
+# §2, "store est derrière un trait Store" — l'impl NVS/flash de l'ESP32 est
+# un module séparé, pas celui-ci). "bundled" : sqlite3 vendorisé, pas de
+# dépendance système (même choix que faute de mieux sur les postes de dev
+# et la CI, qui n'ont pas forcément libsqlite3-dev).
+rusqlite = { version = "0.32", features = ["bundled"] }
+# `getrandom` : expose `aead::OsRng`, nécessaire pour tirer un nonce XChaCha20
+# aléatoire à chaque chiffrement (jamais le même nonce deux fois avec la
+# même clé, sous peine de casser l'AEAD).
+chacha20poly1305 = { version = "0.10", features = ["getrandom"] }
 
 # ---------------------------------------------------------------------------
 # Lints centralisés (Cargo >= 1.74). C'est la « configuration clippy

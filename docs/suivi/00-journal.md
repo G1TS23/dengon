@@ -9,6 +9,61 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-26 — US-207 : `store` — persistance SQLite chiffrée champ par champ
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/store.rs}`
+(nouveau), `Cargo.toml` (racine), `docs/suivi/modules/dengon-core.md`,
+`docs/suivi/02-avancement.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-207, Sprint 2
+
+### Fait
+- Implémenté `store::{Store, KeySource, FixedKeySource}` : schéma SQLite
+  complet (11 tables, repris tel quel de `docs/synthese/09` §11.1),
+  migrations versionnées et rejouables (même discipline que
+  `dashboard/api/app/migrations.py`, US-110), chiffrement XChaCha20-Poly1305
+  champ par champ (`identity.priv_static`/`priv_sign`, `messages.body`,
+  `noise_sessions.state`).
+- Clé de chiffrement différée derrière le trait `KeySource` — même schéma
+  que `ledger::Signer` (US-206) : `identity` (US-205) est dans le même
+  sprint, dépendance intra-sprint interdite par la règle du projet. Écart
+  consigné dans `03-ecarts-conception.md`.
+- `store` reste `std`-only par choix : `rusqlite` vendorise sqlite3 en C,
+  incompatible ESP32 de toute façon (l'impl ESP32 sera un module séparé,
+  NVS/flash, prévu par l'architecture).
+- 9 tests sur `store` : migrations rejouables, round-trip identité/
+  message/session Noise, nonce aléatoire (deux chiffrements du même texte
+  diffèrent), mauvaise clé / donnée modifiée / buffer tronqué échouent tous
+  proprement (pas de panique). **Test central du critère d'acceptation** :
+  écrit un message connu sur un vrai fichier `.db`, `grep` binaire sur le
+  fichier — le texte en clair n'y est pas.
+
+### Pourquoi / décisions
+- Voir `03-ecarts-conception.md`, entrée « `store` : clé de chiffrement
+  différée derrière un trait `KeySource` (US-207) ».
+
+### Écarts vs conception
+- Un écart, documenté : la clé de chiffrement est fixe (bouchon), pas
+  dérivée d'un Keystore/Keychain réel (voir ci-dessus). Le mécanisme de
+  chiffrement lui-même n'est pas un bouchon — il chiffre réellement,
+  vérifié par le test négatif sur fichier.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+11 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(vert, 0 warning)
+
+$ cargo check -p dengon-core --no-default-features --locked
+(vert — store absent de cette configuration, comme prévu)
+```
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`

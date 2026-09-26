@@ -12,7 +12,7 @@
 
 | Composant | Prévu (conception) | Réel | Avancement | Fiche |
 |---|---|---|---|---|
-| `dengon-core` | crate Rust : protocol, crypto, store, sync, ledger, observability | squelette : bascule `no_std`, `PROTOCOL_VERSION`, 2 tests | 5 % | [dengon-core](modules/dengon-core.md) |
+| `dengon-core` | crate Rust : protocol, crypto, store, sync, ledger, observability | squelette + **`store` livré** (US-207) : schéma SQLite complet, chiffrement XChaCha20-Poly1305 champ par champ, migrations rejouables, 11 tests dont le test négatif (grep binaire) | 12 % | [dengon-core](modules/dengon-core.md) |
 | `dengon-ble` | trait Transport + impl btleplug | **contrat livré** (US-105) : `Transport`, `MockTransport`, suite de conformité (12 cas). Pas d'implémentation radio | 40 % | [dengon-ble.md](modules/dengon-ble.md) |
 | `dengon-node` | binaire CLI (nœud headless) | squelette : `main` affiche sa version | 3 % | [dengon-node](modules/dengon-node.md) |
 | `dengon-sim` | simulateur multi-nœuds | squelette : lib + bin, graine fixe déclarée | 3 % | [dengon-sim](modules/dengon-sim.md) |

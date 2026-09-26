@@ -19,9 +19,12 @@
 //!
 //! # État
 //!
-//! Squelette livré par l'US-104. Aucun module réel n'est implémenté.
+//! Squelette livré par l'US-104. `store` livré par l'US-207.
 
 #![cfg_attr(not(feature = "std"), no_std)]
+
+#[cfg(feature = "std")]
+pub mod store;
 
 /// Version du protocole dengon implémentée par cette crate.
 ///
