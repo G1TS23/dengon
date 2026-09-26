@@ -13,10 +13,19 @@ publish.workspace      = true
 # `std` par défaut sur les cibles hôte (Android, PC, dashboard).
 # `--no-default-features` = le mode `no_std` + `alloc` visé pour l'ESP32
 # (docs/synthese/04-architecture.md §2, « Frontières no_std »).
+#
+# `store` (US-207) est de la partie : contrairement à `protocol`/`sync`/
+# `ledger`, ce module n'a PAS vocation à compiler en no_std — rusqlite
+# vendorise sqlite3 en C, ça n'existe pas sur ESP32 (docs/synthese/04 §2 :
+# "store est derrière un trait Store", l'impl ESP32 sera un module séparé,
+# NVS/flash, pas celui-ci). `std = ["dep:rusqlite", "dep:chacha20poly1305"]`
+# active donc `store` en même temps que la feature `std`.
 default = ["std"]
-std     = []
+std     = ["dep:rusqlite", "dep:chacha20poly1305"]
 
 [dependencies]
+rusqlite = { workspace = true, optional = true }
+chacha20poly1305 = { workspace = true, optional = true }
 
 [dev-dependencies]
 

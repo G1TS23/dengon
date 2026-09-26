@@ -9,6 +9,108 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-26 — US-207 : AAD manquante sur le chiffrement champ par champ
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/store.rs`
+**Lot :** US-207, Sprint 2 (auto-revue de la PR #76 avant merge, demandée
+explicitement par Olivier — « refaire un tour sur ces dernières PR un peu
+en mode review »)
+
+### Fait
+- Vulnérabilité trouvée en relisant `encrypt_field`/`decrypt_field` de
+  manière adversariale : le chiffrement XChaCha20-Poly1305 ne liait le
+  texte chiffré à **aucun contexte** (ni `msg_uuid`, ni `peer_id`, ni nom
+  de colonne). Un attaquant capable d'écrire directement dans le fichier
+  `.db` (appareil compromis, synchronisation malveillante) aurait donc pu
+  copier le blob chiffré d'une ligne vers une autre — par ex. remplacer
+  le corps chiffré d'un message par celui, chiffré, d'un autre message, ou
+  échanger l'état Noise de deux pairs — et le déchiffrement aurait quand
+  même réussi, puisque l'AEAD n'authentifiait que le texte chiffré
+  lui-même, jamais la ligne à laquelle il est censé appartenir.
+- Corrigé en ajoutant un paramètre `aad` (« additional authenticated
+  data ») à `encrypt_field`/`decrypt_field`, porté par `chacha20poly1305`
+  nativement (`aead::Payload { msg, aad }`) : `identity.priv_static`/
+  `priv_sign` liés à une constante de colonne, `messages.body` lié à
+  `msg_uuid`, `noise_sessions.state` lié à `peer_id`. Un même texte chiffré
+  présenté sous un mauvais contexte échoue désormais explicitement au
+  déchiffrement (`StoreError::Decryption`), au lieu de réussir
+  silencieusement.
+- Nouveau test permanent
+  `un_champ_dechiffre_avec_un_mauvais_contexte_echoue` couvrant ce cas.
+- Vérifié au passage (hypothèses de la revue précédente) : le fichier
+  `-wal` de SQLite ne peut jamais contenir de plaintext, puisque le
+  chiffrement a lieu côté Rust avant que les octets n'atteignent SQLite
+  (aucun risque lié à `journal_mode = WAL`) ; aucun fichier `-wal`/`-shm`
+  résiduel constaté après fermeture de la connexion dans le test sur
+  fichier réel. La clé de chiffrement partagée entre les trois colonnes
+  sensibles reste un choix de simplification documenté (espace de nonce
+  XChaCha20 assez grand), pas un bug. `#[allow(clippy::too_many_arguments)]`
+  sur `set_identity`/`insert_message` reflète 1:1 les colonnes de la
+  table — accepté tel quel.
+
+### Vérification
+- `cargo test -p dengon-core --lib store` : 10 tests, tous verts (incluait
+  déjà le test négatif de la revue précédente + le nouveau).
+- `cargo fmt --all -- --check` : propre.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` :
+  propre.
+
+## 2026-09-26 — US-207 : `store` — persistance SQLite chiffrée champ par champ
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/store.rs}`
+(nouveau), `Cargo.toml` (racine), `docs/suivi/modules/dengon-core.md`,
+`docs/suivi/02-avancement.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-207, Sprint 2
+
+### Fait
+- Implémenté `store::{Store, KeySource, FixedKeySource}` : schéma SQLite
+  complet (11 tables, repris tel quel de `docs/synthese/09` §11.1),
+  migrations versionnées et rejouables (même discipline que
+  `dashboard/api/app/migrations.py`, US-110), chiffrement XChaCha20-Poly1305
+  champ par champ (`identity.priv_static`/`priv_sign`, `messages.body`,
+  `noise_sessions.state`).
+- Clé de chiffrement différée derrière le trait `KeySource` — même schéma
+  que `ledger::Signer` (US-206) : `identity` (US-205) est dans le même
+  sprint, dépendance intra-sprint interdite par la règle du projet. Écart
+  consigné dans `03-ecarts-conception.md`.
+- `store` reste `std`-only par choix : `rusqlite` vendorise sqlite3 en C,
+  incompatible ESP32 de toute façon (l'impl ESP32 sera un module séparé,
+  NVS/flash, prévu par l'architecture).
+- 9 tests sur `store` : migrations rejouables, round-trip identité/
+  message/session Noise, nonce aléatoire (deux chiffrements du même texte
+  diffèrent), mauvaise clé / donnée modifiée / buffer tronqué échouent tous
+  proprement (pas de panique). **Test central du critère d'acceptation** :
+  écrit un message connu sur un vrai fichier `.db`, `grep` binaire sur le
+  fichier — le texte en clair n'y est pas.
+
+### Pourquoi / décisions
+- Voir `03-ecarts-conception.md`, entrée « `store` : clé de chiffrement
+  différée derrière un trait `KeySource` (US-207) ».
+
+### Écarts vs conception
+- Un écart, documenté : la clé de chiffrement est fixe (bouchon), pas
+  dérivée d'un Keystore/Keychain réel (voir ci-dessus). Le mécanisme de
+  chiffrement lui-même n'est pas un bouchon — il chiffre réellement,
+  vérifié par le test négatif sur fichier.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+11 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(vert, 0 warning)
+
+$ cargo check -p dengon-core --no-default-features --locked
+(vert — store absent de cette configuration, comme prévu)
+```
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`

@@ -327,3 +327,37 @@ _(aucun écart pour l'instant)_
 - **Doc de conception mise à jour ?** Non — ce n'est pas une divergence mais un
   **comblement**. À verser dans `04-architecture.md` §3 si l'équipe veut que la
   conception reste la référence complète du contrat.
+
+---
+
+### `store` : clé de chiffrement différée derrière un trait `KeySource` (US-207)
+
+- **Conception :** `04-architecture.md` §2 dit `store : persistance ...
+  chiffrement XChaCha20-Poly1305 champ par champ des colonnes sensibles
+  (B-3)` — dépend de `rusqlite`. `docs/synthese/06-securite.md` (et le
+  tableau repris en `03-ecarts-conception.md` pour l'US-112) attend que la
+  clé privée du nœud (donc, transitivement, celle qui protège les colonnes
+  chiffrées) vive de préférence en Keystore/Keychain, gérée par `identity`.
+- **Code :** `crates/dengon-core/src/store.rs` — `Store<K: KeySource>` est
+  paramétré par un trait `KeySource` (une méthode `field_key(&self) -> [u8;
+  32]`), pas câblé sur une vraie dérivation Keystore/Keychain.
+  `FixedKeySource` (clé fixe codée en dur) sert de bouchon pour les tests.
+- **Pourquoi :** `identity` (US-205), qui génère et garde la vraie clé, est
+  dans le **même sprint** (S2) que `store` (US-207) — même raison que
+  l'écart symétrique sur `ledger::Signer` (US-206, voir l'entrée
+  précédente) : la règle du projet interdit qu'une US dépende d'une autre
+  US du même sprint. Les deux US sont d'ailleurs attribuées à des personnes
+  différentes ce sprint (`docs/suivi/repartition-sprint2.md`).
+- **Conséquences :** le **mécanisme** de chiffrement est réel et vérifié
+  (XChaCha20-Poly1305, nonce aléatoire par appel, test négatif qui prouve
+  qu'un message écrit n'apparaît pas en clair dans le fichier `.db`) — ce
+  n'est pas un bouchon qui ne chiffre rien. Ce qui est un bouchon, c'est la
+  **clé** : `FixedKeySource` est une clé fixe, connue de quiconque lit le
+  code source. Tant qu'`identity` ne fournit pas une vraie clé dérivée
+  (idéalement jamais lisible en clair par l'application elle-même, via
+  Keystore/Keychain), les colonnes chiffrées ne protègent que contre une
+  lecture accidentelle du fichier `.db`, pas contre un attaquant qui a lu
+  le code source.
+- **Doc de conception mise à jour ?** Non — la conception reste la cible
+  réelle (clé dérivée, gérée par `identity`/Keystore). Documenté ici et
+  dans `modules/dengon-core.md`.
