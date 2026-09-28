@@ -156,7 +156,9 @@ impl Flags {
     pub const FRAGMENT: Self = Self(1 << 2);
     /// L'émetteur autorise le relais (`0` = strictement local, 1 saut).
     pub const RELAY_OK: Self = Self(1 << 3);
-    /// Payload complété par du PKCS#7 vers un [`super::consts::PAD_BUCKETS`].
+    /// Payload complété vers un [`super::consts::PAD_BUCKETS`] : préfixe de
+    /// longueur `u16` BE + zéros, **pas** PKCS#7 (limité à 255 octets de
+    /// bourrage) — voir `crypto::pad` et `docs/suivi/03-ecarts-conception.md`.
     pub const PADDED: Self = Self(1 << 4);
     /// Bits 5-7 : réservés, `0` à l'émission.
     pub const RESERVED_MASK: u8 = 0b1110_0000;

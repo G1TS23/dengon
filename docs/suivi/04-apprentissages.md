@@ -794,3 +794,102 @@ notre MSRV (1.85) et ça crée deux variantes de l'API selon la feature.
 
 **Où c'est utilisé :** `crates/dengon-core/src/protocol/codec/mod.rs`,
 `codec/app.rs`.
+
+### `snow` sans `getrandom` : fournir soi-même l'aléa via un `CryptoResolver`
+
+**C'est quoi :** `snow` obtient ses primitives (DH, hash, AEAD, RNG) par un
+*resolver*. Compilé sans `use-getrandom` (indispensable pour xtensa, Spike A),
+son `DefaultResolver` n'a plus de RNG : `resolve_rng()` renvoie `None` et tout
+`build_initiator()` échoue **au runtime**, pas à la compilation.
+**Pourquoi dans dengon :** `crypto::rng::CallerResolver` délègue tout au
+`DefaultResolver` sauf le RNG, pris dans un `RngCore + CryptoRng` passé par
+l'appelant (`OsRng` sur hôte, `esp_fill_random` sur ESP32, `ChaCha20Rng` graine
+fixe dans les tests). `snow` n'appelle `resolve_rng()` qu'**une fois** par état
+construit, donc le resolver le cède par `RefCell<Option<…>>::take()`.
+**Piège / surprise :** même le répondeur Noise `X`, qui ne tire aucune clé
+éphémère, exige un RNG pour se construire → `NoRng`, qui échoue toujours.
+Bonus : un RNG déterministe rend tout le transcript Noise reproductible, ce qui
+permet des vecteurs de conformité. On a vérifié que l'éphémère = les 32 premiers
+octets du RNG (`e.pub` en tête du message 1).
+**Où c'est utilisé :** `crates/dengon-core/src/crypto/rng.rs`,
+`crates/dengon-core/src/crypto/noise.rs` (`builder`, `open`).
+**Pour aller plus loin :** `snow/src/builder.rs` (`Builder::build`), Noise spec rev. 34 §5.
+
+### PKCS#7 ne sait pas bourrer plus de 255 octets
+
+**C'est quoi :** PKCS#7 écrit N fois l'octet N ; N tient sur un octet, donc le
+bourrage est limité à 255 octets. Conçu pour des blocs de chiffrement (16 o),
+pas pour des *buckets* de plusieurs centaines d'octets.
+**Pourquoi dans dengon :** la conception demandait PKCS#7 vers
+`[256, 512, 1024, 2048]` : impossible au-delà de 512. Remplacé par un préfixe
+de longueur `u16` + zéros (voir `03-ecarts-conception.md`).
+**Piège / surprise :** le défaut n'apparaît qu'aux gros buckets ; un test sur
+des messages courts serait passé.
+**Où c'est utilisé :** `crates/dengon-core/src/crypto/pad.rs`.
+
+### Recouper un transcript Noise sans bibliothèque Noise
+
+**C'est quoi :** un handshake Noise n'est qu'une suite de `MixHash` (SHA-256),
+`MixKey` (HKDF-HMAC-SHA256) et `EncryptAndHash` (ChaCha20-Poly1305, nonce =
+4 zéros ‖ compteur u64 **little-endian**, AD = `h`). Avec des éphémères fixés, on
+peut le réimplémenter en ~30 lignes de Python (`cryptography`).
+**Pourquoi dans dengon :** l'enveloppe Noise `X` des vecteurs
+(`tests/vectors/crypto_v0.json`) a été recalculée ainsi, identique octet par
+octet à `snow` — preuve indépendante que les vecteurs sont du vrai Noise.
+**Piège / surprise :** le nom de protocole (`Noise_X_25519_ChaChaPoly_SHA256`,
+31 o) fait ≤ 32 o : `h` initial = nom **complété de zéros**, pas son hash.
+**Où c'est utilisé :** vérification ponctuelle (script non versionné, voir journal).
+
+### Transport Noise sur un lien non fiable : nonce explicite + fenêtre anti-rejeu
+
+**C'est quoi :** en mode transport, Noise chiffre chaque message avec un
+compteur implicite (0, 1, 2…) que les deux côtés incrémentent. Si un message
+se perd ou arrive dans le désordre, le récepteur essaie le mauvais nonce et
+**tout** échoue ensuite. Sur UDP, WireGuard et DTLS envoient donc le compteur en
+clair avec le message et tiennent une **fenêtre glissante** (bitmap de 64 bits,
+RFC 6479) des nonces déjà vus pour refuser les rejeux.
+**Pourquoi dans dengon :** les `NOISE_MSG` sont relayés à travers le maillage ;
+pertes et désordre sont la norme. `snow` fournit `StatelessTransportState`
+(nonce passé en argument) ; la fenêtre est à écrire soi-même.
+**Piège / surprise :** (1) les tests « tout arrive dans l'ordre » passaient
+avec le transport standard : le bug n'est apparu qu'à la revue, en simulant une
+perte. (2) Ne mettre la fenêtre à jour **qu'après** authentification, sinon un
+attaquant envoie un nonce énorme forgé et fait rejeter tous les messages
+légitimes (test `xx_nonce_forge_ne_fait_pas_avancer_la_fenetre`).
+**Où c'est utilisé :** `crates/dengon-core/src/crypto/noise.rs` (`Session`,
+`ReplayWindow`).
+**Pour aller plus loin :** RFC 6479 ; WireGuard whitepaper §5.4.6.
+
+---
+
+### Garanties message par message d'un handshake Noise `XX` (§7.7 de la spec)
+
+**C'est quoi :** dans `XX` (`-> e` / `<- e, ee, s, es` / `-> s, se`), chaque
+message n'a pas les mêmes garanties. Le message 1 est émis **avant tout DH** :
+son payload part en clair. Le message 2 est chiffré, mais vers un initiateur
+qu'on n'a pas encore authentifié. Seuls le message 3 et le transport ont les
+garanties complètes (confidentialité + authentification mutuelle).
+**Pourquoi dans dengon :** `sync` sera tenté de glisser des métadonnées
+(version, capacités, inventaire) dans le handshake. `Handshake::write_message`
+refuse donc tout payload au message 1 (`PayloadNotAllowed`).
+**Piège / surprise :** padder le message 1 donnait l'illusion d'une
+protection : un `b"SECRETPAYLOAD"` se retrouvait tel quel dans les 288 octets
+émis (constaté en revue de #81). Et comme les tailles de handshake sont fixées
+par le motif quand les payloads sont vides, le padding ne cachait rien : il
+coûtait 768 octets par handshake.
+**Où c'est utilisé :** `crates/dengon-core/src/crypto/noise.rs`, doc de `Handshake`.
+**Pour aller plus loin :** <https://noiseprotocol.org/noise.html#payload-security-properties>.
+
+---
+
+### Les clés de transport Noise ne dépendent pas des payloads de handshake
+
+**C'est quoi :** `Split()` dérive les clés de transport de la *chaining key*
+`ck`, qui n'est mise à jour que par les DH (`MixKey`). Les payloads de handshake
+n'entrent que dans le *handshake hash* `h` (`MixHash`).
+**Pourquoi dans dengon :** en retirant le padding du handshake (revue #81), seuls
+les trois messages de handshake de `crypto_v0.json` ont changé ; les chiffrés de
+transport sont restés identiques octet par octet.
+**Piège / surprise :** on s'attendait à devoir régénérer tout le transcript.
+**Où c'est utilisé :** `crates/dengon-core/tests/vectors/crypto_v0.json`.
+**Pour aller plus loin :** spec Noise §5.2 (`MixKey`, `MixHash`, `Split`).

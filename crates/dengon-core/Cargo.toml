@@ -28,14 +28,21 @@ sha2 = { workspace = true }
 rusqlite = { workspace = true, optional = true }
 chacha20poly1305 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true }
+snow          = { workspace = true }
+curve25519-dalek = { workspace = true }
+hmac          = { workspace = true }
+rand_core     = { workspace = true }
+zeroize       = { workspace = true }
 
 [dev-dependencies]
-# Property tests (ledger, store, et le codec US-201 : decode(encode(p)) == p,
-# aucun panic sur des octets arbitraires).
-proptest = "1"
-# Lecture des vecteurs de conformité (tests/vectors_v0.json) — via `Value`,
-# pas de derive, donc `serde` n'est pas tiré comme dépendance de proc-macro.
-serde_json = "1"
+rand_chacha = { workspace = true }
+# Property tests (ledger, store, crypto, et le codec US-201 :
+# decode(encode(p)) == p, aucun panic sur des octets arbitraires).
+proptest    = { workspace = true }
+# Lecture des vecteurs de conformité (tests/vectors_v0.json, tests/vectors/
+# crypto_v0.json) — via `Value`, pas de derive, donc `serde` n'est pas tiré
+# comme dépendance de proc-macro.
+serde_json  = { workspace = true }
 
 [lints]
 workspace = true

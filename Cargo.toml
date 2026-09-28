@@ -72,6 +72,23 @@ uniffi = { version = "=0.28.3", default-features = false }
 # pour xtensa-esp32-none-elf. On n'active PAS `rand_core` : la génération de
 # clé (RNG) est fournie par l'appelant (firmware : esp_fill_random, US-307).
 ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
+# Noise XX / X (US-204). ÉPINGLÉ ≥ 0.10.0 : la 0.9.6 dépend de `getrandom` 0.2
+# en dur, sans backend pour xtensa (docs/synthese/06-securite.md §3, Spike A
+# point 1). Features = configuration exacte du Spike A ; PAS `use-getrandom` :
+# l'aléa du handshake est injecté par l'appelant (crypto::noise, `rand_core`).
+snow = { version = ">=0.10.0, <0.11", default-features = false, features = ["default-resolver", "use-curve25519", "use-chacha20poly1305", "use-sha2"] }
+# Clé publique X25519 de `StaticKeypair` (retour de revue #81) : c'est la
+# crate que `snow` utilise déjà, la version suit la sienne. Sans features par
+# défaut : ni `alloc`, ni tables précalculées (no_std, ESP32).
+curve25519-dalek = { version = "4.1", default-features = false }
+# recipient_tag = HMAC-SHA256(...)[0..16] (US-204).
+hmac      = { version = "0.12", default-features = false }
+rand_core = { version = "0.6", default-features = false }
+zeroize   = { version = "1", default-features = false }
+# Tests uniquement : RNG déterministe (vecteurs de conformité) et property tests.
+rand_chacha = { version = "0.3", default-features = false }
+proptest    = "1"
+serde_json  = "1"
 
 # ---------------------------------------------------------------------------
 # Lints centralisés (Cargo >= 1.74). C'est la « configuration clippy
