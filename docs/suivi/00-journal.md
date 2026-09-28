@@ -159,6 +159,57 @@ une seule ligne par module
   `dengon-sim`) viendra avec les US suivantes.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+## 2026-09-28 — US-209 : retours de revue #85 (OswinFreyr) sur `sync::routing`
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/routing.rs`,
+`crates/dengon-core/tests/routing_mock.rs`, `docs/suivi/`
+**Lot :** US-209, PR #85
+
+### Fait
+- **Point 1 — reconnexion** : `Router::bind_peer(link, peer, mono_ms)`.
+  L'anti-inondation est compté par `peerID` du voisin, reporté depuis le
+  lien au moment du lien, partagé entre liens vers le même pair, et
+  conservé après `link_down` jusqu'à ce que la fenêtre se vide (purge au
+  `bind_peer` suivant). Test `se_reconnecter_ne_rend_pas_de_quota_d_inondation`.
+- **Point 2 — seen-set 5 min vs 24 h** : un paquet dont l'âge atteint
+  `seen_ttl_ms` est accepté mais pas relayé (`NoRelayReason::Late`, ou
+  `Store` pour une enveloppe). Le seen-set retient une entrée jusqu'à
+  `max(réception, horodatage) + SEEN_TTL_S` (index par échéance), ce qui
+  garantit qu'un paquet encore relayable est toujours reconnu. `Deliver`
+  peut se répéter au-delà : dédup longue durée au `store`, documenté et
+  testé.
+- **Point 3 — horloges** : `Now { wall_ms, mono_ms }`. `poll_due`,
+  `next_deadline`, `RelayScheduled::at_ms`, fenêtres de quota et seen-set
+  en monotone ; murale pour `ClockSkew` / `Expired` / `Late` seulement.
+- **Point 4** : `Router::note_originated(&MsgId, timestamp_ms, Now)` ;
+  `tests/routing_mock.rs` l'appelle dans `Reseau::emettre`.
+- **Point 7** : ligne ajoutée au pipeline de la doc du module (quota de
+  lien avant la dédup ⇒ un doublon refusé par quota ne compte pas pour
+  l'annulation).
+- Doc du module : la signature n'est plus « `crypto` pas sur `main` ».
+- 11 tests unitaires ajoutés (43 au total).
+
+### Pourquoi / décisions
+- Garder la fenêtre du **lien** après `link_down` (piste a de la revue) ne
+  suffisait pas : le lien suivant a un autre `LinkId`. Seule l'identité du
+  pair permet de retrouver le quota, d'où la piste b.
+- Point 2 : ne pas relayer le tardif plutôt qu'un seen-set 24 h (mémoire
+  ESP32) ou un Bloom (faux positifs = messages perdus). Décision **à
+  valider à trois** avec le seuil de doublons.
+
+### Écarts vs conception
+- 3 entrées dans `03-ecarts-conception.md` (horizon du seen-set,
+  anti-inondation par `peerID`, deux horloges) ; l'entrée « trois
+  réglages » est annotée (« un lien = un pair » n'est plus vrai).
+
+### État après cette session
+- Branche **pas** rebasée : `origin/main` a 6 commits d'avance (US-201,
+  US-203/204/205, US-221) — rebase à faire avant merge. `bind_peer` et la dédup `Deliver` côté
+  `store` restent à brancher à l'intégration (US-211 / US-221).
+
+---
+
 ## 2026-09-28 — US-209 : `sync::routing` — TTL, dédup, jitter, clamp densité, quotas, anti-inondation
 
 **Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)

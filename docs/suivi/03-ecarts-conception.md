@@ -1167,7 +1167,8 @@ _(aucun écart pour l'instant)_
   lien, doublons compris, fenêtre 1 s), `BROADCAST_TTL_MAX = 3` (TTL relayé
   max. pour `ANNOUNCE` / `LOG_ATTEST`), `DUP_CANCEL_THRESHOLD = 2` (voir
   l'écart ci-dessus). Le quota « par `peerID` » n'est pas distinct du quota
-  par lien : un lien = un pair au MVP.
+  par lien : un lien = un pair au MVP. **Corrigé en revue #85** : voir
+  l'entrée « anti-inondation par `peerID` » plus bas.
 - **Raison :** `protocol::consts` est un contrat « revue à trois » ; ces
   valeurs ne sont pas lues par les autres implémentations (firmware,
   dashboard) et peuvent varier sans casser l'interopérabilité.
@@ -1192,4 +1193,89 @@ _(aucun écart pour l'instant)_
   après son premier passage peut être accepté une seconde fois par un
   nœud qui l'a oublié. Déjà le cas dans la conception (seen-set à 300 s) ;
   `conv_seq` (couche applicative) le rattrape côté destinataire.
+  **Mise à jour (revue #85, point 2)** : ce second passage n'est plus
+  **relayé** — voir l'entrée « horizon du seen-set » ci-dessous.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `sync::routing` : un paquet plus vieux que l'horizon du seen-set est accepté mais pas relayé (US-209, revue #85 point 2)
+
+- **Prévu :** `synthese/05` §6.1 : seen-set de `SEEN_TTL_S` = 300 s ; §6.5 /
+  §7 : un message vit `MSG_TTL_S` = 24 h. La conception ne dit pas ce qui
+  arrive quand un porteur revient après l'oubli du seen-set.
+- **Réel :** si l'âge du paquet (horloge murale − `timestamp_ms`) atteint
+  `seen_ttl_ms`, le routeur l'accepte (`Deliver` s'il est pour moi, `Store`
+  pour une enveloppe, `NoRelay(Late)` sinon) mais **ne le relaie pas**.
+  L'entrée du seen-set vit jusqu'à `max(réception, horodatage) +
+  SEEN_TTL_S` (index trié par échéance), donc un paquet encore relayable
+  est toujours reconnu, même horodaté jusqu'à 2 h dans le futur.
+- **Raison :** signalé en revue par `OswinFreyr` : sans cette règle, chaque
+  retour d'un porteur (1 h après, par ex.) relançait un flood complet chez
+  tous les nœuds qui l'avaient déjà relayé, et le destinataire recevait un
+  second `Deliver`. Aligner le seen-set sur 24 h coûterait trop de mémoire
+  (ESP32 sans PSRAM) ; un filtre de Bloom 24 h ajoute des faux positifs
+  (messages perdus). Ne relayer que du frais borne le coût à zéro flood
+  supplémentaire, et le transport du tardif passe par la livraison directe
+  ou le dépôt (`sync::courier`, US-212).
+- **Conséquences :** (1) un `Deliver` peut se **répéter** au-delà de
+  l'horizon : la dédup longue durée des messages livrés revient au `store`
+  (clé `msgID`) — à brancher à l'intégration (US-211). (2) Un message non
+  scellé (`NOISE_MSG`) porté plus de 5 min ne progresse plus en multi-saut :
+  il n'atteint son destinataire que par contact direct avec le porteur.
+  Le store-and-forward multi-saut passe par `SEALED_ENVELOPE`. (3) Un
+  recul de l'horloge murale entre deux passages peut encore laisser passer
+  un relais de plus (entrée expirée en monotone, paquet redevenu « frais »
+  en mural) : un par saut d'horloge, borné.
+- **Doc de conception mise à jour ?** non — **à valider à trois** avec le
+  seuil de doublons ; à reporter dans `synthese/05` §6.1 si retenu.
+
+---
+
+### 2026-09-28 — `sync::routing` : anti-inondation par `peerID` du voisin, conservé après déconnexion (US-209, revue #85 point 1)
+
+- **Prévu :** `synthese/05` §6.4 : `FLOOD_MAX_PER_MIN_PEER` nouveaux
+  `msgID` par minute **par `peerID`**. La première version comptait par
+  **lien** et supprimait la fenêtre à `link_down` ; l'écart « trois
+  réglages » ci-dessus disait « un lien = un pair au MVP ».
+- **Réel :** `Router::bind_peer(link, peer, mono_ms)` associe un lien au
+  `peerID` authentifié du voisin. L'anti-inondation est alors compté par
+  `peerID` (les `msgID` déjà comptés sur le lien sont reportés, plusieurs
+  liens vers le même pair partagent le quota) et la fenêtre **survit à la
+  déconnexion** jusqu'à se vider (60 s). Un lien jamais lié garde une
+  fenêtre par lien.
+- **Raison :** signalé en revue par `OswinFreyr` : `LinkId` est un compteur
+  monotone, donc un voisin malveillant pouvait envoyer 20 `msgID`, se
+  reconnecter, et repartir avec un quota neuf. Garder la fenêtre du lien
+  après `link_down` n'aurait rien changé (le lien suivant a un autre
+  `LinkId`) : il faut l'identité du pair, que le transport ignore
+  volontairement (`LinkId` n'est pas un `peerID`).
+- **Conséquences :** l'appelant doit appeler `bind_peer` dès qu'il a
+  authentifié le voisin (handshake Noise, ou `ANNOUNCE` signé reçu en
+  direct) — à brancher à l'intégration. Avant ce moment, un pair peut
+  toujours contourner le quota en se reconnectant. Un attaquant qui change
+  d'identité à chaque reconnexion (Sybil) n'est pas couvert non plus :
+  c'est hors de portée d'un quota par voisin. La table des pairs est
+  purgée à chaque `bind_peer` (pairs sans lien dont la fenêtre est vide).
+- **Doc de conception mise à jour ?** non — c'est l'implémentation qui
+  rejoint la conception.
+
+---
+
+### 2026-09-28 — `sync::routing` : deux horloges, murale et monotone (US-209, revue #85 point 3)
+
+- **Prévu :** rien de précis ; la première version prenait un seul
+  `now_ms` (UTC) pour tout.
+- **Réel :** `Now { wall_ms, mono_ms }`. La murale ne sert qu'à comparer à
+  `timestamp_ms` (`ClockSkew`, `Expired`, `Late`) ; quotas, seen-set et
+  échéances du jitter suivent la monotone. `poll_due`, `next_deadline` et
+  `RelayScheduled::at_ms` sont en temps **monotone**.
+- **Raison :** signalé en revue par `OswinFreyr` : un recul de l'heure
+  (réglage manuel, synchro réseau, ESP32 qui reçoit l'heure après son boot)
+  gelait les relais en attente, empêchait les fenêtres de quota et le
+  seen-set d'expirer, et bloquait un lien saturé pendant toute la durée
+  du saut. Changer la signature coûte peu avant l'intégration.
+- **Conséquences :** chaque hôte fournit les deux horloges
+  (`Instant`/uptime + heure système sur desktop, `esp_timer_get_time` +
+  heure SNTP sur ESP32).
 - **Doc de conception mise à jour ?** non.

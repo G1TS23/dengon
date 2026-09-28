@@ -15,8 +15,18 @@
 //! dépend de `dengon-core`, et utilise `std`. Le routeur ne peut donc pas
 //! l'importer — il est **générique** sur l'identifiant de lien `L`, que
 //! l'appelant instancie avec `dengon_ble::LinkId`. Même principe pour le
-//! temps (`now_ms` passé en argument) et l'aléa (graine au constructeur) :
+//! temps ([`Now`] passé en argument) et l'aléa (graine au constructeur) :
 //! c'est ce qui rend le module `no_std` **et** déterministe à graine fixe.
+//!
+//! # Deux horloges
+//!
+//! [`Now`] porte l'**horloge murale** (`wall_ms`, UTC, même référence que
+//! `Header::timestamp_ms`) et une **horloge monotone** (`mono_ms`, origine
+//! libre). La murale ne sert qu'à comparer à l'horodatage du paquet
+//! (`ClockSkew`, `Expired`, retard) ; tout le reste — quotas, seen-set,
+//! échéances du jitter — suit la monotone. Ainsi un recul de l'heure
+//! (réglage manuel, synchro réseau, ESP32 qui reçoit l'heure après son boot)
+//! ne gèle ni les relais en attente ni les fenêtres de quota.
 //!
 //! # Pipeline (`synthese/05` §6.1)
 //!
@@ -25,31 +35,59 @@
 //! lien connu ?                       → Reject(UnknownLink)
 //! horodatage > now + 2 h             → Reject(ClockSkew)
 //! horodatage < now − MSG_TTL_S       → Reject(Expired)
-//! quota du lien (paquets / s)        → Reject(LinkQuota)
+//! quota du lien (paquets / s)        → Reject(LinkQuota)   (avant la dédup, pour
+//!                                      borner les rejeux : un doublon refusé ici
+//!                                      ne compte donc pas pour l'annulation)
 //! msgID déjà vu                      → Reject(Duplicate)  (+ annule le relais en
 //!                                      attente au DUP_CANCEL_THRESHOLDᵉ doublon)
-//! > FLOOD_MAX_PER_MIN_PEER nouveaux  → Reject(FloodLimited)
+//! > FLOOD_MAX_PER_MIN_PEER nouveaux  → Reject(FloodLimited)  (par peerID du
+//!                                      voisin s'il est lié, sinon par lien)
 //! seen-set.insert(msgID)
 //! adressé à moi                      → Deliver
 //! pas RELAY_OK / ttl ≤ 1             → Store (enveloppe) | NoRelay
+//! plus vieux que l'horizon du seen-set → Store (enveloppe) | NoRelay(Late)
 //! ttl' = min(ttl − 1, clamp densité, clamp broadcast)
 //! jitter RELAY_JITTER_MS             → RelayScheduled
 //! ```
 //!
+//! # Seen-set court, messages acceptés 24 h
+//!
+//! Le seen-set retient un `msgID` [`SEEN_TTL_S`] (5 min) ; un message reste
+//! acceptable [`MSG_TTL_S`] (24 h) pour le store-and-forward. Sans précaution,
+//! un porteur qui revient 1 h plus tard relancerait un flood complet chez
+//! des nœuds qui ont oublié l'avoir relayé. Règle retenue : un paquet dont
+//! l'âge (horloge murale) dépasse l'horizon du seen-set est **accepté mais
+//! pas relayé** ([`NoRelayReason::Late`]) — le flood ne transporte que du
+//! frais, le tardif passe par la livraison directe ou le dépôt
+//! (`sync::courier`). L'entrée du seen-set vit jusqu'à
+//! `max(réception, horodatage) + SEEN_TTL_S`, si bien qu'un paquet encore
+//! « frais » est toujours reconnu (y compris horodaté dans le futur).
+//!
+//! Conséquence pour l'appelant : un [`Decision::Deliver`] peut se **répéter**
+//! pour le même `msgID` au-delà de l'horizon (porteur de retour). La dédup
+//! longue durée des messages livrés revient au `store` (clé `msgID`).
+//!
 //! # Préconditions (hors de ce module)
 //!
-//! - **Signature** : vérifiée **en amont** par l'appelant (`crypto` n'est pas
-//!   encore sur `main`). Un paquet dont la signature est fausse ne doit pas
-//!   arriver ici, sinon il pollue le seen-set.
+//! - **Signature** : vérifiée **en amont** par l'appelant (`crypto`, US-203).
+//!   Un paquet dont la signature est fausse ne doit pas arriver ici, sinon il
+//!   pollue le seen-set.
 //! - **`msgID`** : calculé par l'appelant (`SHA-256(sender ‖ ts ‖ type ‖
 //!   payload)`, A-9). Le routeur le prend tel quel.
+//! - **Identité du voisin** : le transport ne connaît que des liens. Dès que
+//!   l'appelant a authentifié le `peerID` au bout d'un lien, il appelle
+//!   [`Router::bind_peer`] ; l'anti-inondation suit alors ce `peerID` et
+//!   survit aux reconnexions.
+//! - **Émissions locales** : tout message émis ou rejoué (outbox) par le nœud
+//!   passe par [`Router::note_originated`], pour qu'une copie qui revient ne
+//!   soit pas relayée comme nouvelle.
 //! - **Fragments** : le réassemblage L2 (US-202) a lieu avant ou après,
 //!   au choix de l'appelant ; le routeur traite un `Fragment` comme un paquet.
 //! - **ACK qui purge une file** : un `ACK` est chiffré dans Noise, le routeur
 //!   ne voit pas quel message il acquitte. `status` / `courier` (US-211/212)
 //!   appellent [`Router::cancel`] quand ils l'apprennent.
 
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec::Vec;
 use core::ops::RangeInclusive;
 
@@ -91,6 +129,26 @@ const FLOOD_WINDOW_MS: u64 = 60_000;
 /// Fenêtre glissante du quota par lien, en ms (« par seconde »).
 const LINK_WINDOW_MS: u64 = 1_000;
 
+/// L'heure vue par le routeur : horloge murale **et** horloge monotone.
+///
+/// Voir « Deux horloges » dans la doc du module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Now {
+    /// Horloge murale, ms UTC (même référence que `Header::timestamp_ms`).
+    /// Peut sauter, y compris en arrière.
+    pub wall_ms: u64,
+    /// Horloge monotone, ms, origine libre (uptime). Ne recule jamais.
+    pub mono_ms: u64,
+}
+
+impl Now {
+    /// Construit l'instant présent à partir des deux horloges.
+    #[must_use]
+    pub const fn new(wall_ms: u64, mono_ms: u64) -> Self {
+        Self { wall_ms, mono_ms }
+    }
+}
+
 /// Paramètres du routeur. [`RoutingConfig::new`] reprend les valeurs de
 /// `protocol::consts` ; les champs publics permettent aux tests (et à
 /// `dengon-sim`) d'explorer d'autres réglages.
@@ -101,6 +159,7 @@ pub struct RoutingConfig {
     /// Capacité du seen-set ([`SEEN_SET_CAP`]).
     pub seen_cap: usize,
     /// Durée de rétention d'un `msgID` dans le seen-set, en ms ([`SEEN_TTL_S`]).
+    /// C'est aussi l'âge au-delà duquel un paquet n'est plus relayé.
     pub seen_ttl_ms: u64,
     /// Durée de vie applicative d'un message, en ms ([`MSG_TTL_S`]).
     pub msg_ttl_ms: u64,
@@ -172,6 +231,9 @@ pub enum NoRelayReason {
     TtlExhausted,
     /// [`Flags::RELAY_OK`] absent.
     RelayNotAllowed,
+    /// Plus vieux que l'horizon du seen-set ([`RoutingConfig::seen_ttl_ms`]) :
+    /// le relayer risquerait un second flood chez des nœuds qui l'ont oublié.
+    Late,
 }
 
 /// Verdict du routeur sur un paquet reçu.
@@ -183,7 +245,8 @@ pub enum NoRelayReason {
 pub enum Decision {
     /// À jeter.
     Reject(RejectReason),
-    /// Adressé au nœud local : à traiter ici, jamais relayé.
+    /// Adressé au nœud local : à traiter ici, jamais relayé. Peut se répéter
+    /// au-delà de l'horizon du seen-set : dédup longue durée côté `store`.
     Deliver,
     /// Enveloppe scellée qu'on ne relaie pas : à **déposer** (collecte
     /// ultérieure par le destinataire, `sync::courier`).
@@ -193,7 +256,8 @@ pub enum Decision {
     /// Relais programmé : [`Router::poll_due`] le rendra à `at_ms`, avec ce
     /// `ttl`, sauf doublon reçu entre-temps.
     RelayScheduled {
-        /// Échéance du relais (heure de réception + jitter), en ms.
+        /// Échéance du relais (réception + jitter), en ms d'horloge
+        /// **monotone**.
         at_ms: u64,
         /// TTL à écrire dans le paquet relayé.
         ttl: u8,
@@ -249,6 +313,10 @@ pub struct RoutingStats {
 pub struct Router<L> {
     cfg: RoutingConfig,
     links: BTreeMap<L, LinkState>,
+    /// Anti-inondation des voisins identifiés, **conservé après leur
+    /// déconnexion** tant que la fenêtre n'est pas vide : se reconnecter ne
+    /// rend pas de quota.
+    peers: BTreeMap<PeerId, RateWindow>,
     seen: SeenSet,
     pending: BTreeMap<MsgId, Pending<L>>,
     rng: SplitMix64,
@@ -263,6 +331,7 @@ impl<L: Copy + Ord> Router<L> {
             seen: SeenSet::new(cfg.seen_cap, cfg.seen_ttl_ms),
             cfg,
             links: BTreeMap::new(),
+            peers: BTreeMap::new(),
             pending: BTreeMap::new(),
             rng: SplitMix64(seed),
             stats: RoutingStats::default(),
@@ -274,10 +343,39 @@ impl<L: Copy + Ord> Router<L> {
         self.links.entry(link).or_default();
     }
 
+    /// Le voisin au bout de `link` est authentifié comme `peer` (handshake
+    /// Noise, ou `ANNOUNCE` signé reçu en direct).
+    ///
+    /// À partir de là, son anti-inondation est compté **par `peerID`** : les
+    /// `msgID` déjà comptés sur le lien sont reportés, plusieurs liens vers le
+    /// même pair partagent le quota, et une reconnexion le retrouve entamé.
+    /// Sans effet sur un lien inconnu. `mono_ms` sert à purger les fenêtres
+    /// des pairs partis dont le quota est redevenu plein.
+    pub fn bind_peer(&mut self, link: L, peer: PeerId, mono_ms: u64) {
+        let Some(lien) = self.links.get_mut(&link) else {
+            return;
+        };
+        if lien.peer == Some(peer) {
+            return;
+        }
+        lien.peer = Some(peer);
+        let deja = core::mem::take(&mut lien.new_ids);
+        self.peers.entry(peer).or_default().absorb(deja);
+
+        // Purge : un pair sans lien dont la fenêtre est vide n'a plus rien à
+        // retenir. Borne la table au nombre de pairs actifs sur 60 s.
+        let lies: BTreeSet<PeerId> = self.links.values().filter_map(|l| l.peer).collect();
+        self.peers.retain(|p, w| {
+            w.prune(mono_ms, FLOOD_WINDOW_MS);
+            lies.contains(p) || !w.is_empty()
+        });
+    }
+
     /// Un voisin est parti (`TransportEvent::PeerDisconnected`).
     ///
     /// Les relais en attente dont il est la **source** sont conservés : le
-    /// paquet reste valable pour les autres voisins.
+    /// paquet reste valable pour les autres voisins. Son quota
+    /// d'anti-inondation reste en mémoire s'il était lié à un `peerID`.
     pub fn link_down(&mut self, link: L) {
         self.links.remove(&link);
     }
@@ -312,8 +410,9 @@ impl<L: Copy + Ord> Router<L> {
         self.pending.len()
     }
 
-    /// Échéance du prochain relais en attente, pour que la boucle d'événements
-    /// de l'appelant sache quand rappeler [`Router::poll_due`].
+    /// Échéance (horloge monotone) du prochain relais en attente, pour que la
+    /// boucle d'événements de l'appelant sache quand rappeler
+    /// [`Router::poll_due`].
     #[must_use]
     pub fn next_deadline(&self) -> Option<u64> {
         self.pending.values().map(|p| p.deadline).min()
@@ -330,13 +429,22 @@ impl<L: Copy + Ord> Router<L> {
         annule
     }
 
-    /// Passe un paquet reçu de `from` dans le pipeline (voir la doc du module).
+    /// Inscrit au seen-set un message **émis par ce nœud** (création ou rejeu
+    /// depuis l'outbox), sans programmer de relais : si une copie revient par
+    /// un voisin, elle sera vue comme un doublon.
     ///
-    /// `now_ms` : horloge murale du nœud, ms UTC (même référence que
-    /// `Header::timestamp_ms`).
-    pub fn on_packet(&mut self, from: L, hdr: &Header, msg_id: &MsgId, now_ms: u64) -> Decision {
+    /// `timestamp_ms` : horodatage de l'en-tête émis (il peut être ancien pour
+    /// un rejeu).
+    pub fn note_originated(&mut self, msg_id: &MsgId, timestamp_ms: u64, now: Now) {
+        self.seen.expire(now.mono_ms);
+        self.seen
+            .insert(*msg_id, now.mono_ms, avance_ms(timestamp_ms, now));
+    }
+
+    /// Passe un paquet reçu de `from` dans le pipeline (voir la doc du module).
+    pub fn on_packet(&mut self, from: L, hdr: &Header, msg_id: &MsgId, now: Now) -> Decision {
         self.stats.received += 1;
-        let decision = self.decide(from, hdr, msg_id, now_ms);
+        let decision = self.decide(from, hdr, msg_id, now);
         match decision {
             Decision::Reject(motif) => {
                 self.stats.rejected += 1;
@@ -355,17 +463,18 @@ impl<L: Copy + Ord> Router<L> {
         decision
     }
 
-    /// Rend les relais dont le jitter est écoulé à `now_ms`, par échéance
-    /// croissante puis `msgID` croissant (ordre déterministe).
+    /// Rend les relais dont le jitter est écoulé à `mono_ms` (horloge
+    /// monotone), par échéance croissante puis `msgID` croissant (ordre
+    /// déterministe).
     ///
     /// Les cibles sont calculées **maintenant** : un voisin arrivé pendant le
     /// jitter est servi, un voisin parti ne l'est pas. Un relais sans aucune
     /// cible est abandonné (compté dans [`RoutingStats::relays_without_target`]).
-    pub fn poll_due(&mut self, now_ms: u64) -> Vec<RelayOrder<L>> {
+    pub fn poll_due(&mut self, mono_ms: u64) -> Vec<RelayOrder<L>> {
         let mut echus: Vec<(u64, MsgId)> = self
             .pending
             .iter()
-            .filter(|(_, p)| p.deadline <= now_ms)
+            .filter(|(_, p)| p.deadline <= mono_ms)
             .map(|(id, p)| (p.deadline, *id))
             .collect();
         echus.sort_unstable();
@@ -395,7 +504,7 @@ impl<L: Copy + Ord> Router<L> {
         ordres
     }
 
-    fn decide(&mut self, from: L, hdr: &Header, msg_id: &MsgId, now_ms: u64) -> Decision {
+    fn decide(&mut self, from: L, hdr: &Header, msg_id: &MsgId, now: Now) -> Decision {
         use Decision::Reject;
 
         if hdr.version != PROTO_VERSION {
@@ -408,13 +517,15 @@ impl<L: Copy + Ord> Router<L> {
             return Reject(RejectReason::UnknownLink);
         };
 
-        // Fraîcheur. La tolérance ±2 h de `synthese/05` §6.4 ne vaut que vers
-        // le futur : vers le passé, un message porté en store-and-forward a
-        // légitimement jusqu'à MSG_TTL_S (24 h) — voir 03-ecarts-conception.
-        if hdr.timestamp_ms > now_ms.saturating_add(TIMESTAMP_TOLERANCE_MS) {
+        // Fraîcheur (horloge murale). La tolérance ±2 h de `synthese/05` §6.4
+        // ne vaut que vers le futur : vers le passé, un message porté en
+        // store-and-forward a légitimement jusqu'à MSG_TTL_S (24 h) — voir
+        // 03-ecarts-conception.
+        if hdr.timestamp_ms > now.wall_ms.saturating_add(TIMESTAMP_TOLERANCE_MS) {
             return Reject(RejectReason::ClockSkew);
         }
-        if now_ms.saturating_sub(hdr.timestamp_ms) > self.cfg.msg_ttl_ms {
+        let age_ms = now.wall_ms.saturating_sub(hdr.timestamp_ms);
+        if age_ms > self.cfg.msg_ttl_ms {
             return Reject(RejectReason::Expired);
         }
 
@@ -422,12 +533,12 @@ impl<L: Copy + Ord> Router<L> {
         // pourrait saturer le nœud en rejouant un seul msgID.
         if !lien
             .packets
-            .try_take(now_ms, LINK_WINDOW_MS, self.cfg.link_max_pkt_per_s)
+            .try_take(now.mono_ms, LINK_WINDOW_MS, self.cfg.link_max_pkt_per_s)
         {
             return Reject(RejectReason::LinkQuota);
         }
 
-        self.seen.expire(now_ms);
+        self.seen.expire(now.mono_ms);
         if self.seen.contains(msg_id) {
             // « Écouter avant de rediffuser » : assez de voisins l'ont déjà
             // rediffusé pendant notre jitter, on s'abstient.
@@ -442,17 +553,20 @@ impl<L: Copy + Ord> Router<L> {
             return Reject(RejectReason::Duplicate);
         }
 
-        // Anti-inondation : seuls les msgID *nouveaux* comptent. Un msgID
-        // refusé ici n'entre pas au seen-set — un voisin honnête pourra le
-        // relivrer plus tard.
-        if !lien
-            .new_ids
-            .try_take(now_ms, FLOOD_WINDOW_MS, self.cfg.flood_max_per_min)
-        {
+        // Anti-inondation : seuls les msgID *nouveaux* comptent, par peerID
+        // du voisin s'il est connu (survit aux reconnexions), sinon par lien.
+        // Un msgID refusé ici n'entre pas au seen-set — un voisin honnête
+        // pourra le relivrer plus tard.
+        let fenetre = match lien.peer {
+            Some(p) => self.peers.entry(p).or_default(),
+            None => &mut lien.new_ids,
+        };
+        if !fenetre.try_take(now.mono_ms, FLOOD_WINDOW_MS, self.cfg.flood_max_per_min) {
             return Reject(RejectReason::FloodLimited);
         }
 
-        self.seen.insert(*msg_id, now_ms);
+        self.seen
+            .insert(*msg_id, now.mono_ms, avance_ms(hdr.timestamp_ms, now));
 
         if hdr.recipient_id == Some(self.cfg.local_id) {
             return Decision::Deliver;
@@ -471,6 +585,11 @@ impl<L: Copy + Ord> Router<L> {
         if hdr.ttl <= 1 {
             return pas_de_relais(NoRelayReason::TtlExhausted);
         }
+        // Au-delà de l'horizon du seen-set, les nœuds qui l'ont déjà relayé
+        // l'ont oublié : le relayer relancerait un flood complet.
+        if age_ms >= self.cfg.seen_ttl_ms {
+            return pas_de_relais(NoRelayReason::Late);
+        }
 
         let mut ttl = hdr.ttl - 1;
         if self.links.len() >= usize::from(self.cfg.dense_links) {
@@ -486,7 +605,7 @@ impl<L: Copy + Ord> Router<L> {
             return pas_de_relais(NoRelayReason::TtlExhausted);
         }
 
-        let at_ms = now_ms.saturating_add(self.draw_jitter());
+        let at_ms = now.mono_ms.saturating_add(self.draw_jitter());
         self.pending.insert(
             *msg_id,
             Pending {
@@ -509,9 +628,18 @@ impl<L: Copy + Ord> Router<L> {
     }
 }
 
+/// Avance de l'horodatage d'un paquet sur l'horloge murale locale (0 s'il est
+/// dans le passé). Prolonge d'autant sa rétention au seen-set : le paquet
+/// reste « frais » (donc relayable) jusqu'à `horodatage + SEEN_TTL_S`, il doit
+/// rester reconnu jusque-là.
+fn avance_ms(timestamp_ms: u64, now: Now) -> u64 {
+    timestamp_ms.saturating_sub(now.wall_ms)
+}
+
 /// Un relais qui attend la fin de son jitter.
 #[derive(Debug, Clone, Copy)]
 struct Pending<L> {
+    /// Échéance, horloge monotone.
     deadline: u64,
     ttl: u8,
     source: L,
@@ -519,16 +647,19 @@ struct Pending<L> {
     dups: u8,
 }
 
-/// État par voisin : deux fenêtres glissantes.
+/// État par lien.
 #[derive(Debug, Default)]
 struct LinkState {
     /// Tous les paquets reçus (quota par lien, 1 s).
     packets: RateWindow,
-    /// Nouveaux msgID acceptés (anti-inondation, 60 s).
+    /// Nouveaux msgID acceptés (anti-inondation, 60 s), tant que le lien
+    /// n'est pas lié à un `peerID`.
     new_ids: RateWindow,
+    /// `peerID` authentifié du voisin ([`Router::bind_peer`]).
+    peer: Option<PeerId>,
 }
 
-/// Fenêtre glissante : horodatages des événements acceptés.
+/// Fenêtre glissante : horodatages monotones des événements acceptés.
 ///
 /// Ne retient que les événements **acceptés**, donc sa taille est bornée par
 /// `max` : pas de croissance mémoire sous flood.
@@ -536,9 +667,8 @@ struct LinkState {
 struct RateWindow(VecDeque<u64>);
 
 impl RateWindow {
-    /// Accepte un événement à `now` s'il en reste moins de `max` dans la
-    /// fenêtre `[now − window, now]`.
-    fn try_take(&mut self, now: u64, window: u64, max: u16) -> bool {
+    /// Oublie les événements sortis de la fenêtre `[now − window, now]`.
+    fn prune(&mut self, now: u64, window: u64) {
         while self
             .0
             .front()
@@ -546,25 +676,47 @@ impl RateWindow {
         {
             self.0.pop_front();
         }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Accepte un événement à `now` s'il en reste moins de `max` dans la
+    /// fenêtre `[now − window, now]`.
+    fn try_take(&mut self, now: u64, window: u64, max: u16) -> bool {
+        self.prune(now, window);
         if self.0.len() >= usize::from(max) {
             return false;
         }
         self.0.push_back(now);
         true
     }
+
+    /// Fusionne les événements d'une autre fenêtre (report du quota d'un lien
+    /// sur le `peerID` qu'on vient de lui associer).
+    fn absorb(&mut self, autre: RateWindow) {
+        if autre.0.is_empty() {
+            return;
+        }
+        let mut tout: Vec<u64> = self.0.drain(..).chain(autre.0).collect();
+        tout.sort_unstable();
+        self.0 = tout.into();
+    }
 }
 
-/// Seen-set borné : `msgID` → heure d'insertion, éviction du plus ancien.
+/// Seen-set borné : `msgID` → échéance (horloge monotone).
 ///
-/// Un `msgID` n'est inséré qu'une fois (on ne rafraîchit pas un doublon), donc
-/// l'ordre d'insertion est aussi l'ordre d'âge : la file suffit, pas besoin de
-/// LRU plus fin.
+/// L'échéance d'une entrée dépend de l'horodatage du paquet ([`avance_ms`]),
+/// donc l'ordre d'insertion n'est plus l'ordre d'expiration : un index trié
+/// par échéance remplace la simple file. Plein, il évince l'entrée qui
+/// expirerait le plus tôt.
 #[derive(Debug)]
 struct SeenSet {
     cap: usize,
     ttl_ms: u64,
     by_id: BTreeMap<MsgId, u64>,
-    order: VecDeque<(u64, MsgId)>,
+    by_deadline: BTreeSet<(u64, MsgId)>,
 }
 
 impl SeenSet {
@@ -573,7 +725,7 @@ impl SeenSet {
             cap,
             ttl_ms,
             by_id: BTreeMap::new(),
-            order: VecDeque::new(),
+            by_deadline: BTreeSet::new(),
         }
     }
 
@@ -585,28 +737,39 @@ impl SeenSet {
         self.by_id.contains_key(id)
     }
 
-    /// Oublie les entrées plus vieilles que `ttl_ms`.
+    /// Oublie les entrées échues à `now`.
     fn expire(&mut self, now: u64) {
-        while let Some(&(t, id)) = self.order.front() {
-            if now.saturating_sub(t) < self.ttl_ms {
+        while let Some(&(echeance, id)) = self.by_deadline.first() {
+            if echeance > now {
                 break;
             }
-            self.order.pop_front();
+            self.by_deadline.pop_first();
             self.by_id.remove(&id);
         }
     }
 
-    fn insert(&mut self, id: MsgId, now: u64) {
+    /// Retient `id` jusqu'à `now + ttl + prolongation`. Une entrée existante
+    /// n'est que prolongée, jamais raccourcie.
+    fn insert(&mut self, id: MsgId, now: u64, prolongation: u64) {
         if self.cap == 0 {
             return;
         }
-        while self.order.len() >= self.cap {
-            if let Some((_, ancien)) = self.order.pop_front() {
-                self.by_id.remove(&ancien);
+        let echeance = now.saturating_add(self.ttl_ms).saturating_add(prolongation);
+        if let Some(&ancienne) = self.by_id.get(&id) {
+            if ancienne >= echeance {
+                return;
+            }
+            self.by_deadline.remove(&(ancienne, id));
+        } else {
+            while self.by_id.len() >= self.cap {
+                let Some((_, evince)) = self.by_deadline.pop_first() else {
+                    break;
+                };
+                self.by_id.remove(&evince);
             }
         }
-        self.order.push_back((now, id));
-        self.by_id.insert(id, now);
+        self.by_id.insert(id, echeance);
+        self.by_deadline.insert((echeance, id));
     }
 }
 
@@ -633,7 +796,13 @@ mod tests {
 
     const MOI: PeerId = [0xAA; 8];
     const AUTRE: PeerId = [0xBB; 8];
+    const VOISIN: PeerId = [0xCC; 8];
     const T0: u64 = 1_800_000_000_000;
+
+    /// Instant où les deux horloges coïncident (cas nominal des tests).
+    fn a(t: u64) -> Now {
+        Now::new(t, t)
+    }
 
     fn id(n: u32) -> MsgId {
         let mut m = [0u8; 32];
@@ -685,14 +854,14 @@ mod tests {
         let mut r = routeur(3);
         let h = entete(TTL_DEFAULT);
         assert!(matches!(
-            r.on_packet(0, &h, &id(1), T0),
+            r.on_packet(0, &h, &id(1), a(T0)),
             Decision::RelayScheduled { .. }
         ));
         // Le doublon arrive APRÈS l'émission : déjà vu, rien de plus.
         let ordres = r.poll_due(T0 + 1_000);
         assert_eq!(ordres.len(), 1);
         assert_eq!(
-            r.on_packet(1, &h, &id(1), T0 + 1_001),
+            r.on_packet(1, &h, &id(1), a(T0 + 1_001)),
             Decision::Reject(RejectReason::Duplicate)
         );
         assert!(r.poll_due(T0 + 5_000).is_empty());
@@ -703,13 +872,13 @@ mod tests {
     fn deux_doublons_pendant_le_jitter_annulent_le_relais() {
         let mut r = routeur(3);
         let h = entete(TTL_DEFAULT);
-        let Decision::RelayScheduled { at_ms, .. } = r.on_packet(0, &h, &id(1), T0) else {
+        let Decision::RelayScheduled { at_ms, .. } = r.on_packet(0, &h, &id(1), a(T0)) else {
             panic!("relais attendu");
         };
         assert_eq!(r.next_deadline(), Some(at_ms));
         for (lien, t) in [(1, T0 + 1), (2, T0 + 2)] {
             assert_eq!(
-                r.on_packet(lien, &h, &id(1), t),
+                r.on_packet(lien, &h, &id(1), a(t)),
                 Decision::Reject(RejectReason::Duplicate)
             );
         }
@@ -722,8 +891,8 @@ mod tests {
     fn un_seul_doublon_ne_suffit_pas_par_defaut() {
         let mut r = routeur(3);
         let h = entete(TTL_DEFAULT);
-        r.on_packet(0, &h, &id(1), T0);
-        r.on_packet(1, &h, &id(1), T0 + 1);
+        r.on_packet(0, &h, &id(1), a(T0));
+        r.on_packet(1, &h, &id(1), a(T0 + 1));
         assert_eq!(r.poll_due(T0 + 1_000).len(), 1);
     }
 
@@ -737,9 +906,9 @@ mod tests {
             for l in 0..3u32 {
                 r.link_up(l);
             }
-            r.on_packet(0, &h, &id(1), T0);
+            r.on_packet(0, &h, &id(1), a(T0));
             for l in 1..3 {
-                r.on_packet(l, &h, &id(1), T0 + 1);
+                r.on_packet(l, &h, &id(1), a(T0 + 1));
             }
             assert_eq!(
                 r.poll_due(T0 + 1_000).len(),
@@ -753,7 +922,7 @@ mod tests {
     fn le_relais_n_est_rendu_qu_a_echeance_et_exclut_la_source() {
         let mut r = routeur(4);
         let Decision::RelayScheduled { at_ms, ttl } =
-            r.on_packet(2, &entete(TTL_DEFAULT), &id(1), T0)
+            r.on_packet(2, &entete(TTL_DEFAULT), &id(1), a(T0))
         else {
             panic!("relais attendu");
         };
@@ -773,10 +942,22 @@ mod tests {
     #[test]
     fn cancel_retire_un_relais_en_attente() {
         let mut r = routeur(2);
-        r.on_packet(0, &entete(TTL_DEFAULT), &id(7), T0);
+        r.on_packet(0, &entete(TTL_DEFAULT), &id(7), a(T0));
         assert!(r.cancel(&id(7)));
         assert!(!r.cancel(&id(7)));
         assert!(r.poll_due(T0 + 1_000).is_empty());
+    }
+
+    #[test]
+    fn un_message_emis_localement_qui_revient_est_un_doublon() {
+        let mut r = routeur(2);
+        r.note_originated(&id(1), T0, a(T0));
+        assert_eq!(
+            r.on_packet(1, &entete(TTL_DEFAULT), &id(1), a(T0 + 150)),
+            Decision::Reject(RejectReason::Duplicate)
+        );
+        assert_eq!(r.pending_len(), 0);
+        assert_eq!(r.stats().relays_scheduled, 0);
     }
 
     // --- TTL & clamp ------------------------------------------------------
@@ -784,8 +965,8 @@ mod tests {
     #[test]
     fn le_ttl_est_decremente() {
         let mut r = routeur(2);
-        assert_eq!(ttl_programme(r.on_packet(0, &entete(4), &id(1), T0)), 3);
-        assert_eq!(ttl_programme(r.on_packet(0, &entete(2), &id(2), T0)), 1);
+        assert_eq!(ttl_programme(r.on_packet(0, &entete(4), &id(1), a(T0))), 3);
+        assert_eq!(ttl_programme(r.on_packet(0, &entete(2), &id(2), a(T0))), 1);
     }
 
     #[test]
@@ -793,7 +974,7 @@ mod tests {
         let mut r = routeur(2);
         for (n, ttl) in [(1, 1), (2, 0)] {
             assert_eq!(
-                r.on_packet(0, &entete(ttl), &id(n), T0),
+                r.on_packet(0, &entete(ttl), &id(n), a(T0)),
                 Decision::NoRelay(NoRelayReason::TtlExhausted)
             );
         }
@@ -804,11 +985,14 @@ mod tests {
     fn clamp_de_densite_a_six_voisins() {
         let mut dense = routeur(6);
         assert_eq!(
-            ttl_programme(dense.on_packet(0, &entete(7), &id(1), T0)),
+            ttl_programme(dense.on_packet(0, &entete(7), &id(1), a(T0))),
             TTL_CLAMP_DENSE
         );
         let mut clair = routeur(5);
-        assert_eq!(ttl_programme(clair.on_packet(0, &entete(7), &id(1), T0)), 6);
+        assert_eq!(
+            ttl_programme(clair.on_packet(0, &entete(7), &id(1), a(T0))),
+            6
+        );
     }
 
     #[test]
@@ -819,7 +1003,7 @@ mod tests {
             ..entete(7)
         };
         assert_eq!(
-            ttl_programme(r.on_packet(0, &h, &id(1), T0)),
+            ttl_programme(r.on_packet(0, &h, &id(1), a(T0))),
             BROADCAST_TTL_MAX
         );
     }
@@ -835,7 +1019,7 @@ mod tests {
             ..entete(7)
         };
         assert_eq!(
-            r.on_packet(0, &h, &id(1), T0),
+            r.on_packet(0, &h, &id(1), a(T0)),
             Decision::NoRelay(NoRelayReason::TtlExhausted)
         );
     }
@@ -848,7 +1032,7 @@ mod tests {
             ..entete(7)
         };
         assert_eq!(
-            r.on_packet(0, &h, &id(1), T0),
+            r.on_packet(0, &h, &id(1), a(T0)),
             Decision::NoRelay(NoRelayReason::RelayNotAllowed)
         );
     }
@@ -860,10 +1044,10 @@ mod tests {
             packet_type: PacketType::SealedEnvelope,
             ..entete(1)
         };
-        assert_eq!(r.on_packet(0, &h, &id(1), T0), Decision::Store);
+        assert_eq!(r.on_packet(0, &h, &id(1), a(T0)), Decision::Store);
         h.flags = Flags::empty();
         h.ttl = 7;
-        assert_eq!(r.on_packet(0, &h, &id(2), T0), Decision::Store);
+        assert_eq!(r.on_packet(0, &h, &id(2), a(T0)), Decision::Store);
         assert_eq!(r.stats().stored, 2);
     }
 
@@ -873,12 +1057,12 @@ mod tests {
     fn un_paquet_pour_moi_est_livre_et_pas_relaye() {
         let mut r = routeur(3);
         assert_eq!(
-            r.on_packet(0, &adresse(7, MOI), &id(1), T0),
+            r.on_packet(0, &adresse(7, MOI), &id(1), a(T0)),
             Decision::Deliver
         );
         assert_eq!(r.pending_len(), 0);
         assert!(matches!(
-            r.on_packet(0, &adresse(7, AUTRE), &id(2), T0),
+            r.on_packet(0, &adresse(7, AUTRE), &id(2), a(T0)),
             Decision::RelayScheduled { .. }
         ));
     }
@@ -893,7 +1077,7 @@ mod tests {
             ..entete(7)
         };
         assert_eq!(
-            r.on_packet(0, &h, &id(1), T0),
+            r.on_packet(0, &h, &id(1), a(T0)),
             Decision::Reject(RejectReason::BadVersion)
         );
     }
@@ -906,7 +1090,7 @@ mod tests {
             ..entete(7)
         };
         assert_eq!(
-            r.on_packet(0, &h, &id(1), T0),
+            r.on_packet(0, &h, &id(1), a(T0)),
             Decision::Reject(RejectReason::Malformed)
         );
     }
@@ -915,7 +1099,7 @@ mod tests {
     fn lien_inconnu_rejete() {
         let mut r = routeur(1);
         assert_eq!(
-            r.on_packet(9, &entete(7), &id(1), T0),
+            r.on_packet(9, &entete(7), &id(1), a(T0)),
             Decision::Reject(RejectReason::UnknownLink)
         );
     }
@@ -928,7 +1112,7 @@ mod tests {
             ..entete(7)
         };
         assert_eq!(
-            r.on_packet(0, &h, &id(1), T0),
+            r.on_packet(0, &h, &id(1), a(T0)),
             Decision::Reject(RejectReason::ClockSkew)
         );
         let h = Header {
@@ -936,23 +1120,95 @@ mod tests {
             ..entete(7)
         };
         assert!(matches!(
-            r.on_packet(0, &h, &id(2), T0),
+            r.on_packet(0, &h, &id(2), a(T0)),
             Decision::RelayScheduled { .. }
         ));
     }
 
     #[test]
-    fn message_expire_rejete_mais_vieux_de_23_h_accepte() {
+    fn message_expire_rejete_mais_vieux_de_23_h_accepte_sans_relais() {
         let mut r = routeur(2);
         let jour = u64::from(MSG_TTL_S) * 1_000;
         assert_eq!(
-            r.on_packet(0, &entete(7), &id(1), T0 + jour + 1),
+            r.on_packet(0, &entete(7), &id(1), a(T0 + jour + 1)),
             Decision::Reject(RejectReason::Expired)
         );
+        // Accepté (livraison, dépôt), mais trop vieux pour être re-floodé.
+        assert_eq!(
+            r.on_packet(0, &entete(7), &id(2), a(T0 + 23 * 3_600_000)),
+            Decision::NoRelay(NoRelayReason::Late)
+        );
+        assert_eq!(
+            r.on_packet(0, &adresse(7, MOI), &id(3), a(T0 + 23 * 3_600_000)),
+            Decision::Deliver
+        );
+    }
+
+    // --- porteur qui revient (seen-set court, messages 24 h) ------------
+
+    #[test]
+    fn un_porteur_qui_revient_apres_l_horizon_ne_relance_pas_le_flood() {
+        let mut r = routeur(3);
+        let seen_ttl = u64::from(SEEN_TTL_S) * 1_000;
         assert!(matches!(
-            r.on_packet(0, &entete(7), &id(2), T0 + 23 * 3_600_000),
+            r.on_packet(0, &entete(7), &id(1), a(T0)),
             Decision::RelayScheduled { .. }
         ));
+        r.poll_due(T0 + 1_000);
+        // 1 h plus tard, le seen-set a oublié id(1) : accepté comme nouveau,
+        // mais pas relayé une seconde fois.
+        let retour = a(T0 + 3_600_000);
+        assert_eq!(
+            r.on_packet(1, &entete(7), &id(1), retour),
+            Decision::NoRelay(NoRelayReason::Late)
+        );
+        // Juste avant l'horizon, encore frais : c'est un doublon.
+        let mut r = routeur(3);
+        r.on_packet(0, &entete(7), &id(1), a(T0));
+        assert_eq!(
+            r.on_packet(1, &entete(7), &id(1), a(T0 + seen_ttl - 1)),
+            Decision::Reject(RejectReason::Duplicate)
+        );
+    }
+
+    #[test]
+    fn un_deliver_peut_se_repeter_au_dela_de_l_horizon() {
+        // Comportement assumé : la dédup longue durée des messages livrés
+        // revient au store (voir la doc du module).
+        let mut r = routeur(1);
+        let h = adresse(7, MOI);
+        assert_eq!(r.on_packet(0, &h, &id(1), a(T0)), Decision::Deliver);
+        assert_eq!(
+            r.on_packet(0, &h, &id(1), a(T0 + 3_600_000)),
+            Decision::Deliver
+        );
+    }
+
+    #[test]
+    fn un_horodatage_en_avance_reste_au_seen_set_tant_qu_il_est_frais() {
+        let mut r = routeur(3);
+        let seen_ttl = u64::from(SEEN_TTL_S) * 1_000;
+        let heure = 3_600_000;
+        let h = Header {
+            timestamp_ms: T0 + heure,
+            ..entete(7)
+        };
+        assert!(matches!(
+            r.on_packet(0, &h, &id(1), a(T0)),
+            Decision::RelayScheduled { .. }
+        ));
+        r.poll_due(T0 + 1_000);
+        // Toujours frais (âge < 5 min) : doit rester un doublon, même bien
+        // après SEEN_TTL_S d'horloge locale.
+        assert_eq!(
+            r.on_packet(1, &h, &id(1), a(T0 + heure + seen_ttl - 1)),
+            Decision::Reject(RejectReason::Duplicate)
+        );
+        // Oublié à l'horizon, mais alors il n'est plus relayable.
+        assert_eq!(
+            r.on_packet(1, &h, &id(1), a(T0 + heure + seen_ttl)),
+            Decision::NoRelay(NoRelayReason::Late)
+        );
     }
 
     // --- anti-inondation & quotas ----------------------------------------
@@ -961,23 +1217,29 @@ mod tests {
     fn anti_inondation_vingt_et_unieme_msg_id_refuse_puis_accepte_apres_60_s() {
         let mut r = routeur(3);
         let max = u32::from(FLOOD_MAX_PER_MIN_PEER);
-        // Un paquet toutes les 100 ms : sous le quota de lien.
+        // Un paquet toutes les 100 ms : sous le quota de lien. Horodatages
+        // suivant l'horloge, pour rester sous l'horizon du seen-set.
+        let h = |t: u64| Header {
+            timestamp_ms: t,
+            ..entete(7)
+        };
         for n in 0..max {
-            let d = r.on_packet(0, &entete(7), &id(n), T0 + u64::from(n) * 100);
+            let t = T0 + u64::from(n) * 100;
+            let d = r.on_packet(0, &h(t), &id(n), a(t));
             assert!(matches!(d, Decision::RelayScheduled { .. }), "n={n}");
         }
         assert_eq!(
-            r.on_packet(0, &entete(7), &id(max), T0 + 2_100),
+            r.on_packet(0, &h(T0 + 2_100), &id(max), a(T0 + 2_100)),
             Decision::Reject(RejectReason::FloodLimited)
         );
         // Un autre voisin n'est pas pénalisé.
         assert!(matches!(
-            r.on_packet(1, &entete(7), &id(max), T0 + 2_200),
+            r.on_packet(1, &h(T0 + 2_200), &id(max), a(T0 + 2_200)),
             Decision::RelayScheduled { .. }
         ));
         // 60 s après le premier, une place se libère.
         assert!(matches!(
-            r.on_packet(0, &entete(7), &id(max + 1), T0 + 60_000),
+            r.on_packet(0, &h(T0 + 60_000), &id(max + 1), a(T0 + 60_000)),
             Decision::RelayScheduled { .. }
         ));
     }
@@ -989,38 +1251,167 @@ mod tests {
         let mut r = Router::new(cfg, 1);
         r.link_up(0u32);
         r.link_up(1u32);
-        r.on_packet(0, &entete(7), &id(1), T0);
+        r.on_packet(0, &entete(7), &id(1), a(T0));
         assert_eq!(
-            r.on_packet(0, &entete(7), &id(2), T0 + 10),
+            r.on_packet(0, &entete(7), &id(2), a(T0 + 10)),
             Decision::Reject(RejectReason::FloodLimited)
         );
         // id(2) n'a pas pollué le seen-set : un voisin honnête le fait passer.
         assert!(matches!(
-            r.on_packet(1, &entete(7), &id(2), T0 + 20),
+            r.on_packet(1, &entete(7), &id(2), a(T0 + 20)),
             Decision::RelayScheduled { .. }
         ));
+    }
+
+    #[test]
+    fn se_reconnecter_ne_rend_pas_de_quota_d_inondation() {
+        let mut r = routeur(0);
+        let max = u32::from(FLOOD_MAX_PER_MIN_PEER);
+        r.link_up(0);
+        r.bind_peer(0, VOISIN, T0);
+        for n in 0..max {
+            let t = T0 + u64::from(n) * 100;
+            assert!(!matches!(
+                r.on_packet(0, &entete(7), &id(n), a(t)),
+                Decision::Reject(_)
+            ));
+        }
+        // L'attaquant se reconnecte : nouveau LinkId, même peerID.
+        r.link_down(0);
+        r.link_up(1);
+        r.bind_peer(1, VOISIN, T0 + 3_000);
+        assert_eq!(
+            r.on_packet(1, &entete(7), &id(max), a(T0 + 3_000)),
+            Decision::Reject(RejectReason::FloodLimited)
+        );
+        // La fenêtre reste glissante : 60 s après le premier, une place.
+        assert!(!matches!(
+            r.on_packet(1, &entete(7), &id(max), a(T0 + 60_000)),
+            Decision::Reject(_)
+        ));
+    }
+
+    #[test]
+    fn lier_un_peer_id_reporte_le_quota_deja_consomme() {
+        let mut cfg = RoutingConfig::new(MOI);
+        cfg.flood_max_per_min = 4;
+        let mut r = Router::new(cfg, 1);
+        r.link_up(0u32);
+        r.link_up(1u32);
+        // 3 msgID sur le lien 0 avant authentification…
+        for n in 0..3 {
+            r.on_packet(0, &entete(7), &id(n), a(T0 + u64::from(n)));
+        }
+        r.bind_peer(0, VOISIN, T0 + 10);
+        // … puis un second lien vers le même pair : il ne reste qu'une place.
+        r.bind_peer(1, VOISIN, T0 + 10);
+        assert!(!matches!(
+            r.on_packet(1, &entete(7), &id(3), a(T0 + 20)),
+            Decision::Reject(_)
+        ));
+        assert_eq!(
+            r.on_packet(1, &entete(7), &id(4), a(T0 + 30)),
+            Decision::Reject(RejectReason::FloodLimited)
+        );
+    }
+
+    #[test]
+    fn la_fenetre_d_un_pair_parti_est_purgee_une_fois_vide() {
+        let mut r = routeur(0);
+        r.link_up(0);
+        r.bind_peer(0, VOISIN, T0);
+        r.on_packet(0, &entete(7), &id(1), a(T0));
+        r.link_down(0);
+        // Moins de 60 s : la fenêtre du pair parti est conservée.
+        r.link_up(1);
+        r.bind_peer(1, AUTRE, T0 + 1_000);
+        assert!(r.peers.contains_key(&VOISIN));
+        // Au-delà, elle est vide et plus aucun lien ne la porte : purgée.
+        r.link_up(2);
+        r.bind_peer(2, [0xDD; 8], T0 + 60_000);
+        assert!(!r.peers.contains_key(&VOISIN));
+        assert!(r.peers.contains_key(&AUTRE));
+    }
+
+    #[test]
+    fn bind_peer_sur_un_lien_inconnu_est_sans_effet() {
+        let mut r = routeur(1);
+        r.bind_peer(9, VOISIN, T0);
+        assert!(r.peers.is_empty());
     }
 
     #[test]
     fn quota_de_lien_compte_aussi_les_doublons() {
         let mut r = routeur(2);
         let max = u32::from(LINK_MAX_PKT_PER_S);
-        r.on_packet(0, &entete(7), &id(1), T0);
+        r.on_packet(0, &entete(7), &id(1), a(T0));
         for _ in 1..max {
             assert_eq!(
-                r.on_packet(0, &entete(7), &id(1), T0 + 1),
+                r.on_packet(0, &entete(7), &id(1), a(T0 + 1)),
                 Decision::Reject(RejectReason::Duplicate)
             );
         }
         assert_eq!(
-            r.on_packet(0, &entete(7), &id(2), T0 + 2),
+            r.on_packet(0, &entete(7), &id(2), a(T0 + 2)),
             Decision::Reject(RejectReason::LinkQuota)
         );
         assert!(matches!(
-            r.on_packet(0, &entete(7), &id(2), T0 + 1_000),
+            r.on_packet(0, &entete(7), &id(2), a(T0 + 1_000)),
             Decision::RelayScheduled { .. }
         ));
         assert_eq!(r.stats().link_quota, 1);
+    }
+
+    // --- horloges ---------------------------------------------------------
+
+    #[test]
+    fn un_recul_de_l_horloge_murale_ne_gele_ni_relais_ni_quotas() {
+        let mut cfg = RoutingConfig::new(MOI);
+        cfg.flood_max_per_min = 1;
+        let mut r = Router::new(cfg, 1);
+        r.link_up(0u32);
+        r.link_up(1u32);
+        let mono = 5_000;
+        let Decision::RelayScheduled { at_ms, .. } =
+            r.on_packet(0, &entete(7), &id(1), Now::new(T0, mono))
+        else {
+            panic!("relais attendu");
+        };
+        // L'heure murale recule d'une heure ; la monotone avance.
+        let recule = T0 - 3_600_000;
+        assert!((mono + 10..=mono + 220).contains(&at_ms));
+        assert_eq!(r.poll_due(at_ms).len(), 1, "le relais part à l'heure");
+        // La fenêtre d'anti-inondation (quota 1) se libère 60 s monotones
+        // plus tard, quoi que dise l'horloge murale.
+        let h = Header {
+            timestamp_ms: recule,
+            ..entete(7)
+        };
+        assert_eq!(
+            r.on_packet(0, &h, &id(2), Now::new(recule, mono + 1_000)),
+            Decision::Reject(RejectReason::FloodLimited)
+        );
+        assert!(matches!(
+            r.on_packet(0, &h, &id(2), Now::new(recule + 60_000, mono + 60_000)),
+            Decision::RelayScheduled { .. }
+        ));
+    }
+
+    #[test]
+    fn le_seen_set_suit_l_horloge_monotone() {
+        let mut r = routeur(2);
+        let seen_ttl = u64::from(SEEN_TTL_S) * 1_000;
+        r.on_packet(0, &entete(7), &id(1), Now::new(T0, 0));
+        // L'horloge murale recule : l'entrée expire quand même à l'échéance
+        // monotone (le paquet, désormais horodaté « dans le futur », reste
+        // acceptable et on n'a qu'un doublon de plus, pas un blocage).
+        let recule = T0 - 3_600_000;
+        assert_eq!(
+            r.on_packet(1, &entete(7), &id(1), Now::new(recule, seen_ttl - 1)),
+            Decision::Reject(RejectReason::Duplicate)
+        );
+        r.on_packet(1, &entete(7), &id(1), Now::new(recule, seen_ttl));
+        assert_eq!(r.stats().duplicates, 1);
     }
 
     // --- seen-set -------------------------------------------------------
@@ -1034,12 +1425,12 @@ mod tests {
         let mut r = Router::new(cfg, 1);
         r.link_up(0u32);
         for n in 0..10 {
-            r.on_packet(0, &entete(7), &id(n), T0);
+            r.on_packet(0, &entete(7), &id(n), a(T0));
         }
         assert_eq!(r.seen_len(), 4);
         // id(0) a été évincé : il est de nouveau accepté.
         assert!(matches!(
-            r.on_packet(0, &entete(7), &id(0), T0),
+            r.on_packet(0, &entete(7), &id(0), a(T0)),
             Decision::RelayScheduled { .. }
         ));
     }
@@ -1047,16 +1438,17 @@ mod tests {
     #[test]
     fn seen_set_oublie_apres_seen_ttl() {
         let mut r = routeur(2);
-        r.on_packet(0, &entete(7), &id(1), T0);
+        r.on_packet(0, &entete(7), &id(1), a(T0));
         let seen_ttl = u64::from(SEEN_TTL_S) * 1_000;
         assert_eq!(
-            r.on_packet(0, &entete(7), &id(1), T0 + seen_ttl - 1),
+            r.on_packet(0, &entete(7), &id(1), a(T0 + seen_ttl - 1)),
             Decision::Reject(RejectReason::Duplicate)
         );
-        assert!(matches!(
-            r.on_packet(0, &entete(7), &id(1), T0 + seen_ttl),
-            Decision::RelayScheduled { .. }
+        assert!(!matches!(
+            r.on_packet(0, &entete(7), &id(1), a(T0 + seen_ttl)),
+            Decision::Reject(_)
         ));
+        assert_eq!(r.seen_len(), 1);
     }
 
     #[test]
@@ -1065,8 +1457,26 @@ mod tests {
         cfg.seen_cap = 0;
         let mut r = Router::new(cfg, 1);
         r.link_up(0u32);
-        r.on_packet(0, &entete(7), &id(1), T0);
+        r.on_packet(0, &entete(7), &id(1), a(T0));
+        r.note_originated(&id(2), T0, a(T0));
         assert_eq!(r.seen_len(), 0);
+    }
+
+    #[test]
+    fn note_originated_ne_raccourcit_pas_une_entree() {
+        let mut r = routeur(2);
+        let h = Header {
+            timestamp_ms: T0 + 60_000,
+            ..entete(7)
+        };
+        r.on_packet(0, &h, &id(1), a(T0));
+        r.note_originated(&id(1), T0, a(T0 + 1));
+        assert_eq!(r.seen_len(), 1);
+        let seen_ttl = u64::from(SEEN_TTL_S) * 1_000;
+        assert_eq!(
+            r.on_packet(1, &h, &id(1), a(T0 + seen_ttl + 30_000)),
+            Decision::Reject(RejectReason::Duplicate)
+        );
     }
 
     // --- liens ----------------------------------------------------------
@@ -1074,7 +1484,8 @@ mod tests {
     #[test]
     fn cibles_calculees_a_l_echeance() {
         let mut r = routeur(3);
-        let Decision::RelayScheduled { at_ms, .. } = r.on_packet(0, &entete(7), &id(1), T0) else {
+        let Decision::RelayScheduled { at_ms, .. } = r.on_packet(0, &entete(7), &id(1), a(T0))
+        else {
             panic!("relais attendu");
         };
         r.link_down(1);
@@ -1087,7 +1498,7 @@ mod tests {
     #[test]
     fn relais_sans_cible_abandonne() {
         let mut r = routeur(1);
-        r.on_packet(0, &entete(7), &id(1), T0);
+        r.on_packet(0, &entete(7), &id(1), a(T0));
         assert!(r.poll_due(T0 + 1_000).is_empty());
         assert_eq!(r.stats().relays_without_target, 1);
         assert_eq!(r.pending_len(), 0);
@@ -1108,7 +1519,7 @@ mod tests {
         let mut r = Router::new(cfg, 1);
         r.link_up(0u32);
         assert_eq!(
-            r.on_packet(0, &entete(7), &id(1), T0),
+            r.on_packet(0, &entete(7), &id(1), a(T0)),
             Decision::RelayScheduled {
                 at_ms: T0 + 50,
                 ttl: 6
@@ -1141,7 +1552,10 @@ mod tests {
         let mut trace = Vec::new();
         for &(lien, n, ttl, dt) in seq {
             t += dt;
-            trace.push(format!("{:?}", r.on_packet(lien, &entete(ttl), &id(n), t)));
+            trace.push(format!(
+                "{:?}",
+                r.on_packet(lien, &entete(ttl), &id(n), a(t))
+            ));
             for o in r.poll_due(t) {
                 trace.push(format!("{o:?}"));
             }
@@ -1160,11 +1574,11 @@ mod tests {
                 r.link_up(l);
             }
             let mut t = T0;
-            let mut relayes = alloc::collections::BTreeSet::new();
+            let mut relayes = BTreeSet::new();
             let mut tout = Vec::new();
             for (lien, n, ttl, dt) in seq {
                 t += dt;
-                let d = r.on_packet(lien, &entete(ttl), &id(n), t);
+                let d = r.on_packet(lien, &entete(ttl), &id(n), a(t));
                 if let Decision::RelayScheduled { at_ms, ttl: t2 } = d {
                     prop_assert!(t2 < ttl);
                     if voisins >= u32::from(DENSE_LINKS) {

@@ -91,7 +91,8 @@ Modules encore absents : `sync::{inventory, courier}`,
 | `Entry::to_bytes`/`Entry::from_bytes` | `src/ledger.rs` | Sérialisation binaire simple d'une entrée — sert le test de reprise après redémarrage, pas un vrai backend de stockage (voir « Décisions »). |
 | `store::Store<K: KeySource>` | `src/store.rs` | Connexion SQLite + migrations. `open()`/`open_in_memory()`, puis `set_identity`/`get_identity_private_keys`, `upsert_contact`, `insert_conversation`, `insert_message`/`get_message_body`, `set_noise_session`/`get_noise_session_state`. |
 | `store::KeySource` / `store::FixedKeySource` | `src/store.rs` | Trait qui fournit la clé de chiffrement des champs sensibles + bouchon à clé fixe (tests uniquement) — voir « Décisions », même schéma que `ledger::Signer` (US-206). |
-| `sync::routing::Router<L>` | `src/sync/routing.rs:249` | Routeur d'un nœud, **sans I/O**, générique sur l'identifiant de lien `L` (`dengon_ble::LinkId` côté appelant). `new(cfg, seed)`, `link_up`/`link_down`, `on_packet(from, &Header, &MsgId, now_ms) -> Decision` (`:337`), `poll_due(now_ms) -> Vec<RelayOrder>` (`:364`), `next_deadline()`, `cancel(&MsgId)` (`:325`, pour `status`/`courier` quand un ACK passe), `stats()`. |
+| `sync::routing::Router<L>` | `src/sync/routing.rs` | Routeur d'un nœud, **sans I/O**, générique sur l'identifiant de lien `L` (`dengon_ble::LinkId` côté appelant). `new(cfg, seed)`, `link_up`/`link_down`, `bind_peer(link, peerID, mono_ms)` (anti-inondation par pair, revue #85), `on_packet(from, &Header, &MsgId, Now) -> Decision`, `poll_due(mono_ms) -> Vec<RelayOrder>`, `next_deadline()`, `cancel(&MsgId)` (pour `status`/`courier` quand un ACK passe), `note_originated(&MsgId, ts, Now)` (messages émis / rejoués par l'outbox), `stats()`. |
+| `sync::routing::Now` | `src/sync/routing.rs` | `{ wall_ms, mono_ms }` : horloge murale (comparée à `timestamp_ms` seulement) + horloge monotone (quotas, seen-set, jitter). Revue #85. |
 | `sync::routing::Decision` | `src/sync/routing.rs:183` | `Reject(RejectReason)` / `Deliver` / `Store` (enveloppe à déposer) / `NoRelay(NoRelayReason)` / `RelayScheduled { at_ms, ttl }`. Tout sauf `Reject` = paquet **nouveau**. |
 | `sync::routing::RejectReason` | `src/sync/routing.rs:149` | `BadVersion`, `Malformed`, `UnknownLink`, `ClockSkew`, `Expired`, `LinkQuota`, `Duplicate`, `FloodLimited` — prêt pour l'événement `pkt.rejected` (US-208). |
 | `sync::routing::RelayOrder<L>` | `src/sync/routing.rs:205` | `msg_id`, `ttl` à écrire, `targets` = tous les voisins **sauf la source**, calculés à l'échéance. |
@@ -448,6 +449,18 @@ encore le codec (US-201).
   les événements *acceptés* (≤ quota), le seen-set est plafonné à
   `SEEN_SET_CAP`, et un `msgID` n'y est inséré qu'une fois (l'ordre
   d'insertion est l'ordre d'âge : une `VecDeque` suffit, pas de LRU fin).
+  **Remplacé en revue #85** : l'échéance d'une entrée dépend maintenant de
+  l'horodatage du paquet, le seen-set est indexé par échéance
+  (`BTreeSet<(échéance, msgID)>`) et évince l'entrée qui expire le plus tôt.
+- **Retours de revue #85 (OswinFreyr)** : (1) anti-inondation compté par
+  `peerID` du voisin via `bind_peer`, conservé après `link_down` jusqu'à ce
+  que la fenêtre se vide — une reconnexion (nouveau `LinkId`) ne rend plus
+  de quota ; (2) un paquet plus vieux que l'horizon du seen-set (5 min)
+  est accepté mais **pas relayé** (`NoRelay(Late)`), l'entrée vit jusqu'à
+  `max(réception, horodatage) + SEEN_TTL_S` — un porteur de retour ne
+  relance plus de flood, la dédup longue durée de `Deliver` revient au
+  `store` ; (3) deux horloges (`Now`) ; (4) `note_originated` pour les
+  messages émis localement. Trois écarts consignés.
 
 ## Tests
 
@@ -588,6 +601,12 @@ encore le codec (US-201).
   référence SplitMix64) + **2 property tests** : chaque `msgID` relayé au
   plus une fois (et `ttl' < ttl`, clamp respecté, jitter dans
   `RELAY_JITTER_MS`) ; même graine + même séquence ⇒ même trace.
+  Revue #85 : **+11 tests** (43 au total) — reconnexion sans regain de
+  quota, report du quota au `bind_peer`, purge des pairs partis, porteur de
+  retour non re-floodé, `Deliver` répété au-delà de l'horizon (assumé),
+  horodatage en avance retenu tant qu'il est frais, recul de l'horloge
+  murale sans gel des relais ni des quotas, seen-set en monotone,
+  `note_originated` (doublon au retour, ne raccourcit pas une entrée).
 - `tests/routing_mock.rs` (US-209) : **8 tests de bout en bout** — des
   `MockTransport` reliés par un « fil » de test : chaîne A–B–C–D (livré à
   D avec TTL 5), losange (1 seul exemplaire, ≤ 1 relais par nœud), seuil

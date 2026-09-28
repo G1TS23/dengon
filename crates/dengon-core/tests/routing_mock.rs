@@ -18,7 +18,7 @@ use dengon_core::protocol::{
     Flags, Header, MsgId, PacketType, PeerId, DENSE_LINKS, FLOOD_MAX_PER_MIN_PEER, PROTO_VERSION,
     SEEN_SET_CAP, TTL_CLAMP_DENSE, TTL_DEFAULT,
 };
-use dengon_core::sync::routing::{Decision, Router, RoutingConfig, DUP_CANCEL_THRESHOLD};
+use dengon_core::sync::routing::{Decision, Now, Router, RoutingConfig, DUP_CANCEL_THRESHOLD};
 use sha2::{Digest, Sha256};
 
 const T0: u64 = 1_800_000_000_000;
@@ -152,7 +152,7 @@ impl Noeud {
                     let Some((h, id)) = decoder(&bytes) else {
                         continue;
                     };
-                    match self.r.on_packet(peer_link_id, &h, &id, now) {
+                    match self.r.on_packet(peer_link_id, &h, &id, Now::new(now, now)) {
                         Decision::RelayScheduled { .. } => {
                             self.a_relayer.insert(id, bytes);
                         }
@@ -222,6 +222,11 @@ impl Reseau {
 
     /// Le nœud `a` émet un paquet qu'il a lui-même créé, vers tous ses voisins.
     fn emettre(&mut self, a: usize, bytes: &[u8]) {
+        let Some((h, id)) = decoder(bytes) else {
+            panic!("paquet émis indécodable");
+        };
+        let now = Now::new(self.now, self.now);
+        self.noeuds[a].r.note_originated(&id, h.timestamp_ms, now);
         assert!(self.noeuds[a].t.broadcast(bytes).is_ok());
     }
 
