@@ -44,6 +44,24 @@ laisse en mémoire un état qui disparaîtra au redémarrage.
 (`next_status`), property tests dans le même fichier et dans
 `crates/dengon-core/src/sync/status/outbox/tests.rs`.
 **Pour aller plus loin :** <https://proptest-rs.github.io/proptest/>
+### Un property test trouve le cas que l'exemple rate
+
+**C'est quoi :** un property test (`proptest`) génère des entrées au hasard,
+vérifie une propriété, et quand elle casse il **réduit** l'entrée jusqu'au plus
+petit contre-exemple (*shrinking*).
+**Pourquoi dans dengon :** pour la fragmentation, la propriété est « avec un MTU,
+un ordre d'arrivée et des doublons quelconques, le paquet ressort exactement une
+fois, identique ». Les tests écrits à la main (paquets de 300 à 1000 octets)
+passaient tous.
+**Piège / surprise :** le test a réduit l'échec à `p = [0]` avec un doublon : un
+paquet d'**un seul** fragment n'est jamais mis en attente, donc rien ne se
+souvient qu'il est déjà sorti, et le doublon le fait ressortir. Personne
+n'avait pensé à ce cas limite ; la correction (mémoire bornée des `frag_id`
+terminés) a aussi supprimé les réassemblages « zombies » ouverts par un doublon
+tardif.
+**Où c'est utilisé :** `crates/dengon-core/src/protocol/fragment/tests.rs`
+(`reassemblage_mtu_et_ordre_aleatoires`).
+**Pour aller plus loin :** <https://proptest-rs.github.io/proptest/proptest/tutorial/shrinking-basics.html>
 
 ---
 

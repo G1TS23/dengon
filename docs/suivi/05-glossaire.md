@@ -111,6 +111,9 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **GATT** (*Generic Attribute Profile*) | Couche BLE qui structure les données échangées en **services** (regroupements) et **characteristics** (valeurs lisibles/écrivables/notifiables à l'intérieur d'un service). |
 | **Rôle central / peripheral (BLE)** | *Peripheral* : annonce sa présence et publie un service GATT (le « serveur »). *Central* : scanne, trouve, se connecte (le « client »). Un nœud `dengon` tient les **deux** rôles en permanence. |
 | **ATT_MTU** | Taille max d'un paquet BLE au niveau attribut (23 o par défaut, jusqu'à 517 si négocié à la connexion). Dimensionne la fragmentation protocole (`FRAG_SIZE`) — mesuré réellement par le Spike C (US-103). |
+| **Fragment / réassemblage** | Morceau d'un paquet trop grand pour une écriture BLE (paquet L3 de type `0x09`) ; le réassembleur recolle les morceaux à l'arrivée, dans n'importe quel ordre. |
+| **frag_id** | `SHA-256(paquet complet)[0..8]` : identifie les fragments d'un même paquet et sert à vérifier le paquet reconstruit. |
+| **Shrinking** | Étape d'un property test qui réduit une entrée en échec au plus petit contre-exemple, pour rendre le bug lisible. |
 | **Spike** | Tâche courte et bornée dans le temps (*timebox*) pour répondre à une question technique par l'expérimentation plutôt que par la lecture. Livrable = une décision écrite + des chiffres, pas une fonctionnalité ; le code produit est jetable. |
 | **KAT (Known Answer Test)** | Test qui compare la sortie d'un algorithme crypto à un résultat publié par les auteurs de la norme (ici RFC 8032 §7.1). Prouve qu'on implémente bien *le* standard, pas une variante. |
 | **Ed25519 déterministe** | Ed25519 ne tire aucun nombre aléatoire à la signature : le même message et la même clé donnent toujours la même signature. Rend les tests reproductibles et supprime toute une classe de failles liées à un mauvais RNG. |
