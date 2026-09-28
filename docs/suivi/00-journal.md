@@ -10,6 +10,44 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-205 : rebase sur `main` après le merge de #81 (US-204), relecture
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/{lib.rs,identity.rs}`, `docs/suivi/`.
+**Lot :** US-205 (issue #19), PR #82. Branche `feat/US-205-identity`.
+
+### Fait
+
+- #81 a été **squash-mergée** (`93533e9`), après #80 (codec, US-201) :
+  `git rebase --onto origin/main 287575a` rejoue les trois commits US-205.
+  Push en `--force-with-lease`.
+- Conflits : doc de module de `lib.rs` (codec US-201 + `identity`), fiche
+  `modules/dengon-core.md` (état ; `codec` et `identity` retirés des
+  « modules encore absents »).
+- `02-avancement.md` : la ligne `dengon-core` existait en **trois** copies
+  sur `main` (reste de fusions `merge=union`), plus celle de la branche.
+  Fusionnées en une seule (codec US-201 + `identity` US-205).
+- **Relecture** : `IdentityError` implémentait `std::error::Error` sous
+  `cfg(feature = "std")`, alors que `CryptoError` implémente
+  `core::error::Error` sans condition depuis la revue de #78. Aligné : l'erreur
+  est maintenant utilisable comme `Error` en `no_std`. Rien d'autre relevé :
+  `PeerId` d'`identity` est bien celui de `protocol::types` utilisé par le
+  codec.
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo fmt --all -- --check
+$ cargo clippy --workspace --all-targets -- -D warnings
+OK
+$ cargo test --workspace
+dengon-core : 161 unitaires + codec_proptest 7 + crypto 2 + identity 3 + protocole 7, tout vert
+$ cargo check -p dengon-core --no-default-features
+OK
+```
+
+---
+
 ## 2026-09-28 — US-204 : rebase sur `main` après le merge de #78 (US-203) et #80 (US-201)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

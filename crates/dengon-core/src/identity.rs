@@ -89,8 +89,9 @@ impl fmt::Display for IdentityError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for IdentityError {}
+// `core::error::Error` (stable depuis Rust 1.81) : disponible aussi en
+// `no_std`, comme `crypto::CryptoError` (revue #78).
+impl core::error::Error for IdentityError {}
 
 #[cfg(test)]
 mod tests {
