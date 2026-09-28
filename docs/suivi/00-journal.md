@@ -159,6 +159,76 @@ une seule ligne par module
   `dengon-sim`) viendra avec les US suivantes.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+## 2026-09-28 — US-209 : `sync::routing` — TTL, dédup, jitter, clamp densité, quotas, anti-inondation
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/{mod,routing}.rs` (nouveaux),
+`crates/dengon-core/src/lib.rs`, `crates/dengon-core/Cargo.toml`,
+`crates/dengon-core/tests/routing_mock.rs` (nouveau), `Cargo.lock`,
+`docs/suivi/`
+**Lot :** US-209, issue #23 — J1 « Cœur en simulation »
+
+### Fait
+- **`Router<L>`** (`src/sync/routing.rs:249`) : routeur **sans I/O**,
+  générique sur l'identifiant de lien. `on_packet` (`:337`) applique le
+  pipeline de `synthese/05` §6.1 et rend une `Decision` ; `poll_due`
+  (`:364`) rend les `RelayOrder` dont le jitter est écoulé, vers tous les
+  voisins sauf la source. Plus `link_up`/`link_down`, `next_deadline`,
+  `cancel` (pour `status`/`courier`), `stats`.
+- Pipeline : version, cohérence des drapeaux, lien connu, horloge (futur
+  > 2 h, passé > 24 h), **quota par lien** (50 paquets/s, doublons compris),
+  **dédup** (seen-set borné `SEEN_SET_CAP`, expiration `SEEN_TTL_S`),
+  **anti-inondation** (`FLOOD_MAX_PER_MIN_PEER` nouveaux `msgID` / 60 s /
+  voisin), livraison locale, `RELAY_OK` / `ttl ≤ 1` (dépôt si
+  `SEALED_ENVELOPE`), **clamp de densité** (≥ 6 voisins → TTL ≤ 5), TTL
+  broadcast ≤ 3, **jitter** `RELAY_JITTER_MS` tiré par un SplitMix64 seedé,
+  annulation sur doublons pendant le jitter.
+- **Tests** : 32 unitaires dans `routing.rs` (dont 2 property tests :
+  « relayé au plus une fois » et « même graine ⇒ même trace ») ; 8 de bout
+  en bout dans `tests/routing_mock.rs`, où des `MockTransport` sont reliés
+  par un fil de test et décodés par un **codec de test provisoire** (en-tête
+  L3 réel lu à la main, TTL réécrit à l'octet 2).
+- `dengon-ble` ajouté en dev-dependency de `dengon-core`.
+
+### Pourquoi / décisions
+- Sans I/O parce que `dengon-ble` dépend de `dengon-core` (cycle interdit
+  hors dev-deps) et parce que c'est ce qui donne `no_std` + déterminisme.
+- **Seuil d'annulation du relais = 2 doublons, pas 1.** Le premier jet
+  suivait la règle littérale (1) : le test du losange A→{B,C}→D→E a
+  **échoué** (E : 0 message reçu au lieu de 1) — D entendait la copie de C
+  pendant son jitter et s'abstenait. Rendu configurable, défaut 2 ; le cas
+  à 1 est gardé comme test de régression documenté.
+- Un `msgID` refusé par l'anti-inondation n'entre pas au seen-set (un voisin
+  honnête peut le relivrer).
+- Le relais d'un paquet dont la source se déconnecte pendant le jitter est
+  **conservé** (le plan disait « purgé ») : le paquet reste valable pour
+  les autres voisins.
+- Vérif de signature laissée à l'appelant (`crypto` pas sur `main`) ; les
+  ACK chiffrés ne sont pas visibles du routeur → `Router::cancel`.
+
+### Écarts vs conception
+- 4 entrées dans `03-ecarts-conception.md` : seuil de doublons 2 au lieu
+  de 1 (**à valider à trois**) ; routeur sans I/O + dev-dep `dengon-ble` ;
+  3 réglages sans constante de conception (quota lien, TTL broadcast,
+  seuil) ; tolérance ±2 h appliquée seulement vers le futur (sinon
+  contradiction avec `MSG_TTL_S` = 24 h).
+
+### Appris
+- 4 notes dans `04-apprentissages.md` : sans-IO, tempête de diffusion et
+  seuil à compteur, cycle via dev-dependencies, SplitMix64.
+
+### État après cette session
+- Critères d'acceptation de #23 : pipeline complet ✅ ; bout en bout contre
+  `MockTransport` ✅ ; inondation bornée avec chiffre explicite ✅ (voir
+  ci-dessous) ; déterministe à graine fixe ✅ ; `no_std` + clippy +
+  couverture ≥ 85 % ✅.
+- Reste hors périmètre : branchement dans `dengon-node` / `dengon-sim`
+  (US-221), vrai codec (US-201), signature (US-203), `status`/`courier`
+  (US-211/212, Oswin) qui appelleront `cancel`. Le point de signatures
+  avec Oswin (`repartition-sprint2.md` §3) **n'a pas eu lieu** avant le
+  code : l'API est à relire avec lui en revue.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non
 
 ### Vérification (commandes réellement exécutées)
 ```
@@ -1007,6 +1077,23 @@ $ (binaire release, deux exécutions) diff run1 run2 → identiques
   touchés** (`Incorrect newline style`) : copie de travail Windows en CRLF ;
   sans objet sur la CI Linux.
 - Couverture non mesurée localement (`cargo-llvm-cov` absent).
+74 passed (lib) ; 4 passed (protocol_vectors) ; 8 passed (routing_mock)
+$ cargo test -p dengon-core --test routing_mock -- --nocapture
+inondation 1 voisin : 30000 reçus, 20 relais, 40 trames émises,
+  2980 anti-inondation, 27000 quota lien, seen-set = 20
+inondation 3 voisins : 60 relais, 120 trames émises
+$ cargo test --workspace                       → tout vert
+$ cargo clippy --workspace --all-targets -- -D warnings   → OK
+  (1 erreur manual_range_contains corrigée dans un test)
+$ cargo fmt --all --check                      → OK
+$ cargo check -p dengon-core --no-default-features   → OK (no_std)
+$ cargo llvm-cov -p dengon-core --summary-only
+sync/routing.rs : 99.16 % lignes, 98.17 % régions ; crate : 97.69 % lignes
+```
+- Premier passage de `routing_mock` : 6/7, échec du losange (voir
+  « Pourquoi ») — c'est ce qui a conduit au seuil 2.
+- Non vérifié : cross-compilation réelle `xtensa-esp32-none-elf` (seul le
+  `no_std` sur cible hôte est contrôlé) ; job CI `sim` (US-222) inexistant.
 
 ---
 

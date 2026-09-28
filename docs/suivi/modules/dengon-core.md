@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
 **Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209).
 
 ## À quoi ça sert
 
@@ -47,7 +47,10 @@ dengon-core/
         mod.rs         — Packet, encode / decode L3, FrameRule, entrée de signature
         app.rs         — AppFrame (Message, Ack), encode / decode L4
     sync/
-      mod.rs           — sous-modules sync (seul `status` livré)
+      mod.rs           — table des sous-modules sync (routing, status livrés ;
+                         inventory, courier = US-210/212)
+      routing.rs       — routeur sans-IO : TTL, dédup, jitter, clamp densité,
+                         quotas, anti-inondation (US-209)
       status.rs        — Status, StatusEvent, next_status, StatusChange (US-211)
       status/outbox.rs — Outbox, OutboxStore, MemoryStore, OutboxRecord
       status/outbox/tests.rs — tests de l'outbox
@@ -59,13 +62,15 @@ dengon-core/
     vectors/crypto_v0.json — vecteurs crypto (padding, tags, transcript XX, enveloppe X)
     identity_vectors.rs    — vecteurs identity + scénario d'appairage A↔B (US-205)
     vectors/identity_v0.json — 2 identités : clés publiques, peerID, empreinte, QR, code
+    routing_mock.rs        — sync::routing de bout en bout contre MockTransport
+                             (+ codec de test provisoire)
 ```
 
 `crypto.rs` et le dossier `crypto/` coexistent (disposition Rust 2018) : le
 fichier Ed25519 de US-203 n'a pas été déplacé (pas de déplacement
 de fichier pendant que les PR #78/#81/#82 sont empilées).
 
-Modules encore absents : `sync::{routing, inventory, courier}`,
+Modules encore absents : `sync::{inventory, courier}`,
 `observability`, `api` (sprint 2).
 
 ## Concepts / types importants
@@ -86,6 +91,12 @@ Modules encore absents : `sync::{routing, inventory, courier}`,
 | `Entry::to_bytes`/`Entry::from_bytes` | `src/ledger.rs` | Sérialisation binaire simple d'une entrée — sert le test de reprise après redémarrage, pas un vrai backend de stockage (voir « Décisions »). |
 | `store::Store<K: KeySource>` | `src/store.rs` | Connexion SQLite + migrations. `open()`/`open_in_memory()`, puis `set_identity`/`get_identity_private_keys`, `upsert_contact`, `insert_conversation`, `insert_message`/`get_message_body`, `set_noise_session`/`get_noise_session_state`. |
 | `store::KeySource` / `store::FixedKeySource` | `src/store.rs` | Trait qui fournit la clé de chiffrement des champs sensibles + bouchon à clé fixe (tests uniquement) — voir « Décisions », même schéma que `ledger::Signer` (US-206). |
+| `sync::routing::Router<L>` | `src/sync/routing.rs:249` | Routeur d'un nœud, **sans I/O**, générique sur l'identifiant de lien `L` (`dengon_ble::LinkId` côté appelant). `new(cfg, seed)`, `link_up`/`link_down`, `on_packet(from, &Header, &MsgId, now_ms) -> Decision` (`:337`), `poll_due(now_ms) -> Vec<RelayOrder>` (`:364`), `next_deadline()`, `cancel(&MsgId)` (`:325`, pour `status`/`courier` quand un ACK passe), `stats()`. |
+| `sync::routing::Decision` | `src/sync/routing.rs:183` | `Reject(RejectReason)` / `Deliver` / `Store` (enveloppe à déposer) / `NoRelay(NoRelayReason)` / `RelayScheduled { at_ms, ttl }`. Tout sauf `Reject` = paquet **nouveau**. |
+| `sync::routing::RejectReason` | `src/sync/routing.rs:149` | `BadVersion`, `Malformed`, `UnknownLink`, `ClockSkew`, `Expired`, `LinkQuota`, `Duplicate`, `FloodLimited` — prêt pour l'événement `pkt.rejected` (US-208). |
+| `sync::routing::RelayOrder<L>` | `src/sync/routing.rs:205` | `msg_id`, `ttl` à écrire, `targets` = tous les voisins **sauf la source**, calculés à l'échéance. |
+| `sync::routing::RoutingConfig` | `src/sync/routing.rs:98` | Réglages, `new(local_id)` = valeurs de `protocol::consts` + 3 valeurs propres au routeur : `LINK_MAX_PKT_PER_S = 50` (`:70`), `BROADCAST_TTL_MAX = 3` (`:76`), `DUP_CANCEL_THRESHOLD = 2` (`:87`). |
+| `SeenSet`, `RateWindow`, `SplitMix64` (privés) | `src/sync/routing.rs:563`, `:536`, `:616` | Seen-set borné (cap + expiration), fenêtre glissante bornée par son quota, PRNG 64 bits seedé pour le jitter. |
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
 | `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
 | `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
@@ -204,7 +215,10 @@ encore le codec (US-201).
   `aead::OsRng`) : `getrandom` n'est donc tiré que par la feature `std`.
   Viendront encore `serde`.
 - **Externes (dev) :** `rand_chacha` 0.3 (RNG déterministe des vecteurs),
-  `proptest` 1 (property tests de `ledger`, `crypto` et du codec), `serde_json` 1
+  `dengon-ble` (US-209 : `MockTransport` pour `tests/routing_mock.rs` — cycle
+  de dépendances *de dev* seulement, `dengon-ble` dépendant de `dengon-core` ;
+  Cargo l'autorise), `proptest` 1 (property tests de `ledger`, `crypto`, du
+  codec et de `sync::routing`), `serde_json` 1
   (lecture des vecteurs via `Value`, sans derive). N'affectent pas la
   compilation `no_std` (`cargo check` ne compile pas les dev-deps).
 
@@ -414,6 +428,27 @@ encore le codec (US-201).
   le message 1 part en clair et refuse tout payload, et avec des payloads vides
   les tailles sont fixées par le motif. Écart vs 06 §3, consigné.
 
+- **`sync::routing` est sans I/O (US-209)** : pas d'appel à `Transport`
+  (impossible : `dengon-ble` dépend de `dengon-core` et tire `std`), pas
+  d'horloge (`now_ms` en argument), pas d'aléa système (graine au
+  constructeur, PRNG SplitMix64 maison). Conséquences : `no_std`, testable
+  sans radio, **déterministe à graine fixe**. Le relais est découpé en deux
+  temps — `on_packet` programme, `poll_due` rend ce qui est échu — ce qui
+  permet le « écouter avant de rediffuser » sans thread ni timer.
+- **Ordre du pipeline** (`decide`, `src/sync/routing.rs:398`) : version →
+  cohérence des drapeaux → lien connu → horloge (futur > 2 h / passé >
+  24 h) → quota brut du lien (doublons compris) → dédup → anti-inondation
+  (nouveaux `msgID` seulement) → insertion au seen-set → livraison locale →
+  relais. Un `msgID` refusé par l'anti-inondation **n'entre pas** au
+  seen-set, pour qu'un voisin honnête puisse le relivrer.
+- **Seuil d'annulation pendant le jitter = 2 doublons, pas 1** : écart
+  consigné (le seuil littéral affame un losange, prouvé par
+  `seuil_litteral_affame_le_losange`).
+- **Mémoire bornée sous flood** : les fenêtres glissantes ne retiennent que
+  les événements *acceptés* (≤ quota), le seen-set est plafonné à
+  `SEEN_SET_CAP`, et un `msgID` n'y est inséré qu'une fois (l'ordre
+  d'insertion est l'ordre d'âge : une `VecDeque` suffit, pas de LRU fin).
+
 ## Tests
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
@@ -543,14 +578,38 @@ encore le codec (US-201).
 - Couverture (`cargo llvm-cov -p dengon-core --all-features`, mesurée avant le
   rebase sur `ledger`/`store`) : **99,14 % des lignes** ; `crypto` : 98,3 à
   100 % selon le fichier.
+- `src/sync/routing.rs`, module `tests` (US-209) : **30 tests unitaires**
+  (une ligne de `synthese/10` §4.2 = au moins un test : dédup, TTL
+  décrémenté, `ttl ≤ 1` → pas de relais, clamp à 6 voisins, `RELAY_OK`
+  absent, abandon sur doublons pendant le jitter, anti-inondation au 21ᵉ
+  `msgID` + libération après 60 s + autre voisin non pénalisé ; plus
+  quota de lien, horloge, expiration à 24 h, enveloppe déposée, livraison
+  locale, cibles calculées à l'échéance, seen-set borné / expiré, vecteur de
+  référence SplitMix64) + **2 property tests** : chaque `msgID` relayé au
+  plus une fois (et `ttl' < ttl`, clamp respecté, jitter dans
+  `RELAY_JITTER_MS`) ; même graine + même séquence ⇒ même trace.
+- `tests/routing_mock.rs` (US-209) : **8 tests de bout en bout** — des
+  `MockTransport` reliés par un « fil » de test : chaîne A–B–C–D (livré à
+  D avec TTL 5), losange (1 seul exemplaire, ≤ 1 relais par nœud), seuil
+  littéral qui affame le losange (régression documentée), portée bornée
+  par TTL 3 sur une chaîne de 8, clamp de densité + exclusion de la
+  source, **inondation** 1 voisin et 3 voisins, déterminisme de la trace.
+  Chiffres mesurés (sortie `--nocapture`) : 1 voisin à **500 msg/s
+  pendant 60 s** → 30 000 reçus, **20 relais, 40 trames émises**, 27 000
+  refusés par le quota de lien, 2 980 par l'anti-inondation, seen-set = 20 ;
+  3 voisins → **60 relais, 120 trames**.
+- Commande (2026-09-28, US-209) : `cargo test -p dengon-core` → **86 passés**
+  (74 lib + 4 `protocol_vectors` + 8 `routing_mock`).
+- Couverture `cargo llvm-cov -p dengon-core --summary-only` (2026-09-28) :
+  `sync/routing.rs` **99,16 % des lignes**, 98,17 % des régions ; total
+  crate 97,69 % des lignes.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
   temporairement fait échouer `accept_vectors_are_structurally_consistent`
   sur le nouveau vecteur `noise-msg-addressed-reserved-bit-ignored` (30
   octets, exactement `hdr`) — confirme le « mirror bug » signalé par Paul
   (un paquet valide à `payload_len` faible rejeté à tort).
-- Couverture non mesurée par un outil (`cargo llvm-cov` pas encore posé dans
-  ce sprint) — objectif ≥ 85 % de la DoD §7.2 non vérifié formellement,
-  mais chaque branche de `verify_chain` (Ok/Broken/Fork/Gap) a un test
+- Couverture de `ledger` non mesurée à l'époque (`cargo llvm-cov` pas encore
+  posé) — depuis mesurée avec l'US-209 (voir ci-dessus), mais chaque branche de `verify_chain` (Ok/Broken/Fork/Gap) a un test
   dédié qui l'exerce explicitement.
 
 ## Limites connues / TODO
@@ -676,6 +735,14 @@ d'implémentation SQLite d'`OutboxStore` (après US-207) ; un `msg_uuid` déjà
 terminé puis ré-enqueué repartirait en `QUEUED` (précondition documentée :
 `msg_uuid` aléatoire sur 128 bits, jamais réutilisé).
 
+- **`sync::routing`** : la signature des paquets est supposée vérifiée
+  **en amont** (pas de `crypto` sur `main`) ; le décodage de
+  `tests/routing_mock.rs` est un **codec de test provisoire** (sans
+  signature), à remplacer par `protocol::codec` (US-201) ; le routeur ne
+  voit pas les ACK (chiffrés dans Noise) — c'est `status`/`courier` qui
+  appelleront `Router::cancel`. Pas de RSSI-gating (optionnel MVP).
+  Pas encore branché dans `dengon-node` ni `dengon-sim`.
+
 ## Pour l'oral
 
 Trois livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
@@ -702,3 +769,11 @@ téléphones affichent le même code de 60 chiffres, que l'on compare de visu.
 Anecdote utile à l'oral : la formule du document de conception ne pouvait
 jamais produire un groupe au-dessus de 65535. On l'a vu, corrigée, et
 consignée.
+
+US-209 (`sync::routing`) est le **cœur du maillage** : pour chaque paquet
+reçu, décider si on le relaie, avec quel TTL, après quel délai, et à qui.
+Message clé : sous un flot de 500 messages/seconde venant d'un voisin, un
+nœud ne relaie **que 20 messages par minute** de ce voisin, et le trafic
+honnête des autres passe toujours. Et une vraie trouvaille de conception : la
+règle « abandonner au premier doublon » de la doc empêchait la livraison dans
+un simple losange — mesuré, corrigé, documenté.

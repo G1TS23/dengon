@@ -1113,3 +1113,83 @@ _(aucun écart pour l'instant)_
 - **Conséquences :** l'app Android doit encoder sans padding
   (`Base64.URL_SAFE or NO_PADDING or NO_WRAP`).
 - **Doc de conception mise à jour ?** Non (précision, pas contradiction).
+### 2026-09-28 — `sync::routing` : un doublon pendant le jitter n'annule plus le relais, il en faut deux (US-209)
+
+- **Prévu :** `docs/synthese/05-protocole-et-trame.md` §6.1 et `docs/powl/03`
+  §7.1 : « reçu en double pendant l'attente ? — oui → abandonner le relais »,
+  soit un seuil de **1** doublon.
+- **Réel :** `RoutingConfig::dup_cancel_threshold`, par défaut
+  `DUP_CANCEL_THRESHOLD = 2` (`crates/dengon-core/src/sync/routing.rs:87`).
+  `1` reste disponible (règle littérale), `0` désactive l'annulation.
+- **Raison :** mesurée, pas supposée. Dans un losange A→{B,C}→D→E, D reçoit
+  la copie de B, programme son relais, entend la copie de C pendant son
+  jitter et s'abstient : **E ne reçoit jamais le message**. Le test
+  `seuil_litteral_affame_le_losange` (`crates/dengon-core/tests/routing_mock.rs`)
+  le reproduit à chaque exécution ; `plusieurs_chemins_un_seul_relais_par_noeud`
+  montre qu'avec 2, E est servi et chaque nœud relaie au plus une fois. C'est
+  le défaut connu du schéma « à compteur » avec un seuil de 1 (Ni et al.,
+  *The broadcast storm problem*, 1999, recommandent 3 à 4).
+- **Conséquences :** un peu plus de relais redondants en zone dense (au plus
+  un par nœud et par `msgID`, la dédup ne change pas). Un seuil de 2 ne
+  garantit pas tout : un nœud qui a 3 entrées et une seule sortie peut encore
+  s'abstenir — la réconciliation d'inventaire (US-210) reste le filet.
+  **À valider à trois** (point d'équipe) ; revenir à 1 = une ligne.
+- **Doc de conception mise à jour ?** non — à faire si l'équipe valide.
+
+---
+
+### 2026-09-28 — `sync::routing` : routeur sans I/O, générique sur le lien, au lieu d'appeler `Transport` (US-209)
+
+- **Prévu :** l'issue #23 : « s'écrit contre `MockTransport` (US-105) » ;
+  `docs/synthese/04` §2 place le routage dans `dengon-core::sync`.
+- **Réel :** `Router<L>` ne connaît pas `Transport`. Il prend un en-tête
+  décodé et rend une `Decision` ; `poll_due` rend des `RelayOrder<L>` que
+  l'appelant envoie. `L` = `dengon_ble::LinkId` côté appelant. Le test de
+  bout en bout contre `MockTransport` est dans `dengon-core/tests/`, avec
+  `dengon-ble` en **dev-dependency** de `dengon-core`.
+- **Raison :** `dengon-ble` dépend de `dengon-core` (et de `std`) : importer
+  `Transport` dans `dengon-core` créerait un cycle et casserait le `no_std`.
+  Le cycle limité aux dev-dependencies est accepté par Cargo.
+- **Conséquences :** la boucle d'événements (poll du transport → routeur →
+  send) est à écrire par chaque hôte (`dengon-node`, `dengon-sim`, FFI).
+  Elle fait ~30 lignes (`Noeud::tick` dans `tests/routing_mock.rs`).
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `sync::routing` : trois réglages sans constante de conception (US-209)
+
+- **Prévu :** `synthese/05` §6.4 : « quota par `peerID` et par lien
+  (paquets/s) » ; §6.1 : broadcast « TTL faible (2–3) ». Aucune valeur dans
+  `protocol::consts`.
+- **Réel :** constantes **du routeur** (pas du contrat `protocol::consts`) et
+  champs de `RoutingConfig` : `LINK_MAX_PKT_PER_S = 50` (quota brut par
+  lien, doublons compris, fenêtre 1 s), `BROADCAST_TTL_MAX = 3` (TTL relayé
+  max. pour `ANNOUNCE` / `LOG_ATTEST`), `DUP_CANCEL_THRESHOLD = 2` (voir
+  l'écart ci-dessus). Le quota « par `peerID` » n'est pas distinct du quota
+  par lien : un lien = un pair au MVP.
+- **Raison :** `protocol::consts` est un contrat « revue à trois » ; ces
+  valeurs ne sont pas lues par les autres implémentations (firmware,
+  dashboard) et peuvent varier sans casser l'interopérabilité.
+- **Conséquences :** à promouvoir dans `consts` si le firmware doit les
+  partager.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `sync::routing` : la tolérance d'horloge ±2 h ne s'applique que vers le futur (US-209)
+
+- **Prévu :** `synthese/05` §6.4 : « `timestamp_ms` hors fenêtre ±2 h →
+  rejeté ».
+- **Réel :** futur au-delà de `now + TIMESTAMP_TOLERANCE_MS` → `ClockSkew` ;
+  passé : rejet seulement au-delà de `MSG_TTL_S` (24 h) → `Expired`.
+- **Raison :** appliquée vers le passé, la fenêtre ±2 h rejetterait tout
+  message porté plus de 2 h en store-and-forward, alors que la même
+  conception lui donne 24 h de vie (§6.5, §7 étape 2). Les deux règles se
+  contredisent ; on garde celle qui permet le DTN. L'anti-rejeu reste
+  assuré par le seen-set + `msgID`.
+- **Conséquences :** un paquet rejoué entre 5 min (`SEEN_TTL_S`) et 24 h
+  après son premier passage peut être accepté une seconde fois par un
+  nœud qui l'a oublié. Déjà le cas dans la conception (seen-set à 300 s) ;
+  `conv_seq` (couche applicative) le rattrape côté destinataire.
+- **Doc de conception mise à jour ?** non.
