@@ -40,7 +40,10 @@ dashboard/
 .github/workflows/
   deploy-vps.yml             — déploiement manuel (workflow_dispatch),
                                environment vps-prod
-.dockerignore (racine)       — exclut .venv/target/… du contexte de build
+.dockerignore (racine)       — exclut .venv/target/android/crates/docs/
+                               firmware/dashboard-web/… du contexte de build
+.uv-version (racine)         — source unique de la version uv (Dockerfile +
+                               .github/workflows/dashboard.yml)
 ```
 
 ## Concepts / types importants
@@ -64,8 +67,8 @@ déclenchement manuel de `deploy-vps` (Actions → Run workflow)
   ssh vps "cd ~/dengon/dashboard/deploy && docker compose up -d --build"
     → image api reconstruite si le code a changé, sinon cache Docker réutilisé
     → .env du VPS PAS touché (créé une fois à la main, voir Procédure d'accès)
-  smoke test 1 : curl -fsSk https://<IP>:8443/healthz         → doit répondre 200
-  smoke test 2 : curl -X POST https://<IP>:8443/ingest/batch  → doit répondre 202
+  smoke test 1 : curl -fsSk https://<IP>:8443/healthz                    → doit répondre 200
+  smoke test 2 : curl -X POST https://<IP>:8443/ingest/batch (sans JWT)  → doit répondre 401
 ```
 
 En session de démo, avant de commencer : `ssh vps "cd ~/dengon/dashboard/deploy && ./purge-demo.sh"`.
@@ -127,6 +130,32 @@ En session de démo, avant de commencer : `ssh vps "cd ~/dengon/dashboard/deploy
   régénérerait le certificat auto-signé à chaque purge, ce qui obligerait à
   re-valider le certificat dans le navigateur à chaque session de démo —
   coût sans bénéfice, seule la base applicative doit repartir de zéro.
+- **Corrections suite à la revue de la PR #97** (constats POWLAIR/OswinFreyr,
+  détail dans l'entrée de journal du 2026-09-28 « corrections post-revue ») :
+  - Smoke test 2 vérifie désormais un **401** sur `POST /ingest/batch` sans
+    JWT (US-216, PR #91, était déjà mergée sur `main` — l'ancien test qui
+    attendait un `202` aurait échoué au premier run réel du workflow).
+  - `VPS_KNOWN_HOSTS` (nouveau secret, voir Limites/Procédure d'accès)
+    remplace `StrictHostKeyChecking accept-new`, qui acceptait la clé d'hôte
+    sans vérification à **chaque** run (runner éphémère) plutôt qu'au seul
+    premier contact.
+  - `CADDY_HTTPS_PORT`/`CADDY_HTTP_PORT` (`.env`, optionnels, défaut
+    8443/8080) : une seule variable pour le port, lue par
+    `docker-compose.yml`, `Caddyfile` (redirection HTTP→HTTPS) et
+    `deploy-vps.yml` (smoke tests) — remplace `8443` dupliqué en dur à 4
+    endroits.
+  - `.uv-version` (racine du dépôt) : source unique pour la version de `uv`,
+    lue par `dashboard/api/Dockerfile` et `.github/workflows/dashboard.yml`.
+  - `HEALTHCHECK` sur l'image `api` + `depends_on: condition: service_healthy`
+    côté `caddy` : ferme la fenêtre de 502 transitoires au déploiement.
+  - `encode gzip` exclu de `/api/stream` dans le Caddyfile (SSE, US-218) :
+    `gzip` bufferise sa sortie, ce qui aurait retenu les événements live.
+  - `.dockerignore` exclut maintenant `android/`, `crates/`, `docs/`,
+    `firmware/`, `dashboard/web/` : seuls `contracts/` et `dashboard/api/`
+    sont copiés dans l'image.
+  - `purge-demo.sh` : `docker volume inspect` avant `rm` (distingue « absent »
+    d'une autre erreur, ex. volume encore utilisé) ; `sleep 2` remplacé par
+    un poll sur `/healthz`.
 - **Utilisateur non-root dans l'image `api`** (`USER app`, retour de revue
   SonarCloud — 4 findings sur `dashboard/api/Dockerfile` : image `python`
   tournant root par défaut, deux `uv`/`pip install` sans forcer les wheels
@@ -174,15 +203,22 @@ En session de démo, avant de commencer : `ssh vps "cd ~/dengon/dashboard/deploy
   configurer `ufw`/`iptables` sur ce VPS. On dépend entièrement du réseau
   déjà en place (et des autres groupes qui partagent la machine).
 - **Secrets GitHub Actions (`vps-prod`) pas encore configurés** au moment de
-  cette entrée : `VPS_HOST`, `VPS_PORT`, `VPS_USER`, `VPS_SSH_KEY` — à
-  ajouter dans Settings → Environments → vps-prod avant le premier run du
-  workflow.
-- **Le smoke test d'ingestion suppose le squelette permissif de l'US-110**
-  (`POST /ingest/batch` accepte `[]`) : quand US-216 (PR #91) mergera,
-  `/ingest/batch` exigera un JWT + une signature valide, et ce smoke test
-  échouera tel quel — à mettre à jour dans `deploy-vps.yml` à ce moment-là
-  (enregistrer un nœud de test via `/api/nodes` puis signer un batch avant
-  de l'envoyer).
+  cette entrée : `VPS_HOST`, `VPS_PORT`, `VPS_USER`, `VPS_SSH_KEY`,
+  `VPS_KNOWN_HOSTS` — à ajouter dans Settings → Environments → vps-prod avant
+  le premier run du workflow. `VPS_KNOWN_HOSTS` (ajouté après revue de la PR
+  #97) = sortie de `ssh-keyscan -p <VPS_PORT> <VPS_HOST>`, à générer et
+  **vérifier une fois à la main** (voir Procédure d'accès) avant de la coller
+  comme secret — sans lui, l'étape « Préparer la clé SSH » du workflow écrit
+  un `known_hosts` vide et tout `ssh`/`tar` suivant échouera (`Host key
+  verification failed`), c'est voulu : mieux vaut un run qui échoue vite
+  qu'une vérification d'hôte silencieusement désactivée.
+- **Le smoke test d'ingestion vérifie un 401, pas un aller-retour complet** :
+  depuis que US-216 (PR #91) est mergée sur `main`, `/ingest/batch` exige un
+  JWT + une signature Ed25519 valide — hors de portée d'un smoke test bash
+  sans y enregistrer un nœud de test au préalable. Le smoke test 2 vérifie
+  donc que l'auth est bien active en prod (401 sans jeton) plutôt qu'une
+  ingestion réussie de bout en bout ; ce niveau de couverture reste un choix
+  à revisiter si une ingestion réelle post-déploiement devient nécessaire.
 - **Un seul utilisateur SSH (`group3`) partagé pour toute l'équipe** : voir
   Procédure d'accès ci-dessous pour comment Paul et Oswin s'y connectent
   sans partager de clé privée entre eux.
@@ -212,6 +248,25 @@ désormais une clé. Chaque personne doit avoir **sa propre paire de clés**
 
 Le mot de passe du compte `group3` ne doit être utilisé qu'une fois par
 personne, pour l'étape 2 — jamais pour se connecter ensuite.
+
+### Secret `VPS_KNOWN_HOSTS` (une seule fois, pour le workflow)
+
+Le workflow `deploy-vps.yml` tourne sur un runner GitHub **éphémère** : son
+`~/.ssh/known_hosts` est vide à chaque run, donc il ne peut pas vérifier la
+clé d'hôte du VPS tout seul (voir Décisions — corrigé après revue de la PR
+#97). Une personne qui a déjà vérifié l'empreinte de l'hôte (via l'étape 4
+ci-dessus, ou en la comparant à une source de confiance) génère ce secret
+une fois :
+
+```
+ssh-keyscan -p 2221 51.255.38.214
+```
+
+Coller la sortie telle quelle (plusieurs lignes, une par type de clé) dans
+Settings → Environments → vps-prod → secrets → `VPS_KNOWN_HOSTS`. À refaire
+seulement si le VPS change de clé d'hôte (réinstallation du système, par
+exemple) — le workflow échouera alors explicitement (`Host key verification
+failed`) plutôt que d'accepter silencieusement la nouvelle clé.
 
 ## Pour l'oral
 

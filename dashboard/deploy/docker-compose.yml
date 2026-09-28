@@ -27,25 +27,63 @@ services:
       # plutôt que de démarrer un conteneur qui plantera à la première
       # requête (`.env` n'existe pas dans le dépôt, voir `.env.example`).
       DENGON_DASHBOARD_JWT_SECRET: ${DENGON_DASHBOARD_JWT_SECRET:?DENGON_DASHBOARD_JWT_SECRET manquant — copier .env.example vers .env et le renseigner}
-      DENGON_DASHBOARD_MAX_BATCH_BYTES: "2097152"
+      # Pas de `DENGON_DASHBOARD_MAX_BATCH_BYTES` ici (supprimé après revue de
+      # la PR #97, constat OswinFreyr) : la valeur qui était fixée en dur
+      # (2097152) est exactement `DEFAULT_MAX_BATCH_BYTES` dans
+      # `app/config.py` — redondant, et aurait divergé silencieusement si le
+      # défaut applicatif changeait un jour sans que ce fichier suive.
     volumes:
       - dengon_api_db:/data
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+      interval: 5s
+      timeout: 2s
+      start_period: 5s
+      retries: 5
 
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
     depends_on:
-      - api
+      # `service_healthy` (pas seulement `service_started`) : corrigé après
+      # revue de la PR #97 (constat OswinFreyr) — Caddy attend maintenant
+      # qu'uvicorn réponde vraiment à `/healthz` avant de démarrer son
+      # `reverse_proxy`, plutôt que de commencer avec des 502 transitoires
+      # pendant qu'`api` termine son initialisation (SQLite, schémas
+      # `contracts/`).
+      api:
+        condition: service_healthy
     environment:
       # IP publique du VPS en prod (voir .env.example) — nom/SAN du
-      # certificat auto-signé, voir Caddyfile pour pourquoi un bloc de site
-      # sans étiquette d'hôte ne suffit pas.
+      # certificat auto-signé. Le défaut `localhost` (pratique pour tester en
+      # local) vit UNIQUEMENT ici : le Caddyfile lit `{$CADDY_SITE_ADDRESS}`
+      # sans deuxième valeur de repli (corrigé après revue de la PR #97,
+      # constat OswinFreyr — le même défaut était répété trois fois dans le
+      # Caddyfile, avec le risque qu'un des trois reste sur `localhost` si on
+      # change un jour ce défaut).
       CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-localhost}
+      # Doit rester cohérent avec le port hôte publié ci-dessous
+      # (`${CADDY_HTTPS_PORT:-8443}:443`) : c'est ce que Caddy met dans
+      # l'URL de redirection HTTP→HTTPS (voir Caddyfile), et Caddy (dans le
+      # conteneur, derrière le mapping de ports Docker) n'a aucun moyen de
+      # deviner tout seul le port hôte externe.
+      CADDY_HTTPS_PORT: ${CADDY_HTTPS_PORT:-8443}
+    # `$$CADDY_SITE_ADDRESS` (double `$`) : échappe la substitution que
+    # Compose ferait lui-même au moment de lire ce fichier, pour que ce soit
+    # bien la variable d'environnement du CONTENEUR (bloc `environment:`
+    # ci-dessus, déjà résolue avec son défaut) qui soit lue au démarrage.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ "$$CADDY_SITE_ADDRESS" = "localhost" ]; then
+          echo "AVERTISSEMENT: CADDY_SITE_ADDRESS non défini (.env) — Caddy démarre avec 'localhost', le certificat TLS ne correspondra pas à l'IP publique du VPS. Voir dashboard/deploy/.env.example." >&2
+        fi
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     ports:
-      - "8080:80"
-      - "8443:443"
+      - "${CADDY_HTTP_PORT:-8080}:80"
+      - "${CADDY_HTTPS_PORT:-8443}:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

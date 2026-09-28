@@ -8,8 +8,16 @@
 # avertissement, mais le trafic est chiffré et `/healthz` est bien joignable
 # en HTTPS.
 #
-# `{$CADDY_SITE_ADDRESS:localhost}` : un bloc de site SANS étiquette d'hôte
-# (juste `:443`) laisse Caddy sans nom à mettre dans le certificat.
+# `{$CADDY_SITE_ADDRESS}` : un bloc de site SANS étiquette d'hôte
+# (juste `:443`) laisse Caddy sans nom à mettre dans le certificat. Pas de
+# valeur de repli ici (`{$CADDY_SITE_ADDRESS:localhost}`) — corrigé après
+# revue de la PR #97 (constat OswinFreyr) : ce même défaut `localhost` était
+# répété trois fois dans ce fichier (ici, le bloc `:443`, le bloc `:80`), au
+# risque qu'un des trois reste sur l'ancien défaut si on le change un jour.
+# Le défaut vit maintenant UNIQUEMENT dans `docker-compose.yml`
+# (`CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-localhost}`) : la variable
+# d'environnement du conteneur est donc TOUJOURS présente quand Caddy
+# démarre, ce fichier n'a plus besoin de son propre repli.
 # **Piège rencontré en le testant en local** : `auto_https off` en option
 # globale (mis d'abord par réflexe — « pas besoin d'HTTPS automatique
 # puisque `tls internal` est déjà explicite ») coupe aussi l'émission du
@@ -33,18 +41,33 @@
 	# fonctionnait (SNI forcé manuellement), mais `curl https://<IP>:8443/…`
 	# échouait toujours, preuve que ce n'était PAS le certificat lui-même
 	# mais l'absence de SNI côté client réel.
-	default_sni {$CADDY_SITE_ADDRESS:localhost}
+	default_sni {$CADDY_SITE_ADDRESS}
 }
 
-{$CADDY_SITE_ADDRESS:localhost}:443 {
+{$CADDY_SITE_ADDRESS}:443 {
 	tls internal
-	encode gzip
+	# `encode gzip` exclu du SSE (corrigé après revue de la PR #97, remarque
+	# POWLAIR n°4) : `gzip` bufferise sa sortie par blocs, ce qui retiendrait
+	# les événements de `GET /api/stream` (US-218, `text/event-stream`) au
+	# lieu de les laisser passer un par un — le flux live n'arriverait plus
+	# qu'en paquets, ou seulement au heartbeat. `reverse_proxy` flushe déjà
+	# immédiatement le SSE de son côté (rien à changer là), donc il suffit
+	# de ne pas repasser ensuite par `encode` pour ce chemin précis.
+	@nostream not path /api/stream
+	encode @nostream gzip
 	reverse_proxy api:8000
 }
 
-# HTTP (port hôte 8080, voir docker-compose.yml) redirigé vers HTTPS plutôt
-# que fermé : plus utile pour un client qui tape l'URL sans schéma, et {host}
-# préserve le nom/IP effectivement utilisé sans le coder en dur ici.
-{$CADDY_SITE_ADDRESS:localhost}:80 {
-	redir https://{host}:8443{uri} permanent
+# HTTP (port hôte {$CADDY_HTTP_PORT:8080}, voir docker-compose.yml) redirigé
+# vers HTTPS plutôt que fermé : plus utile pour un client qui tape l'URL sans
+# schéma, et {host} préserve le nom/IP effectivement utilisé sans le coder en
+# dur ici. Le port HTTPS cible, en revanche, ne peut PAS se déduire de la
+# requête entrante (Caddy écoute sur le port interne 443, mappé côté hôte par
+# Docker) — `{$CADDY_HTTPS_PORT}` reprend la même variable que le mapping de
+# port dans `docker-compose.yml` (`CADDY_HTTPS_PORT: ${CADDY_HTTPS_PORT:-8443}`,
+# seule source du défaut, même logique que `CADDY_SITE_ADDRESS` ci-dessus)
+# (corrigé après revue de la PR #97, constat OswinFreyr : le port 8443 était
+# répété en dur ici et deux fois dans deploy-vps.yml).
+{$CADDY_SITE_ADDRESS}:80 {
+	redir https://{host}:{$CADDY_HTTPS_PORT}{uri} permanent
 }

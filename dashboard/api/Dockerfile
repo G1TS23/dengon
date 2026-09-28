@@ -12,9 +12,12 @@ FROM python:3.13-slim
 # l'installation (SonarCloud docker:S8541). uv publie des wheels pour toutes
 # les plateformes courantes, donc rien à construire ici de toute façon.
 #
-# Version épinglée, la même que `.github/workflows/dashboard.yml`
-# (`astral-sh/setup-uv`) — un `uv` différent en CI et en déploiement serait
-# une source de divergence de résolution de dépendances silencieuse.
+# Version lue depuis `.uv-version` (racine du dépôt) — SOURCE UNIQUE partagée
+# avec `.github/workflows/dashboard.yml` (`astral-sh/setup-uv`) : un `uv`
+# différent en CI et en déploiement serait une source de divergence de
+# résolution de dépendances silencieuse. Corrigé après revue de la PR #97
+# (constat OswinFreyr) : la version était dupliquée en dur dans les deux
+# fichiers, sans rien pour signaler un oubli si l'un des deux changeait.
 #
 # Utilisateur non privilégié dans la même instruction (SonarCloud
 # docker:S7031 — fusionner les `RUN` consécutifs, une couche d'image de
@@ -22,7 +25,9 @@ FROM python:3.13-slim
 # `uvicorn` n'a besoin d'écrire nulle part une fois démarré, root ne lui
 # sert à rien. Créé tôt, activé (`USER`) tout à la fin, une fois que tous
 # les `COPY`/`RUN` qui écrivent dans l'image sont faits.
-RUN pip install --no-cache-dir --only-binary :all: uv==0.9.25 \
+COPY .uv-version /tmp/.uv-version
+RUN pip install --no-cache-dir --only-binary :all: "uv==$(cat /tmp/.uv-version)" \
+    && rm /tmp/.uv-version \
     && groupadd --system app && useradd --system --gid app --no-create-home app
 
 WORKDIR /srv/dengon
@@ -62,4 +67,18 @@ RUN chown -R app:app /srv/dengon && mkdir -p /data && chown app:app /data
 USER app
 
 EXPOSE 8000
+
+# Corrigé après revue de la PR #97 (constat OswinFreyr, docker-compose.yml) :
+# sans HEALTHCHECK, `depends_on: [api]` dans docker-compose.yml ne garantit
+# que le démarrage du conteneur, pas qu'uvicorn écoute déjà — Caddy pouvait
+# démarrer son reverse_proxy avant, avec des 502 transitoires au déploiement.
+# `python3` (déjà dans l'image, pas de dépendance `curl` à ajouter) plutôt
+# qu'un utilitaire externe.
+HEALTHCHECK --interval=5s --timeout=2s --start-period=5s --retries=5 \
+    CMD ["python3", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"]
+
+# Un seul worker uvicorn (pas de `--workers`) : le `Broadcaster` du flux SSE
+# (`app/stream.py`, US-218) tient ses abonnés en mémoire process — plusieurs
+# workers verraient chacun un sous-ensemble des événements, sans rien pour le
+# signaler (retour de revue PR #97, POWLAIR).
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -15,3 +15,15 @@ firmware/*/build/
 android/**/build/
 .idea/
 .vscode/
+
+# Répertoires entiers absents de l'image (seuls `contracts/` et
+# `dashboard/api/` sont `COPY`-és, voir dashboard/api/Dockerfile) — ajoutés
+# après revue de la PR #97 (constat OswinFreyr) : sans eux, tout le monorepo
+# (android/, firmware/, crates/, docs/, dashboard/web/) était hashé et
+# envoyé au démon Docker à chaque `docker compose up -d --build` lancé
+# depuis un checkout complet, pour rien.
+android/
+crates/
+docs/
+firmware/
+dashboard/web/

@@ -10,6 +10,133 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-224 : corrections suite à la revue de la PR #97
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `.uv-version` (nouveau), `.dockerignore`,
+`.github/workflows/{dashboard,deploy-vps}.yml`, `dashboard/api/Dockerfile`,
+`dashboard/deploy/{docker-compose.yml,Caddyfile,.env.example,purge-demo.sh}`,
+`docs/suivi/`.
+**Lot :** US-224 (issue #38). Branche `feat/US-224-deploy-vps` (PR #97), base
+`main`.
+
+### Fait
+- **Fusion de `main` dans la branche** : la PR indiquait un conflit de merge
+  côté GitHub (`mergeable_state: dirty`) ; en local, `git merge origin/main`
+  s'est terminé sans aucun conflit (probablement un état de calcul GitHub pas
+  encore à jour). Vérifié après fusion : 72 tests + ruff toujours au vert.
+- **Revue formelle POWLAIR (APPROVED, 5 remarques) + revue inline
+  OswinFreyr (10 commentaires, COMMENTED)** — tous vérifiés contre le code
+  réel, tous corrigés :
+  1. **Smoke test d'ingestion (bloquant)** — `deploy-vps.yml` attendait un
+     `202` sur `POST /ingest/batch` sans `Authorization`. Or US-216 (PR #91)
+     est déjà mergée sur `main` (donc dans cette branche après la fusion) :
+     l'appel renvoie maintenant `401`. Changé pour vérifier ce `401` (teste
+     que l'auth est bien active en prod), comme suggéré par POWLAIR — signer
+     un batch réel dans un smoke test bash aurait demandé de reproduire la
+     signature Ed25519 hors de portée de ce script.
+  2. **`StrictHostKeyChecking accept-new`** → `VPS_KNOWN_HOSTS` (nouveau
+     secret, `ssh-keyscan` vérifié une fois à la main) + `StrictHostKeyChecking
+     yes`. `accept-new` sur un runner éphémère acceptait la clé d'hôte sans
+     vérification à CHAQUE run, pas seulement au premier contact.
+  3. **Port `8443` dupliqué à 4 endroits** (Caddyfile, `docker-compose.yml`,
+     2× `deploy-vps.yml`) → `CADDY_HTTPS_PORT`/`CADDY_HTTP_PORT` (`.env`,
+     optionnels), une seule variable relue partout.
+  4. **`localhost` (défaut `CADDY_SITE_ADDRESS`) tripé dans le Caddyfile** →
+     le défaut vit maintenant uniquement dans `docker-compose.yml`
+     (`${CADDY_SITE_ADDRESS:-localhost}`), le Caddyfile lit juste
+     `{$CADDY_SITE_ADDRESS}` (toujours présente côté conteneur).
+  5. **Ce même défaut silencieux, incohérent avec le `:?` du secret JWT** →
+     Caddy émet maintenant un avertissement au démarrage (`entrypoint`/
+     `command` shell dans `docker-compose.yml`) si `CADDY_SITE_ADDRESS` vaut
+     encore `localhost`.
+  6. **`uv==0.9.25` dupliqué** entre `Dockerfile` et `dashboard.yml` →
+     `.uv-version` (racine), lu par les deux.
+  7. **`DENGON_DASHBOARD_MAX_BATCH_BYTES: "2097152"` redondant** avec le
+     défaut de `config.py` → ligne supprimée.
+  8. **Pas de garde `api`/`caddy`** → `HEALTHCHECK` (Dockerfile, `python3`,
+     pas de dépendance `curl` ajoutée) + `depends_on: condition:
+     service_healthy`.
+  9. **`docker volume rm ... || echo "(déjà absent)"`** avalait toute erreur,
+     pas seulement « absent » → `docker volume inspect` avant `rm`.
+  10. **`sleep 2` non vérifiant** (`purge-demo.sh`) → poll sur `/healthz` via
+      `docker compose exec`.
+  11. **`context: ../..` envoie tout le monorepo** → `.dockerignore` exclut
+      `android/`, `crates/`, `docs/`, `firmware/`, `dashboard/web/` (seuls
+      `contracts/`+`dashboard/api/` sont `COPY`-és).
+  12. **`encode gzip` sur le SSE** (remarque POWLAIR, anticipant #95) →
+      exclu de `/api/stream` via un matcher `@nostream not path /api/stream`.
+  13. **`tar xzf` ne purge pas les fichiers retirés du dépôt** → `rm -rf` sur
+      le VPS avant extraction, limité à `dashboard/api`/`contracts` — **pas**
+      `dashboard/deploy` (contrairement à la suggestion initiale de la
+      revue) : `dashboard/deploy/.env` (secret JWT, adresse Caddy) vit sur le
+      disque du VPS, jamais dans l'archive transférée, et ce workflow
+      s'interdit explicitement d'y toucher (voir son commentaire d'en-tête).
+  14. **Un seul worker uvicorn** (`Broadcaster` en mémoire, US-218) →
+      documenté en commentaire près du `CMD` du Dockerfile, pas de
+      changement de comportement.
+
+### Pourquoi / décisions
+- Correctifs appliqués directement sur `feat/US-224-deploy-vps` (branche de
+  la PR #97), pas sur une branche séparée — même raisonnement que pour la PR
+  #100 : ce sont des correctifs de revue sur une PR déjà ouverte.
+- Smoke test d'ingestion réduit à vérifier un `401` plutôt qu'une ingestion
+  complète : signer un batch Ed25519 dans un script bash de smoke test
+  aurait dupliqué une part significative de la logique de `contracts/tools/
+  validate.py`/des tests Python, pour un script qui n'a besoin que de
+  prouver que le déploiement a bien pris en compte l'auth de #91.
+- **Non vérifié dans cette session** : aucun démon Docker disponible dans cet
+  environnement (`docker build`/`docker compose up` échouent avec « no such
+  file or directory » sur `/var/run/docker.sock`) — donc pas de build réel
+  de l'image ni de run des services. Compensé par `docker compose config`
+  (résolution des variables/`depends_on`/healthcheck vérifiée), `bash -n`/
+  `sh -n` sur les scripts modifiés, et relecture attentive de la syntaxe
+  Caddyfile (matcher `@nostream`, `{$VAR}`) contre la documentation Caddy —
+  **à revérifier sur le VPS réel avant le prochain déploiement**.
+
+### Écarts vs conception
+- Aucun nouveau — écarts déjà consignés pour US-224 inchangés (ports
+  8080/8443, TLS auto-signé).
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les 5 remarques de la revue POWLAIR et les 10 commentaires inline
+  d'OswinFreyr sur la PR #97 sont corrigés. Le conflit de merge signalé par
+  GitHub s'est résorbé après un simple `git merge origin/main` local.
+- Reste à faire avant de fermer l'issue : **exécuter réellement le workflow
+  sur le VPS** (jamais fait depuis GitHub Actions, voir
+  `modules/deploiement-vps.md` §Limites) — ce qui suppose de configurer le
+  nouveau secret `VPS_KNOWN_HOSTS` (procédure documentée) en plus des 4
+  secrets déjà listés.
+- Fiche module mise à jour : `modules/deploiement-vps.md`.
+- `02-avancement.md` : pas de changement de périmètre/pourcentage, pas édité.
+
+### Vérification (commandes réellement exécutées)
+```
+$ git merge origin/main --no-edit   # sur feat/US-224-deploy-vps
+(fusion sans conflit — 46 fichiers, voir détail dans le diff)
+
+$ uv run --extra dev pytest -q      # dashboard/api, après fusion + fix Dockerfile
+72 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+
+$ docker compose --env-file <test> config   # dashboard/deploy/
+(résolution des variables CADDY_*/DENGON_*, depends_on.condition,
+healthcheck — conforme à l'attendu)
+
+$ bash -n dashboard/deploy/purge-demo.sh
+(rien — syntaxe valide)
+
+$ python3 -c "import yaml; yaml.safe_load(open(f))" # sur les 3 fichiers YAML modifiés
+OK (×3)
+```
+- `docker build`/`docker compose up` réels **non exécutés** (pas de démon
+  Docker dans cette session) — voir Pourquoi/décisions.
+
 ## 2026-09-28 — US-224 : rebase de la PR #97 + 4 findings SonarCloud corrigés
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
