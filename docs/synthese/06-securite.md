@@ -112,14 +112,14 @@ mergée le 2026-09-11, commit `b8fae88` ; détail complet dans
    `use-getrandom` (indisponible sur xtensa), `snow` 0.10 compile mais le
    `DefaultResolver::resolve_rng()` renvoie `None` au runtime — un
    `CryptoResolver` maison branché sur `esp_fill_random()` de l'ESP-IDF est
-   nécessaire. **Aucune US actuelle ne porte explicitement ce point** :
-   US-307 (`libdengon_core.a` + `cbindgen`) ne couvre que le linkage C, pas
-   l'implémentation du resolver ; US-308 (tâches FreeRTOS + `Store`) ne le
-   mentionne pas non plus (retour de revue #66, point d'OswinFreyr — vérifié
-   sur les deux issues). À ajouter aux critères d'acceptation de US-307 ou
-   US-308 avant S3, sans quoi le point risque d'être oublié. `esp_fill_random()`
-   n'est un vrai TRNG que si le Wi-Fi ou le Bluetooth est actif, ou après
-   `bootloader_random_enable()` — à vérifier au moment de l'implémenter.
+   nécessaire. **Porté par US-308 (#46)** — le critère d'acceptation
+   « `CryptoResolver` custom branché sur `esp_fill_random()` » y a été ajouté
+   (retour de revue #66, round 5, point d'OswinFreyr : le report dans une
+   doc de synthèse seule risquait d'être oublié au moment de démarrer US-308
+   deux sprints plus tard). L'épinglage `snow ≥ 0.10.0` est de même porté par
+   US-204 (#18). `esp_fill_random()` n'est un vrai TRNG que si le Wi-Fi ou le
+   Bluetooth est actif, ou après `bootloader_random_enable()` — à vérifier
+   au moment de l'implémenter (US-308).
 
 La seconde condition est la plus significative pour ce document : c'est elle
 qui porte sur la qualité de l'aléa d'un handshake Noise, donc sur la sécurité
@@ -295,13 +295,13 @@ consomme ce mapping comme contrat d'entrée.
 | --- | --- | --- |
 | Signature | Ed25519 | `ed25519-dalek` v2 |
 | Accord de clés | X25519 | `x25519-dalek` |
-| Framework de session | Noise `XX` / `X` | `snow` |
+| Framework de session | Noise `XX` / `X` | `snow` **≥ 0.10.0** |
 | AEAD | ChaCha20-Poly1305 | `chacha20poly1305` (via `snow`) |
 | Chiffrement base locale | XChaCha20-Poly1305 (champ par champ) | `chacha20poly1305` |
 | Hash | SHA-256 / SHA-512 | `sha2` |
 | MAC (tags) | HMAC-SHA256 | `hmac` |
 | KDF (au besoin) | HKDF-SHA256 | `hkdf` |
-| Aléa | OS CSPRNG | `getrandom` / `rand_core::OsRng` |
+| Aléa | OS CSPRNG (mobile) / TRNG ESP32 (firmware) | `getrandom` / `rand_core::OsRng` (mobile) ; `esp_fill_random()` via `CryptoResolver` custom (firmware, §3) |
 
 Règles : **pas de crypto maison** ; versions épinglées ; `cargo audit` +
 `cargo deny` en CI ; revue par un tiers avant le premier déploiement « produit ».

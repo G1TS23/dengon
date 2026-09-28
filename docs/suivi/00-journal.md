@@ -10,6 +10,52 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-112 : round 5 de revue d'OswinFreyr — texte de `06-securite.md`/`00-contexte-global.md` aligné avec le report dans les issues
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md` (§3, §8),
+`docs/synthese/00-contexte-global.md` (ligne A-3/B-1)
+**Lot :** US-112, PR #66
+
+### Fait
+- **§3, condition 2** : « Aucune US actuelle ne porte explicitement ce
+  point […] À ajouter aux critères d'acceptation de US-307 ou US-308 »
+  remplacé par « Porté par US-308 (#46) », maintenant que le critère est
+  réellement dans l'issue (round précédent).
+- **§8 (tableau des primitives), corrigé pour ne plus contredire le §3** :
+  - Ligne « Aléa » : « OS CSPRNG » / `getrandom` seul était faux pour
+    l'ESP32 — le §3 explique juste au-dessus que `getrandom` n'a pas de
+    backend xtensa. Remplacé par « OS CSPRNG (mobile) / TRNG ESP32
+    (firmware) » / `getrandom`+`OsRng` (mobile) et `esp_fill_random()` via
+    `CryptoResolver` (firmware).
+  - Ligne « Framework de session » : `snow` sans version, alors que le
+    texte juste en dessous exige des « versions épinglées » — ajouté
+    `≥ 0.10.0`.
+- **`00-contexte-global.md`, ligne A-3/B-1** : « `CryptoResolver` sur
+  `esp_fill_random()` (non encore assigné à une US) » → référence les
+  issues réelles (#18, #46).
+
+### Pourquoi / décisions
+- Retour d'OswinFreyr, revue de suivi du 2026-09-28 : les 2 remarques du
+  round précédent étaient bien traitées (vérifiées sur GitHub), mais le
+  texte de la doc de synthèse elle-même n'avait pas suivi le report dans
+  les issues — incohérence pointée comme « à corriger avant merge » sur le
+  tableau §8 (contradiction interne avec le §3).
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Les 2 points de ce round sont traités.
+
+### Vérification (commandes réellement exécutées)
+```
+$ grep -n "esp_fill_random\|snow" docs/synthese/06-securite.md
+(vérifié manuellement : §3 et §8 cohérents, plus de contradiction)
+```
+
+---
+
 ## 2026-09-28 — US-112 : round de revue d'OswinFreyr sur la PR #66, gap `CryptoResolver` reporté dans les issues
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
