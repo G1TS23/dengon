@@ -2,7 +2,7 @@
 
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame).
-**Dernière mise à jour :** 2026-09-16
+**Dernière mise à jour :** 2026-09-28
 **État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108).
 
 ## À quoi ça sert
@@ -124,13 +124,19 @@ codec (US-201). Le flux visé : `04-architecture.md` §4.
   `Header::{header_len, wire_len, flags_are_consistent}`, **un bit réservé
   posé n'invalide plus `flags_are_consistent()`** (nouveau, retour de revue
   #63), `AppFrameKind`/`AckStatus`.
-- `tests/protocol_vectors.rs` — 3 tests : les 8 vecteurs `accept` sont
+- `tests/protocol_vectors.rs` — 4 tests : les 8 vecteurs `accept` sont
   structurellement cohérents avec leurs `expect` (via `protocol::{consts,
   types}`) ; les 5 vecteurs `reject` violent chacun une règle du format ;
-  `Inventory` a bien le type `0x0D`.
+  `Inventory` a bien le type `0x0D` ; **les 8 vecteurs `accept` ont tous
+  `ttl > 1` et portent tous `RELAY_OK`**
+  (`accept_vectors_with_ttl_above_1_have_relay_ok`, nouveau — retour de revue
+  #63, round 3 : garantit que l'invariant « un paquet broadcast relayable
+  porte `RELAY_OK` » (`synthese/05:203`) reste vrai vecteur par vecteur, pas
+  seulement pour les deux corrigés au round 2).
 - `src/lib.rs` — 2 tests fumigènes (inchangés).
-- Commande : `cargo test -p dengon-core` → **18 passés** (15 lib + 3 intégration
-  + 0 doc), vérifié le 2026-09-16. `clippy -D warnings` propre, y compris avec
+- Commande : `cargo test -p dengon-core` → **19 passés** (15 lib + 4 intégration
+  + 0 doc), vérifié le 2026-09-28 (round 3 de revue). `clippy -D warnings`
+  propre, y compris avec
   `cast_possible_truncation`/`cast_sign_loss`/`cast_possible_wrap` activés.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
   temporairement fait échouer `accept_vectors_are_structurally_consistent`

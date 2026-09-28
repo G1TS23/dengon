@@ -9,7 +9,6 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
----
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
 
@@ -152,6 +151,7 @@ YAML valide
   validation se limite à un contrôle de syntaxe YAML. Son premier vrai run aura
   lieu à l'ouverture de la PR.
 
+---
 
 ## 2026-09-25 — `protocol::{consts, types}` : revue round 2 d'OswinFreyr sur la PR #63 (US-108)
 
