@@ -1,0 +1,34 @@
+{
+  "batch_id": "a9d5fb9c6e20066e43aa370d856d8db639e825cf9859ff7dfcc666c55cbdbfb1",
+  "node_id": "relay-3f2a9c",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "47517e1b22272f90d2a17a661e2a6fe571d5a519f688278f1b916960422569e9",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1008,
+      "ts_ms": 1725800000080,
+      "name": "envelope.offered",
+      "payload": {
+        "count": 3,
+        "to_peer": "a1b2c3d4e5f60718"
+      }
+    },
+    {
+      "event_id": "9c27b8de1e7ab0d55f41c31e26907c7c3bfe0c8c13996a9967a86ce5fc540e54",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1009,
+      "ts_ms": 1725800000085,
+      "name": "envelope.handoff",
+      "payload": {
+        "msg_log_id": "4d5e6f7a8b9c0d1e",
+        "recipient_tag": "00112233445566778899aabbccddeeff",
+        "to_peer": "a1b2c3d4e5f60718",
+        "budget_after": 3
+      }
+    }
+  ],
+  "sig": "Ijng93o2E8XlQ8qRBM5WrGXAinFh8m+cNEnoD0CFmNn7TBmk6V7Ld7PLT3JrbKUud11zUC5lYXXwqHSXXfW+Bg=="
+}

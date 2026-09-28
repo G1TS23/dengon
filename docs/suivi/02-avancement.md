@@ -21,6 +21,8 @@
 | App Android | Kotlin + Compose | squelette : Compose + `MeshForegroundService` (`foregroundServiceType="connectedDevice"`) + permissions BLE à l'exécution + notification permanente. Pas de vraie logique BLE (GATT). | 15 % (US-109 fait ; US-213/214/215 restent) | [android-app](modules/android-app.md) |
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | squelette ESP-IDF v5.5 : annonce le service `dengon` (UUID 128 bits + manufacturer data `peerID`‖flags, nom en réponse de scan), table GATT `CHAR_RX` (write sans réponse) / `CHAR_TX` (notify) déclarée, ATT MTU 517 demandé. `peerID` bouchonné sur la MAC eFuse. Pas de scan/central, pas de `dengon_core_ffi`, pas de routage, pas de Wi-Fi. | 10 % (US-114 fait ; US-220/307/308/309 restent) | [firmware-relay](modules/firmware-relay.md) |
 | Dashboard `api` | FastAPI + SQLite + SSE (A-5) | — | 0 % | — |
+| Dashboard `web` | page légère + SSE (A-5) | — | 0 % | — |
+| Contrats (`contracts/`) | schémas d'événements + fixtures golden | événements : envelope/batch/payloads schema + CANONICAL.md + 20 fixtures signées + validate.py (US-107, PR #60) | ~15 % | [contracts-events](modules/contracts-events.md) |
 | Dashboard `web` | page légère + SSE (A-5) | **squelette livré** (US-111) : page statique liste + détail (timeline des sauts), données bidon, aucun appel réseau, rendu vérifié à 360 px. Pas d'API ni de SSE (US-217/US-219) | 15 % | [dashboard-web](modules/dashboard-web.md) |
 | Contrats (`contracts/`) | schémas d'événements + fixtures golden | — | 0 % | — |
 | Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | — | 0 % | — |
