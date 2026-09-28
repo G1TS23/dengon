@@ -9,6 +9,63 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-28 — `contracts/events` : round 5 de revue (OswinFreyr) sur la PR #60
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `contracts/events/envelope.schema.json`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/modules/contracts-events.md`
+**Lot :** US-107, PR #60
+
+### Fait
+- **`envelope.schema.json` : `name` ferme réellement le trou `\n`** avec
+  `"not": {"pattern": "\n"}`, en plus de `minLength`/`maxLength`. La
+  description précédente présentait ces bornes comme la parade au trou —
+  trompeur : vérifié avec `jsonschema` en isolant la propriété `name`,
+  `"msg.queued\n"` (11 caractères) passait toujours le schéma seul, seul
+  l'`enum` de `payloads.schema.json` le rejetait en pratique.
+- **Décision de contrat explicite sur la longueur de `node_id`** (6
+  caractères hex = 24 bits) : nouvelle entrée dans
+  `03-ecarts-conception.md` qui quantifie le risque de collision
+  (approximation des anniversaires : ~2,9 % pour 1000 nœuds, négligeable à
+  l'échelle du MVP — 5-8 appareils, B-4) et fixe la condition de levée
+  (augmenter la longueur avant un déploiement à plusieurs centaines de
+  nœuds).
+
+### Pourquoi / décisions
+- Round 5 de revue d'OswinFreyr sur la PR #60 (commentaire GitHub daté du
+  2026-09-28) : 2 points non bloquants, tous deux traités.
+- `name` : fermer le trou directement (option 2 proposée par Oswin) plutôt
+  que corriger seulement la description (option 1) — plus robuste pour un
+  futur consommateur direct de l'enveloppe, coût nul (`not` est standard
+  JSON Schema, neutre en langage comme le reste de `contracts/`).
+
+### Écarts vs conception
+- `docs/synthese/09-dashboard-et-donnees.md:64` reste volontairement vague
+  (« un hash », pas de longueur) — la longueur réelle (6 hex) est
+  maintenant documentée comme décision de contrat dans
+  `03-ecarts-conception.md`, pas dans la synthèse.
+
+### État après cette session
+- Les 2 points du round 5 sont traités. Fiche module mise à jour.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run python3 -c "
+import json, jsonschema
+schema = json.load(open('events/envelope.schema.json'))
+v = jsonschema.Draft202012Validator(schema['properties']['name'])
+print(list(v.iter_errors('msg.queued\n')))
+"
+[<ValidationError: 'msg.queued\n' should not be valid under {'pattern': '\n'}>]
+
+$ uv run ruff check .
+All checks passed!
+```
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`

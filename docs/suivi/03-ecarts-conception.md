@@ -386,6 +386,50 @@ _(aucun écart pour l'instant)_
   valeur hors catalogue, échoue à l'égalité de chaîne peu importe la regex du
   champ dans `envelope.schema.json`. Le trou décrit ci-dessus ne s'applique
   donc plus qu'à `node_id`.
+- **Mise à jour 2026-09-28 (retour de revue #60, round 5, point 1
+  d'OswinFreyr) :** `name` a en réalité toujours deux protections
+  indépendantes maintenant — l'`enum` ci-dessus côté `payloads.schema.json`,
+  **et** `envelope.schema.json` lui-même ferme le trou avec `"not":
+  {"pattern": "\n"}` sur la propriété `name`. Le motif `node_id` reste seul
+  concerné par ce piège ; voir l'entrée dédiée ci-dessous sur la longueur de
+  `node_id`, qui documente pourquoi il n'a pas reçu le même traitement.
+
+---
+
+### 2026-09-28 — `node_id` : longueur hexadécimale gelée à 6 caractères (24 bits), risque de collision assumé pour le MVP (retour de revue #60, round 5, point 2 d'OswinFreyr)
+
+- **Constat :** `docs/synthese/09-dashboard-et-donnees.md:64` décrit
+  `node_id` comme « un hash », sans fixer de longueur. Le contrat
+  (`contracts/events/envelope.schema.json`, `$defs/node_id`) fige la partie
+  hexadécimale à exactement 6 caractères (`relay-[0-9a-f]{6}` /
+  `client-[0-9a-f]{6}`) — un choix fait au round 4 pour fermer le trou du
+  `$`/`\n` avec une longueur exacte par branche (`minLength == maxLength`),
+  mais jamais tranché comme décision de contrat en tant que telle : ce
+  round 4 corrigeait un piège regex, pas la taille de l'espace de noms.
+- **`node_id` sert de clé primaire** (`nodes.node_id`), entre dans le calcul
+  d'`event_id` (`SHA-256(node_id ‖ seq)`) et identifie le journal chaîné par
+  appareil (A-7). Une collision entre deux nœuds mélangerait leurs deux
+  chaînes côté dashboard et produirait de faux `integrity.chain_broken`.
+- **Risque quantifié (approximation des anniversaires,
+  `p ≈ 1 - exp(-n²/2N)`, `N = 16 777 216` pour 24 bits) :** ~0,003 % pour
+  100 nœuds, ~2,9 % pour 1 000 nœuds, ~63 % pour 6 000 nœuds. Le MVP vise
+  une démo de 5-8 appareils (B-4) — risque négligeable à cette échelle,
+  mais 6 caractères ne passerait pas à l'échelle d'un déploiement réel de
+  plusieurs centaines de nœuds sans revoir la longueur.
+- **Décision : garder 6 hex (24 bits) pour le MVP**, plutôt que de rouvrir le
+  motif en longueur variable (`{6,}` + `"not": {"pattern": "\n"}` + une borne
+  haute explicite, ex. `maxLength: 40`, qui aurait aussi fermé le trou sans
+  figer la longueur). Une longueur fixe est plus simple à documenter et à
+  tester (les fixtures golden et `docs/powl/08` utilisent déjà tous 6 hex),
+  et le MVP ne dépassera pas quelques appareils physiques.
+- **Condition de levée :** avant tout déploiement au-delà de quelques
+  centaines de nœuds simultanés, augmenter la longueur hexadécimale de
+  `node_id` (le format `relay-`/`client-` + longueur exacte reste le même
+  mécanisme, seule la borne change) et régénérer les fixtures golden en
+  conséquence.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` reste
+  volontairement vague (« un hash ») ; ce fichier est la référence pour la
+  longueur réellement figée par le contrat.
 
 ---
 

@@ -5,7 +5,7 @@ tête d'un événement d'observabilité, le corps de `POST /ingest/batch`, et
 20 exemples signés qui font référence pour tous les composants.
 **Correspond à la conception :** [`docs/powl/08-observability-events.md`](../../powl/08-observability-events.md),
 [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §9.
-**Dernière mise à jour :** 2026-09-16
+**Dernière mise à jour :** 2026-09-28
 **État :** fonctionnel — schémas + 20 fixtures + `validate.py` vert. **Contrat
 à geler** au point d'équipe (US-107).
 
@@ -180,6 +180,19 @@ tools/validate.py  (ce que lance la CI)
 - **`.github/workflows/contracts.yml` : filtre de chemin déplacé du
   déclencheur vers un `if:` de job** (`dorny/paths-filter`, retour de revue
   #60, round 3) — même piège que `core.yml`/`dashboard.yml`.
+- **Round 5 (retours d'OswinFreyr) :**
+  - **`envelope.schema.json` : `name` ferme désormais aussi le trou `\n` au
+    niveau du schéma lui-même** (`"not": {"pattern": "\n"}`), en plus de
+    l'`enum` de `payloads.schema.json` (round 3). La description du champ
+    présentait auparavant `minLength`/`maxLength` comme la parade au trou —
+    trompeur, ces bornes ne le fermaient pas (vérifié : `"msg.queued\n"`,
+    11 caractères, passait toujours le `pattern` seul). Description
+    corrigée en même temps.
+  - **Longueur hexadécimale de `node_id` (6 caractères = 24 bits) explicitement
+    tranchée comme décision de contrat pour le MVP**, pas seulement héritée
+    du correctif regex du round 4 — voir l'entrée dédiée dans
+    `03-ecarts-conception.md` (risque de collision quantifié : ~2,9 % pour
+    1000 nœuds, négligeable pour la démo à 5-8 appareils du MVP).
 
 ## Tests
 

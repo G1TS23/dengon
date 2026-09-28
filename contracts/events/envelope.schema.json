@@ -31,7 +31,8 @@
       "pattern": "^[a-z]+\\.[a-z_]+$",
       "minLength": 3,
       "maxLength": 64,
-      "description": "<domaine>.<action> en snake_case. Restreint au catalogue MVP par payloads.schema.json. minLength/maxLength en plus du pattern : le moteur regex de jsonschema (Python re) fait correspondre `$` juste avant un `\\n` final, donc `\"msg.queued\\n\"` passerait le seul pattern (même trou que node_id ci-dessous — retour de revue #60 round 4, point d'OswinFreyr ; contrairement à node_id, ce champ est déjà re-vérifié via l'enum de payloads.schema.json par validate.py, mais le schéma seul reste trop permissif pour un futur consommateur direct)."
+      "not": { "pattern": "\n" },
+      "description": "<domaine>.<action> en snake_case. Restreint au catalogue MVP par payloads.schema.json. `not: {pattern: \\n}` ferme le trou du `$` : le moteur regex de jsonschema (Python re) fait correspondre `$` juste avant un `\\n` final, donc `\"msg.queued\\n\"` passerait le seul `pattern` ci-dessus, `minLength`/`maxLength` compris (même trou que node_id ci-dessous). Ce champ était déjà re-vérifié via l'enum de payloads.schema.json par validate.py, mais le schéma seul restait trop permissif pour un futur consommateur direct de l'enveloppe (retour de revue #60 round 5, point 1 d'OswinFreyr — la description précédente documentait le trou sans le fermer)."
     },
     "payload": {
       "type": "object",
