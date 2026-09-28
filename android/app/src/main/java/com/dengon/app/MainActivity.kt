@@ -31,9 +31,6 @@ import com.dengon.app.ble.BlePermissions
 import com.dengon.app.ble.MeshForegroundService
 import com.dengon.app.ble.spike.HelloMeshSpikeScreen
 import com.dengon.app.ble.transport.TransportDebugScreen
-import com.dengon.app.ffi.DengonNodeStub
-import com.dengon.app.ffi.generateIdentity
-import com.dengon.app.identite.IdentiteLocale
 import com.dengon.app.ui.appairage.AppairageScreen
 import com.dengon.app.ui.appairage.AppairageViewModel
 import com.dengon.app.ui.conversations.ConversationsViewModel
@@ -43,16 +40,19 @@ class MainActivity : ComponentActivity() {
 
     private var permissionsGranted = mutableStateOf(false)
 
-    // Messagerie (US-214) alimentée par le bouchon FFI (US-106). Le vrai nœud
-    // (`DengonNode` généré par UniFFI) le remplacera à l'US-306 : seul ce
-    // point d'injection change. Le ViewModel survit aux rotations d'écran.
+    // Le vrai nœud `dengon-core` (US-302), unique pour le processus.
+    private val noeud get() = (application as DengonApplication).noeud
+
+    // Messagerie (US-214) sur le vrai nœud. Le ViewModel survit aux rotations
+    // d'écran.
     private val conversationsViewModel: ConversationsViewModel by viewModels {
-        ConversationsViewModel.fabrique(DengonNodeStub(generateIdentity("moi")))
+        ConversationsViewModel.fabrique(noeud)
     }
 
-    // US-215 : alimenté par le bouchon FFI (identité provisoire, voir IdentiteLocale).
+    // Appairage (US-215) : un contact confirmé devient un correspondant du
+    // nœud, sans quoi `sendMessage` le refuserait (`UnknownPeer`).
     private val appairage: AppairageViewModel by viewModels {
-        AppairageViewModel.fabrique(IdentiteLocale.identite(applicationContext))
+        AppairageViewModel.fabrique(noeud.localIdentity(), onContactVerifie = noeud::addContact)
     }
 
     private val requestPermissions =
@@ -168,9 +168,8 @@ private fun DengonScreen(
     ) {
         Text(text = stringResource(R.string.app_name))
 
-        // Messagerie sur bouchon FFI (US-214) : accessible sans permissions
-        // BLE, puisqu'aucune radio n'est utilisée tant que le vrai nœud n'est
-        // pas branché (US-306).
+        // Messagerie : accessible sans permissions BLE, puisqu'aucune radio
+        // n'alimente encore le nœud (AndroidTransport, US-213 / US-306).
         Button(onClick = onOpenMessagerie) {
             Text(text = "Conversations")
         }

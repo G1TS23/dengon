@@ -232,6 +232,8 @@ local.properties
 captures/
 .externalNativeBuild/
 .cxx/
+# libdengon_ffi.so construites par android/scripts/build-ffi.sh (US-302)
+android/app/src/main/jniLibs/
 Pods/
 *.xcuserstate
 xcuserdata/

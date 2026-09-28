@@ -34,9 +34,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.dengon.app.ffi.Conversation
-import com.dengon.app.ffi.DengonNodeStub
 import com.dengon.app.ffi.Message
-import com.dengon.app.ffi.generateIdentity
+import com.dengon.app.ffi.MessageStatus
 import kotlinx.coroutines.delay
 
 /** Période d'interrogation du nœud (`pollEvents`), en ms. */
@@ -231,21 +230,30 @@ private fun EnTete(titre: String, onRetour: () -> Unit) {
     }
 }
 
-// --- Aperçus (Android Studio) : alimentés par le bouchon, comme l'app. ---
+// --- Aperçus (Android Studio) : données fixes. Pas de nœud ici : le vrai
+// demande la bibliothèque native, absente du rendu d'aperçu. ---
+
+private val apercuMessages = listOf(
+    Message("m0", "c0", "alice", "Bienvenue sur dengon", outgoing = false, sentMs = 0L, status = MessageStatus.DELIVERED),
+    Message("m1", "c0", "moi", "Salut !", outgoing = true, sentMs = 1L, status = MessageStatus.IN_FLIGHT),
+)
+
+private val apercuConversation =
+    Conversation("c0", "alice", "Alice", lastMessage = apercuMessages.last(), unreadCount = 1u)
 
 @Preview(showBackground = true, widthDp = 360)
 @Composable
 private fun ApercuListe() {
-    val vm = ConversationsViewModel(DengonNodeStub(generateIdentity("moi")))
-    MaterialTheme { ListeConversations(vm.etat.value.conversations, onOuvrir = {}, onQuitter = {}) }
+    MaterialTheme { ListeConversations(listOf(apercuConversation), onOuvrir = {}, onQuitter = {}) }
 }
 
 @Preview(showBackground = true, widthDp = 360, heightDp = 640)
 @Composable
 private fun ApercuFil() {
-    val vm = ConversationsViewModel(DengonNodeStub(generateIdentity("moi")))
-    vm.ouvrir("conv-canned")
-    vm.modifierBrouillon("Salut !")
-    vm.envoyer()
-    MaterialTheme { FilConversation(vm.etat.value, onRetour = {}, onBrouillon = {}, onEnvoyer = {}) }
+    val etat = ConversationsUiState(
+        conversations = listOf(apercuConversation),
+        conversationOuverte = apercuConversation,
+        messages = apercuMessages,
+    )
+    MaterialTheme { FilConversation(etat, onRetour = {}, onBrouillon = {}, onEnvoyer = {}) }
 }

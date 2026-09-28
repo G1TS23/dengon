@@ -30,12 +30,13 @@ data class ConversationsUiState(
 /**
  * ViewModel des écrans de messagerie (US-214).
  *
- * Alimenté **exclusivement** par [DengonNodeInterface] : aujourd'hui le
- * bouchon `DengonNodeStub` (US-106), à l'US-306 le `DengonNode` généré par
- * UniFFI, sans changement ici.
+ * Alimenté **exclusivement** par [DengonNodeInterface] : dans l'app, le
+ * `DengonNode` généré par UniFFI sur le vrai `dengon-core` (US-302) ; dans
+ * les tests, un faux nœud en mémoire.
  *
- * Toutes les méthodes sont **synchrones** : le bouchon répond en mémoire, et
- * les tests unitaires lisent [etat] directement, sans dispatcher de test.
+ * Toutes les méthodes sont **synchrones** : le nœud Rust tient ses
+ * conversations en mémoire et répond sans E/S, et les tests unitaires lisent
+ * [etat] directement, sans dispatcher de test.
  * L'interrogation périodique du nœud ([sonder]) est cadencée par l'écran.
  * Quand le vrai FFI fera des E/S, ces appels passeront dans `viewModelScope`
  * sur un dispatcher d'E/S (US-306).

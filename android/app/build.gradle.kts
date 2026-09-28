@@ -19,6 +19,14 @@ android {
         versionName = "0.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // US-302 : seules ABI pour lesquelles build-ffi.sh construit
+        // libdengon_ffi.so. Sans ce filtre, l'AAR de JNA ajoute son
+        // libjnidispatch pour armeabi-v7a, x86, mips… : un téléphone armv7
+        // installerait l'APK puis planterait au premier appel FFI.
+        ndk {
+            abiFilters += listOf("arm64-v8a", "x86_64")
+        }
     }
 
     buildTypes {
@@ -43,6 +51,16 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        unitTests.all { test ->
+            // US-302 : les tests JVM qui passent par le vrai FFI chargent la
+            // libdengon_ffi.so construite pour l'hôte par
+            // `android/scripts/build-ffi.sh hote` (target/debug/ du workspace
+            // Cargo). Absente (Android Studio sous Windows), ces tests sont
+            // ignorés, pas en échec — voir `FfiNatif` dans les tests.
+            val libHote = providers.gradleProperty("dengon.ffi.libHote")
+                .getOrElse(rootProject.file("../target/debug").absolutePath)
+            test.systemProperty("jna.library.path", libHote)
+        }
     }
 
     buildFeatures {
@@ -76,8 +94,12 @@ dependencies {
     // scan caméra (et demande lui-même la permission CAMERA).
     implementation(libs.zxing.core)
     implementation(libs.zxing.android.embedded)
+    // US-302 : pont vers libdengon_ffi.so. L'AAR embarque le jnidispatch
+    // Android ; les tests JVM prennent le JAR, qui embarque celui de l'hôte.
+    implementation(libs.jna) { artifact { type = "aar" } }
 
     testImplementation(libs.junit)
+    testImplementation(libs.jna) { artifact { type = "jar" } }
 
     androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.test.ext.junit)

@@ -1,5 +1,6 @@
 package com.dengon.app.ui.appairage
 
+import com.dengon.app.ffi.FfiNatif
 import com.dengon.app.ffi.generateIdentity
 import com.dengon.app.ffi.identityFromQrCode
 import com.dengon.app.ffi.identityQrCode
@@ -41,6 +42,7 @@ class QrCodeTest {
 
     @Test
     fun `le QR d identite dessine se relit a l identique`() {
+        FfiNatif.exiger()
         val identite = generateIdentity("alice")
         val contenu = identityQrCode(identite)
         val relu = relire(contenu)
@@ -54,7 +56,10 @@ class QrCodeTest {
 
     @Test
     fun `regression - le QR d alice est rendu lisible par changement de masque`() {
-        val contenu = identityQrCode(generateIdentity("alice"))
+        // QR d'« alice » tel que le produisait le bouchon de l'US-106 : figé
+        // ici, car le vrai FFI tire des clés aléatoires et ne reproduirait
+        // pas ce contenu précis.
+        val contenu = QR_ALICE_US215
         // Masque choisi par défaut par ZXing : données correctes mais repères
         // introuvables par le détecteur (constaté pendant l'US-215).
         val parDefaut = QRCodeWriter().encode(
@@ -74,7 +79,8 @@ class QrCodeTest {
 
     @Test
     fun `tout QR d identite affiche se relit par detection`() {
-        // Pseudos variés, dont le format réel (hexadécimal) d'IdentiteLocale.
+        FfiNatif.exiger()
+        // Pseudos variés (vraies clés aléatoires à chaque identité).
         val pseudos = (0 until 256).map { "%08x".format(it * 16843009) } +
             (0 until 44).map { "contact $it" }
         val illisibles = pseudos.filterNot { pseudo ->
@@ -86,6 +92,7 @@ class QrCodeTest {
 
     @Test
     fun `pseudo non ASCII et pseudo long passent aussi`() {
+        FfiNatif.exiger()
         for (pseudo in listOf("Élodie 伝言", "x".repeat(255))) {
             val contenu = identityQrCode(generateIdentity(pseudo))
             assertEquals(contenu, relire(contenu))
@@ -94,7 +101,7 @@ class QrCodeTest {
 
     @Test
     fun `matrice carree avec une marge blanche`() {
-        val matrice = matriceQr(identityQrCode(generateIdentity("alice")))
+        val matrice = matriceQr(QR_ALICE_US215)
         assertEquals(matrice.width, matrice.height)
         // Marge de 2 modules : la première ligne est entièrement blanche.
         assertTrue((0 until matrice.width).none { matrice[it, 0] })
@@ -127,5 +134,7 @@ class QrCodeTest {
     private companion object {
         const val NOIR = 0xFF000000.toInt()
         const val BLANC = 0xFFFFFFFF.toInt()
+        const val QR_ALICE_US215 =
+            "dengon:v1:BWFsaWNlYWxpY2UAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABibWpkZgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     }
 }

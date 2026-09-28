@@ -1,22 +1,32 @@
 package com.dengon.app.ui.appairage
 
+import com.dengon.app.ffi.FfiNatif
+import com.dengon.app.ffi.Identity
 import com.dengon.app.ffi.generateIdentity
 import com.dengon.app.ffi.identityQrCode
 import com.dengon.app.ffi.verificationCode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 
 /**
  * Tests JVM de [AppairageViewModel] (US-215) : parcours complet de
  * l'appairage, erreurs de scan, lecture croisée (même code des deux côtés).
- * Alimentés uniquement par le bouchon FFI (US-106).
+ * Sur le vrai FFI (US-302) : ignorés sans libdengon_ffi.so (voir [FfiNatif]).
  */
 class AppairageViewModelTest {
 
-    private val alice = generateIdentity("alice")
-    private val bob = generateIdentity("bob")
+    private lateinit var alice: Identity
+    private lateinit var bob: Identity
+
+    @Before
+    fun preparer() {
+        FfiNatif.exiger()
+        alice = generateIdentity("alice")
+        bob = generateIdentity("bob")
+    }
 
     private fun vmAlice() = AppairageViewModel(alice)
 
@@ -65,6 +75,27 @@ class AppairageViewModelTest {
         val etat = vm.etat.value
         assertEquals(EtapeAppairage.Verifie(ContactVerifie(bob.peerId, "bob")), etat.etape)
         assertEquals(listOf(ContactVerifie(bob.peerId, "bob")), etat.contactsVerifies)
+    }
+
+    @Test
+    fun `confirmer transmet la carte complete du contact au noeud`() {
+        val transmis = mutableListOf<Identity>()
+        val vm = AppairageViewModel(alice, onContactVerifie = { transmis += it })
+        vm.onQrScanne(identityQrCode(bob))
+        assertTrue("rien n'est transmis avant confirmation", transmis.isEmpty())
+
+        vm.confirmer()
+        assertEquals(listOf(bob.peerId), transmis.map { it.peerId })
+        assertTrue(transmis.single().pubStatic.contentEquals(bob.pubStatic))
+    }
+
+    @Test
+    fun `refuser ne transmet rien au noeud`() {
+        val transmis = mutableListOf<Identity>()
+        val vm = AppairageViewModel(alice, onContactVerifie = { transmis += it })
+        vm.onQrScanne(identityQrCode(bob))
+        vm.refuser()
+        assertTrue(transmis.isEmpty())
     }
 
     @Test
