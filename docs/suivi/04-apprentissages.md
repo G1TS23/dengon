@@ -1116,6 +1116,38 @@ le blob, en-tête compris, et vérifie le refus.
 **Où c'est utilisé :** `crates/dengon-core/src/identity/vault.rs:74`.
 **Pour aller plus loin :** RFC 8439 §2.8 ; draft-irtf-cfrg-xchacha
 (nonce de 24 octets, sûr en tirage aléatoire).
+
+---
+
+### TLS sur une IP littérale : le client n'envoie pas de SNI (US-224)
+
+**C'est quoi :** SNI (*Server Name Indication*) est l'extension TLS par
+laquelle un client indique, en clair, quel nom d'hôte il cherche à joindre
+— c'est ce qui permet à un serveur de choisir le bon certificat quand
+plusieurs sites partagent la même IP/le même port. La RFC 6066 ne définit
+SNI que pour des **noms d'hôte** ; un client qui se connecte à une IP
+littérale (`https://51.255.38.214:8443`) n'a, par construction, aucun nom
+à y mettre, et n'envoie donc **aucune** extension SNI.
+**Pourquoi dans dengon :** le VPS de démo (US-224) n'a pas de nom de
+domaine, seulement une IP. Le reverse-proxy Caddy sélectionne pourtant son
+certificat par SNI (`tls_connection_policies` matchées par nom d'hôte) —
+sans nom envoyé par le client, Caddy ne trouve aucune politique
+correspondante et refuse la poignée de main (`tlsv1 alert internal error`).
+**Piège / surprise :** ça marchait en local avec `https://localhost:8443`
+(un nom, donc du SNI est envoyé) et cassait uniquement en pointant vers
+l'IP publique du VPS — le symptôme ne dépendait donc pas du réseau
+(local vs. Internet) mais du **type d'adresse** utilisé pour se connecter,
+ce qui n'était pas évident au premier abord. Le diagnostic décisif :
+`openssl s_client -connect <ip>:8443 -servername <ip>` réussissait (il
+permet de forcer une SNI arbitraire, y compris une IP, ce qu'un vrai client
+ne ferait jamais), alors que `curl https://<ip>:8443/...` échouait sur la
+même configuration serveur — la différence entre les deux commandes EST le
+diagnostic. La solution est l'option `default_sni` de Caddy : un nom de
+repli utilisé quand la connexion n'en fournit aucun.
+**Où c'est utilisé :** `dashboard/deploy/Caddyfile`.
+**Pour aller plus loin :** RFC 6066 §3 (SNI) ; documentation Caddy sur
+`default_sni` et `tls_connection_policies`.
+
 ---
 
 ### Routeur « sans I/O » (*sans-IO*) : l'heure et l'aléa en arguments

@@ -1,0 +1,122 @@
+# ---------------------------------------------------------------------------
+# Workflow `deploy-vps` — déploiement manuel du dashboard sur le VPS (US-224).
+# Référence : docs/suivi/modules/deploiement-vps.md.
+#
+# Déclenchement `workflow_dispatch` UNIQUEMENT (pas de `push`) : le VPS est
+# PARTAGÉ avec d'autres groupes (voir docs/suivi/03-ecarts-conception.md) —
+# un déploiement automatique à chaque merge sur `main` prendrait la décision
+# de redémarrer le service pour tout le monde sans qu'un humain ne l'ait
+# décidé ce jour-là.
+#
+# `environment: vps-prod` — les secrets (VPS_HOST/VPS_PORT/VPS_USER/
+# VPS_SSH_KEY) vivent dans cet environment GitHub, pas dans les secrets du
+# dépôt : un environment peut exiger une approbation manuelle avant de
+# s'exécuter (Settings → Environments → vps-prod → Required reviewers),
+# recommandé ici puisque c'est un déploiement réel sur un serveur partagé.
+#
+# Pas de `rsync` : absent du VPS (image de base sans lui, pas d'accès sudo
+# pour l'installer — voir docs/suivi/03-ecarts-conception.md). `tar` sur
+# ssh fait le même travail sans dépendance supplémentaire côté serveur.
+#
+# Le `.env` du VPS (secret JWT, adresse Caddy) n'est PAS touché par ce
+# workflow : il est créé une fois à la main (voir docs/suivi/modules/
+# deploiement-vps.md §Procédure d'accès) et persiste entre les déploiements
+# — le régénérer à chaque run invaliderait tous les jetons JWT déjà émis
+# aux nœuds.
+#
+# `CADDY_HTTPS_PORT` (env du job) : même variable que `docker-compose.yml`/
+# `Caddyfile`, seule source pour ce numéro de port dans ce fichier — corrigé
+# après revue de la PR #97 (constat OswinFreyr) : `8443` était répété en dur
+# deux fois ici (les deux smoke tests), sans rien en commun avec le
+# `docker-compose.yml` qui décide réellement quel port est publié.
+
+name: deploy-vps
+
+on:
+  workflow_dispatch:
+
+env:
+  CADDY_HTTPS_PORT: 8443
+
+jobs:
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    environment: vps-prod
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Préparer la clé SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # `VPS_KNOWN_HOSTS` (secret de l'environment `vps-prod`) plutôt que
+          # `StrictHostKeyChecking accept-new` — corrigé après revue de la PR
+          # #97 (remarque POWLAIR n°3) : le runner est éphémère, donc
+          # `accept-new` acceptait la clé d'hôte SANS AUCUNE vérification À
+          # CHAQUE run (pas seulement au « premier contact » comme le
+          # commentaire le laissait entendre) — du TOFU permanent, aucun
+          # changement de clé n'aurait jamais été détecté. `VPS_KNOWN_HOSTS`
+          # doit contenir la sortie de
+          # `ssh-keyscan -p <VPS_PORT> <VPS_HOST>`, vérifiée UNE FOIS à la
+          # main (voir docs/suivi/modules/deploiement-vps.md §Procédure
+          # d'accès) puis collée dans Settings → Environments → vps-prod →
+          # secrets.
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          {
+            echo "Host vps-deploy"
+            echo "  HostName ${{ secrets.VPS_HOST }}"
+            echo "  Port ${{ secrets.VPS_PORT }}"
+            echo "  User ${{ secrets.VPS_USER }}"
+            echo "  IdentityFile ~/.ssh/deploy_key"
+            echo "  UserKnownHostsFile ~/.ssh/known_hosts"
+            echo "  StrictHostKeyChecking yes"
+          } >> ~/.ssh/config
+          chmod 600 ~/.ssh/config
+
+      - name: Transférer dashboard/api, contracts, dashboard/deploy
+        run: |
+          # `rm -rf` sur `dashboard/api`/`contracts` avant l'extraction
+          # (corrigé après revue de la PR #97, remarque POWLAIR n°5) : un
+          # `tar xzf` par-dessus ~/dengon ne supprime pas les fichiers
+          # retirés du dépôt depuis le déploiement précédent — sans
+          # conséquence tant que le Dockerfile ne fait que des COPY
+          # explicites, mais ça garantit un état propre. **PAS**
+          # `dashboard/deploy` (tel quel dans la suggestion de revue) :
+          # `dashboard/deploy/.env` (secret JWT, adresse Caddy) vit sur le
+          # disque du VPS, jamais dans l'archive transférée (`.env` n'est
+          # pas suivi par git) — un `rm -rf` de ce dossier le détruirait, ce
+          # que ce workflow s'interdit explicitement (voir commentaire
+          # d'en-tête de ce fichier). `tar xzf` écrase les fichiers suivis
+          # par git dans `dashboard/deploy/` un par un sans y toucher.
+          ssh vps-deploy "rm -rf ~/dengon/dashboard/api ~/dengon/contracts && mkdir -p ~/dengon/dashboard/deploy"
+          tar czf - --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' \
+            dashboard/api contracts dashboard/deploy \
+            | ssh vps-deploy "tar xzf - -C ~/dengon"
+
+      - name: docker compose up -d --build
+        run: |
+          ssh vps-deploy "cd ~/dengon/dashboard/deploy && docker compose up -d --build"
+
+      - name: Smoke test — /healthz en HTTPS depuis l'extérieur
+        run: |
+          curl -fsSk "https://${{ secrets.VPS_HOST }}:${{ env.CADDY_HTTPS_PORT }}/healthz"
+
+      - name: Smoke test — /ingest/batch rejette bien une requête sans jeton
+        run: |
+          # Depuis US-216 (mergée sur `main`, PR #91), /ingest/batch exige un
+          # JWT valide et répond 401 sans lui — corrigé après revue de la PR
+          # #97 (constat OswinFreyr) : ce smoke test attendait encore un 202
+          # pour un POST SANS Authorization, écrit avant que US-216 ne soit
+          # mergée. Il aurait échoué au premier run réel du workflow. Vérifie
+          # maintenant, comme suggéré par POWLAIR, que l'auth est bien active
+          # en prod plutôt que de simuler une ingestion complète (qui exige
+          # un nœud enregistré + un batch signé Ed25519, hors de portée d'un
+          # smoke test bash).
+          code=$(curl -sk -o /tmp/ingest.json -w '%{http_code}' \
+            -X POST "https://${{ secrets.VPS_HOST }}:${{ env.CADDY_HTTPS_PORT }}/ingest/batch" \
+            -H 'Content-Type: application/json' -d '[]')
+          cat /tmp/ingest.json
+          test "$code" = "401"
