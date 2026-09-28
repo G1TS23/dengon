@@ -349,6 +349,29 @@ _(aucun écart pour l'instant)_
 - **Conséquences :** US-302/US-306 devront ajouter au FFI un appel
   « marquer vérifié » (et la persistance `contacts.verified_at`), et
   remplacer `IdentiteLocale` par la vraie identité (US-205).
+### 2026-09-28 — `dengon-verify` (US-305) : export binaire, pas de `LOG_ATTEST` ; écart « export partiel » d'US-206 résolu
+
+- **Prévu :** `synthese/09` §11 : entrée de journal hachée sous forme de
+  **JSON canonique** (`entry_hash = SHA-256(json_utf8)`) ; `dengon-verify`
+  (doc de module d'US-104) « lit un export de journal accompagné de son
+  `LOG_ATTEST` ».
+- **Réel :**
+  1. L'export lu est la suite binaire des `Entry::to_bytes` de `ledger`, et
+     `entry_hash` est celui que `ledger` calcule réellement (encodage
+     binaire à longueurs préfixées, US-206) — pas le JSON canonique de
+     `synthese/09` §11. Le binaire suit le code, seule source de vérité (B-5).
+  2. Pas de `LOG_ATTEST` : ce paquet n'a pas encore de format côté
+     `protocol` ni de producteur.
+  3. **Écart US-206 « `verify_chain()` ne peut pas re-vérifier un export
+     partiel » résolu** : `ledger::Anchor` + `verify_entries(entries,
+     anchor)` ; `dengon-verify --from-seq N --prev-hash HEX`.
+- **Raison :** (1) aligner le vérificateur sur ce que le journal produit
+  vraiment ; (2) rien à consommer ; (3) le dashboard reçoit des tranches.
+- **Conséquences :** le dashboard (US-310) devra transmettre l'export
+  binaire (ou le reconstruire depuis les colonnes `seq`, `ts_ms`,
+  `event_name`, `payload_json`, `prev_hash`, `entry_hash`, `sig`). L'écart
+  JSON canonique vs binaire entre `synthese/09` §11 et `ledger` reste à
+  trancher en équipe.
 - **Doc de conception mise à jour ?** non.
 
 ---

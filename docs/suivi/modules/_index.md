@@ -26,6 +26,8 @@ de son area (proposition d'organisation §10.3 point 3).
 | `dengon-verify` | [dengon-verify.md](dengon-verify.md) | esquisse | 2026-09-09 |
 | `deploiement-vps` (`dashboard/deploy/`, `.github/workflows/deploy-vps.yml`) | [deploiement-vps.md](deploiement-vps.md) | fait (US-224) | 2026-09-28 |
 | `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-28 |
+| `dengon-verify` | [dengon-verify.md](dengon-verify.md) | fonctionnel (US-305) | 2026-09-28 |
+| `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-25 |
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
 | `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **contrat v0 gelé** (US-106) | 2026-09-28 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | 4 workflows requis présents (US-222) ; checks requis de `main` pas encore élargis | 2026-09-28 |
