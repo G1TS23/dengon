@@ -138,9 +138,9 @@ impl Noeud {
             self.a_relayer.clear();
         }
         for push in self.inv.poll_push(a(now)) {
-            let mut bytes = push.bytes;
-            bytes[OCTET_TTL] = push.ttl;
-            assert!(self.t.send(push.target, &bytes).is_ok());
+            // TTL de push déjà écrit par l'inventaire : envoyé tel quel.
+            assert_eq!(push.bytes[OCTET_TTL], push.ttl);
+            assert!(self.t.send(push.target, &push.bytes).is_ok());
         }
     }
 

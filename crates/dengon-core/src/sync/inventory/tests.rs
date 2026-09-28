@@ -334,15 +334,64 @@ fn push_porte_les_octets_et_le_ttl() {
     assert!(i.remember(id(1), T0, 4, vec![0xAB; 10], a(T0)));
     let _ = i.link_up(B, a(T0));
     let _ = i.on_inventory(B, &[], a(T0));
+    // Le TTL de push est déjà écrit à l'octet TTL_OFFSET : à envoyer tel quel.
+    let mut attendu = vec![0xAB; 10];
+    attendu[TTL_OFFSET] = 4;
     assert_eq!(
         i.poll_push(a(T0)),
         vec![PushOrder {
             target: B,
             msg_id: id(1),
             ttl: 4,
-            bytes: vec![0xAB; 10],
+            bytes: attendu.into(),
         }]
     );
+}
+
+/// Retour de revue #96 : pousser le même paquet à plusieurs voisins partage
+/// les octets du cache au lieu de les copier.
+#[test]
+fn push_a_plusieurs_voisins_partage_les_octets() {
+    let mut i = avec([1], T0);
+    for l in [A, B] {
+        let _ = i.link_up(l, a(T0));
+        let _ = i.on_inventory(l, &[], a(T0));
+    }
+    let pushes = i.poll_push(a(T0));
+    assert_eq!(pushes.len(), 2);
+    assert!(Arc::ptr_eq(&pushes[0].bytes, &pushes[1].bytes));
+}
+
+#[test]
+fn paquet_trop_court_pour_le_ttl_garde_ses_octets() {
+    let mut i = inv();
+    assert!(i.remember(id(1), T0, 4, vec![7, 7], a(T0)));
+    let _ = i.link_up(B, a(T0));
+    let _ = i.on_inventory(B, &[], a(T0));
+    assert_eq!(&*i.poll_push(a(T0))[0].bytes, &[7, 7]);
+}
+
+/// Retour de revue #96 : l'expiration amortie garde les deux index
+/// cohérents (fenêtre de réception d'un côté, horodatage de l'autre).
+#[test]
+fn expiration_amortie_index_coherents() {
+    let msg_ttl = InventoryConfig::new().msg_ttl_ms;
+    let mut i = inv();
+    // 1 : reçu tôt, horodatage récent → sort par la fenêtre de 6 h.
+    assert!(i.remember(id(1), T0, 6, octets(1), a(T0)));
+    // 2 : reçu tard, horodatage ancien → sort par MSG_TTL_S avant 1.
+    let t2 = T0 + MINUTE;
+    assert!(i.remember(id(2), t2 - msg_ttl + 2 * MINUTE, 6, octets(2), a(t2)));
+    // 3 : reçu tard, horodatage récent → reste.
+    assert!(i.remember(id(3), t2, 6, octets(3), a(t2)));
+    i.purge(a(t2 + 2 * MINUTE + 1));
+    assert_eq!(i.ids(), vec![id(1), id(3)]);
+    i.purge(a(T0 + INVENTORY_WINDOW_MS));
+    assert_eq!(i.ids(), vec![id(3)]);
+    assert_eq!(i.stats().expired, 2);
+    assert_eq!(i.by_ts.len(), i.len());
+    assert!(i.forget(&id(3)));
+    assert!(i.by_ts.is_empty() && i.order.is_empty());
 }
 
 #[test]
@@ -354,20 +403,33 @@ fn cadence_bornee_par_minute_puis_reprise() {
     let max = usize::from(PUSH_MAX_PER_MIN);
     assert_eq!(i.poll_push(a(T0)).len(), max);
     assert!(i.poll_push(a(T0 + MINUTE - 1)).is_empty());
-    assert_eq!(i.next_deadline(), Some(T0 + MINUTE));
+    assert_eq!(i.next_deadline(a(T0 + MINUTE - 1)), Some(T0 + MINUTE));
     assert_eq!(i.poll_push(a(T0 + MINUTE)).len(), max);
     assert_eq!(i.poll_push(a(T0 + 2 * MINUTE)).len(), 40 - 2 * max);
-    assert_eq!(i.next_deadline(), None);
+    assert_eq!(i.next_deadline(a(T0 + 2 * MINUTE)), None);
     assert_eq!(i.stats().pushes_emitted, 40);
 }
 
 #[test]
 fn next_deadline_immediate_si_budget_restant() {
     let mut i = avec([1], T0);
-    assert_eq!(i.next_deadline(), None);
+    assert_eq!(i.next_deadline(a(T0)), None);
     let _ = i.link_up(B, a(T0));
     let _ = i.on_inventory(B, &[], a(T0));
-    assert_eq!(i.next_deadline(), Some(0));
+    assert_eq!(i.next_deadline(a(T0)), Some(0));
+}
+
+/// Retour de revue #96 : une file dont tous les paquets ont expiré ne doit
+/// pas promettre un `poll_push` non vide.
+#[test]
+fn next_deadline_ignore_une_file_de_paquets_expires() {
+    let mut i = avec([1], T0);
+    let _ = i.link_up(B, a(T0));
+    let _ = i.on_inventory(B, &[], a(T0));
+    assert_eq!(i.queued(B), 1);
+    let apres = a(T0 + INVENTORY_WINDOW_MS);
+    assert_eq!(i.next_deadline(apres), None);
+    assert!(i.poll_push(apres).is_empty());
 }
 
 #[test]
@@ -380,7 +442,7 @@ fn cadence_nulle_ne_pousse_jamais() {
     let _ = i.link_up(B, a(T0));
     let _ = i.on_inventory(B, &[], a(T0));
     assert!(i.poll_push(a(T0 + 10 * MINUTE)).is_empty());
-    assert_eq!(i.next_deadline(), Some(u64::MAX));
+    assert_eq!(i.next_deadline(a(T0 + 10 * MINUTE)), Some(u64::MAX));
 }
 
 #[test]
@@ -445,10 +507,10 @@ fn reconcilier(ga: &BTreeSet<u32>, gb: &BTreeSet<u32>) -> (Vec<MsgId>, Vec<MsgId
         let pb = nb.poll_push(a(t));
         emis.extend(core::iter::repeat_n(t, pa.len().max(pb.len())));
         for p in pa {
-            let _ = nb.remember(p.msg_id, T0, p.ttl, p.bytes, a(t));
+            let _ = nb.remember(p.msg_id, T0, p.ttl, p.bytes.to_vec(), a(t));
         }
         for p in pb {
-            let _ = na.remember(p.msg_id, T0, p.ttl, p.bytes, a(t));
+            let _ = na.remember(p.msg_id, T0, p.ttl, p.bytes.to_vec(), a(t));
         }
         pire = pire.max(emis.iter().filter(|&&e| t - e < MINUTE).count());
         t += 1_000;

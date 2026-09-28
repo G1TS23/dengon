@@ -109,10 +109,10 @@ Modules encore absents : `api` (sprint 2).
 | `sync::routing::RelayOrder<L>` | `src/sync/routing.rs:205` | `msg_id`, `ttl` à écrire, `targets` = tous les voisins **sauf la source**, calculés à l'échéance. |
 | `sync::routing::RoutingConfig` | `src/sync/routing.rs:98` | Réglages, `new(local_id)` = valeurs de `protocol::consts` + 3 valeurs propres au routeur : `LINK_MAX_PKT_PER_S = 50` (`:70`), `BROADCAST_TTL_MAX = 3` (`:76`), `DUP_CANCEL_THRESHOLD = 2` (`:87`). |
 | `SeenSet`, `RateWindow`, `SplitMix64` (privés) | `src/sync/routing.rs:563`, `:536`, `:616` | Seen-set borné (cap + expiration), fenêtre glissante bornée par son quota, PRNG 64 bits seedé pour le jitter. |
-| `sync::inventory::Inventory<L>` | `src/sync/inventory.rs:284` | Cache de réconciliation d'un nœud, **sans I/O**, générique sur le lien. `remember(id, ts, ttl, bytes, Now)` (`:356`), `forget(&MsgId)` (`:393`, ACK), `link_up(link, Now) -> Vec<MsgId>` (`:412`, notre inventaire, plus récents d'abord), `on_inventory(from, &[MsgId], Now)` (`:433`, met en file le manquant), `poll_push(Now) -> Vec<PushOrder>` (`:456`, cadencé), `next_deadline()`, `stats()`. |
-| `sync::inventory::cacheable` | `src/sync/inventory.rs:183` | `(&Header, &Decision) -> Option<u8>` : le paquet reçu entre-t-il au cache, et avec quel TTL sera-t-il poussé. `SEALED_ENVELOPE`/`NOISE_MSG`/`ACK` acceptés non livrés, `RELAY_OK` et `ttl > 1`. |
-| `sync::inventory::{encode_payload, decode_payload}` | `src/sync/inventory.rs:121`, `:141` | Payload `INVENTORY` = `count(2) ‖ msgID[count]` ; `PayloadError` (`Truncated`, `TooMany`, `LengthMismatch`) ; borne `INVENTORY_MAX_IDS = 2047`. |
-| `sync::inventory::InventoryConfig` | `src/sync/inventory.rs:206` | `cap` (`INVENTORY_CACHE_CAP = 120`), `window_ms` (`INVENTORY_WINDOW_MS` = 6 h), `msg_ttl_ms`, `push_max_per_min` (`PUSH_MAX_PER_MIN = 15`), `max_ids`. |
+| `sync::inventory::Inventory<L>` | `src/sync/inventory.rs:296` | Cache de réconciliation d'un nœud, **sans I/O**, générique sur le lien. `remember(id, ts, ttl, bytes, Now)` (`:373`, écrit le TTL de push dans les octets), `forget(&MsgId)` (`:414`, ACK), `link_up(link, Now) -> Vec<MsgId>` (`:432`, notre inventaire, plus récents d'abord), `on_inventory(from, &[MsgId], Now)` (`:453`, met en file le manquant), `poll_push(Now) -> Vec<PushOrder>` (`:476`, cadencé ; `PushOrder::bytes` = `Arc<[u8]>` partagé avec le cache, à envoyer tel quel), `next_deadline(Now)` (`:511`, ignore les files dont les paquets ont expiré), `stats()`. Expiration amortie : deux index ordonnés (réception, horodatage), comme le `SeenSet` du routeur (revue #96). |
+| `sync::inventory::cacheable` | `src/sync/inventory.rs:194` | `(&Header, &Decision) -> Option<u8>` : le paquet reçu entre-t-il au cache, et avec quel TTL sera-t-il poussé. `SEALED_ENVELOPE`/`NOISE_MSG`/`ACK` acceptés non livrés, `RELAY_OK` et `ttl > 1`. |
+| `sync::inventory::{encode_payload, decode_payload}` | `src/sync/inventory.rs:132`, `:152` | Payload `INVENTORY` = `count(2) ‖ msgID[count]` ; `PayloadError` (`Truncated`, `TooMany`, `LengthMismatch`) ; borne `INVENTORY_MAX_IDS = 2047`. |
+| `sync::inventory::InventoryConfig` | `src/sync/inventory.rs:217` | `cap` (`INVENTORY_CACHE_CAP = 120`), `window_ms` (`INVENTORY_WINDOW_MS` = 6 h), `msg_ttl_ms`, `push_max_per_min` (`PUSH_MAX_PER_MIN = 15`), `max_ids`. |
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
 | `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
 | `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
@@ -530,8 +530,11 @@ encore le codec (US-201).
   lien a donc une file de push vidée à 15 paquets/min (marge pour
   l'`INVENTORY` et le trafic direct), avec la même fenêtre glissante que le
   routeur (`RateWindow`, partagée en `pub(super)`). Le cache garde les
-  **octets bruts** (signature comprise) : pas besoin de réencoder, seul le
-  TTL (octet 2) est réécrit au push. Un push compte comme un saut (TTL − 1),
+  **octets bruts** (signature comprise) : pas besoin de réencoder, le TTL de
+  push (octet 2) est écrit **une fois** à la mise en cache, et les octets
+  sont partagés (`Arc<[u8]>`) entre le cache et chaque `PushOrder` (revue
+  #96 : pas de copie par voisin). `Arc` plutôt que `Rc` pour que
+  `Inventory` reste `Send` (runtime async de `dengon-node`). Un push compte comme un saut (TTL − 1),
   donc la réconciliation de proche en proche reste bornée par le TTL
   d'origine ; un paquet « tardif » (`NoRelay(Late)`) entre quand même au
   cache — c'est justement l'inventaire qui transporte le tardif.
@@ -737,7 +740,10 @@ encore le codec (US-201).
   posé) — depuis mesurée avec l'US-209 (voir ci-dessus), mais chaque branche de `verify_chain` (Ok/Broken/Fork/Gap) a un test
   dédié qui l'exerce explicitement.
 
-- `src/sync/inventory/tests.rs` (US-210) : **28 tests unitaires** —
+- `src/sync/inventory/tests.rs` (US-210) : **32 tests unitaires** (28 +
+  4 ajoutés par les retours de revue #96 : `next_deadline` sur file
+  expirée, octets partagés entre voisins, paquet trop court pour le TTL,
+  cohérence des index d'expiration) —
   payload (aller-retour, `count` big-endian, tronqué, longueur incohérente,
   trop d'ids), `cacheable` (par décision, portée voulue par l'émetteur,
   types), cache (doublon, éviction, capacité nulle, ordre d'arrivée,
@@ -757,6 +763,9 @@ encore le codec (US-201).
 - Commande (2026-09-28, US-210) : `cargo test -p dengon-core` → 116 lib +
   6 `inventory_mock` + 4 `protocol_vectors` + 8 `routing_mock`. Couverture :
   `sync/inventory.rs` **96,88 % des lignes**, total crate 97,61 %.
+  Après rebase sur `main` et retours de revue #96 : 322 lib + 6
+  `inventory_mock` + 8 `routing_mock` ; `sync/inventory.rs` **98,20 % des
+  lignes**, total crate 97,32 %.
 
 ## Limites connues / TODO
 

@@ -192,6 +192,72 @@ $ ssh dengon-vps "cd ~/dengon/dashboard/deploy && ./purge-demo.sh"
 $ curl -sk https://51.255.38.214:8443/healthz
 {"status":"ok"}   # HTTP 200, corrigé
 ```
+## 2026-09-28 — US-210 : rebase de la PR #96 sur `main` + retours de revue
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/inventory.rs`,
+`sync/inventory/tests.rs`, `tests/inventory_mock.rs`, `lib.rs`,
+`sync/mod.rs`, `docs/suivi/`
+**Lot :** US-210, PR #96 (revue de G1TS23)
+
+### Fait
+- Rebase : seul le commit US-210 est rejoué sur `main` (`git rebase --onto
+  origin/main 7df55d9`) ; les deux commits US-209 empilés étaient déjà sur
+  `main` via #85 (contenu identique, vérifié par `git diff`). Conflits
+  résolus dans `lib.rs`, `sync/mod.rs` (liste des modules : **`courier`,
+  `inventory`, `routing`, `status`** — point 1 de la revue, rien de perdu) et
+  `modules/dengon-core.md`. Les auto-merges avaient dupliqué la ligne
+  `dengon-core` de `02-avancement.md` et de `modules/_index.md`, et placé
+  l'entrée US-210 du journal au milieu du fichier : corrigé à la main.
+- Revue point 2 : `next_deadline(now)` prend l'heure et ignore une file
+  dont aucun paquet n'est encore valide — plus de réveil promis sur une
+  file de paquets expirés. Reste un cas assumé (documenté) : un paquet qui
+  expire entre `now` et l'échéance donne un `poll_push` vide.
+- Revue point 3 : `purge` amortie, sans allocation — index `order`
+  (réception) et nouvel index `by_ts` (horodatage), parcourus depuis le plus
+  ancien avec arrêt au premier valide, comme `SeenSet`. `remove_entry`
+  maintient les trois structures.
+- Revue point 4 : octets stockés en `Arc<[u8]>` avec le TTL de push **déjà
+  écrit** (`codec::TTL_OFFSET`) ; `PushOrder::bytes` est partagé et
+  s'envoie tel quel (`Transport::send` prend `&[u8]`) → zéro copie par push.
+- 4 tests ajoutés (32 unitaires dans `inventory/tests.rs`).
+
+### Pourquoi / décisions
+- `Arc` plutôt que `Rc` (suggéré par la revue) : `Rc` rendrait `Inventory`
+  non `Send`, gênant pour le runtime async de `dengon-node` ; `Arc` existe
+  sur la cible ESP32 (Xtensa, atomiques).
+- Écrire le TTL à la mise en cache plutôt qu'au push : il est fixe pour
+  une entrée, et c'est ce qui rend le partage sans copie possible (sinon
+  l'appelant devait copier pour réécrire l'octet 2).
+- Codec de test provisoire (`tests/common/mod.rs`) **pas** remplacé par
+  `protocol::codec` : le vrai codec impose `ADDRESSED` sur `NOISE_MSG` et
+  `SIGNED` sur `SEALED_ENVELOPE`, que les scénarios n'utilisent pas ;
+  migration laissée à une PR dédiée (noté dans la fiche module).
+
+### Écarts vs conception
+- aucun nouveau.
+
+### Appris
+- rien de nouveau.
+
+### État après cette session
+- PR #96 à jour sur `main`, retours de revue traités.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                → OK
+$ cargo clippy --workspace --all-targets -- -D warnings     → OK
+$ cargo check -p dengon-core --no-default-features          → OK (no_std)
+$ cargo test -p dengon-core
+  lib : 322 passés · inventory_mock : 6 · routing_mock : 8 · autres OK — 0 échec
+$ cargo llvm-cov -p dengon-core --summary-only
+  sync/inventory.rs  98,20 % lignes · TOTAL crate 97,32 %
+```
+
+---
+
 ## 2026-09-28 — US-210 : `sync::inventory` — échange d'inventaire, push du manquant
 
 **Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)

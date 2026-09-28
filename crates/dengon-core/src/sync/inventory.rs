@@ -35,6 +35,15 @@
 //! l'`INVENTORY` lui-même et le trafic en direct. Écart consigné dans
 //! `docs/suivi/03-ecarts-conception.md`.
 //!
+//! # Mémoire
+//!
+//! Le cache est borné par [`InventoryConfig::cap`] (cible ESP32, ~64 Ko de
+//! SRAM). Les octets sont stockés **une fois**, TTL de push déjà écrit, dans
+//! un `Arc<[u8]>` : pousser le même paquet à plusieurs voisins ne copie rien,
+//! et [`PushOrder::bytes`] s'envoie tel quel. L'expiration est **amortie**,
+//! comme le `SeenSet` du routeur : deux index ordonnés (réception, horodatage)
+//! parcourus depuis le plus ancien, arrêt au premier paquet encore valide.
+//!
 //! # Préconditions (hors de ce module)
 //!
 //! - **Quoi mettre en cache** : l'appelant passe à [`Inventory::remember`]
@@ -47,10 +56,12 @@
 //!   [`super::routing::Router::cancel`].
 
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::fmt;
 
 use super::routing::{Decision, Now, RateWindow};
+use crate::protocol::codec::TTL_OFFSET;
 use crate::protocol::consts::{FLOOD_MAX_PER_MIN_PEER, MSG_ID_LEN, MSG_TTL_S};
 use crate::protocol::{Flags, Header, MsgId, PacketType};
 
@@ -247,10 +258,11 @@ pub struct PushOrder<L> {
     pub target: L,
     /// Identifiant du paquet.
     pub msg_id: MsgId,
-    /// TTL à écrire dans l'en-tête avant émission (octet 2).
+    /// TTL du paquet poussé, déjà écrit dans [`PushOrder::bytes`].
     pub ttl: u8,
-    /// Octets bruts tels que reçus (signature comprise).
-    pub bytes: Vec<u8>,
+    /// Octets bruts tels que reçus (signature comprise), TTL de push déjà
+    /// écrit : à envoyer tels quels. Partagés avec le cache, sans copie.
+    pub bytes: Arc<[u8]>,
 }
 
 /// Compteurs cumulés depuis la création.
@@ -286,6 +298,9 @@ pub struct Inventory<L> {
     cache: BTreeMap<MsgId, Entry>,
     /// Ordre d'arrivée : `(réception monotone, n° d'arrivée)` → `msgID`.
     order: BTreeMap<(u64, u64), MsgId>,
+    /// Même contenu, trié par horodatage de l'en-tête (expiration
+    /// `MSG_TTL_S`).
+    by_ts: BTreeSet<(u64, MsgId)>,
     /// N° d'arrivée suivant (départage deux réceptions à la même ms).
     next_seq: u64,
     links: BTreeMap<L, PeerSync>,
@@ -300,6 +315,7 @@ impl<L: Copy + Ord> Inventory<L> {
             cfg,
             cache: BTreeMap::new(),
             order: BTreeMap::new(),
+            by_ts: BTreeSet::new(),
             next_seq: 0,
             links: BTreeMap::new(),
             stats: InventoryStats::default(),
@@ -349,7 +365,8 @@ impl<L: Copy + Ord> Inventory<L> {
     }
 
     /// Met en cache un paquet reçu (ou émis localement) pour le pousser aux
-    /// voisins qui ne l'ont pas. `ttl` : celui que rend [`cacheable`].
+    /// voisins qui ne l'ont pas. `ttl` : celui que rend [`cacheable`] ; il
+    /// est écrit dans `bytes` (octet [`TTL_OFFSET`]) dès la mise en cache.
     ///
     /// Rend `false` si le paquet est déjà en cache, déjà trop vieux, ou si
     /// la capacité est nulle. Plein, le cache évince le plus ancien.
@@ -358,7 +375,7 @@ impl<L: Copy + Ord> Inventory<L> {
         id: MsgId,
         timestamp_ms: u64,
         ttl: u8,
-        bytes: Vec<u8>,
+        mut bytes: Vec<u8>,
         now: Now,
     ) -> bool {
         self.purge(now);
@@ -366,22 +383,26 @@ impl<L: Copy + Ord> Inventory<L> {
             return false;
         }
         while self.cache.len() >= self.cfg.cap {
-            let Some((_, plus_ancien)) = self.order.pop_first() else {
+            let Some((_, &plus_ancien)) = self.order.first_key_value() else {
                 break;
             };
-            self.cache.remove(&plus_ancien);
+            self.remove_entry(&plus_ancien);
             self.stats.evicted += 1;
+        }
+        if let Some(octet) = bytes.get_mut(TTL_OFFSET) {
+            *octet = ttl;
         }
         let cle = (now.mono_ms, self.next_seq);
         self.next_seq += 1;
         self.order.insert(cle, id);
+        self.by_ts.insert((timestamp_ms, id));
         self.cache.insert(
             id,
             Entry {
                 cle,
                 timestamp_ms,
                 ttl,
-                bytes,
+                bytes: bytes.into(),
             },
         );
         self.stats.remembered += 1;
@@ -396,10 +417,9 @@ impl<L: Copy + Ord> Inventory<L> {
                 p.queue.retain(|q| q != id);
             }
         }
-        let Some(e) = self.cache.remove(id) else {
+        if self.remove_entry(id).is_none() {
             return false;
-        };
-        self.order.remove(&e.cle);
+        }
         self.stats.forgotten += 1;
         true
     }
@@ -473,7 +493,7 @@ impl<L: Copy + Ord> Inventory<L> {
                     target,
                     msg_id: id,
                     ttl: e.ttl,
-                    bytes: e.bytes.clone(),
+                    bytes: Arc::clone(&e.bytes),
                 });
             }
         }
@@ -482,14 +502,21 @@ impl<L: Copy + Ord> Inventory<L> {
     }
 
     /// Prochain instant (horloge monotone) où [`Inventory::poll_push`] aura
-    /// quelque chose à rendre ; `None` si toutes les files sont vides. Une
-    /// valeur passée veut dire « tout de suite ».
+    /// quelque chose à rendre ; `None` si aucune file ne contient un paquet
+    /// encore valide à `now`. Une valeur passée veut dire « tout de suite ».
+    ///
+    /// Un paquet qui expire **entre** `now` et l'échéance rendue donne un
+    /// `poll_push` vide : un réveil inutile, pas une perte.
     #[must_use]
-    pub fn next_deadline(&self) -> Option<u64> {
+    pub fn next_deadline(&self, now: Now) -> Option<u64> {
         let max = self.cfg.push_max_per_min;
         self.links
             .values()
-            .filter(|p| !p.queue.is_empty())
+            .filter(|p| {
+                p.queue
+                    .iter()
+                    .any(|id| self.cache.get(id).is_some_and(|e| !self.expired(e, now)))
+            })
             .map(|p| p.window.next_free(PUSH_WINDOW_MS, max))
             .min()
     }
@@ -498,23 +525,40 @@ impl<L: Copy + Ord> Inventory<L> {
         now.wall_ms.saturating_sub(timestamp_ms) > self.cfg.msg_ttl_ms
     }
 
+    fn window_over(&self, cle: (u64, u64), now: Now) -> bool {
+        now.mono_ms.saturating_sub(cle.0) >= self.cfg.window_ms
+    }
+
+    fn expired(&self, e: &Entry, now: Now) -> bool {
+        self.window_over(e.cle, now) || self.too_old(e.timestamp_ms, now)
+    }
+
+    /// Retire `id` du cache et de ses deux index (pas des files de push).
+    fn remove_entry(&mut self, id: &MsgId) -> Option<Entry> {
+        let e = self.cache.remove(id)?;
+        self.order.remove(&e.cle);
+        self.by_ts.remove(&(e.timestamp_ms, *id));
+        Some(e)
+    }
+
     /// Sort du cache ce qui a dépassé la fenêtre de rétention ou
-    /// `MSG_TTL_S`. Les files de push s'en aperçoivent paresseusement.
+    /// `MSG_TTL_S`. Amorti : chaque index est parcouru depuis son plus
+    /// ancien et le parcours s'arrête au premier paquet encore valide, sans
+    /// allocation. Les files de push s'en aperçoivent paresseusement.
     fn purge(&mut self, now: Now) {
-        let fenetre = self.cfg.window_ms;
-        let perimes: Vec<MsgId> = self
-            .cache
-            .iter()
-            .filter(|(_, e)| {
-                now.mono_ms.saturating_sub(e.cle.0) >= fenetre || self.too_old(e.timestamp_ms, now)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        for id in perimes {
-            if let Some(e) = self.cache.remove(&id) {
-                self.order.remove(&e.cle);
-                self.stats.expired += 1;
+        while let Some((&cle, &id)) = self.order.first_key_value() {
+            if !self.window_over(cle, now) {
+                break;
             }
+            self.remove_entry(&id);
+            self.stats.expired += 1;
+        }
+        while let Some(&(ts, id)) = self.by_ts.first() {
+            if !self.too_old(ts, now) {
+                break;
+            }
+            self.remove_entry(&id);
+            self.stats.expired += 1;
         }
     }
 }
@@ -526,9 +570,10 @@ struct Entry {
     cle: (u64, u64),
     /// Horodatage de l'en-tête (horloge murale de l'émetteur).
     timestamp_ms: u64,
-    /// TTL à écrire au push.
+    /// TTL de push (déjà écrit dans `bytes`).
     ttl: u8,
-    bytes: Vec<u8>,
+    /// Octets bruts, TTL de push écrit, partagés avec les `PushOrder`.
+    bytes: Arc<[u8]>,
 }
 
 /// État de réconciliation avec un voisin.
