@@ -48,9 +48,9 @@ proptest    = { workspace = true }
 # (dengon-ble dépend de dengon-core) : Cargo l'autorise, et les tests
 # d'intégration lient la même instance de dengon-core que dengon-ble.
 dengon-ble  = { workspace = true }
-# Lecture des vecteurs de conformité (tests/vectors_v0.json, tests/vectors/
-# crypto_v0.json) — via `Value`, pas de derive, donc `serde` n'est pas tiré
-# comme dépendance de proc-macro.
+# Lecture des vecteurs de conformité (contracts/packet/vectors_v0.json,
+# contracts/packet/crypto_v0.json) — via `Value`, pas de derive, donc `serde`
+# n'est pas tiré comme dépendance de proc-macro.
 serde_json  = { workspace = true }
 
 [lints]

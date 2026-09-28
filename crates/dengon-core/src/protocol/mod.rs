@@ -17,11 +17,10 @@
 //! - [`fragment`] — fragmentation / réassemblage L2 (US-202).
 //!
 //! Les **vecteurs de conformité v0** vivent dans
-//! `crates/dengon-core/tests/vectors_v0.json` (neutre en langage) et sont
+//! `contracts/packet/vectors_v0.json` (neutre en langage) et sont
 //! contrôlés par `tests/protocol_vectors.rs`. Ils sont la base du job CI
 //! `cross-vectors` (US-222) : le firmware et le dashboard consomment le même
-//! fichier. Un futur déplacement vers `contracts/packet/` est possible une
-//! fois ce dossier stabilisé sur `main` (voir `03-ecarts-conception.md`).
+//! fichier.
 
 pub mod codec;
 pub mod consts;

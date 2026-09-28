@@ -7,6 +7,13 @@ revue et un point d'équipe.
 | Contrat | Dossier | Consommé par |
 | --- | --- | --- |
 | Enveloppe d'événement + batch `/ingest/batch` + 20 fixtures golden | [`events/`](events/) | dashboard `api` (US-216/217), `dengon-core::observability` (US-208), firmware relais |
+| Vecteurs de conformité du format de trame, `crypto` et `identity` | [`packet/`](packet/) | `dengon-core` avec et sans `std` (US-108/201/204/205), `tools/validate_packets.py` |
+
+## `packet/`
+
+Voir [`packet/README.md`](packet/README.md). Trois fichiers de vecteurs relus
+par trois implémentations indépendantes — c'est ce que le job `cross-vectors`
+(US-222) exécute.
 
 ## `events/`
 

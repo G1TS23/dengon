@@ -3,7 +3,7 @@
 // les modules `#[cfg(test)]`, pas les crates de `tests/`.)
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! Vecteurs de conformité `identity` v0 (US-205) : `vectors/identity_v0.json`.
+//! Vecteurs de conformité `identity` v0 (US-205) : `contracts/packet/identity_v0.json`.
 //!
 //! Pour deux identités dérivées d'un `ChaCha20Rng` (`rand_chacha` 0.3) à
 //! graine fixe, le fichier fixe : clés publiques, `peerID` (hex et base32),
@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 
 const VECTORS_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/vectors/identity_v0.json"
+    "/../../contracts/packet/identity_v0.json"
 );
 
 const SEED_ALICE: [u8; 32] = [0x0A; 32];
@@ -73,7 +73,7 @@ fn compute() -> Value {
 
 fn load() -> Value {
     let raw = std::fs::read_to_string(VECTORS_PATH)
-        .expect("tests/vectors/identity_v0.json manquant — lancer generer_vecteurs");
+        .expect("contracts/packet/identity_v0.json manquant — lancer generer_vecteurs");
     serde_json::from_str(&raw).unwrap()
 }
 
@@ -135,7 +135,7 @@ fn appairage_a_et_b() {
 }
 
 #[test]
-#[ignore = "réécrit tests/vectors/identity_v0.json"]
+#[ignore = "réécrit contracts/packet/identity_v0.json"]
 fn generer_vecteurs() {
     let mut out = serde_json::to_string_pretty(&compute()).unwrap();
     out.push('\n');

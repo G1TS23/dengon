@@ -64,6 +64,12 @@ jobs:
             rust:
               # crates/** couvre aussi crates/rustfmt.toml et crates/clippy.toml.
               - 'crates/**'
+              # Les tests de dengon-core et dengon-conformance LISENT ces
+              # fichiers (include_str! pour les vecteurs de trame, lecture
+              # disque pour les fixtures golden) : les modifier casse ou
+              # répare des tests Rust, donc ça doit déclencher `core`.
+              - 'contracts/packet/**'
+              - 'contracts/events/**'
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
