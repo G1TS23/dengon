@@ -203,6 +203,9 @@ aucun code modifié
   échangent 20 octets », avec réserve sur le central non-Android). Les 3
   autres (MTU, timing, matrice d'appareils) restent ouverts — nécessitent un
   second téléphone Android. US-103 reste ouverte.
+
+---
+
 ## 2026-09-25 — Spike B (US-102) : `btleplug` et le rôle peripheral
 
 **Auteur :** Claude (Sonnet 5)
