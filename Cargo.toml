@@ -58,6 +58,12 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # aléatoire à chaque chiffrement (jamais le même nonce deux fois avec la
 # même clé, sous peine de casser l'AEAD).
 chacha20poly1305 = { version = "0.10", features = ["getrandom"] }
+# Version EXACTE (pas de caret) : même logique que rust-toolchain.toml — une
+# montée de version d'UniFFI est une PR volontaire, pas un `cargo update`
+# silencieux. default-features = false retire "cargo-metadata" (inutile ici,
+# on n'invoque jamais `uniffi-bindgen` en CLI) ; dengon-ffi ajoute la feature
+# "build" seulement sur sa dépendance de build.
+uniffi = { version = "=0.28.3", default-features = false }
 
 # ---------------------------------------------------------------------------
 # Lints centralisés (Cargo >= 1.74). C'est la « configuration clippy
