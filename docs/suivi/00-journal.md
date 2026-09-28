@@ -10,6 +10,87 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-212 : `sync::courier` — dépôt / collecte d'enveloppes scellées, expiration
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/{mod.rs, courier.rs, courier/tests.rs}`, `crates/dengon-core/src/lib.rs`
+**Lot :** US-212 (#26), sprint 2, jalon J1
+
+### Fait
+- **Nouveau module `sync`** (`src/sync/mod.rs`) avec `courier` seul. La PR
+  US-211 (#84) crée le même fichier avec `status` : conflit d'ajout attendu,
+  à résoudre en gardant les deux `pub mod`.
+- **`Courier`** (`src/sync/courier.rs`) : magasin borné d'enveloppes scellées
+  détenues pour autrui.
+  - `deposit(msg_id, raw_packet, now)` : décode le paquet avec le codec
+    (US-201), exige un `SEALED_ENVELOPE`, lit **uniquement**
+    `recipient_tag(16) ‖ epoch_day(2)` (`parse_sealed_payload`) et stocke le
+    paquet **octet pour octet**. Dédup par `msgID`.
+  - `offer(now)` → tags distincts à annoncer (`ENVELOPE_OFFER`) ;
+    `matching(tags, now)` → enveloppes à renvoyer sur `ENVELOPE_REQUEST` ;
+    `confirm_handoff(msg_id)` → retrait après envoi réussi.
+  - `expire(now)` → supprime les périmées, renvoie leurs `msgID`
+    (événement `envelope.expired`).
+- **Bornes** : `capacity` (`ENVELOPE_STORE_MAX = 64` par défaut),
+  `ENVELOPE_MAX_BYTES` par paquet, politique explicite `EvictionPolicy`
+  (`RejectNew` par défaut, `EvictOldest` configurable).
+
+### Pourquoi / décisions
+- **Échéance = `min(timestamp_ms + TTL, dépôt + TTL)`** : avec le seul
+  `deposit_ms` de `synthese/07` §7, une enveloppe pourrait vivre
+  indéfiniment en passant de courrier en courrier. Le `min` borne aussi une
+  horloge d'émetteur en avance.
+- **`RejectNew` par défaut** (`synthese/08` §7 : « refus de nouvelles
+  enveloppes, existantes protégées »), `EvictOldest` disponible
+  (`synthese/05` §6.4). Les deux docs divergent : la politique est un réglage
+  explicite plutôt qu'un choix caché.
+- **Lecture → envoi → confirmation** plutôt qu'un retrait à la lecture : si
+  le lien BLE tombe pendant l'envoi, l'enveloppe n'est pas perdue.
+- **Aucune clé dans l'API** : le courrier ne voit que la partie en clair.
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-212) : échéance
+  bornée par l'horodatage d'origine ; test négatif avec un AEAD de
+  substitution (Noise `X` pas encore mergé) ; `copy_budget` (v2) absent ;
+  remise confirmée en deux temps.
+
+### Appris
+- Rien de nouveau à consigner (patron déjà noté : property test sur les
+  bornes, cf. US-202).
+
+### État après cette session
+- Critères US-212 : dépôt / collecte ✅, expiration ✅, test négatif ✅ (avec
+  un AEAD de substitution, à rejouer avec Noise `X` après US-204), stockage
+  borné + politique explicite ✅, `no_std` ✅, couverture ≥ 85 % ✅.
+- Pas encore appelé : le branchement (pipeline de réception, échange
+  `ENVELOPE_OFFER`/`REQUEST`) viendra avec `sync::routing` et l'`api`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+_Commandes d'origine ; revérifiées après rebase sur `main` (#84, #85, #88, #89), voir ci-dessous._
+```
+$ cargo test --workspace --all-features
+168 tests passés, 0 échec (dont 15 sync::courier)
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+aucun avertissement
+$ cargo check -p dengon-core --no-default-features
+Finished (no_std OK)
+$ cargo llvm-cov -p dengon-core --summary-only
+sync/courier.rs  lignes 100,00 %  régions 100,00 %
+TOTAL dengon-core  lignes 97,66 %
+```
+- Le test négatif ne tourne qu'avec la feature `std` (l'AEAD de
+  substitution, `chacha20poly1305`, est une dépendance optionnelle liée à
+  `std`) : c'est le cas de `cargo test` par défaut et de la CI.
+- **Après rebase sur `main`** (#88 puis #89 ; conflits `lib.rs`, `sync/mod.rs` → `courier`,
+  `routing`, `status` gardés ; fiches `suivi/` refusionnées à la main) :
+  `cargo fmt --check` OK ; `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings` OK ; `cargo test --workspace --all-features`
+  376 passés, 0 échec ; `cargo check -p dengon-core --no-default-features` OK.
+
+---
+
 ## 2026-09-28 — US-208 : rebase de la PR #89 sur `main` (après #84, #85, #87, #88)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
@@ -1290,6 +1371,150 @@ $ cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs 
   absente du poste) — seul le `no_std` hôte est vérifié.
 
 ---
+## 2026-09-28 — US-216 : correctifs de revue de la PR #91 (node_id/node_kind, upsert de nœud, longueur du secret JWT)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{ingest,main,config}.py`,
+`dashboard/api/tests/test_api.py`, `docs/suivi/`.
+**Lot :** US-216 (issue #30). PR #91 (`feat/US-216-ingest-validation`), revue
+de POWLAIR.
+
+### Fait
+- `app/ingest.py` — **point bloquant** : `_lookup_node_pub_sign` renommée
+  `_lookup_node`, renvoie aussi `kind` (en plus de `pub_sign`) ;
+  `_verify_event_ids(body, expected_node_kind)` rejette désormais en 400 tout
+  événement dont `node_id` ≠ `node_id` du batch, ou `node_kind` ≠ `kind`
+  enregistré pour ce nœud dans `nodes`. Avant ce correctif, `event_id` était
+  recalculé avec le `node_id` du **batch** mais `_insert_events` stockait
+  celui de l'**événement** — un nœud whitelisté pouvait signer un batch
+  valide tout en attribuant ses événements à un autre nœud enregistré.
+- `app/main.py::register_node` — **point important** : `POST /api/nodes` ne
+  fait plus d'upsert (`ON CONFLICT DO UPDATE` supprimé). Un `SELECT`
+  préalable sous le même verrou renvoie **409** si le `node_id` existe déjà,
+  au lieu de remplacer sa clé publique et de le re-whitelister.
+- `app/config.py::jwt_secret()` — **point mineur** : refuse un secret de
+  moins de 32 octets (`MIN_JWT_SECRET_BYTES`) au démarrage — PyJWT lève
+  `InsecureKeyLengthWarning` en dessous de cette taille pour HS256.
+- 5 tests ajoutés à `tests/test_api.py` (34 → 39) :
+  `test_ingest_rejects_event_node_id_different_from_batch_node_id`,
+  `test_ingest_rejects_event_node_kind_different_from_registered_kind`,
+  `test_register_node_rejects_re_registration_of_an_existing_node_id`,
+  `test_startup_fails_fast_when_jwt_secret_is_too_short`, plus l'extension de
+  `_build_signed_batch()` (params `spoof_event_node_id`/
+  `spoof_event_node_kind`) qui les rend possibles.
+- Rebase de `feat/US-216-ingest-validation` sur `main` (la PR était en
+  conflit, signalé par la revue).
+
+### Pourquoi / décisions
+- Voir `docs/suivi/modules/dashboard-api.md` §Décisions d'implémentation
+  (« Revue de la PR #91 ») pour le détail des trois correctifs.
+
+### Écarts vs conception
+- Le point important **réduit** l'écart déjà consigné (`POST /api/nodes`
+  sans auth opérateur) sans le fermer : ré-enregistrer un `node_id` existant
+  est bloqué (409), mais enregistrer un `node_id` **inédit** reste ouvert à
+  quiconque atteint l'API. Mise à jour ajoutée à l'entrée existante dans
+  `03-ecarts-conception.md` plutôt qu'une nouvelle entrée, pour garder
+  l'historique du même trou ensemble.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les trois points de la revue (1 bloquant, 1 important, 1 mineur) sont
+  corrigés et couverts par un test de régression chacun (sauf le mineur, qui
+  réutilise le test de démarrage existant, étendu).
+- Reste à faire : pousser la branche rebasée, attendre la ré-approbation de
+  POWLAIR.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui (ligne « Dashboard `api` »).
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv non disponible dans cet environnement d'exécution — installation
+  équivalente via un venv temporaire :
+  python -m venv .venv_tmp && .venv_tmp/Scripts/python.exe -m pip install -e ".[dev]"
+
+$ .venv_tmp/Scripts/python.exe -m pytest -q
+39 passed
+
+$ .venv_tmp/Scripts/python.exe -m ruff check app tests
+All checks passed!
+```
+- `.venv_tmp` supprimé après vérification, non commité.
+
+---
+
+## 2026-09-28 — US-216 : ingestion validée du dashboard — schéma, JWT, signature Ed25519, dédup
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{auth,canonical,ingest,schemas,config,main,migrations}.py`,
+`dashboard/api/pyproject.toml`, `dashboard/api/uv.lock`,
+`dashboard/api/tests/{conftest,test_api}.py`, `docs/suivi/`.
+**Lot :** US-216 (issue #30). Branche `feat/US-216-ingest-validation`.
+
+### Fait
+- `app/schemas.py::batch_validator()` — `Draft202012Validator` contre
+  `contracts/events/batch.schema.json` (résolution du `$ref` vers
+  `envelope.schema.json` via `referencing.Registry`, lecture par chemin
+  filesystem, pas d'import cross-paquet).
+- `app/canonical.py::canonical_json()`/`event_id()` — copie volontaire de
+  `contracts/tools/catalogue.py` (deux implémentations indépendantes, même
+  algorithme).
+- `app/auth.py` — JWT HS256 courts (24h) par nœud :
+  `create_token()`/`node_id_from_authorization_header()`, secret
+  `jwt_secret()` sans valeur par défaut (échec au démarrage si absent).
+- `app/ingest.py::ingest_batch()` — pipeline complet : parse JSON → schéma →
+  `node_id` du batch == `node_id` du JWT → nœud whitelisté (`pub_sign`
+  connu) → vérification de la signature Ed25519 du batch → `event_id`
+  recalculé par événement (pas seulement validé en format) → insertion
+  idempotente dans `events` (`INSERT OR IGNORE` sur `event_id`, clé
+  primaire).
+- `app/main.py` — remplace le squelette permissif de l'US-110 :
+  `POST /ingest/batch` route désormais vers `ingest.ingest_batch`, JWT
+  vérifié **avant** la lecture du corps ; nouvelle route
+  `POST /api/nodes` (enregistrement d'un nœud, remise d'un JWT). Migration
+  v2 (`nodes`/`events` + index).
+- Tests : 34 (`test_api.py`) — 13 nouveaux pour l'US-216 (rejet schéma
+  invalide, JWT absent/expiré/forgé, `node_id` incohérent batch/JWT, nœud
+  inconnu, signature forgée, `event_id` trafiqué, idempotence au rejeu,
+  batch multi-événements accepté).
+
+### Pourquoi / décisions
+- Détail des choix (JWT avant lecture du corps, `contracts/` lu par chemin
+  plutôt qu'importé, `event_id` recalculé côté serveur, message 401
+  identique pour nœud inconnu/non whitelisté, `jwt_secret()` sans défaut,
+  `raw_batches` gardée mais plus écrite) : voir
+  `docs/suivi/modules/dashboard-api.md` §Décisions d'implémentation.
+
+### Écarts vs conception
+- `POST /api/nodes` sans authentification opérateur — consigné dans
+  `03-ecarts-conception.md`.
+- Nœud inconnu traité comme un 401 direct plutôt que la quarantaine décrite
+  par `docs/synthese/09` §3 — consigné dans `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les 4 critères d'acceptation de l'US-216 sont couverts : validation de
+  schéma (rejet 4xx), signature Ed25519, JWT, idempotence prouvée par test,
+  `pytest` vert sur base SQLite éphémère.
+- Manque encore avant de fermer l'issue : ouvrir la PR, revue par une
+  personne d'une autre `area:` (DoD globale §7.1).
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui (ligne « Dashboard `api` »).
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev ruff check app tests
+All checks passed!
+
+$ uv run --extra dev pytest -q
+34 passed
+```
+- CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
+  ouverte au moment de cette entrée).
 
 ## 2026-09-28 — US-203 : `crypto`, rebase sur `main` et retours de revue de #78
 

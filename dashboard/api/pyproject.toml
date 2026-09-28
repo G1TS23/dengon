@@ -1,11 +1,20 @@
 [project]
 name = "dengon-dashboard-api"
 version = "0.1.0"
-description = "API du dashboard d'observabilité dengon — squelette d'ingestion permissive (US-110)."
+description = "API du dashboard d'observabilité dengon — ingestion validée (US-216)."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
+    # Mêmes bornes que contracts/pyproject.toml (US-107) : jsonschema +
+    # referencing pour valider contre contracts/events/batch.schema.json
+    # (qui $ref envelope.schema.json), pynacl pour la vérification Ed25519
+    # — même format de signature que contracts/tools/validate.py.
+    "jsonschema>=4.23",
+    "pynacl>=1.5",
+    "referencing>=0.35",
+    # JWT court par nœud (B-2/C-5, docs/synthese/06-securite.md).
+    "pyjwt>=2.9",
 ]
 
 [project.optional-dependencies]
