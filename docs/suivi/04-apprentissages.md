@@ -507,6 +507,35 @@ séquencement des opérations ; issue tracker AOSP historique sur ce
 comportement (recherche « BluetoothGatt operation already in progress »).
 ---
 
+### Régénérer `verification-metadata.xml` ne couvre que l'OS de la machine qui régénère
+
+**C'est quoi :** certains artefacts Maven publient une variante **par
+plateforme**, via un *classifier* (`aapt2-<version>-osx.jar`,
+`-linux.jar`, `-windows.jar` : trois fichiers distincts, pas trois copies
+du même). Gradle ne résout que le classifier de l'OS courant, donc
+`--write-verification-metadata` n'enregistre jamais que le checksum de
+**cette** plateforme.
+**Pourquoi dans dengon :** la PR #56 a régénéré `verification-metadata.xml`
+sur macOS (voir la note ci-dessus sur le cache chaud) — ça a bien corrigé
+l'entrée `osx`, mais a laissé le fichier sans checksum `linux`, invisible
+tant que personne ne clone sur Linux ou en CI. Découvert en pratique par
+Paul (poste Linux) puis recorrigé dans la PR #72.
+**Piège / surprise :** la procédure « vider le cache + régénérer »
+(apprentissage précédent) **ne suffit pas** à elle seule pour ce cas — elle
+corrige le cache chaud, pas l'absence structurelle des autres plateformes.
+Le seul moyen de couvrir un classifier qu'on n'a pas la machine pour
+résoudre soi-même : télécharger le jar officiel depuis
+`dl.google.com/android/maven2/...` et calculer `sha256sum` à la main.
+Reviendra identiquement à chaque montée de version d'AGP tant que
+`aapt2` (ou tout autre artefact à classifier) change de version.
+**Où c'est utilisé :** `android/gradle/verification-metadata.xml`, entrées
+`com.android.tools.build:aapt2`.
+**Pour aller plus loin :** `docs/suivi/modules/android-app.md`, section
+« Décisions d'implémentation » (puce `aapt2`) ; la section « Trois pièges
+rencontrés » (onboarding) couvre le piège voisin du cache chaud.
+
+---
+
 ### `$` en regex Python matche avant un `\n` final — piège pour un motif JSON Schema
 
 **C'est quoi :** en Python (`re`, sans `re.MULTILINE`), `$` matche soit la fin
