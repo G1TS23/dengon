@@ -202,6 +202,76 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-28 — `AndroidTransport` (US-213) : détection de déconnexion brutale asymétrique selon le rôle GATT
+
+- **Prévu :** `crates/dengon-ble/src/transport.rs`, rustdoc de `Transport`,
+  règle 1 : « émettre exactement un `PeerDisconnected` avec
+  `DisconnectReason::Brutale`, au plus tard au *supervision timeout* BLE »,
+  sans distinction de rôle (central/périphérique).
+- **Réel :** sur appareil réel, en provoquant une vraie perte radio
+  (éloignement physique, pas un `disconnect()` logiciel), le **même**
+  événement de coupure est rapporté différemment selon le rôle GATT du
+  nœud sur ce lien :
+  - côté **central** (`BluetoothGattCallback.onConnectionStateChange`) :
+    code de statut HCI exploitable, correctement traduit en `BRUTALE` par
+    `motifDeconnexion` — confirmé (Samsung Galaxy A16, 2026-09-28).
+  - côté **périphérique** (`BluetoothGattServerCallback
+    .onConnectionStateChange`) : Android rend quasi systématiquement
+    `status=0`, quelle que soit la cause réelle de la coupure — le même
+    événement, vu du Pixel 8 Pro (périphérique sur ce lien), a été rapporté
+    `PROPRE`.
+- **Raison :** limitation documentée de l'API Android (le rappel serveur ne
+  reçoit pas les codes HCI détaillés que reçoit le rappel client) — pas un
+  bug de `motifDeconnexion`, dont la logique de traduction status→motif est
+  correcte pour les deux rôles et a été écrite en anticipant ce cas (voir
+  le commentaire du code, confirmé par cet essai).
+- **Conséquences :** un nœud Android **ne peut pas garantir de façon fiable**
+  la règle 1 du contrat quand il joue le rôle périphérique sur un lien
+  donné — seul le rôle central le peut. Comme la règle anti-boucle de
+  connexion (`Annonce.doitInitier`) fait déjà qu'un seul des deux nœuds
+  initie (donc est central), la moitié des liens d'un nœud donné n'auront
+  pas de détection fiable de coupure brutale. Impact pour `sync` (US-209) :
+  ne pas se fier uniquement à `DisconnectReason` pour décider de retenter —
+  un timeout applicatif (pas de trafic depuis N secondes) reste nécessaire
+  en complément, y compris pour capturer les cas mal classés `PROPRE`.
+- **Doc de conception mise à jour ?** non — c'est une contrainte de
+  plateforme, pas un choix de conception à documenter dans `synthese/`.
+
+---
+
+### 2026-09-28 — `GattRadio` (US-213) : dédup de connexion par adresse MAC, pas par identité de nœud
+
+- **Prévu :** `crates/dengon-ble/src/transport.rs`, rustdoc de `LinkId` :
+  « un `LinkId` ne doit jamais être réutilisé pour un autre pair », et
+  implicitement, un nœud physique ne devrait porter qu'un lien actif à la
+  fois (l'esprit de la règle anti-boucle de `synthese/05` §6, reprise dans
+  `TransportConfig::local_peer_id`).
+- **Réel :** observé une fois en test réel (session écran éteint,
+  2026-09-28) : un **second** lien GATT s'est ouvert entre les deux mêmes
+  téléphones déjà connectés et actifs (Pixel : `link#2` + `link#3` tous deux
+  vivants ; Samsung : `link#1` + `link#2`), les deux liens relayant le même
+  battement en double. `GattRadio.rappelScan` déduplique les connexions
+  entrantes par adresse BLE (`RadioPeer.adresse`) ; l'hypothèse la plus
+  probable est qu'Android a fait tourner l'adresse privée résolvable
+  annoncée par le pair entre deux scans, et que le pair est alors apparu
+  comme un « nouvel » appareil sous cette nouvelle adresse.
+- **Raison :** `Transport` ne connaît **par contrat** que des identifiants
+  de lien locaux et une adresse radio — jamais un `peerID` cryptographique
+  (rustdoc du contrat : « il ne route pas », « il ne fait pas de crypto »).
+  Il ne peut donc pas, par construction, savoir que deux adresses
+  différentes désignent le même nœud : c'est le rôle d'`ANNOUNCE` et de la
+  couche `sync` (US-209/210), qui verront le même `peerID` sur les deux
+  liens et pourront fermer le doublon.
+- **Conséquences :** aucune donnée corrompue ni crash — juste un lien
+  redondant (trafic et batterie gaspillés tant qu'il n'est pas fermé).
+  `sync::routing` devra fermer explicitement un lien dont le `peerID`
+  annoncé fait déjà l'objet d'un autre lien actif ; ce n'est pas fait
+  aujourd'hui (aucun code `sync` n'existe encore côté Android). À garder en
+  tête pour US-213 → US-306 (branchement réel) et pour `sync::routing`.
+- **Doc de conception mise à jour ?** non.
+
+---
+
 ### 2026-09-28 — `sync::status` (US-211) : deux transitions en plus, `msg.cancelled` hors catalogue, `RESEND_MAX` local, outbox en clé → octets
 
 - **Prévu :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §2 : `DELIVERED`

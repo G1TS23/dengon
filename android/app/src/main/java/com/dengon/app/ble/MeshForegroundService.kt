@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import com.dengon.app.MainActivity
 import com.dengon.app.R
+import com.dengon.app.ble.transport.TransportActif
 
 /**
  * Service de fond du maillage BLE (US-109 : squelette uniquement).
@@ -24,9 +25,9 @@ import com.dengon.app.R
  * et sans ce type déclaré, le système tue le service peu après l'extinction
  * de l'écran.
  *
- * La logique BLE réelle (GATT server + scanner + advertiser) arrive avec
- * `AndroidTransport` (US-213) ; pour l'instant ce service ne fait que
- * démontrer qu'il survit écran éteint.
+ * Depuis l'US-213, il possède le transport BLE réel ([TransportActif] :
+ * `AndroidTransport` + `GattRadio`) : c'est ce qui garde les liens GATT
+ * ouverts écran éteint.
  */
 class MeshForegroundService : Service() {
 
@@ -44,10 +45,17 @@ class MeshForegroundService : Service() {
             buildNotification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
         )
+        // Idempotent : onStartCommand est rappelé à chaque startService.
+        if (BlePermissions.allGranted(this)) TransportActif.demarrer(this)
         // START_STICKY : le système relance le service (intent=null) s'il a
         // dû le tuer pour libérer de la mémoire — comportement voulu pour un
         // relais qui doit rester joignable.
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        TransportActif.arreter()
+        super.onDestroy()
     }
 
     private fun buildNotification(): Notification {

@@ -1314,6 +1314,130 @@ BUILD SUCCESSFUL — 34/34 tests JVM verts (IdentiteLocaleTest 4/4, QrCodeTest 7
 - Critères US-215 : QR affiché + scan ✅, comparaison du code 60 chiffres
   avec confirmation explicite ✅, alimenté par le bouchon FFI ✅, testé sur
   2 appareils réels (caméra) ✅, tests unitaires ViewModel ✅.
+## 2026-09-28 — US-213 : `AndroidTransport` — GATT server + advertiser + scanner, testé sur 2 vrais téléphones
+
+**Auteur :** Oswin + Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/transport/` (nouveau : `Transport.kt`,
+`AndroidTransport.kt`, `BleRadio.kt`, `GattRadio.kt`, `FragmentationBle.kt`, `Annonce.kt`,
+`TransportActif.kt`, `TransportDebugScreen.kt`), `MeshForegroundService.kt`, `MainActivity.kt`,
+tests `app/src/test/java/com/dengon/app/ble/transport/`
+
+### Fait
+
+- **`AndroidTransport`** : implémentation Kotlin du contrat `Transport` (US-105,
+  `crates/dengon-ble/src/transport.rs`), sans une ligne d'API Android — attribution
+  des `LinkId`, file d'événements, quota `maxConnections`, fragmentation/réassemblage
+  BLE, et les 5 règles de déconnexion brutale. La radio réelle est injectée derrière
+  l'interface `BleRadio`, ce qui rend tout le contrat testable en JVM pur.
+- **`GattRadio`** : la vraie radio Android — serveur GATT + annonce (rôle périphérique)
+  **et** scan + client GATT (rôle central) simultanément, comme l'exige un nœud mesh.
+  Gère : une seule opération GATT en vol par connexion (file d'écriture), la **règle
+  anti-boucle de connexion** (`Annonce.doitInitier`, comparaison non signée des 4
+  premiers octets du `peerID`), le morcellement à 512 o max par valeur GATT même avec
+  un MTU négocié plus grand, et la traduction `status` GATT → `DisconnectReason`.
+- **`FragmentationBle`** : fragmentation **BLE** (L1, distincte de la fragmentation
+  *protocole* de `dengon-core`), format `en-tête(1) ‖ données` avec un seul bit SUITE
+  (GATT garantit l'ordre sur une connexion).
+- **`TransportActif`** + **écran de debug** : objet singleton qui possède le transport
+  du processus, journalise les événements (CRC + aperçu), et expose diffusion de
+  messages courts/grandes trames + un battement périodique — l'outillage qui a servi
+  à tous les essais ci-dessous.
+- **Suite de conformité transcrite** (`AndroidTransportConformiteTest`, 12 cas un pour
+  un avec `crates/dengon-ble/src/conformance.rs`, via `FauxRadio`) + tests hors suite
+  partagée (`AndroidTransportTest`, `FragmentationBleTest`) : règle 3 (trame partielle
+  jetée à la coupure — explicitement hors de la suite Rust, renvoyée aux bancs
+  matériels), fragmentation à l'envoi, quota, rappels radio anormaux, arrêt. **48 tests
+  JVM, 0 échec.**
+
+### Vérifié sur 2 vrais téléphones (Google Pixel 8 Pro Android 17, Samsung Galaxy A16
+Android 16), via `adb` + l'écran de debug
+
+- **Connexion** : les deux nœuds se découvrent et **un seul lien** s'ouvre entre eux
+  (règle anti-boucle confirmée) — le nœud au plus petit préfixe de `peerID`
+  (`ae7c53fd`, Samsung) initie en central (RSSI reçu), l'autre (`cf51d537`, Pixel) est
+  périphérique (RSSI absent, cohérent avec la limite Android documentée dans le code).
+- **Messages courts et grandes trames (5000 o, fragmentées)**, dans les deux sens :
+  reçus intacts, vérifiés par CRC32 des deux côtés.
+- **Déconnexion brutale — résultat asymétrique important** : en éloignant physiquement
+  les téléphones (perte radio réelle, pas un `disconnect()` propre), le **même**
+  événement de coupure est rapporté différemment selon le rôle : `BRUTALE` côté
+  central (Samsung, `BluetoothGattCallback`, code de statut HCI exploitable) mais
+  `PROPRE` côté périphérique (Pixel, `BluetoothGattServerCallback`, qui rend
+  quasi-systématiquement `status=0` quelle que soit la cause réelle). C'est une
+  **limitation de la plateforme Android**, pas un bug du code — déjà anticipée dans
+  un commentaire de `motifDeconnexion` avant l'essai, et confirmée ici. Écart
+  consigné (voir ci-dessous).
+- **Lien dupliqué par rotation d'adresse BLE** : en cours d'essai (écran éteint), un
+  second lien GATT s'est ouvert entre les deux mêmes téléphones déjà connectés
+  (`link#2`+`link#3` côté Pixel, `link#1`+`link#2` côté Samsung), les deux recevant le
+  même battement. Cause probable : l'adresse BLE annoncée par le pair a changé (Android
+  fait tourner les adresses privées résolubles), et la déduplication de `GattRadio` se
+  fait par adresse MAC — un pair déjà connecté sous une nouvelle adresse est vu comme
+  neuf. Aucune donnée corrompue, aucun crash ; juste un lien redondant. Écart consigné :
+  résoudre par identité cryptographique (`peerID` via `ANNOUNCE`) est le travail de
+  `sync`, pas de `Transport`, qui par contrat ne connaît pas le `peerID` (voir la
+  rustdoc du contrat, « il ne route pas »).
+- **Service de fond, écran éteint** : les deux écrans éteints (`mWakefulness=Dozing`
+  confirmé par `adb shell dumpsys power`), le battement (toutes les 30 s) a circulé
+  sans interruption pendant les 5 min 40 de l'essai (12 allers-retours, CRC vérifié à
+  chaque fois). **Réserve méthodologique honnête** : à la fin de l'essai, le Pixel
+  est ressorti `Awake` — cause non tranchée avec certitude (`stay_on_while_plugged_in`
+  vérifié à `0`, donc pas ce réglage) ; l'explication la plus probable est l'activité
+  `adb shell`/`logcat` du protocole d'observation lui-même (interrogé toutes les 15 s
+  pendant 5+ minutes), pas le transport. Le Samsung, lui, est resté `Dozing` jusqu'au
+  bout. Aucune coupure ni aucune perte de trame n'est corrélée à cet épisode dans les
+  deux cas — le flux de données n'a jamais été interrompu.
+- Panne annexe rencontrée : `svc bluetooth disable` (test initial de coupure) donne un
+  arrêt **propre** du contrôleur (négociation de déconnexion normale), pas une coupure
+  brutale — utile à savoir pour de futurs essais, mais ce n'est pas le test qu'il
+  fallait ; la vraie coupure brutale a demandé l'éloignement physique.
+
+### Pourquoi / décisions
+
+- **Toute la logique du contrat dans `AndroidTransport`, zéro dans `GattRadio`** :
+  `GattRadio` ne fait que traduire les rappels Android ↔ l'interface `BleRadio`,
+  ce qui permet de tester 100 % des règles du contrat sans jamais toucher un
+  vrai `BluetoothManager`.
+- **Une seule opération GATT en vol par connexion** (file `Connexion.file` +
+  `enVol`) : BluetoothGatt ne met pas en file les écritures côté Android — lancer
+  la suivante avant le rappel de fin de la précédente échoue silencieusement.
+- **Dédup par adresse MAC à la connexion, pas par `peerID`** (limite trouvée en
+  test, voir ci-dessus) : `Transport` ne connaît pas le `peerID` par contrat ;
+  la vraie déduplication de nœud appartient à `sync` (US-209/210), une fois
+  `ANNOUNCE` échangé.
+
+### Écarts vs conception
+
+- Deux écarts ajoutés à `03-ecarts-conception.md` (2026-09-28, US-213) :
+  asymétrie `BRUTALE`/`PROPRE` selon le rôle GATT (limite Android), et liens
+  dupliqués possibles par rotation d'adresse BLE (limite de la déduplication
+  par adresse, résolution renvoyée à `sync`).
+- Format des morceaux de fragmentation BLE **proposé** dans `FragmentationBle.kt`
+  (en-tête 1 octet, bit SUITE) : à aligner avec le firmware NimBLE (US-220) —
+  déjà noté dans le fichier, confirmé ici comme écart ouvert.
+
+### Appris
+
+- Le rappel de déconnexion **serveur** GATT d'Android (`BluetoothGattServerCallback
+  .onConnectionStateChange`) ne peut pas être considéré comme une source fiable de
+  la cause de déconnexion — seul le rappel **client** (`BluetoothGattCallback`) le
+  peut. Un nœud mesh est les deux à la fois, donc **aucune implémentation Android
+  du contrat ne peut garantir la règle 1 (`BRUTALE` fiable) sur son rôle
+  périphérique** ; seul le rôle central le peut. Conséquence pratique : un nœud qui
+  veut fiabiliser la détection de coupure a intérêt à préférer le rôle central
+  quand il le peut (cohérent avec la règle anti-boucle, qui laisse déjà un seul
+  des deux nœuds initier).
+
+### État après cette session
+
+- Critères US-213 : GATT server + advertiser + scanner opérationnels ✅ ; implémente
+  le contrat `Transport` ✅ ; suite de conformité transcrite et passée (12/12, écart
+  UniFFI consigné) — **pas encore passée via la vraie suite Rust** (dépend de
+  l'US-302, callback interface UniFFI) ; testé sur 2 appareils réels ✅ (modèles :
+  Google Pixel 8 Pro Android 17, Samsung Galaxy A16 Android 16) ; comportement en
+  déconnexion brutale documenté ✅ (et son asymétrie de plateforme, ci-dessus) ;
+  pas de régression du service de fond ✅ (battement continu 5 min 40, écran
+  éteint sur au moins un des deux appareils tout du long).
 - Fiche(s) module mise(s) à jour : `modules/android-app.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
 
@@ -1473,6 +1597,24 @@ $ cargo check -p dengon-core --no-default-features         → OK
 - 01-etat-du-code.md mis à jour : non
 
 ---
+
+```
+$ ./gradlew --no-daemon -q assembleDebug testDebugUnitTest
+BUILD OK — 48 nouveaux tests JVM (dont les 12 cas de conformité transcrits), 0 échec
+$ adb -s <Pixel> install -r app-debug.apk && adb -s <Samsung> install -r app-debug.apk
+Success sur les deux
+```
+
+Essais matériels via `adb shell input`/`logcat`/`dumpsys` pilotés depuis la session
+(voir le détail ci-dessus) : connexion, message court, grande trame fragmentée
+(5000 o), déconnexion brutale par éloignement physique, battement 30 s pendant
+5 min 40 écran éteint. Deux comportements de plateforme inattendus trouvés et
+consignés en écarts plutôt que masqués (asymétrie `BRUTALE`/`PROPRE`, lien
+dupliqué par rotation d'adresse). Réserve honnête sur l'état d'écran final du
+Pixel (probable artefact de la méthode d'observation `adb`, pas du transport).
+
+---
+
 
 ## 2026-09-28 — US-211 : rebase de la PR #84 sur `main` (après #76, #78, #80, #81, #82, #83)
 

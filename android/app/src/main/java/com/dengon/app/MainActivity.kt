@@ -30,6 +30,7 @@ import androidx.core.content.ContextCompat
 import com.dengon.app.ble.BlePermissions
 import com.dengon.app.ble.MeshForegroundService
 import com.dengon.app.ble.spike.HelloMeshSpikeScreen
+import com.dengon.app.ble.transport.TransportDebugScreen
 import com.dengon.app.ffi.DengonNodeStub
 import com.dengon.app.ffi.generateIdentity
 import com.dengon.app.identite.IdentiteLocale
@@ -103,6 +104,7 @@ private fun DengonApp(
     var showSpike by remember { mutableStateOf(false) }
     var showMessagerie by remember { mutableStateOf(false) }
     var showAppairage by remember { mutableStateOf(false) }
+    var showTransport by remember { mutableStateOf(false) }
 
     // Démarrage auto dès que les permissions sont accordées (une
     // seule fois par passage à `true`, pas à chaque recomposition).
@@ -121,6 +123,8 @@ private fun DengonApp(
                 HelloMeshSpikeScreen(onBack = { showSpike = false })
             } else if (showAppairage) {
                 AppairageScreen(viewModel = appairage, onRetour = { showAppairage = false })
+            } else if (showTransport) {
+                TransportDebugScreen(onRetour = { showTransport = false })
             } else {
                 DengonScreen(
                     permissionsGranted = granted,
@@ -137,6 +141,7 @@ private fun DengonApp(
                     onOpenSpike = { showSpike = true },
                     onOpenMessagerie = { showMessagerie = true },
                     onOpenAppairage = { showAppairage = true },
+                    onOpenTransport = { showTransport = true },
                 )
             }
         }
@@ -152,6 +157,7 @@ private fun DengonScreen(
     onOpenSpike: () -> Unit,
     onOpenMessagerie: () -> Unit,
     onOpenAppairage: () -> Unit,
+    onOpenTransport: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -188,6 +194,10 @@ private fun DengonScreen(
             )
             Button(onClick = onToggleService) {
                 Text(text = if (serviceRunning) "Arrêter" else "Démarrer")
+            }
+            // Essais du transport réel sur deux téléphones (US-213).
+            Button(onClick = onOpenTransport) {
+                Text(text = "Transport BLE (debug)")
             }
             // Écran de debug jetable (US-103) — voir ble/spike/HelloMeshSpikeScreen.kt.
             Button(onClick = onOpenSpike) {
