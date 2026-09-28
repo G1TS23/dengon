@@ -7,9 +7,37 @@
 // origine vers une API HTTP) — attendu, l'US-111 disait déjà que US-219
 // « branchera ces mêmes écrans sur l'API réelle », ce qui suppose de facto
 // un vrai serveur. Voir `docs/suivi/modules/dashboard-web.md`.
+//
+// Écran #/integrite (US-310) : verdict d'intégrité par nœud (`GET
+// /api/integrity`, calculé par `dengon-verify` côté API).
 
 (function () {
   "use strict";
+
+  var VERDICT_LABEL = {
+    ok: "Intègre",
+    broken: "Altéré",
+    fork: "Fourche détectée",
+    gap: "Trou dans le journal",
+    unverified: "Non vérifiable",
+  };
+
+  // "Vire au rouge" (critère d'acceptation US-310) : les trois verdicts
+  // d'anomalie partagent la même couleur d'alerte — la distinction entre eux
+  // est dans le libellé/l'étiquette, pas dans une nuance de rouge en plus.
+  var VERDICT_CLASSE = {
+    ok: "statut--delivered",
+    broken: "statut--expired",
+    fork: "statut--expired",
+    gap: "statut--expired",
+    unverified: "statut--inconnu",
+  };
+
+  var SIGNATURES_LABEL = {
+    verified: "vérifiées",
+    invalid: "invalides",
+    unchecked: "non vérifiées",
+  };
 
   var MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
 
@@ -217,6 +245,52 @@
     return el("section", { class: "ecran" }, [retour, entete, meta, el("h2", { class: "titre-section", text: "Parcours" }), corpsSauts]);
   }
 
+  function ligneIntegrite(verdict) {
+    var plage = verdict.first_seq === null ? "—" : "seq " + verdict.first_seq + "–" + verdict.last_seq;
+    var signatures = SIGNATURES_LABEL[verdict.signatures] || texteOuTiret(verdict.signatures);
+
+    return el("li", { class: "carte-integrite" }, [
+      el("div", { class: "carte-integrite__entete" }, [
+        el("code", { class: "id-noeud", text: verdict.node_id }),
+        el("span", {
+          class: "statut " + (VERDICT_CLASSE[verdict.verdict] || "statut--inconnu"),
+          text: VERDICT_LABEL[verdict.verdict] || texteOuTiret(verdict.verdict),
+        }),
+      ]),
+      el("dl", { class: "carte-integrite__meta" }, [
+        el("dt", { text: "Entrées vérifiées" }),
+        el("dd", { text: String(verdict.entries) }),
+        el("dt", { text: "Plage" }),
+        el("dd", { text: plage }),
+        el("dt", { text: "Signatures" }),
+        el("dd", { text: signatures }),
+      ]),
+    ]);
+  }
+
+  async function renderIntegrite() {
+    document.title = "dengon · suivi — intégrité";
+    var retour = el("a", { class: "retour", href: "#/", text: "← Retour à la liste" });
+    var titre = el("h2", { class: "titre-section", text: "Intégrité des journaux, par nœud" });
+    // Même garde contre une réponse périmée que les autres écrans : le jeton
+    // de génération de `route()` (plus de vérification `isConnected` ici).
+    var verdicts = await window.DengonApi.fetchIntegrity();
+
+    if (verdicts.length === 0) {
+      return el("section", { class: "ecran" }, [
+        retour,
+        titre,
+        el("p", { class: "vide", text: "Aucun nœud enregistré pour l'instant." }),
+      ]);
+    }
+
+    return el("section", { class: "ecran" }, [
+      retour,
+      titre,
+      el("ul", { class: "liste-integrite" }, verdicts.map(ligneIntegrite)),
+    ]);
+  }
+
   // Jeton de génération : une requête `fetch` en vol dont la réponse arrive
   // APRÈS qu'une navigation ou un rafraîchissement SSE plus récent a déjà
   // affiché autre chose ne doit pas écraser cet affichage plus récent avec
@@ -225,10 +299,15 @@
   // liste).
   var generationCourante = 0;
 
+  function ecranCourant(hash) {
+    if (hash === "#/integrite") return renderIntegrite();
+    var correspondanceMessage = /^#\/message\/(.+)$/.exec(hash);
+    if (correspondanceMessage) return renderDetail(decodeURIComponent(correspondanceMessage[1]));
+    return renderListe();
+  }
+
   async function route() {
     var generation = ++generationCourante;
-    var hash = window.location.hash;
-    var correspondance = /^#\/message\/(.+)$/.exec(hash);
     var racine = document.getElementById("app");
 
     racine.innerHTML = "";
@@ -236,7 +315,7 @@
 
     var ecran;
     try {
-      ecran = correspondance ? await renderDetail(decodeURIComponent(correspondance[1])) : await renderListe();
+      ecran = await ecranCourant(window.location.hash);
     } catch (error_) {
       ecran = ecranErreur(error_);
     }

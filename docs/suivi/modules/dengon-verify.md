@@ -2,8 +2,9 @@
 
 **Rôle en une phrase :** un petit programme qui répond à une seule question — ce journal d'événements a-t-il été trafiqué ?
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2, [`09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §2-3 (décisions A-5 et B-5).
-**Dernière mise à jour :** 2026-09-28
-**État :** fonctionnel (US-305) ; pas encore appelé par le dashboard (US-310)
+**Dernière mise à jour :** 2026-09-28 (US-310 — appelé par `dashboard/api`)
+**État :** fonctionnel (US-305) ; appelé en sous-processus par
+`dashboard/api` (US-310, `GET /api/integrity`) — voir `dashboard-api.md`.
 
 ## À quoi ça sert
 
@@ -69,6 +70,21 @@ Il a déjà vérifié jusqu'à 119 : il lance
 en passant le lot sur l'entrée standard, lit le code de sortie et la ligne
 JSON, et met à jour `ledger_state.integrity`.
 
+## Usage réel par `dashboard/api` (US-310)
+
+L'usage effectif diffère légèrement de l'exemple ci-dessus (écrit avant
+l'implémentation de `GET /api/integrity`) : `dashboard/api/app/integrity.py`
+ne passe pas encore `--from-seq`/`--prev-hash` (pas d'ancre persistée côté
+dashboard) — il rejoue **toute** la chaîne connue pour le nœud, depuis
+`GENESIS_HASH`, à chaque appel. `dashboard/api/app/config.py` localise le
+binaire via la variable d'environnement `DENGON_VERIFY_BIN` (par défaut
+`dengon-verify`, résolu dans le `PATH`) ; la CI (`.github/workflows/dashboard.yml`)
+compile le workspace Rust (`cargo build -p dengon-verify --locked`) et pointe
+dessus avant de lancer `pytest`. Voir `dashboard-api.md` (section
+« US-310 ») pour la reconstruction de l'export binaire à partir des colonnes
+SQLite et les limites connues (fork non démontrable via l'ingestion normale,
+binaire absent de l'image Docker).
+
 ## Dépendances
 
 - **Internes :** `dengon-core` (`ledger`, `crypto`).
@@ -102,7 +118,10 @@ JSON, et met à jour `ledger_state.integrity`.
 ## Limites connues / TODO
 
 - Format d'entrée = export binaire `Entry::to_bytes`, pas le JSON canonique
-  de `synthese/09` §11 (voir `03-ecarts-conception.md`).
+  de `synthese/09` §11 (voir `03-ecarts-conception.md`). Décision US-310 :
+  plutôt que de changer ce format, `dashboard/api` reconstruit l'export
+  binaire à partir de colonnes SQLite (`entry_hash`/`prev_hash`/`sig`
+  ajoutées à `envelope.schema.json`, additives) — voir `dashboard-api.md`.
 - Pas de `LOG_ATTEST` (racine + hauteur attestées) : à ajouter quand le
   format existera côté `protocol`.
 - Les journaux réels sont encore signés par `NullSigner` (le `Signer`

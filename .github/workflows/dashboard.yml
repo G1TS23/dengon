@@ -31,6 +31,16 @@ jobs:
               - 'dashboard/**'
               - '.github/workflows/dashboard.yml'
               - '.uv-version'
+              # `tests/test_integrity.py` (US-310) construit et appelle le
+              # VRAI binaire `dengon-verify` : un changement dans son code ou
+              # dans `dengon-core` (dont il dépend entièrement, pas juste
+              # `ledger.rs`) peut faire passer ou casser ces tests sans
+              # qu'aucun fichier sous `dashboard/` ne bouge.
+              - 'crates/dengon-verify/**'
+              - 'crates/dengon-core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
 
       - name: Aucun changement dashboard/api
         if: steps.filtre.outputs.api != 'true'
@@ -62,8 +72,48 @@ jobs:
       - name: Lint (ruff)
         if: steps.filtre.outputs.api == 'true'
         run: uv run --no-sync --no-build ruff check .
+
+      # `tests/test_integrity.py` (US-310) appelle le VRAI binaire
+      # `dengon-verify` en sous-processus — même principe que le reste de la
+      # CI (core.yml) : la règle de vérification reste celle de
+      # `dengon_core::ledger`, jamais réécrite côté test Python. Toolchain
+      # lue depuis `rust-toolchain.toml` (source unique, même étape que
+      # core.yml) plutôt que dupliquée ici.
+      - name: Lire la toolchain figée
+        if: steps.filtre.outputs.api == 'true'
+        id: toolchain
+        working-directory: .
+        run: |
+          canal=$(grep -oP '(?<=^channel\s=\s")[^"]+' rust-toolchain.toml)
+          if [ -z "$canal" ]; then
+            echo "Impossible de lire 'channel' dans rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "canal=$canal" >> "$GITHUB_OUTPUT"
+
+      - name: Installer Rust
+        if: steps.filtre.outputs.api == 'true'
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master au 2026-09-03
+        with:
+          toolchain: ${{ steps.toolchain.outputs.canal }}
+
+      - name: Cache cargo
+        if: steps.filtre.outputs.api == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: dengon-verify
+          workspaces: . -> target
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Construire dengon-verify
+        if: steps.filtre.outputs.api == 'true'
+        working-directory: .
+        run: cargo build -p dengon-verify --locked
+
       - name: Tests (pytest)
         if: steps.filtre.outputs.api == 'true'
+        env:
+          DENGON_VERIFY_BIN: ${{ github.workspace }}/target/debug/dengon-verify
         run: uv run --no-sync --no-build pytest
       - name: Le paquet s'installe (packages = ["app"] à jour dans pyproject.toml)
         if: steps.filtre.outputs.api == 'true'

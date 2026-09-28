@@ -467,6 +467,78 @@ _(aucun écart pour l'instant)_
   `event_name`, `payload_json`, `prev_hash`, `entry_hash`, `sig`). L'écart
   JSON canonique vs binaire entre `synthese/09` §11 et `ledger` reste à
   trancher en équipe.
+
+### 2026-09-28 — `GET /api/integrity` (US-310) : extension additive d'`envelope.schema.json`, pas de transmission de l'export binaire
+
+- **Prévu :** aucune conception écrite ne tranchait ce point (l'entrée
+  `dengon-verify` ci-dessus le laissait explicitement « à trancher en
+  équipe ») ; deux options étaient sur la table : (a) transmettre l'export
+  binaire brut sur un nouveau canal, ou (b) enrichir `/ingest/batch` /
+  `envelope.schema.json` pour que le dashboard reconstruise l'export.
+- **Réel :** option (b) retenue (choix utilisateur explicite, pas une US
+  écrite). `envelope.schema.json` gagne deux champs **optionnels** par
+  événement : `entry_hash` (hex 64) et `sig` (base64 64 octets) ; `prev_hash`
+  (déjà présent, optionnel) est redéfini pour porter la sémantique de
+  `ledger::Entry.prev_hash` plutôt que « `event_id` de l'événement
+  précédent ». Absence de ces champs → événement exclu de la vérification
+  d'intégrité (rétro-compatible avec les producteurs existants qui ne les
+  envoient pas). Côté `dashboard/api`, `app/integrity.py::_build_export`
+  reconstruit la suite binaire `Entry::to_bytes` à partir des colonnes
+  SQLite (`seq`, `ts_ms`, `name`, `payload`, `prev_hash`, `entry_hash`,
+  `sig`) et l'envoie à `dengon-verify` en sous-processus, plutôt que de
+  transmettre/stocker l'export binaire tel quel.
+- **Raison :** additif (pas de rupture de compatibilité sur un contrat déjà
+  utilisé par plusieurs producteurs potentiels) ; `dengon-verify` reste
+  inchangé (aucune US ouverte dessus) ; le dashboard connaît déjà tous les
+  octets nécessaires à la reconstruction (US-206 : `to_bytes()` est un
+  encodage déterministe et sans perte des mêmes champs).
+- **Conséquences / limites :**
+  1. **Reconstruction du `payload_json`** : `_build_export` suppose que le
+     JSON stocké en base correspond octet pour octet au JSON canonique
+     signé à l'origine (`Value::to_canonical_bytes()` côté Rust,
+     `canonical_json()` côté Python — vérifié identique pour tous les
+     appels `ledger.append()` de `dengon-core` actuels). Non vérifié contre
+     un producteur réel (Android/firmware encore des bouchons) : un
+     producteur qui sérialiserait le payload différemment (ordre de clés,
+     espaces) casserait la vérification côté dashboard sans que la chaîne
+     soit réellement altérée.
+  2. **Détection de fork non démontrable via l'ingestion normale** :
+     `event_id = SHA-256(node_id ‖ seq)` est déterministe ; deux entrées en
+     conflit sur le même `(node_id, seq)` produisent le même `event_id`,
+     donc la seconde est silencieusement ignorée par `INSERT OR IGNORE`
+     avant d'atteindre la vérification de chaîne. Le verdict `fork` existe
+     et est testé (insertion SQL directe dans `test_integrity.py`,
+     contournant `/ingest/batch`), mais un vrai relais malveillant/fourché
+     ne peut pas le déclencher par le flux d'ingestion actuel — limitation
+     structurelle du schéma `events` (clé primaire `event_id`), pas un bug
+     de `integrity.py`.
+  3. **Binaire `dengon-verify` absent de l'image Docker** : `dashboard/api/Dockerfile`
+     (US-224) ne construit/n'embarque pas ce binaire Rust ; sur le VPS réel
+     tel que déployé aujourd'hui, `GET /api/integrity` répondrait `503`
+     (`DENGON_VERIFY_BIN` introuvable dans le `PATH` du conteneur). La CI
+     (`.github/workflows/dashboard.yml`) le compile pour les tests, mais
+     rien ne le fait pour l'image de production.
+
+### 2026-09-28 — Appairage (US-215) : contact vérifié en mémoire, identité provisoire, code placeholder
+
+- **Prévu :** `powl/04` §2.3 : « Match → contact marqué ✔ vérifié (stocké
+  dans `contacts.verified_at`) » ; code = `SHA-512(min(fpA,fpB) ‖ max(fpA,fpB))`,
+  12 groupes de `u16 mod 100000`.
+- **Réel :**
+  1. Le contrat FFI v0 (US-106) n'a pas d'appel « marquer vérifié » : les
+     contacts vérifiés vivent dans `AppairageViewModel` (perdus au
+     redémarrage de l'app).
+  2. Identité locale provisoire : `generateIdentity("tel-xxxx")` du
+     bouchon, pseudo aléatoire par installation. Le bouchon dérivant le
+     `peerId` des 8 premiers octets du pseudo, l'aléa doit y tenir.
+  3. Le code affiché est celui du bouchon (FNV-1a) : forme conforme (12 × 5
+     chiffres, identique des deux côtés, ordre-indépendant), calcul non
+     conforme — comme prévu par US-106.
+- **Raison :** l'US est explicitement « sur bouchon FFI » ; le branchement
+  réel est l'US-306.
+- **Conséquences :** US-302/US-306 devront ajouter au FFI un appel
+  « marquer vérifié » (et la persistance `contacts.verified_at`), et
+  remplacer `IdentiteLocale` par la vraie identité (US-205).
 - **Doc de conception mise à jour ?** non.
 
 ---

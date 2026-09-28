@@ -70,7 +70,30 @@ header.entete-app {
 
 header.entete-app h1 {
   font-size: 1.25rem;
-  margin: 0 0 4px;
+  margin: 0;
+}
+
+.entete-app__ligne1 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.nav-app {
+  display: flex;
+  gap: 14px;
+  font-size: 0.88rem;
+}
+
+.nav-app a {
+  text-decoration: none;
+}
+
+.nav-app a:hover {
+  text-decoration: underline;
 }
 
 .bandeau-portee {
@@ -299,4 +322,45 @@ a {
 .sauts__detail {
   color: var(--texte-discret);
   font-size: 0.8rem;
+}
+
+.liste-integrite {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.carte-integrite {
+  border: 1px solid var(--bordure);
+  border-radius: 10px;
+  background: var(--fond-carte);
+  padding: 12px 14px;
+}
+
+.carte-integrite__entete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.carte-integrite__meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 10px;
+  margin: 0;
+  font-size: 0.85rem;
+}
+
+.carte-integrite__meta dt {
+  color: var(--texte-discret);
+  font-weight: 400;
+}
+
+.carte-integrite__meta dd {
+  margin: 0;
 }
