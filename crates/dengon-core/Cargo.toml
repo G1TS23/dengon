@@ -21,6 +21,9 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 proptest = "1"
+# Lecture des vecteurs de conformité (tests/vectors_v0.json) — via `Value`,
+# pas de derive, donc `serde` n'est pas tiré comme dépendance de proc-macro.
+serde_json = "1"
 
 [lints]
 workspace = true

@@ -104,9 +104,16 @@ impl Entry {
             Vec::with_capacity(8 + 8 + 4 + event_name.len() + 4 + payload_json.len() + HASH_LEN);
         buf.extend_from_slice(&seq.to_be_bytes());
         buf.extend_from_slice(&ts_ms.to_be_bytes());
-        buf.extend_from_slice(&(event_name.len() as u32).to_be_bytes());
+        // `try_from` + saturation plutôt qu'un cast brut (retour de revue
+        // #63, `cast_possible_truncation` activé workspace-wide avec
+        // `protocol`) : un `event_name`/`payload_json` de plus de 4 Go n'a
+        // aucun sens pratique ici, saturer à `u32::MAX` évite un panic sans
+        // prétendre gérer un cas qui ne se produira jamais.
+        let event_name_len = u32::try_from(event_name.len()).unwrap_or(u32::MAX);
+        buf.extend_from_slice(&event_name_len.to_be_bytes());
         buf.extend_from_slice(event_name.as_bytes());
-        buf.extend_from_slice(&(payload_json.len() as u32).to_be_bytes());
+        let payload_json_len = u32::try_from(payload_json.len()).unwrap_or(u32::MAX);
+        buf.extend_from_slice(&payload_json_len.to_be_bytes());
         buf.extend_from_slice(payload_json.as_bytes());
         buf.extend_from_slice(prev_hash);
         buf
@@ -142,9 +149,11 @@ impl Entry {
         );
         buf.extend_from_slice(&self.seq.to_be_bytes());
         buf.extend_from_slice(&self.ts_ms.to_be_bytes());
-        buf.extend_from_slice(&(self.event_name.len() as u32).to_be_bytes());
+        let event_name_len = u32::try_from(self.event_name.len()).unwrap_or(u32::MAX);
+        buf.extend_from_slice(&event_name_len.to_be_bytes());
         buf.extend_from_slice(self.event_name.as_bytes());
-        buf.extend_from_slice(&(self.payload_json.len() as u32).to_be_bytes());
+        let payload_json_len = u32::try_from(self.payload_json.len()).unwrap_or(u32::MAX);
+        buf.extend_from_slice(&payload_json_len.to_be_bytes());
         buf.extend_from_slice(self.payload_json.as_bytes());
         buf.extend_from_slice(&self.prev_hash);
         buf.extend_from_slice(&self.entry_hash);
