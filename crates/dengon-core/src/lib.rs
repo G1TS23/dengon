@@ -15,10 +15,12 @@
 //!
 //! # Contrainte `no_std`
 //!
-//! [`protocol`], `sync` et `ledger` doivent rester compilables en `no_std` +
-//! `alloc` pour la cible ESP32. La feature `std` est activée par défaut ; la
-//! CI lance `cargo check -p dengon-core --no-default-features` pour détecter
-//! toute dépendance à `std` qui se serait glissée par inadvertance.
+//! [`protocol`], `sync`, `ledger` et `observability` doivent rester
+//! compilables en `no_std` + `alloc` pour la cible ESP32 (le firmware doit
+//! pouvoir émettre `relay.*`/`pkt.*`). La feature `std` est activée par
+//! défaut ; la CI lance `cargo check -p dengon-core --no-default-features`
+//! pour détecter toute dépendance à `std` qui se serait glissée par
+//! inadvertance.
 //!
 //! # État
 //!
@@ -26,19 +28,21 @@
 //! livré par l'US-206. `store` livré par l'US-207. `crypto` livré par
 //! l'US-203 (Ed25519) et l'US-204 (Noise, `recipient_tag`, padding).
 //! `sync::status` livré par l'US-211, `sync::routing` par l'US-209.
+//! `observability` livré par l'US-208.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
 // `alloc` est nécessaire en no_std pour `Vec`/`String`/`BTreeMap` (utilisés
-// par `ledger`, `sync`, par le codec de `protocol` et par `crypto::noise`, car
-// snow alloue) ; en mode `std`, `alloc` est déjà réexporté par la libstd, donc
-// cette déclaration ne coûte rien et le code reste identique dans les deux
-// configurations.
+// par `ledger`, `sync`, `observability`, par le codec de `protocol` et par
+// `crypto::noise`, car snow alloue) ; en mode `std`, `alloc` est déjà
+// réexporté par la libstd, donc cette déclaration ne coûte rien et le code
+// reste identique dans les deux configurations.
 extern crate alloc;
 
 pub mod crypto;
 pub mod identity;
 pub mod ledger;
+pub mod observability;
 pub mod protocol;
 #[cfg(feature = "std")]
 pub mod store;

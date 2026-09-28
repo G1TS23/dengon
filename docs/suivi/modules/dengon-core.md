@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
 **Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `observability` (US-208).
 
 ## À quoi ça sert
 
@@ -56,6 +56,10 @@ dengon-core/
       status.rs        — Status, StatusEvent, next_status, StatusChange (US-211)
       status/outbox.rs — Outbox, OutboxStore, MemoryStore, OutboxRecord
       status/outbox/tests.rs — tests de l'outbox
+    observability/
+      mod.rs           — Envelope, redaction (msg_log_id), constructeurs de payload (US-208)
+      catalog.rs       — EVENT_NAMES (28 noms MVP, miroir de contracts/tools/catalogue.py)
+      canonical.rs     — Value + sérialisation JSON canonique (CANONICAL.md), sans serde_json
   tests/
     vectors_v0.json        — vecteurs de conformité v0 du format de trame (US-108)
     protocol_vectors.rs    — contrôle structurel + décodage réel de ces vecteurs
@@ -72,8 +76,7 @@ dengon-core/
 fichier Ed25519 de US-203 n'a pas été déplacé (pas de déplacement
 de fichier pendant que les PR #78/#81/#82 sont empilées).
 
-Modules encore absents : `sync::{inventory, courier}`,
-`observability`, `api` (sprint 2).
+Modules encore absents : `sync::{inventory, courier}`, `api` (sprint 2).
 
 ## Concepts / types importants
 
@@ -124,6 +127,11 @@ Modules encore absents : `sync::{inventory, courier}`,
 | `Identity::seal` / `unseal` | `src/identity/vault.rs` | Blob `"DGID" ‖ 1 ‖ nonce 24 ‖ XChaCha20-Poly1305(secret ‖ graine ‖ len ‖ pseudo)`, en-tête en AAD, nonce de la RNG injectée. Erreurs `VaultFormat` / `VaultVersion` / `VaultDecrypt`. |
 | `Vault`, `MemoryVault`, `FileVault`, `load_or_create` | `src/identity/vault.rs` | Rangement d'octets opaques. `FileVault` (std) écrit via `.tmp` (supprimé puis recréé en `create_new`, mode `0600`) + `rename`, puis `fsync` du répertoire sous Unix. `load_or_create` : déchiffre si présent, sinon génère + scelle + enregistre → `peerID` stable. |
 | `IdentityError` | `src/identity.rs` | `InvalidPseudo`, `Qr{Prefix,Version,Encoding,Length,PublicKey}`, `Vault{Format,Version,Decrypt}`, `VaultIo(ErrorKind)` (std). |
+| `observability::Envelope` | `src/observability/mod.rs` | Enveloppe d'événement (`event_id`/`node_id`/`node_kind`/`seq`/`ts_ms`/`name`/`payload`). `event_id = hex(SHA-256(node_id ‖ seq_be))`. `to_canonical_bytes()` produit les mêmes octets que `contracts/tools/catalogue.py::canonical_json` (vérifié octet à octet contre 3 fixtures golden réelles). |
+| `observability::msg_log_id` | `src/observability/mod.rs` | `SHA-256(msg_uuid)[0..8]` — seul point de passage du brut (`MsgId`, 32 o) vers le redacté (`MsgLogId`, 8 o). Voir « Décisions ». |
+| `observability::{pkt_seen, pkt_relayed, msg_queued, peer_connected}` | `src/observability/mod.rs` | 4 constructeurs de `payload` représentatifs (sur les 28 du catalogue) — n'acceptent que des identifiants déjà redactés. |
+| `observability::catalog::EVENT_NAMES` | `src/observability/catalog.rs` | Les 28 noms d'événements du périmètre MVP, triés — miroir de `contracts/tools/catalogue.py::CATALOGUE`. |
+| `observability::canonical::Value` | `src/observability/canonical.rs` | JSON canonique maison (`Bool`/`Int`/`Str`/`Array`/`Object`, `BTreeMap` pour le tri des clés) — pas de dépendance `serde_json` dans la crate. |
 
 ## Flux principal (exemple)
 
@@ -186,11 +194,21 @@ Store::open("dengon.db", key_source)
   → get_message_body(msg_uuid) → déchiffre, renvoie "salut"
 ```
 
+Et `observability` :
+
+```
+let log_id = observability::msg_log_id(msg_uuid);   // redaction : SEUL point de passage brut → redacté
+let payload = observability::msg_queued(log_id, conv_hash);
+let env = Envelope::new(node_id, NodeKind::Client, seq, ts_ms, "msg.queued", payload);
+env.to_canonical_bytes()   // → mêmes octets que canonical_json() côté Python, signés par le batch appelant
+```
+
 Le flux applicatif complet (Alice écrit → chiffrement → trame → diffusion BLE
 → relais → Bob → accusé) reste décrit dans
 [`04-architecture.md`](../../synthese/04-architecture.md) §4 — `ledger` n'en
-est qu'un maillon (la traçabilité) et `store` la persistance locale, pas le
-chemin des messages.
+est qu'un maillon (la traçabilité), `store` la persistance locale, et
+`observability` ce qui en sort vers le dashboard — pas le chemin des
+messages lui-même.
 
 Côté trame : US-108 livre les **types** (`PacketType`, `Flags`, `Header`), pas
 encore le codec (US-201).
@@ -224,6 +242,10 @@ encore le codec (US-201).
   codec et de `sync::routing`), `serde_json` 1
   (lecture des vecteurs via `Value`, sans derive). N'affectent pas la
   compilation `no_std` (`cargo check` ne compile pas les dev-deps).
+- **`observability` : aucune dépendance externe** — `sha2` (déjà présent
+  pour `ledger`) pour `event_id`/`msg_log_id`, et un sérialiseur JSON
+  canonique écrit à la main (`canonical.rs`) plutôt qu'un `serde_json` en
+  dépendance de runtime, voir « Décisions ».
 
 ## Décisions d'implémentation
 
@@ -463,6 +485,35 @@ encore le codec (US-201).
   relance plus de flood, la dédup longue durée de `Deliver` revient au
   `store` ; (3) deux horloges (`Now`) ; (4) `note_originated` pour les
   messages émis localement. Trois écarts consignés.
+- **JSON canonique écrit à la main (`observability::canonical::Value`),
+  pas `serde_json` en dépendance de runtime** (US-208) : `CANONICAL.md`
+  exige des clés triées et interdit tout flottant. `serde_json` ne trie pas
+  par défaut (il faudrait `preserve_order` + tri explicite, ou un crate
+  tiers `serde_json_canonicalizer`), et une désérialisation en `f64` casse
+  la signature (`2` vs `2.0`) — deux pièges que `CANONICAL.md` documente
+  lui-même côté Rust. Un `BTreeMap<String, Value>` trie déjà les clés par
+  construction, et `Value` ne représente même pas les flottants (pas de
+  variante `Float`) : les deux pièges sont éliminés par le typage, pas par
+  discipline. Coût : pas de dérive `Serialize`, chaque constructeur de
+  payload (`pkt_seen`, `msg_queued`, …) construit son `BTreeMap` à la main.
+- **Redaction appliquée structurellement, pas par convention** (US-208) :
+  les constructeurs de payload n'acceptent que `MsgLogId` (8 o, déjà
+  `SHA-256(msg_uuid)[0..8]`), jamais `MsgId` (32 o, `protocol::MsgId`) —
+  impossible d'appeler `msg_queued(msg_uuid, ...)` par erreur, ça ne
+  compile pas. `msg_log_id()` est le seul point de passage du brut vers le
+  redacté. Testé positivement (le `msg_log_id` redacté apparaît bien dans
+  la sortie) et négativement (le `msg_uuid` brut, et sa forme hex,
+  n'apparaissent jamais) sur plusieurs événements distincts.
+- **Catalogue Rust (`EVENT_NAMES`) sans vérification cross-langage
+  automatique avec `contracts/tools/catalogue.py`** (US-208) : les 28 noms
+  ont été recomptés et comparés manuellement à l'écriture de ce module —
+  écart consigné dans `03-ecarts-conception.md`, le job CI `cross-vectors`
+  (US-222) serait le bon endroit pour l'automatiser.
+- **4 constructeurs de payload sur 28, pas l'intégralité du catalogue**
+  (US-208) : `pkt_seen`, `pkt_relayed`, `msg_queued`, `peer_connected` —
+  représentatifs du domaine `pkt`/`msg`/`peer`, mais pas exhaustifs. Chaque
+  événement restant suit le même patron mécanique (un `BTreeMap` de champs
+  redactés) — écart consigné, pas un blocage technique.
 
 ## Tests
 
@@ -628,6 +679,34 @@ encore le codec (US-201).
 - Couverture `cargo llvm-cov -p dengon-core --summary-only` (2026-09-28) :
   `sync/routing.rs` **99,16 % des lignes**, 98,17 % des régions ; total
   crate 97,69 % des lignes.
+- `src/observability/canonical.rs` — 5 tests : clés triées même insérées
+  dans le désordre, pas d'espace après les séparateurs, entier négatif sans
+  notation exposant, guillemets/antislash échappés, caractère non-ASCII en
+  UTF-8 littéral (pas `\uXXXX`).
+- `src/observability/catalog.rs` — 3 tests : exactement 28 noms (recompté
+  contre `catalogue.py`), la liste reste triée et sans doublon (exigence de
+  `binary_search`), `is_known` reconnaît un nom du catalogue et rejette un
+  nom inconnu **et** un nom explicitement hors périmètre MVP (`msg.read`,
+  `integrity.chain_broken`).
+- `src/observability/mod.rs` — 4 tests : **3 comparaisons octet à octet
+  contre des fixtures golden réelles** de l'US-107
+  (`01-pkt-seen.json`/`10-msg-queued.json`/
+  `16-peer-connected-disconnected.json` — `event_id` et JSON canonique
+  complet, calculés indépendamment avec
+  `contracts/tools/catalogue.py::canonical_json` puis codés en dur comme
+  octets attendus, critère d'acceptation US-208) ; **test négatif de
+  redaction** sur 3 événements distincts (`pkt.seen`/`pkt.relayed`/
+  `msg.queued`) construits à partir du même `msg_uuid` « secret » : ni les
+  octets bruts ni leur forme hex n'apparaissent dans la sortie, seul le
+  `msg_log_id` redacté y figure (et le test vérifie aussi sa présence,
+  pour ne pas passer trivialement sur un événement vide).
+- `src/lib.rs` — 2 tests fumigènes (inchangés).
+- Commande : `cargo test -p dengon-core` → **58 passés** (54 lib + 4
+  intégration + 0 doc — 14 `ledger`, 13 `store`, 13 `protocol`, 12
+  `observability`, 2 `lib.rs`), vérifié le 2026-09-28 (US-208). `clippy -D
+  warnings` propre, `cargo fmt --all -- --check` propre, `cargo check -p
+  dengon-core --no-default-features` (frontière `no_std`, `observability`
+  compris) vert.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
   temporairement fait échouer `accept_vectors_are_structurally_consistent`
   sur le nouveau vecteur `noise-msg-addressed-reserved-bit-ignored` (30
@@ -675,6 +754,16 @@ encore le codec (US-201).
   `xtensa-esp32-none-elf` est l'objet du Spike A (US-101), déjà validé pour
   `protocol`/`crypto` mais pas encore rejoué pour `ledger` spécifiquement.
   `store` n'a jamais vocation à y compiler (voir « Décisions »).
+- **`observability` : aucun site d'appel réel** — `sync::routing`/
+  `sync::inventory` (US-209/US-210), qui produiraient réellement `pkt.*`,
+  ne sont pas encore livrés. Ce module fournit le mécanisme (catalogue,
+  redaction, sérialisation canonique) et 4 constructeurs représentatifs,
+  pas une intégration dans du code qui n'existe pas encore.
+- **`observability::catalog::EVENT_NAMES` n'a pas de vérification
+  cross-langage automatique** avec `contracts/tools/catalogue.py` —
+  recompté manuellement (28 des deux côtés), pas garanti par un outil.
+- **`observability` : 4 constructeurs de payload sur 28** — les 24 restants
+  suivent le même patron, pas encore écrits (voir « Décisions »).
 - **`timestamp_ms` des vecteurs `accept` figé à une date fixe (2024-07-29),
   hors tolérance anti-rejeu `TIMESTAMP_TOLERANCE_MS` (±2 h)** — signalé
   hors-diff par Paul (revue PR #63) — **sans objet pour le codec** (US-201 :
@@ -802,7 +891,7 @@ dans le pipeline de réception ; au MVP le nœud réassemble avant de relayer
 
 ## Pour l'oral
 
-Trois livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
+Quatre livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
 protocole** : les 13 types de paquets, les 5 drapeaux, la forme de l'en-tête,
 et une trentaine de constantes (durée de vie d'un message, seuils
 d'anti-inondation, TTL de départ…) — rien ne « fonctionne » encore, mais
@@ -834,3 +923,11 @@ nœud ne relaie **que 20 messages par minute** de ce voisin, et le trafic
 honnête des autres passe toujours. Et une vraie trouvaille de conception : la
 règle « abandonner au premier doublon » de la doc empêchait la livraison dans
 un simple losange — mesuré, corrigé, documenté.
+
+US-208 (`observability`) est le pont vers le dashboard : produit **le même
+JSON canonique**, octet pour octet, que le contrat Python déjà utilisé par
+`dashboard/api` — deux langages, une seule vérité — et applique la règle de
+redaction du projet (« rien d'identifiant ne doit sortir du téléphone ») de
+façon **structurelle** : le typage empêche de construire un événement avec
+un identifiant de message non redacté, ce n'est pas une discipline
+qu'un développeur pourrait oublier.
