@@ -61,6 +61,64 @@ et le mentionner dans l'entrée de journal.
   exercée que par le job CI `firmware` — voir
   `docs/suivi/modules/dengon-core-ffi.md`, section Tests, pour ce qui a
   (et n'a pas) pu être vérifié en local sur ce poste Windows sans `espup`.
+### 2026-09-29 — Contrat FFI étendu en v1 : `open` + coffre, chemin des octets radio (US-302)
+
+- **Prévu :** US-302 — « bindings UniFFI générés depuis le `.udl` de US-106,
+  **sans modifier ce `.udl`** (ou l'écart est consigné et annoncé) ». Le `.udl`
+  v0 était gelé : toute évolution passe par une réunion.
+- **Réel :** le `.udl` est **étendu** (v1) :
+  - `constructor(Identity)` → `[Name=open] constructor(data_dir, vault_key, pseudo)` ;
+  - ajouts : `local_identity`, `add_contact`, `on_peer_disconnected`,
+    `on_bytes_received`, `take_outgoing` (+ `dictionary OutgoingFrame`) ;
+  - `on_peer_connected` et les fonctions libres `generate_identity`,
+    `identity_qr_code`, `verification_code` deviennent `[Throws=DengonError]`.
+  Les types v0 (`Identity`, `Message`, `Conversation`, `NodeEvent`,
+  `MessageStatus`, `DengonError`) sont inchangés.
+- **Pourquoi :** le vrai nœud (`dengon_core::api::Node`, US-301) a besoin de
+  ses clés **privées**, que la carte `Identity` du v0 ne porte pas, et d'un
+  chemin pour les octets radio : le nœud ne possède aucun transport, c'est
+  l'app qui pousse et tire les trames. La doc de l'US-301 annonçait déjà ces
+  deux manques. Les `[Throws]` ajoutés : une carte venue de Kotlin peut être
+  invalide, ce que le bouchon ne vérifiait pas. Alternative écartée : laisser
+  le `.udl` intact et exposer le reste par `#[uniffi::export]` — le contrat
+  aurait été éclaté sur deux sources.
+- **Conséquence :** **à annoncer en point d'équipe** (règle du gel US-106).
+  Côté Kotlin, aucun appelant de l'UI n'a changé (exceptions non vérifiées) ;
+  `DengonNode(identity)` n'existe plus, remplacé par `DengonNode.open(...)`.
+
+---
+
+### 2026-09-29 — FFI : messages et contacts non persistés (US-302)
+
+- **Prévu :** `docs/synthese/04-architecture.md` — le nœud persiste messages
+  et contacts (`store`, US-207).
+- **Réel :** seule l'**identité** est persistée (coffre `identity.vault`).
+  `api::Node::attach_store` n'est pas appelé : conversations, messages et
+  contacts vivent le temps du processus. `Read` et `Cancelled` ne sont
+  jamais émis (pas de `mark_read` / `cancel_message` dans la façade).
+- **Pourquoi :** hors critères d'acceptation de l'US-302 ; brancher `store`
+  demande une clé de base (autre que celle du coffre) et une relecture des
+  contacts au démarrage, qui touchent au périmètre de l'US-306.
+- **Conséquence :** après un redémarrage de l'app, il faut refaire
+  l'appairage QR pour pouvoir écrire à un contact.
+
+---
+
+### 2026-09-29 — ABI Android limitées à arm64-v8a + x86_64 ; tests FFI ignorés sous Windows (US-302)
+
+- **Prévu :** US-302 — « build de la bibliothèque native pour les ABI Android
+  ciblées », sans liste.
+- **Réel :** `arm64-v8a` (Pixel 8 Pro, Galaxy A16) et `x86_64` (émulateur).
+  `abiFilters` les impose dans l'APK. Les tests JVM qui passent par le FFI
+  sont **ignorés** (`Assume`) quand la lib hôte manque : c'est le cas dans
+  Android Studio sous Windows, où le dépôt est ouvert depuis WSL.
+- **Pourquoi :** pas d'appareil armv7 dans l'équipe. Sans `abiFilters`, l'AAR
+  de JNA ajoutait armv7/x86/mips et un téléphone armv7 aurait planté au
+  premier appel. Côté tests, construire une `dengon_ffi.dll` Windows n'apporte
+  rien que la CI ne vérifie déjà.
+- **Conséquence :** le job CI `android` est la référence et échoue si le test
+  d'intégration a été ignoré ; en local, lancer Gradle depuis WSL après
+  `android/scripts/build-ffi.sh`.
 
 ---
 

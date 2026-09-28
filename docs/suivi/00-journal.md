@@ -112,6 +112,107 @@ $ adb … input tap / input text / uiautomator dump / screencap             OK
 - Tests : `cargo build -p dengon-verify` puis, dans `dashboard/api`,
   `uv run pytest` → 107 passés ; `ruff check` OK ; `node --check` sur
   `app.js`/`api.js` OK. **Pas de vérification navigateur** après le rebase.
+## 2026-09-29 — US-302 : `dengon-ffi` réel (UniFFI), l'app quitte le bouchon
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-ffi/` (`dengon.udl`, `lib.rs`, `convert.rs`,
+`uniffi-bindgen.rs`, `Cargo.toml`, `uniffi.toml`, `build.rs`),
+`android/` (`scripts/build-ffi.sh`, `app/build.gradle.kts`,
+`proguard-rules.pro`, `ffi/dengon.kt` généré, `identite/`, `MainActivity`,
+`DengonApplication`, appairage, aperçus, tests), `.github/workflows/android.yml`,
+`.gitignore`, `docs/suivi/`.
+**Lot :** US-302 (issue #40), préalable de l'US-306 (issue #44). Branche
+`feat/US-302-ffi-reel`, commencée sur `feat/US-301-api-facade` (PR #102) puis
+**recalée sur `main`** une fois #102 (US-301) et #98 (US-213) mergées ; deux
+conflits résolus à la main (`MainActivity.kt`, en-tête de
+`modules/android-app.md`).
+
+### Fait
+- Demande initiale : l'issue #44 (US-306). Constat : ses dépendances US-302
+  (non commencée), US-301 (#102) et US-213 (#98) ne sont pas sur `main`.
+  Arbitrage de Paul : **faire l'US-302 seule**, sur la branche de #102, et
+  **étendre le `.udl`**.
+- `dengon.udl` v1 : `open(data_dir, vault_key, pseudo)` remplace
+  `constructor(Identity)` ; ajout de `local_identity`, `add_contact`,
+  `on_peer_disconnected`, `on_bytes_received`, `take_outgoing`
+  (`OutgoingFrame`) ; `[Throws]` sur `on_peer_connected` et les fonctions libres.
+- `lib.rs` réécrit : `DengonNode = Mutex<api::Node>` + horloge + `OsRng`.
+  Fonctions libres branchées sur `dengon_core::identity` (vraies clés, vrai
+  code SHA-512). Base64url et placeholders XOR/FNV supprimés. `convert.rs` :
+  `peerID` base32, `conv_id`/`msg_uuid` hexadécimal, `Identity` revérifiée à
+  l'entrée (`peer_id` falsifié → `Internal`).
+- Binaire `uniffi-bindgen` (feature `bindgen`) ; `android/scripts/build-ffi.sh`
+  (bindings + `.so` arm64-v8a/x86_64 via cargo-ndk + `.so` hôte).
+- App : `DengonTypes.kt`, `DengonNodeStub.kt`, `DengonNodeStubTest.kt`
+  supprimés ; `dengon.kt` généré et versionné ; `DengonApplication.noeud` ;
+  `CleCoffre` (clé du coffre enveloppée par le Keystore) ; `IdentiteLocale`
+  réécrit (pseudo = `Build.MODEL`) ; `AppairageViewModel(onContactVerifie)` →
+  `noeud::addContact` ; aperçus Compose sur données fixes ; ancien bouchon
+  déplacé en `FauxNoeud` (tests UI seulement).
+- Tests : 12 tests Rust ; `DengonNodeIntegrationTest` (4, Kotlin → JNA →
+  Rust) ; `FfiNatif.exiger()` ignore les tests FFI sans lib hôte ;
+  `AppairageViewModelTest` +2 (transmission au nœud à la confirmation, rien au
+  refus) ; `QrCodeTest` : QR d'« alice » de l'US-215 figé en constante pour la
+  régression du masque ; `IdentiteLocaleTest` réécrit (3).
+- Gradle : JNA 5.14.0 (AAR + JAR de test), `abiFilters`, `jna.library.path`,
+  règles R8, `gradle.lockfile` et `verification-metadata.xml` régénérés
+  (ajout de JNA 5.14.0 uniquement, diff vérifié).
+- CI : workflow `android` (voir `02-avancement.md`).
+- Suivi : les deux lignes « App Android » en double (artefact `merge=union`)
+  de `02-avancement.md` et `modules/_index.md` fusionnées en une seule.
+
+### Pourquoi / décisions
+- `.udl` étendu plutôt que contourné : le vrai nœud a besoin de ses clés
+  privées et d'un chemin d'octets ; une seule source de contrat.
+- Bindings versionnés : Android Studio est sous Windows, sans Rust.
+- `peerID` en base32 : format déjà affiché par `identity::peer_id_base32`.
+- `abiFilters` : trouvé en inspectant l'APK (`unzip -l`) — JNA y ajoutait
+  7 ABI de `jnidispatch` pour 2 de `libdengon_ffi`.
+
+### Écarts vs conception
+- Contrat FFI v1 (**à annoncer en point d'équipe**) ; messages et contacts
+  non persistés ; ABI + tests ignorés sous Windows → `03-ecarts-conception.md`.
+
+### Appris
+- UniFFI/JNA : `cdylib_name`, AAR vs JAR, `abiFilters`, R8 →
+  `04-apprentissages.md`. Glossaire : JNA, cargo-ndk, ABI, coffre d'identité.
+
+### État après cette session
+- Critères US-302 : bindings générés depuis le `.udl` ✔ (écart consigné) ;
+  bouchon Kotlin remplacé, l'app **compile** ✔ — **tourner sur un téléphone
+  n'a pas été vérifié** (voir ci-dessous) ; test Kotlin d'intégration ✔ ;
+  `.so` arm64-v8a + x86_64 ✔ ; `clippy -D warnings` ✔.
+- Manque pour l'US-306 : brancher `AndroidTransport` (#98) sur le nœud,
+  persister contacts/messages, démo 2 téléphones.
+- Fiches : `modules/dengon-ffi.md` (réécrite), `modules/android-app.md`
+  (section US-302). `01-etat-du-code.md` mis à jour : oui (commandes).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                              OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   OK
+$ cargo test --workspace --all-features --locked        467 passed, 2 ignored
+$ cargo check -p dengon-core --no-default-features --locked               OK
+$ cargo deny check                     advisories ok, bans ok, licenses ok, sources ok
+$ cargo audit --deny warnings --ignore RUSTSEC-2025-0141 --ignore RUSTSEC-2024-0436   OK
+$ android/scripts/build-ffi.sh         dengon.kt + 2 × .so Android (2,5 / 2,7 Mo) + .so hôte
+$ ./gradlew assembleDebug testDebugUnitTest -Pdengon.ffi.libHote=…/target/debug
+  BUILD SUCCESSFUL — 75 tests, 0 échec, 0 ignoré (dont 4 DengonNodeIntegrationTest
+  et les 37 de l'US-213), relancé après recalage sur main
+$ ./gradlew testDebugUnitTest -Pdengon.ffi.libHote=/nonexistent
+  38 tests (avant recalage), 0 échec, 21 ignorés (FFI) — comportement voulu sous Windows
+$ ./gradlew assembleRelease                                   OK (R8 + règles JNA)
+$ unzip -l app-debug.apk | grep .so     lib/{arm64-v8a,x86_64}/{libdengon_ffi,libjnidispatch}.so
+```
+- Gradle lancé **dans WSL** sur une copie de `android/` (scratchpad) avec son
+  propre `local.properties` : celui du dépôt pointe sur le SDK Windows.
+  SDK cmdline-tools + platform 34 + build-tools 34 + NDK 27.2.12479018
+  installés dans `~/Android/Sdk` pour cela.
+- **Non vérifié :** l'APK n'a été installé sur **aucun** téléphone (pas
+  d'appareil accessible depuis cette session) — ni lancement, ni QR réel, ni
+  stabilité du `peerID` après redémarrage, ni le Keystore (`CleCoffre` n'a
+  aucun test JVM). Le workflow `android` n'a jamais tourné sur GitHub
+  (branche non poussée).
 
 ---
 
