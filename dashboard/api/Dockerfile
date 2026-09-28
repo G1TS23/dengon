@@ -15,14 +15,15 @@ FROM python:3.13-slim
 # Version épinglée, la même que `.github/workflows/dashboard.yml`
 # (`astral-sh/setup-uv`) — un `uv` différent en CI et en déploiement serait
 # une source de divergence de résolution de dépendances silencieuse.
-RUN pip install --no-cache-dir --only-binary :all: uv==0.9.25
-
-# Utilisateur non privilégié (SonarCloud docker:S6471 — l'image `python`
-# tourne root par défaut) : `uvicorn` n'a besoin d'écrire nulle part une
-# fois démarré, root ne lui sert à rien. Créé tôt, activé (`USER`) tout à la
-# fin, une fois que tous les `COPY`/`RUN` qui écrivent dans l'image sont
-# faits.
-RUN groupadd --system app && useradd --system --gid app --no-create-home app
+#
+# Utilisateur non privilégié dans la même instruction (SonarCloud
+# docker:S7031 — fusionner les `RUN` consécutifs, une couche d'image de
+# moins ; docker:S6471 — l'image `python` tourne root par défaut).
+# `uvicorn` n'a besoin d'écrire nulle part une fois démarré, root ne lui
+# sert à rien. Créé tôt, activé (`USER`) tout à la fin, une fois que tous
+# les `COPY`/`RUN` qui écrivent dans l'image sont faits.
+RUN pip install --no-cache-dir --only-binary :all: uv==0.9.25 \
+    && groupadd --system app && useradd --system --gid app --no-create-home app
 
 WORKDIR /srv/dengon
 
@@ -49,15 +50,15 @@ COPY dashboard/api/app dashboard/api/app
 WORKDIR /srv/dengon/dashboard/api
 ENV PATH="/srv/dengon/dashboard/api/.venv/bin:${PATH}"
 
-RUN chown -R app:app /srv/dengon
 # `/data` : point de montage du volume SQLite (voir docker-compose.yml).
-# Créé et donné à `app` ICI, dans l'image — un volume nommé, à sa toute
-# première création, hérite du contenu/des permissions du chemin correspondant
-# dans l'image plutôt que d'appartenir à root par défaut. Sans ça, `app`
-# (non-root, voir ci-dessus) ne pourrait pas écrire le fichier SQLite au
-# démarrage (`sqlite3.OperationalError: unable to open database file`,
-# constaté en testant l'image après être passé en non-root).
-RUN mkdir -p /data && chown app:app /data
+# Créé et donné à `app` ICI, dans l'image, dans la MÊME instruction que le
+# `chown` du reste (SonarCloud docker:S7031, voir plus haut) — un volume
+# nommé, à sa toute première création, hérite du contenu/des permissions du
+# chemin correspondant dans l'image plutôt que d'appartenir à root par
+# défaut. Sans ça, `app` (non-root, voir ci-dessus) ne pourrait pas écrire
+# le fichier SQLite au démarrage (`sqlite3.OperationalError: unable to open
+# database file`, constaté en testant l'image après être passé en non-root).
+RUN chown -R app:app /srv/dengon && mkdir -p /data && chown app:app /data
 USER app
 
 EXPOSE 8000
