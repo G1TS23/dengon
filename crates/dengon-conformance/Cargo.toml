@@ -1,0 +1,39 @@
+[package]
+name        = "dengon-conformance"
+description = "Rejoue les vecteurs de contracts/packet/ contre dengon-core compilé SANS std (proxy firmware, US-222)"
+
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+repository.workspace   = true
+authors.workspace      = true
+publish.workspace      = true
+
+# ⚠ Cette crate n'existe QUE pour sa configuration de features.
+#
+# `cargo test -p dengon-core --no-default-features` ne donne PAS un build
+# no_std : la dev-dependency `dengon-ble` dépend de `dengon-core` avec ses
+# features par défaut, et l'unification de features du résolveur v2 réactive
+# `std` (donc `rusqlite`) dans le même graphe. Vérifiable :
+#
+#   cargo tree -p dengon-core --no-default-features -e features | grep rusqlite
+#
+# Un paquet séparé, qui ne dépend QUE de `dengon-core` en
+# `default-features = false`, est le seul moyen de faire tourner les vecteurs
+# contre le décodeur tel que le firmware ESP32 l'embarquera.
+#
+# ⚠ Dépendance de CHEMIN, pas `{ workspace = true }` : avec l'héritage de
+# workspace, `default-features = false` est IGNORÉ tant que la ligne de
+# `[workspace.dependencies]` ne le déclare pas elle-même (Cargo le signale :
+# « default-features is ignored for dengon-core »). Et le déclarer là-bas
+# priverait `dengon-ble`/`dengon-node`/… de `std`. Écrire le chemin ici est
+# le seul moyen de n'affecter que cette crate.
+[dependencies]
+dengon-core = { path = "../dengon-core", version = "0.1.0", default-features = false }
+
+[dev-dependencies]
+# Lecture de contracts/packet/vectors_v0.json — via `Value`, pas de derive.
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
