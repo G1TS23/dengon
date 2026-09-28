@@ -47,3 +47,4 @@
 | GitGuardian + SonarCloud | applications GitHub installées, statut sur chaque PR | — |
 | Hook Conventional Commits | actif (`.githooks/commit-msg`) | — |
 | Toolchain Xtensa (`espup`, cible `xtensa-esp32-none-elf`) | validée par le **Spike A** le 10/09 : les briques crypto compilent en `no_std` — B-1 tranchée « tout en Rust » | [spikes/US-101](spikes/US-101-cross-compile-xtensa.md) |
+| Backend BLE desktop (`dengon-node`) | **Spike B** le 25/09 (recherche documentaire) : `btleplug` est *central-only* sur tous les OS — repli `bluer` (Linux) recommandé, B-6 **à ratifier** ; à revérifier sur Linux réel à l'US-303 | [spikes/US-102](spikes/US-102-btleplug-peripheral.md) |

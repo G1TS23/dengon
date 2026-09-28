@@ -206,6 +206,100 @@ aucun code modifié
 
 ---
 
+## 2026-09-25 — Spike B (US-102) : `btleplug` et le rôle peripheral
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/spikes/US-102-btleplug-peripheral.md` (nouveau),
+`docs/synthese/01-sujets-a-trancher.md` (nouvelle entrée B-6),
+`docs/synthese/04-architecture.md`, `docs/synthese/10-benchmarks-mvp-tests.md`
+(annotations), `docs/suivi/modules/dengon-ble.md`,
+`docs/suivi/modules/_index.md`, `docs/suivi/05-glossaire.md`
+**Lot :** Lot 0 (spike), Sprint 1 — issue #2, `should`, 2 pts
+
+### Fait
+- Répondu à la question de l'issue #2 : `btleplug` peut-il tenir le rôle
+  *peripheral* (annonce + serveur GATT) sous Linux/BlueZ ? **Réponse : non.**
+  Pas seulement sous Linux — `btleplug` est *central-only* par conception, sur
+  les trois OS qu'il supporte (confirmé par la doc officielle du projet :
+  README GitHub + docs.rs, voir le rapport pour les citations exactes).
+- Repéré au passage que cette réponse invalide une case du comparatif
+  `docs/synthese/10-benchmarks-mvp-tests.md:49` (et sa contrepartie
+  `docs/synthese/04-architecture.md:86`) qui cochait `btleplug` ✅ pour le
+  rôle peripheral sur Linux/macOS/Windows — erreur préexistante, pas propre à
+  Linux. Les deux tableaux sont annotés (pas réécrits) avec un renvoi vers le
+  rapport de spike.
+- Recommandé un repli : remplacer `btleplug` par `bluer` (bindings officiels
+  BlueZ/D-Bus, couvre central **et** peripheral) pour le backend desktop de
+  `dengon-ble`, en assumant `dengon-node` **Linux uniquement** — cohérent avec
+  la cible déjà documentée ailleurs (« PC/Linux »). Consigné en B-6, **à
+  ratifier en réunion** (même statut que B-2/B-3), pas encore implémenté.
+- Ajouté 5 termes au glossaire (`GATT`, rôle central/peripheral, `BlueZ`,
+  `D-Bus`, `bluer`) et mis à jour la fiche `dengon-ble` (limite Spike B levée)
+  + l'index des modules (dates).
+
+### Pourquoi / décisions
+- **Spike mené par recherche documentaire, pas par exécution** : aucune
+  machine Linux avec BlueZ disponible dans cet environnement (poste Windows,
+  pas de WSL avec distro active). La question posée porte sur la **surface
+  publique** de `btleplug` (expose-t-elle une API d'annonce/serveur GATT ?),
+  constatable en lisant sa documentation officielle — contrairement au Spike A
+  (US-101) qui vérifiait un résultat de compilation. Détaillé et assumé comme
+  limite dans le rapport (§3 et §6).
+- Pas de code jetable écrit : rien à compiler sans Linux/BlueZ pour le
+  vérifier — le critère d'acceptation « code jetable jeté » est donc vide par
+  construction ici, pas contourné.
+- Le contrat `Transport` (US-105) n'est pas touché : `dengon-ble.md`
+  anticipait déjà ce cas de figure (`TransportError::Backend(String)` conçu
+  pour absorber un changement de backend).
+
+### Écarts vs conception
+- Le comparatif `10-benchmarks-mvp-tests.md` et le tableau d'implémentations
+  `04-architecture.md` affirmaient un support peripheral cross-OS de
+  `btleplug` qui n'a jamais existé — corrigé par annotation en ligne (voir
+  « Fait » ci-dessus), pas dans `03-ecarts-conception.md` : c'est une
+  correction de prémisse de conception (B-6), pas un écart entre du code et
+  la conception (aucun code `dengon-ble` desktop n'existe encore).
+
+### Appris
+- `btleplug::api::Peripheral` est un piège de nommage : il désigne l'appareil
+  **distant** trouvé en scannant (le serveur GATT d'en face), pas « notre
+  rôle peripheral ». Ajouté au glossaire pour ne pas retomber dedans à
+  l'US-303.
+
+### État après cette session
+- Décision B-6 consignée, **non ratifiée en réunion** — reste une
+  recommandation. Rien n'est implémenté (spike = décision écrite, pas du
+  code) ; l'US-303 (vraie implémentation `dengon-ble` desktop) devra rejouer
+  ce spike sur une vraie machine Linux avant de s'engager définitivement sur
+  `bluer`.
+- Issue #2 : à fermer une fois la décision ratifiée (le rapport à lui seul
+  suffit à répondre à la question posée par le DoR, mais la recommandation de
+  repli appelle une ratification d'équipe avant de la considérer actée).
+- Fiche(s) module mise(s) à jour : [modules/dengon-ble.md](modules/dengon-ble.md)
+  (limite Spike B levée), [modules/_index.md](modules/_index.md) (dates)
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh issue view 2 --json title,body,labels,assignees
+US-102, assignee OswinFreyr, pas de label needs:materiel (contrairement à
+US-103/US-114) — confirme que ce spike n'exige pas de matériel spécifique,
+seulement un Linux/BlueZ, absent ici.
+
+$ grep -n "btleplug" crates/dengon-ble/Cargo.toml Cargo.toml
+aucune dépendance btleplug ajoutée à ce jour (US-105 = contrat seul) —
+terrain vierge, rien à retirer après le spike.
+
+$ wsl --list --verbose
+seul "docker-desktop" (arrêté) — pas de distro Linux utilisable ici.
+```
+- **Pas exécuté / pas possible** : compilation ou exécution de `btleplug`
+  ou `bluer` — recherche documentaire uniquement (README GitHub + docs.rs de
+  `btleplug`, citations exactes dans le rapport). Recommandation `bluer` non
+  vérifiée empiriquement, voir limites du rapport.
+
+---
+
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
 
 **Auteur :** Paul Claverie + Claude (Opus 5)

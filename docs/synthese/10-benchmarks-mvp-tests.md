@@ -46,7 +46,7 @@ peripheral + GATT central + actif en arrière-plan.
 | **Android natif (Kotlin)** | ✅ `BluetoothGattServer` + `BluetoothLeScanner` + `BluetoothLeAdvertiser` | ✅ foreground service (restrictions gérables) | ✅ **Retenu — MVP** (~70 % du parc mondial) |
 | iOS natif (Swift) | ⚠️ central OK ; peripheral **fortement bridé** en fond (*overflow area*) | ⚠️ throttlé | 🟡 **v2**, même cœur Rust |
 | Flutter / React Native | ⚠️ dépend de plugins tiers ; peripheral partiel voire absent ; l'*advertiser* RN n'est plus maintenu | ⚠️ pire qu'en natif | ❌ Rejeté — un framework d'UI multiplateforme ne mutualise pas la couche BLE (fiche A-1) |
-| Desktop / CLI (Rust + `btleplug`) | ✅ (Linux/BlueZ, macOS, Windows) | ✅ (process/daemon) | ✅ **Retenu comme `dengon-node`** |
+| Desktop / CLI (Rust + `btleplug`) | ⚠️ central **seul** — `btleplug` ne fait pas peripheral, sur aucun OS (Spike B, US-102) | ✅ (process/daemon) | ✅ **Retenu comme `dengon-node`**, repli `bluer` (Linux) à ratifier — voir [B-6](01-sujets-a-trancher.md) |
 | Web (Web Bluetooth) | ❌ central only, pas d'advertising, rien en fond | ❌ | ❌ Rejeté |
 
 ### 2.3 Modèle de sécurité des messages
