@@ -29,6 +29,8 @@ from __future__ import annotations
 import sqlite3
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from .config import db_path
 from .migrations import MIGRATIONS
@@ -38,6 +40,16 @@ from .migrations import MIGRATIONS
 # busy_timeout (5 s) qui couvre le reste des opérations.
 _WAL_MODE_MAX_ATTEMPTS = 20
 _WAL_MODE_RETRY_DELAY_S = 0.05
+
+
+def _is_retryable_lock_error(exc: sqlite3.OperationalError) -> bool:
+    """Ne re-tente que sur un verrou (`SQLITE_BUSY`/`SQLITE_LOCKED`), pas sur
+    n'importe quelle `OperationalError` — un `disk I/O error` ou un `unable
+    to open database file` ne se résoudra pas en re-tentant 1 s plus tard, et
+    les rattraper masquerait un vrai problème derrière 20 tentatives inutiles
+    (retour de revue #59, round 5, point 5 d'OswinFreyr)."""
+    code = getattr(exc, "sqlite_errorcode", None)
+    return code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
 
 
 def _set_wal_mode_with_retry(conn: sqlite3.Connection) -> None:
@@ -60,8 +72,8 @@ def _set_wal_mode_with_retry(conn: sqlite3.Connection) -> None:
         try:
             conn.execute("PRAGMA journal_mode = WAL")
             return
-        except sqlite3.OperationalError:
-            if attempt == _WAL_MODE_MAX_ATTEMPTS:
+        except sqlite3.OperationalError as exc:
+            if attempt == _WAL_MODE_MAX_ATTEMPTS or not _is_retryable_lock_error(exc):
                 raise
             time.sleep(_WAL_MODE_RETRY_DELAY_S)
 
@@ -83,10 +95,20 @@ def connect() -> sqlite3.Connection:
     l'appelant.
     """
     conn = sqlite3.connect(db_path(), isolation_level=None, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000")  # attendre un verrou plutôt qu'échouer aussitôt
-    _set_wal_mode_with_retry(conn)  # lecteurs et écrivain ne se bloquent pas
-    conn.execute("PRAGMA foreign_keys = ON")
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 5000")  # attendre un verrou plutôt qu'échouer aussitôt
+        _set_wal_mode_with_retry(conn)  # lecteurs et écrivain ne se bloquent pas
+        conn.execute("PRAGMA foreign_keys = ON")
+    except BaseException:
+        # `sqlite3.connect()` a déjà ouvert le fichier : si une étape
+        # suivante échoue (WAL épuise ses tentatives, par ex.), personne
+        # d'autre ne fermera cette connexion — `lifespan` garde `conn =
+        # connect()` hors de son `try` (retour de revue #59, round 5, point 4
+        # d'OswinFreyr : même classe de fuite que le point 2 du round 4,
+        # déplacée d'un cran).
+        conn.close()
+        raise
     return conn
 
 
@@ -109,8 +131,25 @@ class LockedConnection:
         self._lock = threading.Lock()
 
     def execute(self, sql: str, parameters: tuple = ()) -> sqlite3.Cursor:
+        """Pour un `INSERT`/`UPDATE`/`DELETE` isolé : le verrou n'est tenu
+        que le temps de l'instruction. **Ne pas appeler `.fetchall()` sur le
+        `Cursor` renvoyé** — il n'est plus protégé une fois le verrou relâché
+        (retour de revue #59, round 5, point 2 d'OswinFreyr). Pour un
+        `SELECT` dont on lit les lignes, ou pour plusieurs instructions liées
+        (ex. `BEGIN`/`COMMIT`), utiliser [`locked`] à la place.
+        """
         with self._lock:
             return self._conn.execute(sql, parameters)
+
+    @contextmanager
+    def locked(self) -> Iterator[sqlite3.Connection]:
+        """Tient le verrou pour toute la durée du bloc `with` — pour un
+        `SELECT` suivi d'un `fetchall()`, ou une séquence d'instructions liées
+        (la connexion est en autocommit, donc un `BEGIN`/`COMMIT` à plusieurs
+        étapes serait sinon entrelacé entre threads).
+        """
+        with self._lock:
+            yield self._conn
 
     def close(self) -> None:
         with self._lock:

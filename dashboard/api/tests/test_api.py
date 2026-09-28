@@ -22,15 +22,23 @@ def _apply_migrations_in_subprocess(db_path: str, start_barrier, result_queue) -
 
     from app.db import connect, run_migrations
 
-    conn = connect()
+    conn = None
     try:
-        start_barrier.wait(timeout=10)  # aligne les N process avant BEGIN IMMEDIATE
+        # La barrière doit aligner les N process AVANT `connect()`, pas
+        # seulement avant `run_migrations()` : c'est `connect()` (le passage
+        # en WAL, via `_set_wal_mode_with_retry`) qui est la race concurrente
+        # réelle qu'on veut forcer à chaque exécution. Avant ce correctif, le
+        # bug du WAL n'apparaissait que grâce au hasard du démarrage en
+        # `spawn` (retour de revue #59, round 5, point 6 d'OswinFreyr).
+        start_barrier.wait(timeout=10)
+        conn = connect()
         run_migrations(conn)
         result_queue.put(None)
     except Exception as exc:  # noqa: BLE001 — remonté au process parent via la queue, pas une trace
         result_queue.put(repr(exc))
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 def test_healthz(client):
@@ -324,8 +332,18 @@ def test_migrations_are_safe_across_processes(tmp_path, monkeypatch):
     for p in processes:
         p.join(timeout=30)
 
-    assert all(not p.is_alive() for p in processes), "un process n'a pas terminé à temps"
-    results = [result_queue.get_nowait() for _ in range(n_workers)]
+    if not all(not p.is_alive() for p in processes):
+        for p in processes:
+            if p.is_alive():
+                p.terminate()
+        pytest.fail("un process n'a pas terminé à temps")
+
+    # `.get(timeout=...)` plutôt que `.get_nowait()` : un worker qui a mis du
+    # temps à pousser son résultat (le `put()` suit `join()` dans le temps,
+    # pas garanti instantané) ferait échouer `get_nowait()` sur un
+    # `queue.Empty` opaque plutôt que sur l'assertion lisible ci-dessous
+    # (retour de revue #59, round 5, point 6 d'OswinFreyr).
+    results = [result_queue.get(timeout=5) for _ in range(n_workers)]
     assert results == [None] * n_workers, (
         f"un des {n_workers} process a échoué au lieu d'attendre sous busy_timeout : {results}"
     )

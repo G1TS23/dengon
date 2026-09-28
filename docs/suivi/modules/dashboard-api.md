@@ -219,6 +219,47 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   romprait l'installation réelle sans que la CI le voie. Vérifié en ajoutant
   volontairement un sous-module non déclaré : absent du wheel construit,
   l'étape l'aurait détecté.
+- **Round 5 (retours d'OswinFreyr) :**
+  - **Liste des modules attendus DÉRIVÉE de `git ls-files`** au lieu d'être
+    codée en dur dans `dashboard.yml` : une liste figée ne détecte rien de
+    plus qu'elle-même — un sous-paquet ajouté sous `app/` (ex.
+    `app/routes/`) resterait absent des deux listes à la fois, exactement le
+    cas que cette étape était censée détecter.
+  - **`LockedConnection.locked()`** (context manager) ajouté à côté
+    d'`execute()` : `execute()` ne tient le verrou que le temps d'une
+    instruction — correct pour l'`INSERT` actuel, mais un futur `SELECT`
+    (`db.execute(...).fetchall()`, US-217) lirait les lignes hors verrou.
+    `locked()` expose la connexion pour toute la durée du bloc `with`, pour
+    un `SELECT` suivi d'un `fetchall()` ou une séquence de plusieurs
+    instructions liées.
+  - **`_read_limited_body` vide le flux jusqu'à `_DRAIN_CAP_BYTES` (1 MiB),
+    puis abandonne**, au lieu de vider sans borne : un client qui envoie en
+    continu occupait la coroutine indéfiniment, la limite de taille ne
+    bornait plus que la mémoire, pas le travail fourni. Passé le cap,
+    uvicorn ferme la connexion plutôt que de livrer un 413 propre — compromis
+    accepté. La branche de comptage réel continue désormais **la même**
+    boucle `async for` au lieu de rappeler `request.stream()` (qui peut lever
+    `RuntimeError("Stream consumed")` si tout le corps est arrivé en un seul
+    message ASGI) — supprime le `except RuntimeError` qui rattrapait plus
+    large que ce seul cas.
+  - **`connect()` ferme la connexion si une étape après `sqlite3.connect()`
+    échoue** (ex. `_set_wal_mode_with_retry` épuise ses tentatives) : avant,
+    le fichier restait ouvert sans référence, personne ne le fermant —
+    même classe de fuite que celle corrigée au round 4 pour `lifespan`,
+    déplacée d'un cran plus tôt.
+  - **`_set_wal_mode_with_retry` ne re-tente que sur `SQLITE_BUSY`/
+    `SQLITE_LOCKED`**, pas sur n'importe quelle `OperationalError` : un
+    `disk I/O error` ou `unable to open database file` ne se résout pas en
+    attendant 1 s, et les rattraper masquait un vrai problème derrière 20
+    tentatives inutiles.
+  - **`test_migrations_are_safe_across_processes` : la barrière aligne les N
+    process avant `connect()`**, pas seulement avant `run_migrations()` —
+    c'est `connect()` (le passage en WAL) qui est la race concurrente
+    qu'on veut forcer à coup sûr, pas seulement par chance selon l'ordre de
+    démarrage `spawn`. `result_queue.get(timeout=5)` remplace
+    `get_nowait()` (un résultat mis un peu tard faisait échouer le test sur
+    un `queue.Empty` opaque plutôt que sur l'assertion), et les process
+    encore vivants sont `terminate()`-és si le test échoue par timeout.
 
 ## Tests
 
@@ -242,9 +283,12 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   #59, round 4, point d'OswinFreyr : a révélé le bug de `busy_timeout`/`WAL`
   documenté plus haut) ; 3 formes de payload paramétrées.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .` et `uv run pytest` → **21 passed** (vérifié le
-  2026-09-25). Chaque nouveau bug (RecursionError, ProgrammingError) reproduit
-  d'abord en isolant le code sans le fix, confirmé absent avec.
+  `uv run ruff check .` et `uv run pytest` → **21 passed** (revérifié le
+  2026-09-28 après les correctifs du round 5). Chaque nouveau bug
+  (RecursionError, ProgrammingError) reproduit d'abord en isolant le code
+  sans le fix, confirmé absent avec. Étape wheel du round 4 rejouée
+  manuellement (`uv build --wheel` + boucle sur `git ls-files 'app/*.py'
+  'app/**/*.py'`) → tous les modules présents, `statut=0`.
 
 ## Limites connues / TODO
 

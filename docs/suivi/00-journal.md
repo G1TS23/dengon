@@ -9,6 +9,65 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-28 — US-110 : dashboard-api, round 5 de revue (OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{db.py,main.py}`,
+`dashboard/api/tests/test_api.py`, `.github/workflows/dashboard.yml`
+**Lot :** US-110, PR #59
+
+### Fait
+- **Check CI wheel dérivé de `git ls-files`** au lieu d'une liste codée en
+  dur : la liste figée ne détectait rien de plus qu'elle-même, un
+  sous-paquet ajouté sous `app/` resterait absent des deux listes à la fois.
+- **`LockedConnection.locked()`** ajouté : `execute()` ne tient le verrou
+  que le temps d'une instruction, insuffisant pour un futur `SELECT` suivi
+  d'un `fetchall()` (US-217) ou une séquence de plusieurs instructions.
+- **Vidage du flux HTTP borné à 1 MiB (`_DRAIN_CAP_BYTES`)** avant
+  abandon, au lieu d'un vidage sans borne (qui laissait un client malveillant
+  occuper la coroutine indéfiniment). La branche de comptage réel continue
+  désormais la même boucle `async for` au lieu de rappeler
+  `request.stream()`, supprimant le `except RuntimeError` trop large.
+- **`connect()` ferme la connexion SQLite si une étape après
+  `sqlite3.connect()` échoue** — fuite sinon, même classe de bug que celle
+  corrigée au round 4 côté `lifespan`.
+- **Retry de `_set_wal_mode_with_retry` filtré sur `SQLITE_BUSY`/
+  `SQLITE_LOCKED`** au lieu de toute `OperationalError`.
+- **Test multi-process : barrière alignée avant `connect()`** (pas
+  seulement avant `run_migrations()`), `result_queue.get(timeout=5)` au lieu
+  de `get_nowait()`, `terminate()` des process restants en cas de timeout.
+
+### Pourquoi / décisions
+- Tous ces points viennent du round 5 de revue d'OswinFreyr sur la PR #59
+  (voir commentaire GitHub daté du 2026-09-28) — auto-revue non demandée
+  cette fois, retours d'un vrai reviewer externe.
+- Le vidage borné (plutôt que sans borne) accepte une connexion coupée
+  brutalement par uvicorn pour un client hors limite, plutôt qu'un 413
+  propre mais un travail non borné — compromis explicitement recommandé par
+  Oswin.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### État après cette session
+- Les 6 points du round 5 sont traités. Fiche module mise à jour
+  (`modules/dashboard-api.md`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run --no-sync --no-build pytest
+21 passed, 2 warnings
+
+$ uv run --no-sync --no-build ruff check .
+All checks passed!
+
+$ uv build --wheel -o /tmp/dashboard-api-dist && \
+  while IFS= read -r m; do python3 -m zipfile -l /tmp/dashboard-api-dist/*.whl | grep -q "$m" || echo manquant: $m; done \
+  < <(git ls-files 'app/*.py' 'app/**/*.py')
+(rien affiché — tous les modules présents)
+```
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`

@@ -89,6 +89,16 @@ def _guess_event_count(parsed: Any) -> int | None:
     return None
 
 
+# Borne du drain supplémentaire une fois la limite dépassée : vider le flux
+# SANS borne (comme avant) transformait la limite de taille en simple limite
+# mémoire, pas de travail fourni — un client qui envoie en continu occupait
+# la coroutine indéfiniment (retour de revue #59, round 5, point 3
+# d'OswinFreyr). Passé ce cap, on abandonne : uvicorn ferme la connexion au
+# lieu de livrer un 413 propre, ce qui est le compromis le plus sûr pour un
+# client hors limite.
+_DRAIN_CAP_BYTES = 1 * 1024 * 1024
+
+
 async def _read_limited_body(request: Request, limit: int) -> bytes:
     """Lit le corps par morceaux, coupe dès que `limit` est dépassé.
 
@@ -106,40 +116,53 @@ async def _read_limited_body(request: Request, limit: int) -> bytes:
         except ValueError:
             trop_gros = False  # en-tête non numérique : on se fie au comptage réel ci-dessous
         if trop_gros:
-            # Vider le flux avant de lever : sans ça, le corps reste non lu
-            # sur la connexion au moment du 413, ce qui peut forcer
+            # Vider un peu le flux avant de lever : sans ça, le corps reste
+            # non lu sur la connexion au moment du 413, ce qui peut forcer
             # uvicorn/h11 à couper la connexion keep-alive plutôt que de
             # livrer la réponse proprement (retour de revue #59, round 2).
-            async for _ in request.stream():
-                pass
+            # Borné à `_DRAIN_CAP_BYTES` (round 5, point 3) : le flux n'a pas
+            # encore été touché ici, donc un nouvel appel à `request.stream()`
+            # est sûr.
+            await _drain_bounded(request.stream())
             raise _BodyTooLarge
 
     morceaux: list[bytes] = []
     total = 0
+    hors_limite = False
+    drained = 0
     async for morceau in request.stream():
+        if hors_limite:
+            # On continue de consommer LA MÊME boucle `async for` plutôt que
+            # de rappeler `request.stream()` : Starlette marque le flux
+            # consommé (`_stream_consumed`) dès que le dernier message ASGI
+            # (`more_body=False`) est reçu, AVANT même de le céder à ce
+            # `async for` — si tout le corps est arrivé en un seul message,
+            # rappeler `request.stream()` lève `RuntimeError("Stream
+            # consumed")`. Rester dans la boucle en cours évite le problème
+            # sans avoir à rattraper cette `RuntimeError` (retour de revue
+            # #59, round 5, point 3 : l'`except RuntimeError` précédent
+            # rattrapait plus large que « flux déjà consommé »).
+            drained += len(morceau)
+            if drained > _DRAIN_CAP_BYTES:
+                break
+            continue
         total += len(morceau)
         if total > limit:
-            # Même raison que la branche Content-Length ci-dessus : vider le
-            # reste du flux avant de lever, sinon la connexion garde du corps
-            # non lu au moment du 413 (retour de revue #59, round 4, point
-            # d'OswinFreyr — cette branche-ci avait été oubliée par le fix du
-            # round 2, qui ne couvrait que la branche Content-Length).
-            # Starlette marque le flux consommé (`_stream_consumed`) dès que
-            # le dernier message ASGI (`more_body=False`) est reçu, AVANT même
-            # de le céder à ce `async for` — si tout le corps est arrivé en un
-            # seul message (courant avec un petit corps, y compris dans les
-            # tests), le flux est donc déjà entièrement consommé ici et
-            # rappeler `request.stream()` lève `RuntimeError("Stream
-            # consumed")`. C'est le signal qu'il n'y a justement plus rien à
-            # vider, pas une vraie erreur.
-            try:
-                async for _ in request.stream():
-                    pass
-            except RuntimeError:
-                pass
-            raise _BodyTooLarge
+            hors_limite = True
+            continue
         morceaux.append(morceau)
+    if hors_limite:
+        raise _BodyTooLarge
     return b"".join(morceaux)
+
+
+async def _drain_bounded(stream: Any) -> None:
+    """Consomme un flux ASGI jusqu'à `_DRAIN_CAP_BYTES`, puis abandonne."""
+    drained = 0
+    async for morceau in stream:
+        drained += len(morceau)
+        if drained > _DRAIN_CAP_BYTES:
+            return
 
 
 def _store_raw_batch(

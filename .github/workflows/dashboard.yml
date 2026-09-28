@@ -68,11 +68,21 @@ jobs:
         # revue #59, round 4, point d'OswinFreyr). Construit le wheel et
         # vérifie qu'il contient bien les modules réels, indépendamment du
         # raccourci sys.path des tests.
+        #
+        # La liste des modules attendus est DÉRIVÉE de `git ls-files`, pas
+        # codée en dur : une liste figée ne détecte rien de plus qu'elle-même
+        # — un sous-paquet ajouté sous `app/` (ex. `app/routes/`) resterait
+        # absent des deux listes à la fois, et cette étape resterait verte à
+        # tort (retour de revue #59, round 5, point 1 d'OswinFreyr : le
+        # backend est `setuptools` avec `packages = ["app"]`, non récursif —
+        # exactement le cas que cette étape est censée détecter).
         run: |
           uv build --wheel -o /tmp/dashboard-api-dist
-          for module in app/__init__.py app/main.py app/config.py app/db.py app/migrations.py; do
+          statut=0
+          while IFS= read -r module; do
             python3 -m zipfile -l /tmp/dashboard-api-dist/*.whl | grep -q "$module" || {
               echo "::error::$module absent du wheel construit — packages/pyproject.toml périmé"
-              exit 1
+              statut=1
             }
-          done
+          done < <(git ls-files 'app/*.py' 'app/**/*.py')
+          exit "$statut"
