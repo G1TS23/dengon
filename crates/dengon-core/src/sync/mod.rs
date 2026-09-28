@@ -10,10 +10,11 @@
 //! | [`routing`] | US-209 | **si**, **quand** et **vers qui** un paquet reçu est relayé |
 //! | `inventory` | US-210 | **quoi** échanger avec un pair qui arrive |
 //! | [`status`] | US-211 | cycle de vie d'un message émis + outbox persistante |
-//! | `courier` | US-212 | dépôt / collecte des enveloppes scellées |
+//! | [`courier`] | US-212 | dépôt / collecte des enveloppes scellées |
 //!
 //! Tout `sync` reste compilable en `no_std` + `alloc` (cible ESP32) : aucune
 //! I/O, ni horloge, ni aléa système. L'appelant fournit l'heure et la graine.
 
+pub mod courier;
 pub mod routing;
 pub mod status;

@@ -29,6 +29,8 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Ed25519 / X25519** | Ed25519 = signatures (prouver qui parle). X25519 = accord de clés (établir un secret partagé). Même courbe (Curve25519), usages différents. |
 | **Enveloppe scellée** | Message chiffré pour un destinataire absent, déposé sur des relais en attendant qu'il revienne. |
 | **recipient_tag** | Étiquette anonyme et **tournante** (change chaque jour) qui désigne le destinataire d'une enveloppe sans révéler qui c'est. |
+| **Courrier (*courier*)** | Rôle d'un nœud qui garde des enveloppes scellées pour d'autres et les remet à la rencontre, sans pouvoir les lire (`sync::courier`). |
+| **`ENVELOPE_OFFER` / `ENVELOPE_REQUEST`** | Échange à la rencontre : le porteur annonce les `recipient_tag` qu'il détient, le pair demande ceux qui sont les siens. |
 | **Budget de copies** | Nombre max d'exemplaires d'une enveloppe qu'on laisse circuler (inspiré de *Spray-and-Wait*). |
 | **TOFU** | *Trust On First Use* : on fait confiance à la première clé vue pour un contact, et on alerte si elle change. |
 | **Code de vérification / safety number** | Suite de chiffres identique des deux côtés, à comparer hors bande, pour détecter un intercepteur au premier contact. |

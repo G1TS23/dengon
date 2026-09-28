@@ -14,6 +14,37 @@ et le mentionner dans l'entrée de journal.
 
 ## Modèle d'entrée
 
+
+---
+
+### 2026-09-28 — `sync::courier` (US-212) : échéance bornée par l'origine, remise en deux temps, test négatif sur AEAD de substitution
+
+- **Prévu :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §7 : une
+  enveloppe expire à `deposit_ms + MSG_TTL_S` (et budget de copies = 0, v2) ;
+  `synthese/05` §6.3 : le porteur « renvoie le `SEALED_ENVELOPE` » sur
+  `ENVELOPE_REQUEST` ; `synthese/05` §6.4 et `synthese/08` §7 : éviction
+  « LRU / plus ancien » **ou** « refus des nouvelles, existantes
+  protégées » (les deux docs divergent).
+- **Réel :**
+  1. Échéance = `min(timestamp_ms + TTL, deposit_ms + TTL)`.
+  2. La remise se fait en deux temps : `matching` (lecture) puis
+     `confirm_handoff` (retrait) après envoi réussi.
+  3. Politique d'éviction = réglage `EvictionPolicy`, `RejectNew` par défaut.
+  4. Pas de `copy_budget` (colonne `held_envelopes.copy_budget`) : v2 (A-13).
+  5. Le test négatif « le courrier ne peut pas déchiffrer » simule le
+     scellement avec XChaCha20-Poly1305, Noise `X` (US-204, PR #81) n'étant
+     pas sur `main`.
+- **Raison :** (1) avec le seul `deposit_ms`, une enveloppe re-déposée de
+  courrier en courrier vivrait indéfiniment ; (2) un lien BLE qui tombe
+  pendant l'envoi ne doit pas perdre l'enveloppe ; (3) rendre visible le
+  désaccord entre `synthese/05` et `synthese/08` ; (5) ne pas bloquer l'US
+  sur une PR non mergée — la propriété testée (le courrier ne reçoit aucune
+  clé, rend le ciphertext intact, ne détient aucun octet du clair) ne
+  dépend pas de l'AEAD.
+- **Conséquences :** après le merge d'US-204, remplacer l'AEAD du test par
+  un vrai scellement Noise `X`. L'équipe doit trancher la politique
+  d'éviction par défaut (téléphone vs ESP32).
+- **Doc de conception mise à jour ?** non.
 ### [date] — [titre court de l'écart]
 
 - **Prévu :** ce que dit `docs/powl/NN-....md` (référence précise).
