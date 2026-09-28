@@ -1,10 +1,11 @@
-"""Pipeline de validation + ingestion d'un batch (US-216).
+"""Pipeline de validation + ingestion d'un batch (US-216) + projections (US-217).
 
 `POST /ingest/batch` → décoder/parser JSON → valider contre le schéma
 (`contracts/events/batch.schema.json`) → `node_id` du batch == `node_id` du
 jeton JWT → nœud whitelisté, `pub_sign` connu → signature Ed25519 du batch
 → `event_id` recalculé par événement → insertion idempotente dans
-`events` (déduplication sur `event_id`, clé primaire).
+`events` (déduplication sur `event_id`, clé primaire) → statut par message
+(`messages`) recalculé pour chaque `msg_log_id` touché par ce batch.
 
 Réf : `docs/synthese/09-dashboard-et-donnees.md` §3 (pipeline complet — la
 vérification de journal chaîné via `dengon-verify` n'est PAS dans le
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 from dataclasses import dataclass
 
 from nacl.exceptions import BadSignatureError
@@ -24,6 +26,7 @@ from nacl.signing import VerifyKey
 
 from .canonical import canonical_json, event_id
 from .db import LockedConnection
+from .projections import project_message
 from .schemas import batch_validator
 
 
@@ -133,10 +136,60 @@ def _verify_event_ids(body: dict, expected_node_kind: str) -> None:
             )
 
 
+def _touched_msg_log_ids(body: dict) -> set[str]:
+    return {
+        event["payload"]["msg_log_id"]
+        for event in body["events"]
+        if event.get("payload", {}).get("msg_log_id")
+    }
+
+
+def _refresh_message_projection(conn: sqlite3.Connection, msg_log_id: str) -> None:
+    """Recalcule la projection de `msg_log_id` depuis **tous** les
+    événements connus en base (pas seulement ceux du batch courant) : un
+    batch qui arrive en retard ou dans le désordre par rapport à un autre
+    doit produire le même statut final, peu importe l'ordre d'ingestion —
+    c'est plus simple à garantir en relisant l'état complet qu'en fusionnant
+    incrémentalement (voir `app/projections.py`).
+    """
+    rows = conn.execute(
+        "SELECT name, ts_ms, payload FROM events WHERE json_extract(payload, '$.msg_log_id') = ?",
+        (msg_log_id,),
+    ).fetchall()
+    events = [
+        {"name": row["name"], "ts_ms": row["ts_ms"], "payload": json.loads(row["payload"])}
+        for row in rows
+    ]
+    projection = project_message(msg_log_id, events)
+    conn.execute(
+        "INSERT INTO messages "
+        "(msg_log_id, conv_hash, first_seen_ms, last_event_ms, status, status_ms, "
+        " hop_count, delivery_latency_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(msg_log_id) DO UPDATE SET "
+        "conv_hash = excluded.conv_hash, first_seen_ms = excluded.first_seen_ms, "
+        "last_event_ms = excluded.last_event_ms, status = excluded.status, "
+        "status_ms = excluded.status_ms, hop_count = excluded.hop_count, "
+        "delivery_latency_ms = excluded.delivery_latency_ms",
+        (
+            projection.msg_log_id,
+            projection.conv_hash,
+            projection.first_seen_ms,
+            projection.last_event_ms,
+            projection.status,
+            projection.status_ms,
+            projection.hop_count,
+            projection.delivery_latency_ms,
+        ),
+    )
+
+
 def _insert_events(db: LockedConnection, body: dict) -> int:
     """Insère les événements du batch, idempotent (`INSERT OR IGNORE` sur
-    `event_id`, clé primaire de `events`). Renvoie le nombre de lignes
-    RÉELLEMENT insérées (nouvelles) — un rejeu du même batch renvoie 0.
+    `event_id`, clé primaire de `events`), puis recalcule la projection
+    `messages` de chaque `msg_log_id` touché — dans la **même transaction**
+    (une projection ne doit jamais refléter un batch partiellement inséré).
+    Renvoie le nombre de lignes RÉELLEMENT insérées dans `events` (nouvelles)
+    — un rejeu du même batch renvoie 0.
     """
     new_count = 0
     with db.locked() as conn:
@@ -157,6 +210,8 @@ def _insert_events(db: LockedConnection, body: dict) -> int:
                     ),
                 )
                 new_count += cur.rowcount
+            for msg_log_id in _touched_msg_log_ids(body):
+                _refresh_message_projection(conn, msg_log_id)
             conn.execute("COMMIT")
         except Exception:
             if conn.in_transaction:

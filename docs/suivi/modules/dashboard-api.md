@@ -7,8 +7,9 @@ message.
 §2 (architecture), §3 (ingestion), §11.2 (schéma cible).
 **Dernière mise à jour :** 2026-09-28
 **État :** `/healthz` + `/ingest/batch` **validé** (schéma + JWT + signature
-Ed25519 + dédup, US-216) + `/api/nodes` (enregistrement, US-216). Pas encore
-de projections (`messages`/`links`/`message_hops`), pas de SSE.
+Ed25519 + dédup, US-216) + `/api/nodes` (enregistrement, US-216) + projection
+`messages` recalculée à chaque batch ingéré (US-217). Pas encore de
+`links`/`message_hops`, pas de SSE, pas de route de lecture des projections.
 
 Cette fiche tient aussi lieu de **note d'onboarding de l'area `dashboard-api`**
 (proposition d'organisation §10.3 point 3).
@@ -39,11 +40,13 @@ dashboard/api/
     canonical.py         — canonical_json()/event_id() : copie volontaire de contracts/tools/catalogue.py (voir décisions)
     schemas.py            — batch_validator() : jsonschema Draft202012Validator contre contracts/events/batch.schema.json
     auth.py               — create_token()/node_id_from_authorization_header() : JWT HS256 courts (24h)
-    ingest.py             — pipeline complet de validation (voir Flux principal)
+    projections.py        — project_message()/project_messages() : reconstruction de statut (US-217), pure, sans I/O
+    ingest.py             — pipeline complet de validation + rafraîchissement des projections (voir Flux principal)
     main.py             — app FastAPI ; lifespan → migrations + connexion partagée + jwt_secret() ; routes /healthz, /ingest/batch, /api/nodes
   tests/
     conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan, secret JWT de test
-    test_api.py          — 39 tests (voir plus bas)
+    test_api.py          — 38 tests (voir plus bas)
+    test_projections.py  — 24 tests, dont 2 bout-en-bout sur les 20 fixtures golden via /ingest/batch
 ```
 
 ## Concepts / types importants
@@ -53,12 +56,14 @@ dashboard/api/
 | `db_path()` | `app/config.py` | chemin du fichier SQLite, lu depuis l'env à chaque appel (pas de cache → tests simples) |
 | `max_batch_bytes()` | `app/config.py` | taille max acceptée pour `/ingest/batch`, lue depuis l'env à chaque appel (défaut 2 MiB) |
 | `jwt_secret()` | `app/config.py` | secret HMAC pour les JWT courts des nœuds ; **pas de défaut** (contrairement à `max_batch_bytes()`) — un défaut serait une clé maîtresse publique ; validé au démarrage (`lifespan`) |
-| `MIGRATIONS` | `app/migrations.py` | liste `(version, nom, [instructions])` ; littéraux du module (pas de fichier lu), versionnés, embarqués, sans I/O disque ; chaque `CREATE` en `IF NOT EXISTS` ; v2 ajoute `nodes`/`events` + index |
+| `MIGRATIONS` | `app/migrations.py` | liste `(version, nom, [instructions])` ; littéraux du module (pas de fichier lu), versionnés, embarqués, sans I/O disque ; chaque `CREATE` en `IF NOT EXISTS` ; v2 ajoute `nodes`/`events`, v3 ajoute `messages` (projection, US-217) |
 | `canonical_json()`/`event_id()` | `app/canonical.py` | sérialisation canonique + `event_id = SHA-256(node_id ‖ seq_be_u64)` ; copie intentionnelle de `contracts/tools/catalogue.py` (`CANONICAL.md` : deux implémentations doivent converger indépendamment) |
 | `batch_validator()` | `app/schemas.py` | `Draft202012Validator` sur `batch.schema.json`, résolution du `$ref` vers `envelope.schema.json` via `referencing.Registry` (lu par chemin filesystem, pas d'import cross-paquet — voir décisions) ; `lru_cache` |
 | `create_token()`/`node_id_from_authorization_header()` | `app/auth.py` | JWT HS256, TTL par défaut 24h ; la seconde lève `InvalidToken` sur tout échec (en-tête absent/malformé, expiré, signature invalide, claim `node_id` manquant) |
-| `ingest_batch()` | `app/ingest.py` | pipeline complet : parse JSON → schéma → `node_id` batch == `node_id` JWT → nœud whitelisté → signature Ed25519 → `event_id` recalculé → insertion idempotente (`INSERT OR IGNORE`) |
+| `ingest_batch()` | `app/ingest.py` | pipeline complet : parse JSON → schéma → `node_id` batch == `node_id` JWT → nœud whitelisté → signature Ed25519 → `event_id` recalculé → insertion idempotente (`INSERT OR IGNORE`) → projection `messages` rafraîchie pour chaque `msg_log_id` touché (US-217) |
 | `IngestError` | `app/ingest.py` | exception portant `status_code`/`detail`, traduite en réponse HTTP par la route |
+| `project_message()`/`project_messages()` | `app/projections.py` | reconstruction de statut (`docs/synthese/09` §10) à partir d'une liste d'événements **déjà connus pour un `msg_log_id`** ; recalcul complet à chaque appel (pas de fusion incrémentale) → robuste par construction à l'ordre d'arrivée, aux doublons, aux données partielles |
+| `_refresh_message_projection()` | `app/ingest.py` | relit **tous** les événements connus d'un `msg_log_id` depuis `events`, reprojette, `UPSERT` dans `messages` — dans la même transaction que l'insertion des événements |
 | `connect()` | `app/db.py` | connexion SQLite : `isolation_level=None` (transactions explicites), `check_same_thread=False` (réutilisée depuis le threadpool), `busy_timeout=5000` **posé avant** `WAL` (voir décisions), `foreign_keys=ON` |
 | `_set_wal_mode_with_retry()` | `app/db.py` | bascule en WAL avec re-tentatives manuelles courtes — `busy_timeout` seul ne protège pas ce PRAGMA de façon fiable (voir décisions) |
 | `LockedConnection` | `app/db.py` | couple connexion SQLite et verrou dans un seul objet (`execute()`/`close()`) — remplace les attributs séparés `db_conn`/`db_lock` (voir décisions) |
@@ -86,14 +91,18 @@ un nœud : POST /ingest/batch   Authorization: Bearer <jwt>   body = {batch sign
                                                     ou si node_id/node_kind d'un événement
                                                     diffère du batch/de node_kind enregistré
        new_count = _insert_events(...)          → INSERT OR IGNORE par event_id, idempotent
+          pour chaque msg_log_id touché par ce batch :
+             _refresh_message_projection(...)   → relit TOUS les événements de ce msg_log_id
+                                                    en base, reprojette, UPSERT dans `messages`
           └─ sqlite3.OperationalError ?          → 503 + Retry-After: 1
   → 202  {"batch_id": "...", "node_id": "...", "event_count": 2, "new_event_count": 2}
 ```
 
 `raw_batches` (US-110) n'est plus écrite depuis l'US-216 — `/ingest/batch`
 valide et route directement vers `events`. La table reste dans le schéma
-(vide) plutôt qu'un `DROP TABLE` risqué sur une table déjà déployée. US-217
-ajoutera les projections `messages` / `links` / `message_hops`.
+(vide) plutôt qu'un `DROP TABLE` risqué sur une table déjà déployée.
+`links`/`message_hops` (§11.2) ne sont pas encore créées — écart consigné
+dans `03-ecarts-conception.md`.
 
 ## Dépendances
 
@@ -410,10 +419,40 @@ ajoutera les projections `messages` / `links` / `message_hops`.
     lève `InsecureKeyLengthWarning` en dessous de cette taille pour HS256 ;
     vérifié au démarrage plutôt que laissé comme avertissement ignorable à
     chaque requête, même logique « échouer tôt » que le reste du module.
+- **US-217 (projections) :**
+  - **Recalcul complet à chaque batch, pas de fusion incrémentale** :
+    `_refresh_message_projection()` relit *tous* les événements connus d'un
+    `msg_log_id` (pas seulement ceux du batch en cours) et reprojette depuis
+    zéro. Plus coûteux qu'un état maintenu incrémentalement (un `SELECT` par
+    `msg_log_id` touché à chaque batch), mais rend l'ordre d'arrivée
+    **structurellement** sans effet sur le résultat final — la propriété
+    demandée par le critère d'acceptation « les événements dans le désordre
+    donnent le même résultat » devient une conséquence de l'implémentation
+    plutôt qu'une invariant à prouver et à maintenir. Le volume visé (démo
+    5-8 appareils, B-4) rend le coût négligeable.
+  - **`messages.status` plus granulaire que la table de §10** : §10 range
+    `msg.queued`/`msg.handed_off`/`pkt.relayed` dans un seul bucket
+    « en circulation » ; le schéma cible de §11.2 distingue `queued`
+    (`msg.queued` seul) de `in_flight` (`msg.handed_off` ou `pkt.relayed`
+    observés). Les deux documents ne se contredisent pas — §10 est un résumé
+    pédagogique, §11.2 le schéma réellement implémenté.
+  - **`status_ms` = horodatage de l'événement qui justifie le statut**, pas
+    `last_event_ms` : un événement postérieur mais sans rapport avec le
+    statut retenu (ex. un `pkt.dropped` après un `msg.delivered`) ne doit
+    pas se faire passer pour le moment où le statut a été atteint.
+  - **`msg.read`/statut `read` (v2) non géré** : §10 ne couvre que
+    `queued`/`in_flight`/`delivered`/`expired`/`unknown` ; `read` reste dans
+    l'enum SQL (fidèle à §11.2) mais aucun code ne le produit — écart
+    consigné dans `03-ecarts-conception.md`.
+  - **`links`/`message_hops` (§11.2) non créées** : l'AC de l'US-217 ne
+    porte que sur la reconstruction de statut d'un message, pas sur la
+    topologie ni l'historique détaillé des sauts. `hop_count` (colonne de
+    `messages`) est une approximation — nombre de `pkt.relayed` vus pour ce
+    `msg_log_id`, pas un décompte par nœud — documentée comme telle.
 
 ## Tests
 
-- `tests/test_api.py` — **39 tests**. Hérités et adaptés (auth ajoutée aux
+- `tests/test_api.py` — **38 tests**. Hérités et adaptés (auth ajoutée aux
   tests de taille/drain) : `/healthz` ; démarrage refusé sur
   `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé ; **démarrage refusé si
   `DENGON_DASHBOARD_JWT_SECRET` absent** (nouveau) ; corps trop gros → 413
@@ -460,12 +499,36 @@ ajoutera les projections `messages` / `links` / `message_hops`.
   mauvais format (`relay-inconnu`), qui échoue la validation de schéma (400)
   avant d'atteindre le code testé (401 attendu) — corrigé en utilisant un
   `node_id` bien formé mais non enregistré (`relay-9a9a9a`).
+- `tests/test_projections.py` — **24 tests** (US-217). Unitaires, sur
+  `app/projections.py` seul (pas de base ni d'API) : statut par type
+  d'événement déclencheur (`queued`/`in_flight`/`delivered` via
+  `msg.delivered` et `ack.observed`/`expired`/`unknown` sans événement) ;
+  `hop_count` compte les `pkt.relayed` ; `delivered` gagne sur un
+  `msg.expired` arrivé en retard/désordre ; **5 tests paramétrés** de
+  robustesse à l'ordre d'arrivée (mélange aléatoire, résultat identique) ;
+  données partielles (un seul événement relais, aucun de l'émetteur) ;
+  doublons idempotents ; `group_by_msg_log_id` ignore les événements sans
+  `msg_log_id`. Puis sur les **20 fixtures golden réelles** de US-107
+  (`contracts/events/fixtures/`) : chargement + projection sans exception ;
+  3 scénarios nommés vérifiés (`1122…` → `delivered`, latence 880 ms,
+  `conv_hash` correct ; `aabbccdd…` → `expired` ; `4d5e6f…` → `in_flight`,
+  1 hop) ; **5 tests paramétrés** d'indépendance à l'ordre sur les 20
+  fixtures combinées. Deux tests **bout en bout** (`test_api`-style, via la
+  fixture `client`) : les 20 fixtures **réellement signées** (clé de test
+  `contracts/events/test-signing-key.json`, vérifié que
+  `SigningKey(seed).verify_key == public_hex` du fichier) traversent
+  `POST /api/nodes` puis `POST /ingest/batch`, la table `messages` est
+  ensuite lue directement ; un second test les ingère **dans l'ordre
+  inverse** (le batch `msg.delivered` avant `msg.queued` du même message) et
+  vérifie le même statut final.
+- Commande : `uv run pytest tests/test_projections.py` → **24 passed** ;
+  suite complète (`test_api.py` + `test_projections.py`) → **62 passed**
+  (vérifié le 2026-09-28, après rebase sur `main`).
 
 ## Limites connues / TODO
 
-- **Aucune projection** : on ne sait pas encore reconstruire un statut de
-  message. → US-217.
-- **Pas de SSE**, pas de routes REST de lecture. → US-218, US-219.
+- **Pas de SSE**, pas de routes REST de lecture des projections. →
+  US-218, US-219.
 - **`POST /api/nodes` sans auth opérateur** : n'importe qui peut enregistrer
   un `node_id` **inédit** et obtenir un JWT valide (**re**-enregistrer un
   `node_id` déjà pris est bloqué depuis la revue de la PR #91 — 409, plus
@@ -475,6 +538,12 @@ ajoutera les projections `messages` / `links` / `message_hops`.
   appelé, `integrity` reste toujours `'unverified'`. → hors périmètre US-216.
 - **Nœud inconnu traité comme un 401 direct**, pas comme la quarantaine +
   alerte décrite par la conception (`docs/synthese/09` §3) — écart consigné.
+- **`links`/`message_hops` (§11.2) non créées** : topologie et historique
+  détaillé des sauts par message restent hors périmètre — écart consigné
+  (US-217 ne couvre que le statut). `messages.hop_count` est une
+  approximation (compte de `pkt.relayed`), pas un journal par nœud.
+- **Statut `read` (v2) jamais produit** : `msg.read` n'est pas traité par la
+  projection — écart consigné.
 - **Pas de déploiement** : tourne en local via `uvicorn`. Les migrations
   tournent dans le `lifespan` — US-224 pourra les sortir en étape explicite. →
   US-224 (VPS + TLS).

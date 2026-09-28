@@ -19,9 +19,11 @@ Table `raw_batches` : zone d'atterrissage des batchs bruts (US-110), plus
 utilisée en écriture depuis US-216 (`/ingest/batch` valide et route vers
 `events` directement) — laissée en place, vide, plutôt que retirée par une
 migration de suppression (risque inutile sur une table déjà livrée). Les
-tables `events`/`nodes` (US-216) et les projections `messages` / `links` /
-`message_hops` (US-217) arrivent en sprint 2. Réf :
-docs/synthese/09-dashboard-et-donnees.md §3 et §11.2.
+tables `events`/`nodes` (US-216) sont livrées ; `messages` (US-217) aussi,
+mais **pas** `links`/`message_hops` — écart consigné dans
+`03-ecarts-conception.md` (hors périmètre de l'US-217, qui ne couvre que la
+reconstruction de statut). Réf : docs/synthese/09-dashboard-et-donnees.md
+§3 et §11.2.
 """
 
 from __future__ import annotations
@@ -80,8 +82,31 @@ _0002_NODES_AND_EVENTS: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_events_node ON events (node_id, ts_ms DESC)",
 ]
 
+# Projection : statut par message (US-217), recalculée entièrement depuis
+# `events` à chaque batch touchant son `msg_log_id` (app/projections.py) —
+# jamais mise à jour incrémentale. `links`/`message_hops` de §11.2 ne sont
+# pas créées ici : hors périmètre de l'US-217 (écart consigné).
+_0003_MESSAGES: list[str] = [
+    """
+    CREATE TABLE IF NOT EXISTS messages (
+        msg_log_id           TEXT    PRIMARY KEY,
+        conv_hash            TEXT,
+        first_seen_ms        INTEGER NOT NULL,
+        last_event_ms        INTEGER NOT NULL,
+        status               TEXT    NOT NULL DEFAULT 'unknown'
+                              CHECK (status IN
+                                  ('queued','in_flight','delivered','read','expired','unknown')),
+        status_ms            INTEGER,
+        hop_count            INTEGER NOT NULL DEFAULT 0,
+        delivery_latency_ms  INTEGER
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_messages_status ON messages (status, status_ms DESC)",
+]
+
 # (version, nom, instructions) — ordre = ordre d'application.
 MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (1, "initial", _0001_INITIAL),
     (2, "nodes_and_events", _0002_NODES_AND_EVENTS),
+    (3, "messages", _0003_MESSAGES),
 ]

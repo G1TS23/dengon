@@ -10,6 +10,115 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-217 : rebase de la PR #93 sur `main` (après #91, #99)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/`
+**Lot :** US-217, PR #93 — branche `feat/US-217-dashboard-projections`
+
+### Fait
+- La branche contenait encore le commit US-216 d'avant squash-merge
+  (`e565950`) ; rebase du seul commit US-217 :
+  `git rebase --onto origin/main e565950`.
+- Un conflit : `modules/dashboard-api.md` — arborescence des tests et
+  section « Décisions » (revue PR #91 côté `main`, US-217 côté branche) :
+  les deux côtés gardés.
+- Fusion automatique fautive corrigée à la main : entrée US-217 remise en
+  haut du journal (elle était tombée au milieu, sans séparateur `---`) ;
+  ligne `Dashboard api` en double dans `02-avancement.md` → une seule ligne.
+- Compteur `test_api.py` corrigé dans la fiche module : 38 tests collectés
+  (la fiche sur `main` annonçait 39 ; aucune fonction de test ajoutée ou
+  retirée par US-217 dans ce fichier).
+
+### Vérifications
+```
+$ uv run --extra dev pytest          # dashboard/api
+62 passed   (38 test_api.py + 24 test_projections.py)
+
+$ uv run --extra dev ruff check .
+All checks passed!
+```
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : `dashboard-api.md` (résolution du conflit)
+
+---
+
+## 2026-09-28 — US-217 : projections dashboard — reconstruction de statut par message
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{projections,ingest,migrations}.py`,
+`dashboard/api/tests/{test_api,test_projections}.py`, `docs/suivi/`.
+**Lot :** US-217 (issue #31). Branche `feat/US-217-dashboard-projections`,
+basée sur `feat/US-216-ingest-validation` (PR #91, pas encore mergée au
+moment de cette session — l'`events` table qu'US-217 lit vient de là ;
+dépendance formelle de l'issue = US-107/US-110 seulement, tous deux mergés).
+
+### Fait
+- `app/projections.py` — logique pure, sans I/O : `project_message()`
+  reconstruit le statut d'un `msg_log_id` à partir de **tous** ses
+  événements connus (`docs/synthese/09` §10 : delivered > expired >
+  in_flight > queued > unknown, `status_ms` = horodatage de l'événement
+  déclencheur, `hop_count` = nb de `pkt.relayed`, `delivery_latency_ms`
+  depuis `msg.delivered`) ; `group_by_msg_log_id()`/`project_messages()`
+  pour un flux complet.
+- Migration v3 (`messages`, schéma `docs/synthese/09` §11.2, sans
+  `links`/`message_hops` — écart consigné).
+- `app/ingest.py::_insert_events()` — après l'insertion des événements,
+  recalcule la projection de chaque `msg_log_id` touché par le batch en
+  relisant **tout** `events` pour ce `msg_log_id` (pas de fusion
+  incrémentale), `UPSERT` dans `messages`, même transaction.
+- Tests : 24 nouveaux (`test_projections.py`) — unitaires sur chaque règle
+  de `docs/synthese/09` §10, 10 tests paramétrés de robustesse à l'ordre
+  d'arrivée (5 sur un scénario synthétique, 5 sur les 20 fixtures golden
+  combinées), données partielles, idempotence aux doublons, et 2 tests bout
+  en bout qui ingèrent les **20 fixtures golden réelles** de US-107 via le
+  vrai pipeline HTTP (`POST /api/nodes` + `POST /ingest/batch`, signature
+  Ed25519 vérifiée avec la clé de test `contracts/events/test-signing-key.json`),
+  dont un dans l'ordre inverse.
+- 3 tests hérités de `test_api.py` avaient `[1, 2]` en dur pour les versions
+  de migration — mis à jour en `[1, 2, 3]`.
+
+### Pourquoi / décisions
+- Détail dans `docs/suivi/modules/dashboard-api.md` §Décisions
+  d'implémentation (US-217) : recalcul complet plutôt qu'incrémental (rend
+  l'indépendance à l'ordre structurelle, pas une garantie à maintenir),
+  `messages.status` plus granulaire que le résumé de §10 (`queued` vs
+  `in_flight`), `status_ms` = horodatage du déclencheur et non du dernier
+  événement reçu.
+
+### Écarts vs conception
+- `links`/`message_hops` (§11.2) non créées, `hop_count` approximatif —
+  consigné dans `03-ecarts-conception.md`.
+- Statut `read` (v2) jamais produit par la projection — consigné.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les 6 critères d'acceptation de l'US-217 sont couverts : projections
+  construites depuis le flux d'événements, conformes à `docs/synthese/09`
+  §10, vérifiées sur les 20 fixtures golden, tolérantes aux données
+  partielles, résultat indépendant de l'ordre d'arrivée, `pytest` vert.
+- Manque encore avant de fermer l'issue : ouvrir la PR (vers
+  `feat/US-216-ingest-validation`, tant que #91 n'est pas mergée), revue par
+  une personne d'une autre `area:`.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q
+58 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+```
+- CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
+  ouverte au moment de cette entrée).
+
+---
+
 ## 2026-09-28 — US-212 : `sync::courier` — dépôt / collecte d'enveloppes scellées, expiration
 
 **Auteur :** Oswin + Claude (Opus 5.5)
