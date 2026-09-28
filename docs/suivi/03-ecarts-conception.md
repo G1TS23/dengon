@@ -58,6 +58,33 @@ _(aucun écart pour l'instant)_
   d'`OutboxStore` (une table `outbox(msg_uuid BLOB PRIMARY KEY, record
   BLOB)` suffit). Si le dashboard veut `msg.cancelled`, l'ajouter au
   catalogue (US-107 / `contracts/events`).
+### 2026-09-28 — `protocol::fragment` (US-202) : MTU minimal 46, budget mémoire global, mémoire des `frag_id` terminés
+
+- **Prévu :** `docs/synthese/05-protocole-et-trame.md` §5 : fragments de
+  `FRAG_SIZE` au plus, réassemblage borné par `FRAG_TIMEOUT_S` et
+  `FRAG_MAX_CONCURRENT` ; §2 : `ATT_MTU_MIN = 23` comme repli.
+- **Réel :**
+  1. La taille de chunk dépend du MTU : `min(FRAG_SIZE, ATT_MTU − 3 − 30 −
+     12)`. Au MTU minimal BLE (23 → 20 octets utiles), **même l'en-tête L3
+     (30 o) ne tient pas** : aucun paquet dengon ne passe. Le plus petit MTU
+     utilisable est 46. Sans effet pratique (Spike C : 517 négocié), mais le
+     « repli sur 23 » de `synthese/05` §2 n'est pas viable.
+  2. Budget mémoire **global** en octets (`max_bytes`, 128 Kio par défaut,
+     avec un coût forfaitaire de 32 o par chunk) en plus des deux bornes
+     prévues : sans lui, 64 réassemblages × `PACKET_MAX_LEN` ≈ 4 Mio, hors
+     de portée d'un ESP32.
+  3. Le réassembleur retient les `frag_id` terminés (64 au plus, pendant
+     `timeout_ms`) pour ignorer leurs fragments en retard : sans cela, un
+     paquet ressortait deux fois et un doublon tardif rouvrait un
+     réassemblage inutile.
+  4. Seul le **payload** du fragment est produit ; l'en-tête L3 `0x09` est
+     laissé au codec (US-201).
+- **Raison :** (1) arithmétique du format ; (2)(3) critère « mémoire bornée »
+  de l'US ; (4) codec pas encore mergé, et indépendant.
+- **Conséquences :** `dengon-ble` / l'appli Android doivent refuser (ou
+  signaler) un lien dont le MTU négocié est < 46. La déduplication de paquets
+  reste le rôle du seen-set de `sync::routing` ; celle du réassembleur ne
+  vaut que pour `timeout_ms`.
 - **Doc de conception mise à jour ?** non.
 
 ---

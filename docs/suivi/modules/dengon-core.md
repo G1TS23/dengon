@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
 **Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209).
 
 ## À quoi ça sert
 
@@ -46,6 +46,8 @@ dengon-core/
       codec/
         mod.rs         — Packet, encode / decode L3, FrameRule, entrée de signature
         app.rs         — AppFrame (Message, Ack), encode / decode L4
+      fragment.rs      — fragmentation / réassemblage L2 (US-202)
+      fragment/tests.rs — tests unitaires + property de la fragmentation
     sync/
       mod.rs           — table des sous-modules sync (routing, status livrés ;
                          inventory, courier = US-210/212)
@@ -765,6 +767,38 @@ terminé puis ré-enqueué repartirait en `QUEUED` (précondition documentée :
   voit pas les ACK (chiffrés dans Noise) — c'est `status`/`courier` qui
   appelleront `Router::cancel`. Pas de RSSI-gating (optionnel MVP).
   Pas encore branché dans `dengon-node` ni `dengon-sim`.
+
+## Sous-module `protocol::fragment` (US-202)
+
+Découpe un paquet L3 trop grand pour une écriture BLE, et le recolle à
+l'arrivée. Conception : [`synthese/05`](../../synthese/05-protocole-et-trame.md)
+§5. Payload d'un fragment : `frag_id(8) ‖ index(2) ‖ total(2) ‖ chunk`, avec
+`frag_id = SHA-256(paquet)[0..8]`.
+
+| Type / fonction | Fichier | Ce que ça fait |
+|---|---|---|
+| `chunk_capacity(att_mtu)` | `src/protocol/fragment.rs` | `min(FRAG_SIZE, ATT_MTU − 3 − 30 − 12)` ; `None` sous `MIN_USABLE_ATT_MTU = 46`. |
+| `split` / `split_for_mtu` | `src/protocol/fragment.rs` | Découpe en `Fragment`s (taille de chunk explicite ou tirée du MTU). |
+| `Fragment` | `src/protocol/fragment.rs` | Payload décodé ; `encode`, `decode` (sans panic), `validate`. |
+| `Reassembler::push` | `src/protocol/fragment.rs` | Ajoute un fragment ; rend le paquet complet **une seule fois**, vérifié contre son `frag_id`. |
+| `ReassemblerConfig` | `src/protocol/fragment.rs` | `max_concurrent` (64), `timeout_ms` (30 s), `max_bytes` (128 Kio). |
+
+**Bornes mémoire (un pair malveillant ne peut pas faire croître le
+réassembleur) :** au plus `max_concurrent` réassemblages (éviction du plus
+ancien) ; au plus `PACKET_MAX_LEN` octets par paquet ; au plus `max_bytes`
+octets en attente au total, chaque chunk comptant ses octets + 32
+(`CHUNK_OVERHEAD`) ; au plus 64 `frag_id` terminés mémorisés, oubliés après
+`timeout_ms`. Vérifié par le property test
+`memoire_bornee_face_a_un_pair_malveillant`.
+
+**Tests :** `src/protocol/fragment/tests.rs`, 23 tests dont 4 property tests
+(réassemblage avec MTU, ordre et doublons aléatoires ; fragment manquant →
+rien ne sort et tout est purgé ; bornes mémoire sur entrées hostiles ;
+décodage sans panic). Couverture : 98,8 % des lignes.
+
+**Limites :** pas d'habillage L3 `0x09` (codec, US-201) ; pas encore branché
+dans le pipeline de réception ; au MVP le nœud réassemble avant de relayer
+(A-13), pas de relais fragment par fragment.
 
 ## Pour l'oral
 

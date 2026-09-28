@@ -20,6 +20,9 @@ de son area (proposition d'organisation §10.3 point 3).
 | Module | Fiche | État | Dernière mise à jour |
 |---|---|---|---|
 | `dengon-core` | [dengon-core.md](dengon-core.md) | en cours (+ `sync::status` US-211, `sync::routing` US-209) | 2026-09-28 |
+| `dengon-core` | [dengon-core.md](dengon-core.md) | partiel (`protocol` + fragmentation, `ledger`, `store`) | 2026-09-28 |
+| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |
+| `dengon-core` | [dengon-core.md](dengon-core.md) | esquisse | 2026-09-09 |
 | `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-25 |
 | `dengon-node` | [dengon-node.md](dengon-node.md) | esquisse | 2026-09-09 |
 | `dengon-sim` | [dengon-sim.md](dengon-sim.md) | partiel (harness + réseau simulé + scénarios, US-221) | 2026-09-28 |

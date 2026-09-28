@@ -14,6 +14,7 @@
 //! - [`types`] — [`PacketType`], [`Flags`], [`Header`], [`AppFrameKind`],
 //!   [`AckStatus`], et les alias d'identifiants ([`PeerId`], [`MsgId`]).
 //! - [`codec`] — octets ⇄ [`Packet`] (L3) et ⇄ [`AppFrame`] (L4, clair Noise).
+//! - [`fragment`] — fragmentation / réassemblage L2 (US-202).
 //!
 //! Les **vecteurs de conformité v0** vivent dans
 //! `crates/dengon-core/tests/vectors_v0.json` (neutre en langage) et sont
@@ -24,6 +25,7 @@
 
 pub mod codec;
 pub mod consts;
+pub mod fragment;
 pub mod types;
 
 pub use codec::app::{
