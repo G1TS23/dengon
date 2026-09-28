@@ -1,6 +1,8 @@
 # ---------------------------------------------------------------------------
-# Workflow `android` — build + tests unitaires de l'app Android (android/).
-# Référence : issue #79 (retour de revue d'OswinFreyr sur la PR #72).
+# Workflow `android` — build + tests unitaires de l'app Android (android/),
+# sur le vrai FFI Rust (US-302).
+# Référence : issue #79 (retour de revue d'OswinFreyr sur la PR #72), #107
+# (premier job assembleDebug + testDebugUnitTest), PR #109 (US-302).
 #
 # Deux régressions ont survécu sans être vues avant un clone frais sur une
 # autre plateforme, faute de CI sur android/ :
@@ -8,6 +10,16 @@
 #   - `gradle/verification-metadata.xml` régénéré sur macOS seulement :
 #     checksum `aapt2` manquant pour Linux (PR #72). Le premier `./gradlew`
 #     réellement exécuté sur Linux, ici, est ce qui le vérifie pour de vrai.
+#
+# Étapes (US-302) :
+# 1. Construit libdengon_ffi.so pour arm64-v8a et x86_64 (cargo-ndk), et pour
+#    l'hôte (chargée par JNA dans les tests JVM) : android/scripts/build-ffi.sh.
+# 2. Vérifie que les bindings Kotlin versionnés (app/.../ffi/dengon.kt) sont
+#    bien ceux que produit le `.udl` : un `.udl` modifié sans régénération
+#    casserait l'app à l'exécution, pas à la compilation.
+# 3. `assembleDebug` + `testDebugUnitTest`. Le test d'intégration Kotlin ↔
+#    Rust (DengonNodeIntegrationTest) y est EXÉCUTÉ : la lib hôte est là.
+#    Le job échoue s'il a été ignoré (garde en fin de job).
 #
 # ⚠ DEUX RÈGLES À NE PAS CASSER (identiques à core.yml/firmware.yml)
 #
@@ -40,14 +52,15 @@ concurrency:
   # On n'annule jamais un run sur main : il fait foi pour l'historique.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
 jobs:
   android:
     name: android
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    defaults:
-      run:
-        working-directory: android
+    timeout-minutes: 40
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,22 +68,28 @@ jobs:
           # Nécessaire au filtre de chemins sur les événements push.
           fetch-depth: 0
 
-      - name: Détecter les changements android/
+      - name: Détecter les changements Android / FFI
         id: filtre
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
             android:
               - 'android/**'
+              # Le FFI et tout ce qu'il embarque : le cœur est lié dans le .so.
+              - 'crates/dengon-ffi/**'
+              - 'crates/dengon-core/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
               - '.github/workflows/android.yml'
 
-      - name: Aucun changement android/
+      - name: Aucun changement Android
         if: steps.filtre.outputs.android != 'true'
         run: |
           {
             echo '### android — ignoré'
             echo
-            echo "Aucun fichier android/ modifié : le build gradle est sauté."
+            echo "Ni android/ ni le FFI ne changent : le build est sauté."
             echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -92,20 +111,77 @@ jobs:
         if: steps.filtre.outputs.android == 'true'
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
+      - name: Lire la toolchain figée
+        if: steps.filtre.outputs.android == 'true'
+        id: toolchain
+        run: |
+          canal=$(grep -oP '(?<=^channel\s=\s")[^"]+' rust-toolchain.toml)
+          echo "canal=$canal" >> "$GITHUB_OUTPUT"
+
+      - name: Installer Rust + cibles Android
+        if: steps.filtre.outputs.android == 'true'
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master au 2026-09-03
+        with:
+          toolchain: ${{ steps.toolchain.outputs.canal }}
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Cache cargo
+        if: steps.filtre.outputs.android == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Installer cargo-ndk
+        if: steps.filtre.outputs.android == 'true'
+        run: cargo install cargo-ndk --version 4.1.2 --locked
+
+      # Le NDK reste celui préinstallé sur l'image du runner. Ses variables
+      # (ANDROID_NDK_LATEST_HOME…) n'existent que dans le shell : `${{ env.X }}`
+      # ne voit que les `env:` du workflow et les rend vides.
+      - name: Construire libdengon_ffi.so (Android + hôte) et les bindings
+        if: steps.filtre.outputs.android == 'true'
+        run: |
+          export ANDROID_NDK_HOME="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_ROOT}"
+          echo "NDK : $ANDROID_NDK_HOME"
+          android/scripts/build-ffi.sh
+
+      - name: Bindings Kotlin à jour avec le .udl
+        if: steps.filtre.outputs.android == 'true'
+        run: |
+          if ! git diff --exit-code -- android/app/src/main/java/com/dengon/app/ffi/; then
+            echo "::error::dengon.kt ne correspond plus à dengon.udl : lancer android/scripts/build-ffi.sh bindings et committer."
+            exit 1
+          fi
+
       - name: Cache Gradle
         if: steps.filtre.outputs.android == 'true'
         uses: gradle/actions/setup-gradle@da187c8e6ffbd3802e00f2477aa5a822b25f2dda # v4.4.4
         with:
           # N'écrire le cache que depuis main, pour qu'une PR ne le pollue pas
-          # (même règle que Swatinem/rust-cache dans core.yml).
+          # (même règle que Swatinem/rust-cache ci-dessus).
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # `verification-metadata.xml` (dépendances verrouillées par sha256) et
       # `gradle.lockfile`/`settings-gradle.lockfile` (versions résolues,
       # resolutionStrategy.activateDependencyLocking() dans build.gradle.kts)
       # font déjà échouer le build si l'un des deux est périmé — pas besoin
-      # d'étape de vérification séparée, contrairement à `uv sync --frozen`
-      # côté dashboard.
+      # d'étape de vérification séparée.
       - name: Build + tests unitaires (assembleDebug testDebugUnitTest)
         if: steps.filtre.outputs.android == 'true'
-        run: ./gradlew assembleDebug testDebugUnitTest --no-daemon
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug testDebugUnitTest
+
+      - name: Le test d'intégration Kotlin ↔ Rust a bien tourné
+        if: steps.filtre.outputs.android == 'true'
+        run: |
+          rapport=android/app/build/test-results/testDebugUnitTest/TEST-com.dengon.app.ffi.DengonNodeIntegrationTest.xml
+          grep -q 'skipped="0"' "$rapport" || { echo "::error::DengonNodeIntegrationTest ignoré : lib hôte introuvable"; exit 1; }
+          echo "DengonNodeIntegrationTest exécuté (Kotlin → JNA → libdengon_ffi.so)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publier l'APK debug
+        if: steps.filtre.outputs.android == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dengon-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
