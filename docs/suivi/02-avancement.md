@@ -13,6 +13,7 @@
 | Composant | Prévu (conception) | Réel | Avancement | Fiche |
 |---|---|---|---|---|
 | `dengon-core` | crate Rust : protocol, crypto, store, sync, ledger, observability | squelette + `protocol::{consts, types}` (US-108, PR #63) : 13 types de paquets (INVENTORY = 0x0D), Flags, Header, ~35 constantes, vecteurs de conformité v0 + `ledger` livré (US-206, PR #75) : append/verify_chain/export, signature différée (`Signer` injecté), 16 tests dont 2 property tests + `store` livré (US-207, PR #76) : schéma SQLite complet, chiffrement XChaCha20-Poly1305 champ par champ + AAD, migrations rejouables, 13 tests dont le test négatif (grep binaire) | 25 % | [dengon-core](modules/dengon-core.md) |
+| `dengon-core` | crate Rust : protocol, crypto, store, sync, ledger, observability | squelette : bascule `no_std`, `PROTOCOL_VERSION`, 2 tests ; **`crypto` Ed25519 sign/verify livré** (US-203, KAT RFC 8032 + négatifs, `no_std` vérifié sur thumbv7em) | 10 % | [dengon-core](modules/dengon-core.md) |
 | `dengon-ble` | trait Transport + impl btleplug | **contrat livré** (US-105) : `Transport`, `MockTransport`, suite de conformité (12 cas). Pas d'implémentation radio | 40 % | [dengon-ble.md](modules/dengon-ble.md) |
 | `dengon-node` | binaire CLI (nœud headless) | squelette : `main` affiche sa version | 3 % | [dengon-node](modules/dengon-node.md) |
 | `dengon-sim` | simulateur multi-nœuds | squelette : lib + bin, graine fixe déclarée | 3 % | [dengon-sim](modules/dengon-sim.md) |

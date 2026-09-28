@@ -730,3 +730,27 @@ compiler le code client contre eux.
 **Où c'est utilisé :** `crates/dengon-ffi/src/dengon.udl`,
 `crates/dengon-ffi/uniffi.toml`, `android/.../ffi/DengonTypes.kt`.
 
+
+---
+
+### `verify_strict` : décoder une clé publique ne suffit pas à la juger
+
+**Contexte :** US-203, signature Ed25519 avec `ed25519-dalek` 2.x.
+
+Ed25519 accepte des clés « de faible ordre » (comme le point neutre, `y = 1`) qui
+se décodent sans erreur. Avec certaines de ces clés, on peut fabriquer des
+signatures qui passent la vérification standard sans connaître de secret. Le mode
+`verify_strict` les refuse, et refuse aussi les signatures malléables (deux
+encodages valides pour un même message).
+
+Piège rencontré : on croit que `VerifyingKey::from_bytes` filtre les mauvaises
+clés. Faux — j'ai supposé que `0xFF…FF` serait rejeté, et une sonde a montré que
+dalek le décode. Ce qui protège, c'est la vérification stricte, pas le décodage.
+
+Deuxième leçon : un vecteur de test (KAT) copié de mémoire n'est pas une preuve.
+Les valeurs du RFC 8032 ont été recalculées avec une seconde implémentation
+(Python `cryptography` / OpenSSL) avant d'être figées dans les tests, et on a
+vérifié qu'altérer un octet fait bien échouer les tests.
+
+**Où c'est utilisé :** `crates/dengon-core/src/crypto.rs`
+(`VerifyingKey::verify`, tests `cle_de_faible_ordre_*` et `kat_rfc8032_*`).
