@@ -352,13 +352,14 @@ la PR #58. Elles sont donc candidates à devenir des checks requis, en plus de
   `dashboard.yml` restent à écrire~~ — faits (US-221, US-222, US-114,
   US-110). ~~`android.yml` et `deploy-vps.yml` (§4.3) restent à écrire.~~ —
   faits (US-224, issue #79).
-- **`android.yml` n'a pas pu être vérifié en exécutant réellement
-  `./gradlew` dans cette session** : le bac à sable qui a écrit ce workflow
-  bloque `dl.google.com` (403 sur le tunnel du proxy sortant), donc ni le
-  plugin AGP ni le SDK Android ne sont récupérables en local — seul
-  `./gradlew --version` (bootstrap du wrapper, sans évaluer le projet) a pu
-  être exécuté avec succès. La seule vérification réelle est le premier run
-  du workflow sur GitHub Actions après le push.
+- ~~`android.yml` n'a pas pu être vérifié en exécutant réellement
+  `./gradlew` dans cette session~~ — **levé** : le bac à sable qui a écrit
+  ce workflow bloque `dl.google.com` (403 sur le tunnel du proxy sortant),
+  donc ni le plugin AGP ni le SDK Android n'y sont récupérables (seul
+  `./gradlew --version`, bootstrap du wrapper sans évaluer le projet, a pu
+  être exécuté avec succès en local). Le premier run réel sur la PR #107 a
+  confirmé le job vert (`assembleDebug testDebugUnitTest`, 3 min 04) : la
+  limite était bien celle du bac à sable, pas un défaut du workflow.
 - **Les 4 checks requis ne sont pas encore posés sur `main`** : c'est le
   dernier critère d'acceptation de l'US-222, et il ne peut être rempli
   qu'après le merge, par un compte admin. Voir la commande plus haut.
