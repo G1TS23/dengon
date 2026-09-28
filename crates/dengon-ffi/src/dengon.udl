@@ -1,32 +1,54 @@
-// Contrat FFI v0 de dengon (US-106) — voir docs/synthese/04-architecture.md §5
-// et docs/powl/09-data-model.md §1/§3 pour les types miroirs.
+// Contrat FFI de dengon — voir docs/synthese/04-architecture.md §5 et
+// docs/powl/09-data-model.md §1/§3 pour les types miroirs.
 //
-// Couverture minimale exigée par l'US-106 : send_message, poll_events,
-// on_peer_connected, identité + QR. Le reste de la façade `api`
-// (mark_read, etc. — voir docs/powl/02-architecture.md) arrive avec le vrai
-// FFI (US-301/US-302).
+// v0 (US-106) : send_message, poll_events, on_peer_connected, identité + QR.
+// v1 (US-302) : EXTENSION du contrat gelé, consignée dans
+// docs/suivi/03-ecarts-conception.md et à annoncer en point d'équipe. Le vrai
+// nœud (`dengon_core::api::Node`, US-301) a besoin de deux choses que le v0
+// ne pouvait pas fournir :
+//   - ses clés PRIVÉES : `constructor(Identity)` ne recevait que la carte
+//     publique. Remplacé par `open(data_dir, vault_key, pseudo)`, qui charge
+//     (ou crée au premier lancement) l'identité depuis un coffre chiffré ;
+//   - un chemin pour les octets radio : `on_bytes_received`, `take_outgoing`,
+//     `on_peer_disconnected`. Le nœud ne possède aucun transport, c'est
+//     l'appelant (AndroidTransport, US-213) qui pousse et tire les trames.
+// Les types v0 (Identity, Message, Conversation, NodeEvent, MessageStatus,
+// DengonError) sont inchangés. Les fonctions libres gardent leur nom et leurs
+// arguments mais deviennent `[Throws]` : une carte `Identity` reçue de
+// Kotlin peut être invalide (clé mal formée, `peer_id` falsifié), ce que le
+// bouchon v0 ne vérifiait pas.
 //
-// GELÉ une fois annoncé en point d'équipe (DoR US-106) : ajouter un champ
-// après coup demande une réunion, pas un commit.
-//
-// Types choisis pour que les bindings Kotlin GÉNÉRÉS (uniffi-bindgen 0.28.3)
-// aient la même forme que le bouchon écrit à la main
-// (android/.../ffi/DengonTypes.kt), revue PR #69 de Paul :
+// Types choisis pour que les bindings Kotlin générés (uniffi-bindgen 0.28.3)
+// gardent la forme de l'ex-bouchon Kotlin (revue PR #69 de Paul) :
 //   bytes → ByteArray (sequence<u8> donnerait List<UByte>),
 //   i64   → Long pour les horodatages (u64 donnerait ULong),
 //   u32   → UInt pour les compteurs.
 // Paquet Kotlin fixé par ../uniffi.toml (com.dengon.app.ffi).
+//
+// Formats des identifiants en chaîne :
+//   peer_id  → base32 RFC 4648 minuscules sans padding (13 caractères) ;
+//   conv_id  → 16 caractères hexadécimaux (8 octets) ;
+//   msg_uuid → 32 caractères hexadécimaux (16 octets).
 
 namespace dengon {
     // Identité + QR (docs/synthese/06-securite.md).
+    //
+    // Génère une identité JETABLE : seule la carte publique est rendue, les
+    // clés privées sont perdues. Utile aux tests ; l'app passe par
+    // `DengonNode.open`, qui conserve les secrets dans le coffre.
+    [Throws=DengonError]
     Identity generate_identity(string pseudo);
+
+    [Throws=DengonError]
     string identity_qr_code(Identity identity);
 
     [Throws=DengonError]
     Identity identity_from_qr_code(string qr_code);
 
-    // Code de vérification 60 chiffres (« safety number »), même valeur des
-    // deux côtés quel que soit l'ordre des arguments.
+    // Code de vérification 60 chiffres (« safety number ») : 12 groupes de 5
+    // chiffres séparés par une espace, même valeur des deux côtés quel que
+    // soit l'ordre des arguments.
+    [Throws=DengonError]
     string verification_code(Identity local, Identity remote);
 };
 
@@ -64,6 +86,12 @@ dictionary Conversation {
     u32 unread_count;
 };
 
+// Trame à écrire sur le lien radio du pair `peer_id` (v1, US-302).
+dictionary OutgoingFrame {
+    string peer_id;
+    bytes frame;
+};
+
 [Enum]
 interface NodeEvent {
     MessageReceived(Message message);
@@ -80,14 +108,40 @@ enum DengonError {
 };
 
 interface DengonNode {
-    constructor(Identity identity);
+    // v1 : ouvre le nœud de cet appareil. `data_dir` accueille le coffre
+    // d'identité ; `vault_key` (32 octets) le déchiffre ; `pseudo` n'est lu
+    // qu'au premier lancement (le coffre existant fait foi ensuite).
+    [Throws=DengonError, Name=open]
+    constructor(string data_dir, bytes vault_key, string pseudo);
+
+    // v1 : carte publique de ce nœud (à afficher en QR).
+    Identity local_identity();
+
+    // v1 : enregistre un correspondant (après appairage QR), ce qui permet de
+    // lui écrire avant toute connexion directe.
+    [Throws=DengonError]
+    void add_contact(Identity contact);
 
     [Throws=DengonError]
     string send_message(string dest_peer_id, string body);
 
     sequence<NodeEvent> poll_events();
 
+    // v1 : `[Throws]` ajouté, un `peer_id` mal formé est refusé.
+    [Throws=DengonError]
     void on_peer_connected(string peer_id);
+
+    // v1 : le lien radio vers `peer_id` est tombé.
+    [Throws=DengonError]
+    void on_peer_disconnected(string peer_id);
+
+    // v1 : des octets sont arrivés du lien radio de `peer_id`.
+    [Throws=DengonError]
+    void on_bytes_received(string peer_id, bytes frame);
+
+    // v1 : trames à écrire sur la radio, à vider après chaque appel qui peut
+    // en produire (on_peer_connected, on_bytes_received, send_message).
+    sequence<OutgoingFrame> take_outgoing();
 
     sequence<Conversation> list_conversations();
 

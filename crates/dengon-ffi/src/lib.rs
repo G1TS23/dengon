@@ -1,19 +1,21 @@
 //! `dengon-ffi` — surface FFI de dengon exposée via UniFFI.
 //!
 //! Génère les bindings Kotlin consommés par l'application Android ; Swift est
-//! reporté en v2 (`docs/synthese/04-architecture.md` §5). C'est le pont entre
-//! le cœur Rust et `android/.../ble/AndroidTransport.kt`.
+//! reporté en v2 (`docs/synthese/04-architecture.md` §5).
 //!
-//! Contrat v0 (US-106) : fichier `src/dengon.udl`, couvrant `send_message`,
-//! `poll_events`, `on_peer_connected`, identité + QR. L'implémentation
-//! ci-dessous est un **bouchon en mémoire** — canned, pas branché sur
-//! `dengon-core` (aucun module réel n'existe encore côté `identity`/`sync`,
-//! voir US-108/US-205/US-301) — mais elle passe par le **vrai** scaffolding
-//! UniFFI généré depuis le `.udl` : c'est ce qui prouve que le contrat est
-//! valide, pas juste une intention en Markdown. `AndroidTransport` (US-213)
-//! et le vrai FFI (US-302) remplaceront ce bouchon sans changer la forme du
-//! contrat — toute évolution de `dengon.udl` après le gel passe par une
-//! réunion d'équipe.
+//! Contrat : `src/dengon.udl`. v0 gelé par l'US-106, étendu en v1 par
+//! l'US-302 (constructeur `open` avec coffre, chemin des octets radio) —
+//! l'écart est consigné dans `docs/suivi/03-ecarts-conception.md`.
+//!
+//! Depuis l'US-302, **plus aucun bouchon** : chaque appel est une fine couche
+//! de conversion au-dessus de [`dengon_core::api::Node`] (US-301) et de
+//! [`dengon_core::identity`] (US-205). Tout ce qui est protocole, crypto et
+//! routage vit dans `dengon-core` ; ce fichier ne fait que :
+//! - traduire les identifiants binaires en chaînes (module [`convert`]) ;
+//! - fournir l'horloge ([`Now`]) et l'aléa (`OsRng`), que le cœur `no_std`
+//!   attend de l'appelant ;
+//! - rendre le nœud partageable entre threads (`Mutex`) : l'UI et le service
+//!   de premier plan l'appellent depuis des threads différents.
 //!
 //! # Note sur `unsafe`
 //!
@@ -21,11 +23,6 @@
 //! `[workspace.lints.rust]` est donc neutralisé ici par
 //! `#![allow(unsafe_code)]`. C'est précisément pour cela qu'il est en `deny`
 //! et non en `forbid`, qui serait inviolable.
-//!
-//! # État
-//!
-//! Squelette (`version()`) livré par l'US-104. Contrat FFI v0 + bouchon
-//! livrés par l'US-106.
 
 #![allow(unsafe_code)]
 // Le scaffolding généré par `uniffi::include_scaffolding!` ci-dessous déclenche
@@ -33,9 +30,21 @@
 // inclus tel quel (pas de fichier séparé sur lequel cibler l'allow).
 #![allow(unused_qualifications, clippy::empty_line_after_doc_comments)]
 
+mod convert;
+
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use dengon_core::api;
+use dengon_core::identity::{self as core_identity, FileVault, VaultKey};
+use dengon_core::sync::routing::Now;
+use rand_core::{OsRng, RngCore};
 
 uniffi::include_scaffolding!("dengon");
+
+/// Nom du coffre d'identité dans le `data_dir` passé à [`DengonNode::open`].
+const VAULT_FILE: &str = "identity.vault";
 
 /// Version de la surface FFI, destinée à être exposée aux plateformes hôtes.
 pub fn version() -> String {
@@ -50,12 +59,8 @@ pub fn version() -> String {
 // Types du contrat (miroirs Rust de `dengon.udl`).
 // ---------------------------------------------------------------------------
 
-/// Identité d'un nœud : `peer_id` + pseudo + clés publiques.
-///
-/// **Placeholder cryptographique** : `pub_static`/`pub_sign` ne sont pas de
-/// vraies clés X25519/Ed25519 ici — `identity`/`crypto` n'existent pas encore
-/// côté `dengon-core` (US-108/US-205). Le contrat v0 fige la FORME du type
-/// FFI, pas son contenu cryptographique.
+/// Carte de contact d'un nœud : `peer_id` + pseudo + clés publiques, aucun
+/// secret. Miroir FFI de [`dengon_core::identity::PublicIdentity`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
     pub peer_id: String,
@@ -66,6 +71,9 @@ pub struct Identity {
 
 /// Statuts MVP du cycle de vie d'un message
 /// (`docs/synthese/07-cycle-de-vie-et-statuts.md` §1).
+///
+/// `Read` et `Cancelled` restent dans le contrat mais ne sont jamais émis par
+/// la façade de l'US-301 (pas de `mark_read` ni de `cancel_message`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageStatus {
     Queued,
@@ -96,6 +104,13 @@ pub struct Conversation {
     pub unread_count: u32,
 }
 
+/// Trame à écrire sur le lien radio du pair `peer_id` (v1, US-302).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutgoingFrame {
+    pub peer_id: String,
+    pub frame: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeEvent {
     MessageReceived {
@@ -113,9 +128,12 @@ pub enum NodeEvent {
     },
 }
 
-/// Erreurs de la surface FFI. `Internal` couvre le v0 (contenu peu détaillé
-/// pour l'instant) ; `UnknownPeer`/`NotConnected` sont réservées pour la vraie
-/// logique de routage (US-301).
+/// Erreurs de la surface FFI, gelées à trois variantes sans charge utile.
+///
+/// - `UnknownPeer` : correspondant jamais vu, ou `peer_id` mal formé ;
+/// - `NotConnected` : reprise telle quelle de [`api::DengonError`] ;
+/// - `Internal` : tout le reste (identité ou QR invalide, coffre illisible,
+///   crypto). Le détail n'est volontairement pas exposé.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DengonError {
     UnknownPeer,
@@ -135,108 +153,155 @@ impl std::fmt::Display for DengonError {
 
 impl std::error::Error for DengonError {}
 
-// ---------------------------------------------------------------------------
-// `DengonNode` — bouchon en mémoire (pas de persistance, pas de radio).
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Default)]
-struct NodeState {
-    messages: Vec<Message>,
-    conversations: Vec<Conversation>,
-    pending_events: Vec<NodeEvent>,
-    connected_peers: Vec<String>,
+impl From<api::DengonError> for DengonError {
+    fn from(value: api::DengonError) -> Self {
+        match value {
+            api::DengonError::UnknownPeer => Self::UnknownPeer,
+            api::DengonError::NotConnected => Self::NotConnected,
+            api::DengonError::Internal => Self::Internal,
+        }
+    }
 }
 
+impl From<core_identity::IdentityError> for DengonError {
+    fn from(_: core_identity::IdentityError) -> Self {
+        Self::Internal
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `DengonNode` — le vrai nœud, derrière un verrou.
+// ---------------------------------------------------------------------------
+
+/// Nœud dengon de cet appareil : [`api::Node`] rendu partageable entre
+/// threads, plus l'horloge et l'aléa qu'il attend de l'appelant.
 #[derive(Debug)]
 pub struct DengonNode {
-    identity: Identity,
-    state: Mutex<NodeState>,
+    node: Mutex<api::Node>,
+    /// Origine de l'horloge monotone passée au routeur.
+    origin: Instant,
 }
 
 impl DengonNode {
-    pub fn new(identity: Identity) -> Self {
-        Self {
-            identity,
-            state: Mutex::new(NodeState::default()),
-        }
+    /// Ouvre le nœud : charge l'identité depuis `<data_dir>/identity.vault`,
+    /// ou la crée au premier lancement (`pseudo` n'est lu qu'à ce moment-là).
+    ///
+    /// # Errors
+    ///
+    /// [`DengonError::Internal`] si `vault_key` ne fait pas 32 octets, si le
+    /// répertoire ne peut pas être créé, si le pseudo est invalide ou si le
+    /// coffre ne se déchiffre pas (mauvaise clé ou fichier altéré).
+    pub fn open(data_dir: String, vault_key: Vec<u8>, pseudo: String) -> Result<Self, DengonError> {
+        let key: VaultKey = vault_key
+            .as_slice()
+            .try_into()
+            .map_err(|_| DengonError::Internal)?;
+        let data_dir = PathBuf::from(data_dir);
+        std::fs::create_dir_all(&data_dir).map_err(|_| DengonError::Internal)?;
+        let mut vault = FileVault::new(data_dir.join(VAULT_FILE));
+        let identity = core_identity::load_or_create(&mut vault, &key, &pseudo, OsRng)?;
+
+        // Graine du jitter de relais : pas un secret (voir `api::Node::new`),
+        // mais différente d'un nœud à l'autre pour décorréler les relais.
+        let routing_seed = OsRng.next_u64();
+        Ok(Self {
+            node: Mutex::new(api::Node::new(identity, routing_seed)),
+            origin: Instant::now(),
+        })
     }
 
-    /// Toujours `Ok` dans ce bouchon : la vraie résolution de contact / le
-    /// vrai store-and-forward arrivent avec `sync`/`store` (US-301). Le type
-    /// `Result` reste dans le contrat pour ne pas casser l'appelant quand ces
-    /// erreurs deviendront réelles.
+    pub fn local_identity(&self) -> Identity {
+        convert::identity_to_ffi(&self.lock().public_identity())
+    }
+
+    pub fn add_contact(&self, contact: Identity) -> Result<(), DengonError> {
+        let contact = convert::identity_from_ffi(&contact)?;
+        self.lock().add_contact(contact);
+        Ok(())
+    }
+
     pub fn send_message(&self, dest_peer_id: String, body: String) -> Result<String, DengonError> {
-        let mut state = self.lock_state();
-
-        let msg_uuid = format!("msg-{}", state.messages.len());
-        let conv_id = format!("conv-{dest_peer_id}");
-        let status = if state.connected_peers.iter().any(|p| p == &dest_peer_id) {
-            MessageStatus::InFlight
-        } else {
-            MessageStatus::Queued
-        };
-
-        let message = Message {
-            msg_uuid: msg_uuid.clone(),
-            conv_id: conv_id.clone(),
-            author_peer_id: self.identity.peer_id.clone(),
-            body,
-            outgoing: true,
-            sent_ms: 0,
-            status,
-        };
-        state.messages.push(message.clone());
-
-        match state
-            .conversations
-            .iter_mut()
-            .find(|conv| conv.conv_id == conv_id)
-        {
-            Some(conv) => conv.last_message = Some(message),
-            None => state.conversations.push(Conversation {
-                conv_id,
-                peer_pseudo: dest_peer_id.clone(),
-                peer_id: dest_peer_id,
-                last_message: Some(message),
-                unread_count: 0,
-            }),
-        }
-
-        Ok(msg_uuid)
+        let dest = convert::peer_id_from_str(&dest_peer_id)?;
+        let now = self.now();
+        let msg_uuid = self.lock().send_message(dest, &body, now, OsRng)?;
+        Ok(convert::to_hex(&msg_uuid))
     }
 
     pub fn poll_events(&self) -> Vec<NodeEvent> {
-        std::mem::take(&mut self.lock_state().pending_events)
+        let now = self.now();
+        self.lock()
+            .poll_events(now)
+            .into_iter()
+            .map(convert::event_to_ffi)
+            .collect()
     }
 
-    pub fn on_peer_connected(&self, peer_id: String) {
-        let mut state = self.lock_state();
-        if !state.connected_peers.iter().any(|p| p == &peer_id) {
-            state.connected_peers.push(peer_id.clone());
-            state
-                .pending_events
-                .push(NodeEvent::PeerConnected { peer_id });
-        }
+    pub fn on_peer_connected(&self, peer_id: String) -> Result<(), DengonError> {
+        let peer_id = convert::peer_id_from_str(&peer_id)?;
+        let now = self.now();
+        self.lock().on_peer_connected(peer_id, now, OsRng);
+        Ok(())
+    }
+
+    pub fn on_peer_disconnected(&self, peer_id: String) -> Result<(), DengonError> {
+        let peer_id = convert::peer_id_from_str(&peer_id)?;
+        self.lock().on_peer_disconnected(peer_id);
+        Ok(())
+    }
+
+    pub fn on_bytes_received(&self, peer_id: String, frame: Vec<u8>) -> Result<(), DengonError> {
+        let peer_id = convert::peer_id_from_str(&peer_id)?;
+        let now = self.now();
+        self.lock().on_bytes_received(peer_id, &frame, now);
+        Ok(())
+    }
+
+    pub fn take_outgoing(&self) -> Vec<OutgoingFrame> {
+        self.lock()
+            .take_outgoing()
+            .into_iter()
+            .map(|(peer_id, frame)| OutgoingFrame {
+                peer_id: convert::peer_id_to_string(&peer_id),
+                frame,
+            })
+            .collect()
     }
 
     pub fn list_conversations(&self) -> Vec<Conversation> {
-        self.lock_state().conversations.clone()
+        self.lock()
+            .list_conversations()
+            .into_iter()
+            .map(convert::conversation_to_ffi)
+            .collect()
     }
 
+    /// Liste vide pour un `conv_id` inconnu **ou mal formé** : le contrat ne
+    /// prévoit pas d'erreur ici, et aucune conversation ne peut avoir un
+    /// identifiant qui ne se décode pas.
     pub fn list_messages(&self, conv_id: String) -> Vec<Message> {
-        self.lock_state()
-            .messages
-            .iter()
-            .filter(|message| message.conv_id == conv_id)
-            .cloned()
+        let Some(conv_id) = convert::from_hex::<8>(&conv_id) else {
+            return Vec::new();
+        };
+        self.lock()
+            .list_messages(conv_id)
+            .into_iter()
+            .map(convert::message_to_ffi)
             .collect()
+    }
+
+    fn now(&self) -> Now {
+        let wall_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        let mono_ms = u64::try_from(self.origin.elapsed().as_millis()).unwrap_or(u64::MAX);
+        Now::new(wall_ms, mono_ms)
     }
 
     /// Un mutex empoisonné (panique pendant qu'il était tenu) ne doit pas
     /// faire perdre les données déjà écrites : on récupère le contenu plutôt
     /// que de propager la panique à chaque appel suivant.
-    fn lock_state(&self) -> MutexGuard<'_, NodeState> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, api::Node> {
+        self.node.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -244,295 +309,280 @@ impl DengonNode {
 // Identité + QR (fonctions libres du namespace `dengon`).
 // ---------------------------------------------------------------------------
 
-/// **Placeholder cryptographique** (voir doc de [`Identity`]) : dérive des
-/// octets déterministes à partir du pseudo, pas de vraie génération de clés.
-pub fn generate_identity(pseudo: String) -> Identity {
-    let mut pub_static = vec![0_u8; 32];
-    let mut pub_sign = vec![0_u8; 32];
-    for (i, byte) in pseudo.bytes().enumerate() {
-        pub_static[i % 32] ^= byte;
-        pub_sign[i % 32] ^= byte.wrapping_add(1);
-    }
-    let peer_id = to_hex(&pub_static[..8]);
-    Identity {
-        peer_id,
-        pseudo,
-        pub_static,
-        pub_sign,
-    }
-}
-
-/// Format `docs/synthese/06-securite.md` §identité :
-/// `dengon:v1:<base64url(pseudo_len:u8 ‖ pseudo ‖ pub_static:32 ‖ pub_sign:32)>`.
-pub fn identity_qr_code(identity: Identity) -> String {
-    let pseudo_bytes = identity.pseudo.as_bytes();
-    // Tronqué à 255 o (longueur encodée sur un seul octet), en reculant
-    // jusqu'à une frontière de caractère : couper un caractère UTF-8 en deux
-    // rendait le QR indécodable (revue PR #69, Paul). Même règle que
-    // `identityQrCode` côté Kotlin. La vraie validation du pseudo viendra avec
-    // `identity` (US-205).
-    let mut pseudo_len = pseudo_bytes.len().min(255);
-    while !identity.pseudo.is_char_boundary(pseudo_len) {
-        pseudo_len -= 1;
-    }
-
-    let capacity = 1 + pseudo_len + identity.pub_static.len() + identity.pub_sign.len();
-    let mut payload = Vec::with_capacity(capacity);
-    #[allow(clippy::cast_possible_truncation)] // borné par .min(255) juste au-dessus
-    payload.push(pseudo_len as u8);
-    payload.extend_from_slice(&pseudo_bytes[..pseudo_len]);
-    payload.extend_from_slice(&identity.pub_static);
-    payload.extend_from_slice(&identity.pub_sign);
-
-    format!("dengon:v1:{}", encode_base64url(&payload))
-}
-
-pub fn identity_from_qr_code(qr_code: String) -> Result<Identity, DengonError> {
-    let encoded = qr_code
-        .strip_prefix("dengon:v1:")
-        .ok_or(DengonError::Internal)?;
-    let payload = decode_base64url(encoded)?;
-
-    let pseudo_len = usize::from(*payload.first().ok_or(DengonError::Internal)?);
-    let mut offset = 1;
-
-    let pseudo_bytes = payload
-        .get(offset..offset + pseudo_len)
-        .ok_or(DengonError::Internal)?;
-    offset += pseudo_len;
-    let pub_static = payload
-        .get(offset..offset + 32)
-        .ok_or(DengonError::Internal)?
-        .to_vec();
-    offset += 32;
-    let pub_sign = payload
-        .get(offset..offset + 32)
-        .ok_or(DengonError::Internal)?
-        .to_vec();
-
-    let pseudo =
-        String::from_utf8(pseudo_bytes.to_vec()).map_err(|_utf8_err| DengonError::Internal)?;
-    let peer_id = to_hex(&pub_static[..8]);
-
-    Ok(Identity {
-        peer_id,
-        pseudo,
-        pub_static,
-        pub_sign,
-    })
-}
-
-/// Code de vérification 60 chiffres, ordre-indépendant.
+/// Identité **jetable** : vraies clés, mais les secrets sont perdus au retour
+/// (seule la carte publique franchit le FFI). Pour les tests ; l'app passe
+/// par [`DengonNode::open`].
 ///
-/// **Placeholder** : `docs/synthese/06-securite.md` demande
-/// `SHA-512(min(fpA,fpB) ‖ max(fpA,fpB))`, indisponible ici (pas de `crypto`
-/// avant US-108/US-203). Remplacé par un mélange FNV-1a — même FORME (12
-/// groupes de 5 chiffres, même code des deux côtés), contenu non
-/// cryptographique. Ne pas comparer à un futur calcul basé sur SHA-512 : ce
-/// n'est pas le même algorithme, seulement le même contrat de sortie.
-pub fn verification_code(local: Identity, remote: Identity) -> String {
-    let fp_local = fingerprint(&local);
-    let fp_remote = fingerprint(&remote);
-    let (fp_a, fp_b) = if fp_local <= fp_remote {
-        (fp_local, fp_remote)
-    } else {
-        (fp_remote, fp_local)
-    };
-
-    (0..12)
-        .map(|i| format!("{:05}", placeholder_material(&fp_a, &fp_b, i)))
-        .collect::<Vec<_>>()
-        .join(" ")
+/// # Errors
+///
+/// [`DengonError::Internal`] si le pseudo est vide ou trop long.
+pub fn generate_identity(pseudo: String) -> Result<Identity, DengonError> {
+    let identity = core_identity::Identity::generate(&pseudo, OsRng)?;
+    Ok(convert::identity_to_ffi(&identity.public()))
 }
 
-fn fingerprint(identity: &Identity) -> Vec<u8> {
-    let mut fp = identity.pub_static.clone();
-    fp.extend_from_slice(&identity.pub_sign);
-    fp
+/// Format `dengon:v1:…` de `docs/synthese/06-securite.md` §2.
+///
+/// # Errors
+///
+/// [`DengonError::Internal`] si `identity` n'est pas une carte valide.
+pub fn identity_qr_code(identity: Identity) -> Result<String, DengonError> {
+    Ok(convert::identity_from_ffi(&identity)?.to_qr())
 }
 
-fn placeholder_material(fp_a: &[u8], fp_b: &[u8], group_index: u64) -> u32 {
-    // FNV-1a, salé par l'index de groupe pour produire 12 valeurs
-    // décorrélées à partir des deux mêmes empreintes.
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325 ^ group_index;
-    for byte in fp_a.iter().chain(fp_b.iter()) {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    #[allow(clippy::cast_possible_truncation)] // % 100_000 tient sur 32 bits
-    let groupe = (hash % 100_000) as u32;
-    groupe
+/// # Errors
+///
+/// [`DengonError::Internal`] pour tout QR qui n'est pas une carte dengon v1
+/// valide (y compris un QR étranger : URL, menu…).
+pub fn identity_from_qr_code(qr_code: String) -> Result<Identity, DengonError> {
+    let identity = core_identity::PublicIdentity::from_qr(&qr_code)?;
+    Ok(convert::identity_to_ffi(&identity))
 }
 
-// ---------------------------------------------------------------------------
-// base64url sans padding (RFC 4648 §5) — pas de dépendance externe pour ça
-// seul : `dengon-ffi` n'a qu'UniFFI comme dépendance non-interne.
-// ---------------------------------------------------------------------------
-
-const BASE64URL_ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-fn encode_base64url(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    for chunk in data.chunks(3) {
-        let b0 = chunk[0];
-        let b1 = chunk.get(1).copied();
-        let b2 = chunk.get(2).copied();
-
-        let c0 = b0 >> 2;
-        let c1 = ((b0 & 0b0000_0011) << 4) | (b1.unwrap_or(0) >> 4);
-        out.push(BASE64URL_ALPHABET[c0 as usize] as char);
-        out.push(BASE64URL_ALPHABET[c1 as usize] as char);
-
-        if let Some(b1) = b1 {
-            let c2 = ((b1 & 0b0000_1111) << 2) | (b2.unwrap_or(0) >> 6);
-            out.push(BASE64URL_ALPHABET[c2 as usize] as char);
-        }
-        if let Some(b2) = b2 {
-            let c3 = b2 & 0b0011_1111;
-            out.push(BASE64URL_ALPHABET[c3 as usize] as char);
-        }
-    }
-    out
-}
-
-fn decode_base64url(input: &str) -> Result<Vec<u8>, DengonError> {
-    fn sixbits(byte: u8) -> Result<u8, DengonError> {
-        match byte {
-            b'A'..=b'Z' => Ok(byte - b'A'),
-            b'a'..=b'z' => Ok(byte - b'a' + 26),
-            b'0'..=b'9' => Ok(byte - b'0' + 52),
-            b'-' => Ok(62),
-            b'_' => Ok(63),
-            _ => Err(DengonError::Internal),
-        }
-    }
-
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() / 4 * 3 + 3);
-
-    for chunk in bytes.chunks(4) {
-        let v0 = sixbits(chunk[0])?;
-        let v1 = sixbits(*chunk.get(1).ok_or(DengonError::Internal)?)?;
-        out.push((v0 << 2) | (v1 >> 4));
-
-        let Some(&raw2) = chunk.get(2) else { continue };
-        let v2 = sixbits(raw2)?;
-        out.push((v1 << 4) | (v2 >> 2));
-
-        let Some(&raw3) = chunk.get(3) else { continue };
-        let v3 = sixbits(raw3)?;
-        out.push((v2 << 6) | v3);
-    }
-
-    Ok(out)
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+/// Code de vérification 60 chiffres (SHA-512 des deux empreintes), symétrique.
+///
+/// # Errors
+///
+/// [`DengonError::Internal`] si l'une des deux cartes est invalide.
+pub fn verification_code(local: Identity, remote: Identity) -> Result<String, DengonError> {
+    let local = convert::identity_from_ffi(&local)?;
+    let remote = convert::identity_from_ffi(&remote)?;
+    Ok(core_identity::verification_code(&local, &remote).to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
     use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
-    #[test]
-    fn la_version_expose_le_numero_de_protocole() {
-        assert!(version().contains("protocole v1"));
+    const KEY: [u8; 32] = [7; 32];
+
+    /// Répertoire temporaire propre au test (pas de dépendance `tempfile`
+    /// pour si peu) ; nettoyé à la destruction.
+    struct Dossier(PathBuf);
+
+    impl Dossier {
+        fn nouveau() -> Self {
+            static COMPTEUR: AtomicU32 = AtomicU32::new(0);
+            let n = COMPTEUR.fetch_add(1, Ordering::Relaxed);
+            let chemin =
+                std::env::temp_dir().join(format!("dengon-ffi-test-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&chemin);
+            Self(chemin)
+        }
+
+        fn chemin(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for Dossier {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn ouvrir(dossier: &Dossier, pseudo: &str) -> DengonNode {
+        DengonNode::open(dossier.chemin(), KEY.to_vec(), pseudo.into()).unwrap()
+    }
+
+    /// Recopie les trames de chacun vers l'autre jusqu'au silence : c'est le
+    /// rôle que tiendra `AndroidTransport` (US-213) sur une vraie radio.
+    fn pomper(a: &DengonNode, b: &DengonNode) {
+        let id_a = a.local_identity().peer_id;
+        let id_b = b.local_identity().peer_id;
+        for _ in 0..32 {
+            let de_a = a.take_outgoing();
+            let de_b = b.take_outgoing();
+            if de_a.is_empty() && de_b.is_empty() {
+                return;
+            }
+            for f in de_a {
+                assert_eq!(f.peer_id, id_b);
+                b.on_bytes_received(id_a.clone(), f.frame).unwrap();
+            }
+            for f in de_b {
+                assert_eq!(f.peer_id, id_a);
+                a.on_bytes_received(id_b.clone(), f.frame).unwrap();
+            }
+        }
+        panic!("les deux nœuds échangent encore après 32 tours");
+    }
+
+    /// Alice et Bob appairés (contacts croisés) et connectés, handshake fini.
+    fn paire(da: &Dossier, db: &Dossier) -> (DengonNode, DengonNode) {
+        let alice = ouvrir(da, "alice");
+        let bob = ouvrir(db, "bob");
+        alice.add_contact(bob.local_identity()).unwrap();
+        bob.add_contact(alice.local_identity()).unwrap();
+        alice
+            .on_peer_connected(bob.local_identity().peer_id)
+            .unwrap();
+        bob.on_peer_connected(alice.local_identity().peer_id)
+            .unwrap();
+        pomper(&alice, &bob);
+        let _ = alice.poll_events();
+        let _ = bob.poll_events();
+        (alice, bob)
     }
 
     #[test]
-    fn base64url_fait_un_aller_retour() -> Result<(), DengonError> {
-        let donnees: &[u8] = b"dengon hello mesh 0123456789 !!";
-        let encode = encode_base64url(donnees);
-        let decode = decode_base64url(&encode)?;
-        assert_eq!(decode, donnees);
-        Ok(())
-    }
+    fn message_de_bout_en_bout_entre_deux_noeuds() {
+        let (da, db) = (Dossier::nouveau(), Dossier::nouveau());
+        let (alice, bob) = paire(&da, &db);
+        let id_alice = alice.local_identity().peer_id;
+        let id_bob = bob.local_identity().peer_id;
 
-    #[test]
-    fn qr_code_fait_un_aller_retour() -> Result<(), DengonError> {
-        let identite = generate_identity("alice".to_owned());
-        let qr = identity_qr_code(identite.clone());
-        assert!(qr.starts_with("dengon:v1:"));
+        let msg_uuid = alice
+            .send_message(id_bob.clone(), "bonjour".into())
+            .unwrap();
+        assert_eq!(msg_uuid.len(), 32, "16 octets en hexadécimal");
+        pomper(&alice, &bob);
 
-        let decodee = identity_from_qr_code(qr)?;
-        assert_eq!(decodee, identite);
-        Ok(())
-    }
+        let recu = bob
+            .poll_events()
+            .into_iter()
+            .find_map(|e| match e {
+                NodeEvent::MessageReceived { message } => Some(message),
+                _ => None,
+            })
+            .expect("Bob reçoit le message");
+        assert_eq!(recu.body, "bonjour");
+        assert_eq!(recu.author_peer_id, id_alice);
+        assert!(!recu.outgoing);
 
-    #[test]
-    fn un_qr_code_malforme_renvoie_une_erreur_au_lieu_de_paniquer() {
-        // Payload non vide mais tronqué : un octet `pseudo_len` (5) sans rien
-        // derrière — exerce les bornes `.get(...)` et pas seulement `first()`.
-        let pseudo_len_seul = format!("dengon:v1:{}", encode_base64url(&[5]));
-        assert_eq!(
-            identity_from_qr_code(pseudo_len_seul),
-            Err(DengonError::Internal)
+        let statuts: Vec<_> = alice
+            .poll_events()
+            .into_iter()
+            .filter_map(|e| match e {
+                NodeEvent::StatusChanged {
+                    msg_uuid: u,
+                    status,
+                } if u == msg_uuid => Some(status),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            statuts.contains(&MessageStatus::InFlight),
+            "statuts vus : {statuts:?}"
         );
 
-        // QR valide dont on retire le dernier octet (clé `pub_sign` incomplète).
-        let qr = identity_qr_code(generate_identity("alice".to_owned()));
-        let mut payload = decode_base64url(&qr["dengon:v1:".len()..]).unwrap_or_default();
-        payload.pop();
-        let tronque = format!("dengon:v1:{}", encode_base64url(&payload));
-        assert_eq!(identity_from_qr_code(tronque), Err(DengonError::Internal));
-
-        // Pas un QR dengon du tout.
-        assert_eq!(
-            identity_from_qr_code("https://example.org".to_owned()),
-            Err(DengonError::Internal)
-        );
-    }
-
-    #[test]
-    fn un_pseudo_trop_long_est_tronque_sans_couper_un_caractere() -> Result<(), DengonError> {
-        // 130 « é » = 260 octets UTF-8. Couper brutalement à 255 laissait un
-        // demi-caractère et rendait le QR indécodable (revue PR #69, Paul).
-        let long = "é".repeat(130);
-        let qr = identity_qr_code(generate_identity(long.clone()));
-        let decodee = identity_from_qr_code(qr)?;
-        assert_eq!(
-            decodee.pseudo.len(),
-            254,
-            "recul à la frontière de caractère"
-        );
-        assert!(long.starts_with(&decodee.pseudo));
-        Ok(())
-    }
-
-    #[test]
-    fn le_code_de_verification_est_le_meme_dans_les_deux_sens() {
-        let alice = generate_identity("alice".to_owned());
-        let bob = generate_identity("bob".to_owned());
-
-        let cote_alice = verification_code(alice.clone(), bob.clone());
-        let cote_bob = verification_code(bob, alice);
-
-        assert_eq!(cote_alice, cote_bob);
-        assert_eq!(cote_alice.split(' ').count(), 12);
-    }
-
-    #[test]
-    fn envoyer_un_message_cree_une_conversation_et_signale_le_pair() -> Result<(), DengonError> {
-        let identite = generate_identity("alice".to_owned());
-        let node = DengonNode::new(identite);
-
-        node.on_peer_connected("bob".to_owned());
-        let msg_uuid = node.send_message("bob".to_owned(), "salut".to_owned())?;
-
-        let evenements = node.poll_events();
-        let a_vu_bob_connecte = evenements
-            .iter()
-            .any(|event| matches!(event, NodeEvent::PeerConnected { peer_id } if peer_id == "bob"));
-        assert!(a_vu_bob_connecte);
-
-        let messages = node.list_messages("conv-bob".to_owned());
+        // Même `conv_id` des deux côtés, et le message est listé.
+        let conv_alice = alice.list_conversations();
+        let conv_bob = bob.list_conversations();
+        assert_eq!(conv_alice.len(), 1);
+        assert_eq!(conv_alice[0].conv_id, conv_bob[0].conv_id);
+        assert_eq!(conv_alice[0].peer_id, id_bob);
+        let messages = bob.list_messages(conv_bob[0].conv_id.clone());
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].msg_uuid, msg_uuid);
-        assert_eq!(messages[0].status, MessageStatus::InFlight);
+    }
 
-        assert_eq!(node.list_conversations().len(), 1);
-        Ok(())
+    #[test]
+    fn evenements_de_connexion_et_deconnexion() {
+        let (da, db) = (Dossier::nouveau(), Dossier::nouveau());
+        let alice = ouvrir(&da, "alice");
+        let bob = ouvrir(&db, "bob");
+        let id_bob = bob.local_identity().peer_id;
+
+        alice.on_peer_connected(id_bob.clone()).unwrap();
+        alice.on_peer_disconnected(id_bob.clone()).unwrap();
+        assert_eq!(
+            alice.poll_events(),
+            vec![
+                NodeEvent::PeerConnected {
+                    peer_id: id_bob.clone()
+                },
+                NodeEvent::PeerDisconnected { peer_id: id_bob },
+            ]
+        );
+    }
+
+    #[test]
+    fn identite_stable_d_une_ouverture_a_l_autre() {
+        let dossier = Dossier::nouveau();
+        let premiere = ouvrir(&dossier, "alice").local_identity();
+        // Le pseudo passé à la réouverture est ignoré : le coffre fait foi.
+        let seconde = ouvrir(&dossier, "autre").local_identity();
+        assert_eq!(premiere, seconde);
+        assert_eq!(seconde.pseudo, "alice");
+    }
+
+    #[test]
+    fn mauvaise_cle_de_coffre_refusee() {
+        let dossier = Dossier::nouveau();
+        drop(ouvrir(&dossier, "alice"));
+        let err = DengonNode::open(dossier.chemin(), vec![8; 32], "alice".into()).unwrap_err();
+        assert_eq!(err, DengonError::Internal);
+        let err = DengonNode::open(dossier.chemin(), vec![7; 31], "alice".into()).unwrap_err();
+        assert_eq!(err, DengonError::Internal);
+    }
+
+    #[test]
+    fn envoi_a_un_inconnu_refuse() {
+        let dossier = Dossier::nouveau();
+        let alice = ouvrir(&dossier, "alice");
+        let inconnu = generate_identity("carol".into()).unwrap().peer_id;
+        assert_eq!(
+            alice.send_message(inconnu, "x".into()),
+            Err(DengonError::UnknownPeer)
+        );
+    }
+
+    #[test]
+    fn peer_id_mal_forme_refuse() {
+        let dossier = Dossier::nouveau();
+        let alice = ouvrir(&dossier, "alice");
+        for mauvais in ["", "peer-canned", "aaaaaaaaaaaaaa", "AAAAAAAAAAAA!"] {
+            assert_eq!(
+                alice.on_peer_connected(mauvais.into()),
+                Err(DengonError::UnknownPeer),
+                "{mauvais:?}"
+            );
+        }
+        assert!(alice.list_messages("pas-hexa".into()).is_empty());
+    }
+
+    #[test]
+    fn qr_aller_retour() {
+        let alice = generate_identity("alice".into()).unwrap();
+        let qr = identity_qr_code(alice.clone()).unwrap();
+        assert!(qr.starts_with("dengon:v1:"));
+        assert_eq!(identity_from_qr_code(qr).unwrap(), alice);
+        assert_eq!(
+            identity_from_qr_code("https://example.org".into()),
+            Err(DengonError::Internal)
+        );
+    }
+
+    #[test]
+    fn carte_au_peer_id_falsifie_refusee() {
+        let alice = generate_identity("alice".into()).unwrap();
+        let bob = generate_identity("bob".into()).unwrap();
+        let falsifiee = Identity {
+            peer_id: bob.peer_id,
+            ..alice
+        };
+        assert_eq!(identity_qr_code(falsifiee), Err(DengonError::Internal));
+    }
+
+    #[test]
+    fn code_de_verification_symetrique_60_chiffres() {
+        let alice = generate_identity("alice".into()).unwrap();
+        let bob = generate_identity("bob".into()).unwrap();
+        let ab = verification_code(alice.clone(), bob.clone()).unwrap();
+        assert_eq!(ab, verification_code(bob, alice).unwrap());
+        let groupes: Vec<_> = ab.split(' ').collect();
+        assert_eq!(groupes.len(), 12);
+        assert!(groupes
+            .iter()
+            .all(|g| g.len() == 5 && g.bytes().all(|b| b.is_ascii_digit())));
+    }
+
+    #[test]
+    fn pseudo_vide_refuse() {
+        assert_eq!(generate_identity(String::new()), Err(DengonError::Internal));
     }
 }
