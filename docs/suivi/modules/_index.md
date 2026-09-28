@@ -12,21 +12,14 @@ retrouver vite le bon fichier si elle veut y plonger.
 
 ## Index
 
-Les six crates Rust sont à l'état **esquisse** : elles compilent et sont
-testées, mais aucune n'implémente encore de logique métier (US-104, socle du
-sprint 2). La fiche `process` décrit l'**outillage**. Chaque fiche sert aussi de
-note d'onboarding de son area (proposition d'organisation §10.3 point 3).
-sprint 2). Chaque fiche sert aussi de note d'onboarding de son area (proposition
-d'organisation §10.3 point 3).
+Les crates Rust ont été posées à l'état **esquisse** par US-104 (socle du
+sprint 2) ; la colonne « État » indique où chacune en est depuis. La fiche
+`process` décrit l'**outillage**. Chaque fiche sert aussi de note d'onboarding
+de son area (proposition d'organisation §10.3 point 3).
 
 | Module | Fiche | État | Dernière mise à jour |
 |---|---|---|---|
-| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |
-| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-25 |
-| `dengon-core` | [dengon-core.md](dengon-core.md) | en cours | 2026-09-28 |
-| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-25 |
-| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |
-| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-16 |
+| `dengon-core` | [dengon-core.md](dengon-core.md) | en cours (+ `sync::status`, US-211) | 2026-09-28 |
 | `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-25 |
 | `dengon-node` | [dengon-node.md](dengon-node.md) | esquisse | 2026-09-09 |
 | `dengon-sim` | [dengon-sim.md](dengon-sim.md) | partiel (harness + réseau simulé + scénarios, US-221) | 2026-09-28 |
@@ -37,13 +30,4 @@ d'organisation §10.3 point 3).
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | esquisse | 2026-09-09 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
-
-Pas encore de fiche (le composant n'existe pas) :
-dashboard `api` et `web`.
 | `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
-
-Pas encore de fiche (le composant n'existe pas) : application Android, firmware
-`dengon-relay`, dashboard `api` (fiche sur la branche PR #59) et `web`.
-Pas encore de fiche (le composant n'existe pas) : firmware `dengon-relay`,
-dashboard `web`.
-dashboard `api`.
