@@ -10,6 +10,70 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-305 : corrections suite à la revue de la PR #92
+
+**Auteur :** Oswin (Tanguy) + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-verify/src/main.rs`, `crates/dengon-core/src/ledger.rs`,
+`docs/suivi/`.
+**Lot :** US-305 (issue #43). Branche `feat/US-305-dengon-verify` (PR #92), base
+`main`.
+
+### Fait
+- **Retour bloquant potentiel de Paul (revue non bloquante mais corrigée)** :
+  `main.rs` utilisait `std::env::args()`, qui panique (code de sortie 101, pas
+  de message exploitable) sur un argument non UTF-8 (chemin de fichier
+  exotique). Remplacé par `std::env::args_os()` + conversion explicite ;
+  un argument non convertible rend maintenant `EXIT_USAGE` (64) avec un
+  message sur stderr, conforme au contrat de sortie documenté dans le module.
+- **Commentaire obsolète signalé par Paul** : `ledger.rs::verify_entries`,
+  le commentaire de la passe 1 parlait encore de « trou dans `0..=max` » (avant
+  l'introduction de `Anchor`) et la passe 2 de `self.entries` (avant
+  l'extraction en fonction libre). Mis à jour en `anchor.first_seq..=max` et
+  `entries`.
+- La branche locale avait divergé de `origin` (rebase déjà effectué côté
+  origin sur `main` à jour, incluant tout le Sprint 2/3 mergé depuis) : `git
+  reset --hard origin/feat/US-305-dengon-verify` pour repartir de l'état
+  poussé, sans perdre les deux corrections (appliquées après le reset).
+- PR sortie du brouillon, revue demandée à Paul (`POWLAIR`, codeowner
+  `/crates/`), commentaire posté récapitulant les corrections, checklist DoD
+  §7.1 items 3 (CI verte) et 4 (revue demandée) cochés dans le corps de la PR.
+
+### Pourquoi / décisions
+- Correction ciblée des deux points « non bloquants » de la revue plutôt que
+  de les laisser en dette : ce sont des corrections d'une ligne chacune, sans
+  risque, et elles lèvent tout doute avant la seconde revue.
+
+### Écarts vs conception
+- Aucun nouvel écart ; ceux déjà consignés (JSON canonique vs binaire,
+  `Signer` Ed25519 non branché) restent inchangés, cf. `03-ecarts-conception.md`
+  (entrée 2026-09-28, US-305).
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- `dengon-verify` (US-305) : implémentation inchangée sur le fond, corrections
+  de revue appliquées. En attente de l'approbation de Paul avant merge.
+- Fiche(s) module mise(s) à jour : aucune (pas de changement de comportement
+  ni de contrat à documenter au-delà du journal).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-verify -p dengon-core --quiet
+172 tests, 0 échec
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(aucun avertissement)
+
+$ rustfmt --check (sur copie LF des deux fichiers touchés, contournant le
+  faux positif CRLF de `core.autocrlf=true` en local)
+OK après un point de format corrigé (eprintln! multi-lignes)
+```
+- `cargo fmt --check` direct sur le dépôt local signale une CRLF sur
+  l'ensemble des fichiers du dépôt (artefact `core.autocrlf=true` local,
+  préexistant, sans lien avec cette PR) — non retenu comme signal fiable ici.
+
+---
 ## 2026-09-29 — US-219 : rebase de la PR #100 sur `main`
 
 **Auteur :** Claude (Sonnet 5)
@@ -413,6 +477,91 @@ $ curl -sk https://51.255.38.214:8443/healthz
 ### État après cette session
 - PR #96 à jour sur `main`, retours de revue traités.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+## 2026-09-28 — US-305 : rebase de la PR #92 sur `main` (après #90, #91, #99)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/00-journal.md`
+**Lot :** US-305, PR #92 — branche `feat/US-305-dengon-verify`
+
+### Fait
+- `git rebase origin/main` du commit de la PR : aucun conflit signalé par
+  git (`ledger.rs`, fiches `modules/`, `02-avancement.md`,
+  `03-ecarts-conception.md` fusionnés automatiquement et relus).
+- Fusion automatique fautive du journal corrigée à la main : l'entrée US-305
+  s'était glissée **dans** l'entrée US-212 (bloc « Vérification » coupé, sa
+  fin rattachée à US-305). Journal reconstruit : version `main` intacte +
+  entrée US-305 d'origine remise en haut.
+
+### Vérifications
+- `cargo fmt --all --check` : OK.
+- `cargo clippy --workspace --all-targets -- -D warnings` : OK.
+- `cargo test --workspace` : tous passés, 0 échec (dont 289 unitaires
+  `dengon-core`), 2 ignorés (régénération de vecteurs).
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : aucune (fusion automatique conservée).
+
+---
+
+## 2026-09-28 — US-305 : `dengon-verify` — binaire `ok / broken / fork / gap`
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-verify/{src/lib.rs, src/main.rs, src/tests.rs, tests/cli.rs, tests/fixtures/}`, `crates/dengon-core/src/ledger.rs`
+**Lot :** US-305 (#43), sprint 3, jalon J4
+
+### Fait
+- **`dengon-verify` devient un vrai binaire** : lit un export de journal
+  (fichier ou entrée standard ; suite d'entrées `Entry::to_bytes` bout à
+  bout), rend une ligne JSON (`{"verdict":"ok","entries":5,"first_seq":0,
+  "last_seq":4,"signatures":"unchecked"}`) et un **code de sortie par
+  verdict** : `0` ok, `1` broken, `2` fork, `3` gap ; `64` / `65` / `66`
+  (`sysexits`) pour un appel invalide, un export illisible, un fichier
+  introuvable — sans rien écrire sur la sortie standard.
+- Logique dans `src/lib.rs` (testable sans processus), `main.rs` réduit à
+  l'appel et au code de sortie.
+- **`ledger` : vérification ancrée** — `Anchor { first_seq, prev_hash }`,
+  `Anchor::GENESIS`, `Anchor::after(entry)`, et `verify_entries(entries,
+  anchor)` ; `verify_chain()` en devient le cas `GENESIS` (comportement
+  inchangé). Option `--from-seq N --prev-hash HEX` du binaire.
+- **`ledger::verify_signatures(entries, key)`** (Ed25519 sur `entry_hash`,
+  crypto US-203) ; option `--pubkey HEX` : une signature invalide rend
+  `broken`. Sans clé, la sortie dit `"signatures":"unchecked"`.
+- **Journaux de démonstration commités** : `tests/fixtures/{ok, broken,
+  fork, gap, signed}.bin`, déterministes, régénérables
+  (`DENGON_REGEN_FIXTURES=1`), protégés de toute conversion de fin de ligne
+  (`.gitattributes` local `*.bin binary`).
+
+### Pourquoi / décisions
+- **L'ancre dans `dengon-core`, pas dans le binaire** : une seule règle de
+  vérification (B-5). Elle tranche l'écart ouvert par US-206 (« un export
+  partiel n'est pas re-vérifiable ») : le dashboard reçoit des **tranches**
+  par batch, pas des journaux complets.
+- **Une `seq` antérieure à l'ancre = `fork`** : elle revendique une position
+  déjà vérifiée, donc un historique concurrent.
+- **Signatures vérifiées seulement si la chaîne est intègre** : une
+  signature valide sur un `entry_hash` qui ne correspond pas au contenu ne
+  prouve rien.
+- **Pas de `clap`** : 4 options, analyse à la main, aucune dépendance
+  ajoutée (rien à ajouter au `Cargo.lock`).
+- **Fixtures binaires commitées** : utilisables telles quelles par le
+  dashboard (US-310) et pour la démo de soutenance (« on casse une chaîne et
+  l'outil le dit »).
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-305) : format
+  d'entrée = export binaire `Entry::to_bytes` (pas le JSON canonique de
+  `synthese/09` §11) ; pas de `LOG_ATTEST` ; écart US-206 sur l'export
+  partiel **résolu**.
+
+### Appris
+- Rien de nouveau à consigner.
+
+### État après cette session
+- Critères US-305 : binaire à 4 verdicts ✅, un cas de test par verdict sur un
+  journal fabriqué ✅, code de sortie exploitable ✅, `clippy -D warnings` ✅.
+- Le dashboard (US-310) n'appelle pas encore le binaire.
+- Fiche(s) module mise(s) à jour : `modules/dengon-verify.md` (réécrite),
+  `modules/dengon-core.md` (ledger)
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
 
 ### Vérification (commandes réellement exécutées)
@@ -1051,6 +1200,28 @@ annonce « dengon-relay-39e1 », scan toutes les 10 s, 0 reset, 0 panic
 - **Non vérifié :** le rôle **central** (scan d'un pair dengon, anti-boucle,
   découverte GATT, `NOTIFY_RX`) et le relais **entre deux cartes** — une seule
   carte disponible. Workflow CI pas encore exécuté au moment de l'écriture.
+---
+
+$ cargo test --workspace --all-features
+172 tests passés, 0 échec (dont 9 unitaires + 9 bout en bout pour dengon-verify,
+2 nouveaux dans ledger)
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+aucun avertissement
+$ cargo check -p dengon-core --no-default-features
+Finished (no_std OK)
+$ cargo llvm-cov -p dengon-verify -p dengon-core --summary-only
+dengon-verify/src/lib.rs  lignes 97,02 %   main.rs 100 %
+dengon-core/src/ledger.rs lignes 99,15 %
+$ dengon-verify tests/fixtures/{ok,broken,fork,gap}.bin
+verdicts ok / broken / fork / gap, codes de sortie 0 / 1 / 2 / 3
+```
+- Échecs rencontrés en route : (1) un test prenait pour clé Ed25519
+  invalide des octets qui décodent en fait un point valide — remplacé par
+  `y = 2`, comme le test de `crypto` ; (2) `clippy` refusait les `unwrap()`
+  des fonctions utilitaires de `tests/cli.rs` — ajouté le
+  `#![allow(clippy::unwrap_used, clippy::expect_used)]` utilisé par les
+  autres tests d'intégration du workspace.
+
 ---
 
 ## 2026-09-28 — US-212 : `sync::courier` — dépôt / collecte d'enveloppes scellées, expiration

@@ -1,40 +1,32 @@
-//! `dengon-verify` — vérificateur de journal chaîné.
-//!
-//! Binaire appelé **en sous-processus** par le dashboard Python (décision A-5,
-//! voir `docs/synthese/09-dashboard-et-donnees.md`). Le dashboard étant en
-//! FastAPI, c'est ce binaire qui porte la vérification cryptographique : il
-//! réutilisera `dengon_core::ledger::verify_chain` plutôt que de réimplémenter
-//! la chaîne en Python (décision B-5).
-//!
-//! Il lira un export de journal accompagné de son `LOG_ATTEST` et rendra l'un
-//! des quatre verdicts de [`Verdict`]. Implémentation complète (lecture de
-//! fichier, `LOG_ATTEST`) : P1.13. `Verdict` et `verify_chain` viennent
-//! maintenant réellement de `dengon-core` (US-206), comme annoncé
-//! ci-dessus — plus de définition dupliquée ici.
-//!
-//! # État
-//!
-//! Squelette livré par l'US-104. Branché sur `dengon_core::ledger` par
-//! l'US-206 ; lecture de fichier + `LOG_ATTEST` restent à faire (P1.13).
+//! `dengon-verify` — point d'entrée du binaire. Toute la logique est dans
+//! la bibliothèque de la crate (`src/lib.rs`, US-305), testable sans lancer
+//! de processus.
 
-pub use dengon_core::ledger::Verdict;
+use std::process::ExitCode;
 
-fn main() {
-    println!(
-        "dengon-verify {} — squelette (protocole v{})",
-        env!("CARGO_PKG_VERSION"),
-        dengon_core::PROTOCOL_VERSION
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::Verdict;
-
-    #[test]
-    fn les_quatre_verdicts_sont_distincts() {
-        assert_ne!(Verdict::Ok, Verdict::Broken);
-        assert_ne!(Verdict::Fork, Verdict::Gap);
-        assert_ne!(Verdict::Ok, Verdict::Gap);
+fn main() -> ExitCode {
+    let args = match std::env::args_os()
+        .skip(1)
+        .map(|a| a.into_string())
+        .collect::<Result<Vec<String>, _>>()
+    {
+        Ok(args) => args,
+        Err(_) => {
+            eprintln!(
+                "dengon-verify : argument non UTF-8\n{}",
+                dengon_verify::USAGE
+            );
+            return ExitCode::from(dengon_verify::EXIT_USAGE);
+        }
+    };
+    match dengon_verify::run(&args, std::io::stdin().lock()) {
+        Ok(report) => {
+            println!("{}", report.to_json());
+            ExitCode::from(dengon_verify::exit_code(report.verdict))
+        }
+        Err(e) => {
+            eprintln!("dengon-verify : {e}");
+            ExitCode::from(e.exit_code())
+        }
     }
 }

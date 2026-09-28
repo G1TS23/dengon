@@ -98,7 +98,9 @@ Modules encore absents : `api` (sprint 2).
 | `ledger::Entry` | `src/ledger.rs` | Une entrée du journal : `seq`, `ts_ms`, `event_name`, `payload_json`, `prev_hash`, `entry_hash`, `sig`. `entry_hash = SHA-256(seq‖ts_ms‖len‖event_name‖len‖payload_json‖prev_hash)`, longueurs préfixées pour lever toute ambiguïté de découpage. |
 | `ledger::Ledger<S: Signer>` | `src/ledger.rs` | Le journal lui-même : `append()`, `verify_chain()`, `export(range)`, `entries()`. Paramétré par un `Signer` injecté, pas câblé sur une implémentation Ed25519 concrète. |
 | `ledger::Signer` / `ledger::NullSigner` | `src/ledger.rs` | Trait de signature + bouchon nul, tant que `crypto` (US-203, même sprint) n'existe pas — voir « Décisions ». |
-| `ledger::Verdict` | `src/ledger.rs` | `Ok`/`Broken`/`Fork`/`Gap`, renvoyé par `verify_chain()`. Réutilisé tel quel par `dengon-verify::main`, qui n'en a plus de copie locale. |
+| `ledger::Verdict` | `src/ledger.rs` | `Ok`/`Broken`/`Fork`/`Gap`, renvoyé par `verify_chain()`. Réutilisé tel quel par `dengon-verify`, qui n'en a plus de copie locale. |
+| `ledger::Anchor`, `verify_entries` | `src/ledger.rs` | Vérification **ancrée** (US-305) : `Anchor { first_seq, prev_hash }`, `Anchor::GENESIS`, `Anchor::after(entry)`. `verify_chain()` = `verify_entries(entries, GENESIS)`. Permet de re-vérifier une tranche qui ne commence pas à 0. |
+| `ledger::verify_signatures` | `src/ledger.rs` | Vérifie `Ed25519(entry_hash)` de chaque entrée avec la clé du nœud (US-305) ; `Some(seq)` = première invalide. |
 | `Entry::to_bytes`/`Entry::from_bytes` | `src/ledger.rs` | Sérialisation binaire simple d'une entrée — sert le test de reprise après redémarrage, pas un vrai backend de stockage (voir « Décisions »). |
 | `store::Store<K: KeySource>` | `src/store.rs` | Connexion SQLite + migrations. `open()`/`open_in_memory()`, puis `set_identity`/`get_identity_private_keys`, `upsert_contact`, `insert_conversation`, `insert_message`/`get_message_body`, `set_noise_session`/`get_noise_session_state`. |
 | `store::KeySource` / `store::FixedKeySource` | `src/store.rs` | Trait qui fournit la clé de chiffrement des champs sensibles + bouchon à clé fixe (tests uniquement) — voir « Décisions », même schéma que `ledger::Signer` (US-206). |
@@ -779,7 +781,9 @@ encore le codec (US-201).
 - `verify_chain()` ne vérifie pas la signature (voir « Décisions »). La
   brique existe depuis US-203 (`crypto::SigningKey` implémente
   `ledger::Signer`) mais la vérification n'est pas câblée.
-- **`verify_chain()` ne peut pas re-vérifier un export partiel** (`seq` ne
+- ~~**`verify_chain()` ne peut pas re-vérifier un export partiel**~~ —
+  **résolu par US-305** : `verify_entries(entries, Anchor::after(…))`.
+  Note d'origine : (`seq` ne
   commençant pas à 0) — voir le docstring d'`export()` et l'écart consigné
   dans `03-ecarts-conception.md` (retour de revue #75). Pas encore
   bloquant : aucun appelant réel d'`export()` n'existe en dehors des tests.
