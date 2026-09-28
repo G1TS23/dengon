@@ -17,6 +17,55 @@ et le mentionner dans l'entrée de journal.
 
 ---
 
+### 2026-09-28 — Transport NimBLE (US-220) : pas de fragmentation BLE, `PeerConnected` à l'abonnement, quota borné, anti-boucle sur 4 octets
+
+- **Prévu :** `docs/synthese/04-architecture.md` §3 et `docs/powl/03` §6.2 :
+  « `Transport::send` gère le découpage **BLE** (MTU) de façon transparente » ;
+  la rustdoc de `TransportEvent::FrameReceived` parle de fragmentation BLE
+  « déjà réassemblée par l'implémentation ». `TransportConfig::default()` :
+  8 liens. `docs/powl/03` §6.1 : « celui dont le **`peerID`** est le plus petit
+  initie ». `PeerConnected` = « un lien est établi et utilisable », sans plus.
+- **Réel :**
+  1. **1 trame = 1 PDU ATT.** `send` au-delà de `ATT_MTU - 3` rend
+     `FRAME_TOO_LARGE { max: mtu - 3 }` ; `broadcast` refuse au-delà de 514 et
+     saute les liens au MTU trop petit. Aucune fragmentation BLE dans le
+     transport.
+  2. **`PeerConnected` émis quand le lien marche dans les deux sens** : côté
+     central après échange MTU + découverte + abonnement au `CHAR_TX` du
+     pair ; côté périphérique à l'abonnement du pair. Si le pair écrit avant
+     de s'abonner, `PeerConnected` est émis juste avant sa première trame. Un
+     lien jamais annoncé qui tombe ne produit **aucun** `PeerDisconnected`.
+  3. **`max_connections` borné** à `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` (3) avec
+     un avertissement, au lieu d'échouer ; quota plein = annonce et scan
+     suspendus, connexion entrante excédentaire fermée sans être annoncée.
+  4. **Anti-boucle sur `peerID[0..4]`** (seuls 4 octets sont dans l'annonce),
+     égalité départagée par l'adresse BLE.
+  5. **Motifs** : HCI `0x13`/`0x14`/`0x15` → `Propre`, `0x16` → `Locale`, tout
+     le reste (dont `0x08` supervision timeout) → `Brutale`.
+- **Raison :** (1) `protocol::fragment` (US-202) découpe déjà à `ATT_MTU - 3`
+  (`chunk_capacity`) : une seconde fragmentation dans le transport serait
+  morte, et imposerait un format de trame BLE à partager avec Android. En
+  prime, la règle n°3 de la déconnexion brutale (jeter les trames partielles)
+  est tenue par construction. (2) Émettre `PeerConnected` à la connexion GAP
+  laisserait le cœur envoyer son `ANNOUNCE` avant que le pair soit abonné :
+  perdu. (3) Le contrôleur de l'ESP32 est configuré à 3 liens (US-114) ; un
+  relais qui refuse de démarrer avec la configuration par défaut du contrat
+  serait pire. (4) C'est tout ce que l'annonce transporte. (5) Seul ce que le
+  pair *annonce* (`LL_TERMINATE_IND`) est propre.
+- **Conséquences :** l'appelant **doit** fragmenter (c'est le cas de
+  `dengon-core`). L'implémentation Android (US-213) doit faire les mêmes choix
+  (1) et (2) pour que les deux moitiés du maillage se comprennent. Les écarts
+  d'US-114 sur le manufacturer data (Company ID `0xFFFF` à sauter, bitfield
+  `flags`) sont maintenant **lus** par du code (`dengon_adv_parse_mfg`) et
+  vérifiés par des tests Unity : ils passent de « contrat de fait non vérifié »
+  à « contrat vérifié côté firmware ».
+- **Doc de conception mise à jour ?** non. À remonter dans `docs/powl/03` §6
+  (point 1, format du manufacturer data) et dans la rustdoc de
+  `TransportEvent::FrameReceived` (point 1) — changement de contrat US-105 à
+  proposer en point d'équipe, pas à faire seul.
+
+---
+
 ### 2026-09-28 — `sync::courier` (US-212) : échéance bornée par l'origine, remise en deux temps, test négatif sur AEAD de substitution
 
 - **Prévu :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §7 : une

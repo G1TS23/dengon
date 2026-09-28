@@ -16,6 +16,11 @@
 /** UUID du service `dengon` — exposé parce que l'annonce doit le publier. */
 extern const ble_uuid128_t dengon_svc_uuid;
 
+/** UUID de CHAR_RX et CHAR_TX — exposés pour la découverte côté central
+    (transport_nimble.c), qui les cherche dans la table GATT du PAIR. */
+extern const ble_uuid128_t dengon_chr_rx_uuid;
+extern const ble_uuid128_t dengon_chr_tx_uuid;
+
 /**
  * Enregistre le service auprès du host NimBLE.
  * À appeler APRÈS nimble_port_init() et AVANT nimble_port_freertos_init().
@@ -35,7 +40,7 @@ void dengon_gatt_register_cb(struct ble_gatt_register_ctxt *ctxt, void *arg);
 
 /**
  * Handle de valeur de CHAR_TX, nécessaire à ble_gatts_notify_custom().
- * Vaut 0 tant que dengon_gatt_init() n'a pas tourné. Inutilisé par l'US-114,
- * indispensable à l'US-220 : sans lui, le nœud ne pourra jamais émettre.
+ * Vaut 0 tant que dengon_gatt_init() n'a pas tourné. C'est par lui que le
+ * transport émet en rôle périphérique, et qu'il reconnaît l'abonnement du pair.
  */
 uint16_t dengon_gatt_tx_val_handle(void);

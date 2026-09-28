@@ -23,6 +23,83 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### `conn_handle` NimBLE vs `LinkId` : un identifiant recyclé n'est pas une identité
+
+**C'est quoi :** NimBLE désigne chaque connexion par un `conn_handle`
+(`uint16_t`) et **redonne le même numéro** à la connexion suivante dès que le
+précédent est libéré. Le contrat `Transport` exige au contraire un `LinkId`
+**jamais réutilisé** au cours d'une exécution.
+**Pourquoi dans dengon :** une trame en retard sur un lien mort, ou un
+événement GAP traité après la fermeture, serait attribué au pair **suivant** —
+et la déduplication en amont ne rattraperait rien, elle raisonne sur le
+`msgID`. Le cœur du transport tient donc une table `conn_handle ↔ LinkId`,
+rompue à la fermeture ; le `LinkId` vient d'un compteur monotone 64 bits.
+**Piège / surprise :** un test naïf (« deux connexions successives ont deux
+`LinkId` différents ») passe même avec le bug si le banc donne des
+`conn_handle` différents. Le banc Unity imite NimBLE et redonne le **plus
+petit `conn_handle` libre** : c'est ce qui rend le test significatif.
+**Où c'est utilisé :** `firmware/dengon-relay/components/dengon_transport_core/dengon_transport_core.c:146`
+(`dengon_tc_link_open`), test `cas_link_id_jamais_reutilise`.
+**Pour aller plus loin :** rustdoc de `LinkId`, `crates/dengon-ble/src/transport.rs`.
+
+---
+
+### Séparer un pilote radio en « cœur pur » + « glue » pour le tester sans matériel
+
+**C'est quoi :** toute la logique qui ne dépend pas de la radio (états,
+tables, files, validation, ordre des événements) est écrite en C pur dans un
+composant qui ne connaît que des entiers (`conn_handle`, codes HCI). La glue
+NimBLE ne fait que traduire les callbacks en appels au cœur. ESP-IDF sait
+compiler un tel composant pour la cible **`linux`** : le binaire de test Unity
+tourne alors sur le PC, en CI.
+**Pourquoi dans dengon :** « testé sur 2 cartes réelles » ne peut pas tourner
+en CI. Réduire ce qui n'est vérifiable qu'avec deux cartes au strict minimum
+(la traduction) laisse 32 tests automatiques sur la sémantique, dont le
+portage 1:1 des 12 cas de conformité Rust.
+**Piège / surprise :** (1) Unity attribue par défaut **tous** les cas au
+fichier de `UNITY_BEGIN` — faux numéros de ligne dans les échecs ; remède :
+`UnitySetTestFile(__FILE__)` au début de chaque lanceur. (2) Sur la cible
+linux, `app_main` doit appeler `exit()` avec le résultat, sinon la CI ne voit
+jamais un échec. (3) Deux cibles dans le même projet s'écrasent : `-B
+build-esp32 -D SDKCONFIG=build-esp32/sdkconfig` pour la seconde. (4) Un test
+de mutation (injecter volontairement le bogue « purge de la file à la
+fermeture ») a confirmé que la suite le voit : 2 échecs, code de sortie 1.
+**Où c'est utilisé :** `firmware/dengon-relay/components/dengon_transport_core/test_apps/`,
+étape « Tests Unity du transport » de `.github/workflows/firmware.yml`.
+**Pour aller plus loin :** <https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32/api-guides/host-apps.html>
+
+---
+
+### BLE : ce qui s'arrête tout seul et qu'il faut relancer
+
+**C'est quoi :** trois activités radio de NimBLE s'arrêtent sans que le code
+le demande : l'**annonce** dès qu'un pair se connecte en périphérique ; le
+**scan**, qu'il faut couper soi-même avant `ble_gap_connect()` (sinon
+`BLE_HS_EBUSY`) ; et un scan avec **filtre de doublons** qui, lancé « pour
+toujours », ne reverra jamais une carte déjà vue une fois — même partie puis
+revenue.
+**Pourquoi dans dengon :** c'est exactement le critère « survit à une
+déconnexion brutale » : après une coupure, la carte doit redevenir visible et
+retrouver ses voisins. Chaque fin d'activité (`DISCONNECT`, `ADV_COMPLETE`,
+`DISC_COMPLETE`, échec de connexion) repasse par `ensure_advertising()` et
+`ensure_scanning()`, et le scan tourne par passes de 10 s pour que le filtre de
+doublons soit remis à zéro.
+**Piège / surprise :** une coupure brutale n'a **aucun** message associé : le
+lien meurt au *supervision timeout* (code HCI `0x08`), quelques secondes plus
+tard. Une déconnexion « propre » est un `LL_TERMINATE_IND` du pair (code
+`0x13`), une fermeture par nous revient avec `0x16`. Et NimBLE ne rend pas le
+code HCI brut mais `BLE_HS_ERR_HCI_BASE + code`. **Couper le Bluetooth
+d'un téléphone n'est pas une coupure brutale** : Android envoie d'abord un
+`LL_TERMINATE_IND` (`0x15`, « power off »). Pour en provoquer une vraie
+depuis un Pixel sans le déplacer : `adb shell am force-stop
+com.google.android.bluetooth` tue la pile sans prévenir → `0x08` ~5 s plus
+tard côté ESP32.
+**Où c'est utilisé :** `firmware/dengon-relay/main/transport_nimble.c`
+(`on_disconnect`, `ensure_scanning`), `dengon_tc_map_hci_reason`.
+**Pour aller plus loin :** Core Spec v5.4, Vol 1 Part F (codes d'erreur).
+
+---
+
 ### Machine à états : une fonction pure + un property test de monotonie
 
 **C'est quoi :** au lieu de disperser des `if statut == …` dans le code, toutes

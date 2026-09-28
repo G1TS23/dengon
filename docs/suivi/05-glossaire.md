@@ -70,6 +70,11 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Caractéristique** (*characteristic*) | Une valeur exposée par un service GATT, avec ses permissions. Le service `dengon` en a deux : `RX` (on écrit dedans) et `TX` (elle notifie). |
 | **ATT MTU** | Taille maximale d'un message GATT. Négociée à la connexion : 517 octets visés, 23 au pire. En dessous, il faut fragmenter. |
 | **CCCD** (`0x2902`) | Petit interrupteur attaché à une caractéristique notifiable : c'est en l'écrivant qu'un pair s'abonne aux notifications. NimBLE l'ajoute tout seul. |
+| **`conn_handle`** | Numéro qu'une pile BLE donne à une connexion ouverte. **Recyclé** dès la fermeture — à ne jamais confondre avec le `LinkId` du contrat `Transport`, qui ne l'est jamais. |
+| **`LinkId`** | Identifiant d'un **lien** (une connexion) dans le contrat `Transport` : local au processus, monotone, jamais réutilisé. Ce n'est pas un `peerID`. |
+| **Supervision timeout** | Délai de silence radio au-delà duquel une connexion BLE est déclarée morte (code HCI `0x08`). C'est ainsi qu'on détecte une **coupure brutale** : le pair n'envoie rien, on constate son absence. |
+| **Règle anti-boucle** | Quand deux nœuds se découvrent, seul celui au plus petit `peerID` initie la connexion — sinon chacun se connecte à l'autre et un lien est gâché. |
+| **Cible `linux` (ESP-IDF)** | Mode de compilation d'ESP-IDF qui produit un programme pour le PC au lieu de la carte : sert à exécuter des tests Unity de code sans matériel, en CI. |
 | **`sdkconfig` / `sdkconfig.defaults`** | Configuration d'un projet ESP-IDF. Les `defaults` sont écrits à la main et versionnés ; `sdkconfig` en est **généré une seule fois**, et c'est lui que lit la compilation. |
 | **usbipd** | Passerelle qui expose un périphérique USB de Windows à WSL2. Sans elle, aucune carte ESP32 n'est visible depuis Linux — donc pas de flash. |
 | **DoR** (*Definition of Ready*) | Les 8 conditions pour qu'une issue entre dans un sprint (§6) : livrable nommé, critères vérifiables, référence documentaire, dépendances fermées, contrat disponible, estimation, stratégie de test, contrainte dure. |

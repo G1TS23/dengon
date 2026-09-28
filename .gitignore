@@ -272,6 +272,14 @@ firmware/*/build/
 firmware/*/sdkconfig
 firmware/*/sdkconfig.old
 
+# Les applications de test Unity (US-220) sont des projets ESP-IDF imbriqués,
+# sous components/*/test_apps/ : mêmes fichiers générés, un niveau plus bas.
+# `build-esp32/` est le dossier de build de leur cible carte, séparé de
+# `build/` (cible linux) pour que les deux cibles ne s'écrasent pas.
+firmware/**/test_apps/sdkconfig
+firmware/**/test_apps/sdkconfig.old
+firmware/**/test_apps/build-*/
+
 # Dépendances tirées par le gestionnaire de composants d'ESP-IDF : l'équivalent
 # de node_modules/, reconstruit et jamais édité à la main.
 firmware/*/managed_components/

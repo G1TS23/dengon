@@ -1,0 +1,4 @@
+# Application de test : rien de spécial. Le chien de garde des tâches est
+# coupé parce qu'une exécution Unity sur carte ne rend pas la main entre les
+# cas, et qu'un reset en plein milieu masquerait le résultat.
+CONFIG_ESP_TASK_WDT_EN=n

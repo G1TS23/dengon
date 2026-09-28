@@ -125,7 +125,11 @@ et remplit la file en arrière-plan.
 - **La règle 3 n'est vérifiée nulle part**, et c'est assumé : `MockTransport`
   n'a aucune fragmentation BLE, donc un cas de conformité sur lui ne testerait
   rien. Elle revient aux bancs d'essai **matériels** d'US-213, US-220 et
-  US-303.
+  US-303. *Mise à jour 2026-09-28 (US-220)* : l'implémentation NimBLE n'a
+  **pas** de fragmentation BLE (1 trame = 1 PDU ATT, `FRAME_TOO_LARGE`
+  au-delà de MTU-3) : la règle 3 y est tenue **par construction**. Les 12 cas
+  de cette suite y sont portés 1:1 en C (tests Unity, cible linux) — voir
+  [firmware-relay](firmware-relay.md) et `03-ecarts-conception.md`.
 - **Aucune radio n'est touchée.** Toute la conformité est vérifiée contre un
   bouchon qui, par construction, respecte le contrat — c'est utile pour figer
   l'énoncé, ça ne dit rien du comportement de `btleplug` ou de NimBLE.
