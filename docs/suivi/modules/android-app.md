@@ -307,6 +307,26 @@ fragmente réellement les trames comme le ferait l'autre téléphone. Écart
 assumé, à résorber à l'US-302 (le fichier disparaîtra au profit de la suite
 Rust elle-même).
 
+### Corrections post-revue (PR #98) : 4 bugs de concurrence
+
+Relevés par une revue automatisée de la PR #98 (commentaire GitHub id
+`5872663432`), corrigés dans la foulée (voir `00-journal.md`, entrée du
+2026-09-28 « 4 bugs de concurrence corrigés en revue de la PR #98 ») :
+
+| # | Fichier | Bug | Correctif |
+|---|---|---|---|
+| 1 | `GattRadio.kt`, `demarrer()` | Le `catch` ne rattrapait que `SecurityException` : un `TransportException.Backend` (annonce/scan non pris en charge) laissait `serveur`/`actif` « ouverts », fuite d'un `BluetoothGattServer` au retry. | `catch (e: TransportException)` supplémentaire, appelle `arreter()` avant de relever. |
+| 2 | `GattRadio.kt`, `ecrire()` | `connexions` indexée par `RadioPeer(adresse, rôle)` seul : une reconnexion rapide à la même adresse, entre la résolution du `pair` par `AndroidTransport.send()` (sous verrou) et l'appel à `radio.ecrire()` (hors verrou), envoyait des fragments de l'ancien lien sur la `Connexion` du nouveau — flux corrompu, sans garde-fou. | `RadioPeer` porte une `generation: Long` assignée par `GattRadio` à chaque connexion physique ; `ecrire()`/`chargeUtile()`/`deconnecter()` ne matchent plus après une reconnexion → `UnknownPeer` au lieu de corrompre. Helper `pairActuel()` pour les rappels serveur (adresse seule, sans génération). |
+| 3 | `GattRadio.kt`, `onDescriptorWriteRequest` | `DISABLE_NOTIFICATION_VALUE` (désabonnement de `CHAR_TX` sans déconnexion) était silencieusement ignoré : `pret` restait `true`, file d'envoi potentiellement bloquée pour toujours si `onNotificationSent` n'arrive jamais pour une notification refusée. | Traité comme une fermeture de lien (`fermetureDemandee=true` + `cancelConnection()`), réutilise le chemin `onConnectionStateChange` → `DisconnectReason.LOCALE`. |
+| 4 | `TransportActif.kt`, `transport` | `var` écrite sous `@Synchronized` mais lue sans verrou depuis un autre thread (`sonder()`/`battre()`) : aucune garantie de visibilité inter-thread. | `@Volatile`. |
+
+Le point 2 est le plus structurant : voir `04-apprentissages.md` (« Génération
+(epoch) : désambiguïser deux connexions successives à la même identité ») pour
+le principe général. Non re-testé sur appareil réel (races non reproductibles
+à la main de façon fiable) ; suite JVM inchangée (`FauxRadio` ne modélise pas
+les rappels Android par adresse brute, donc n'exerçait pas ces 4 chemins) —
+48/48 tests toujours verts après correctif.
+
 ## Flux principal (exemple)
 
 1. L'utilisateur ouvre l'app → `MainActivity.onCreate` vérifie

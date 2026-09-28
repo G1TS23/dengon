@@ -82,6 +82,18 @@ class GattRadio(context: Context) : BleRadio {
     /** Adresses récemment tentées en central (évite de marteler un pair qui échoue). */
     private val derniersEssais = HashMap<String, Long>()
 
+    /** Génération de la prochaine [RadioPeer] créée (voir rustdoc de [RadioPeer]). */
+    private var prochaineGeneration = 0L
+
+    /**
+     * Sous verrou. Le [RadioPeer] actuellement en vie pour cette adresse/rôle
+     * (la clé exacte de [connexions]), quelle que soit sa génération.
+     * Nécessaire côté périphérique : les rappels `BluetoothGattServerCallback`
+     * ne donnent qu'une adresse, jamais la génération.
+     */
+    private fun pairActuel(adresse: String, role: RadioPeer.Role): RadioPeer? =
+        connexions.keys.firstOrNull { it.adresse == adresse && it.role == role }
+
     // --- BleRadio -----------------------------------------------------------
 
     override fun demarrer(cfg: TransportConfig, rappels: RappelsRadio) {
@@ -99,6 +111,14 @@ class GattRadio(context: Context) : BleRadio {
         } catch (e: SecurityException) {
             arreter()
             throw TransportException.Backend("permission Bluetooth manquante : ${e.message}")
+        } catch (e: TransportException) {
+            // demarrerServeurEtAnnonce()/demarrerScan() peuvent avoir déjà ouvert
+            // le serveur GATT (addService()) avant d'échouer (annonce/scan non
+            // pris en charge) : sans ce nettoyage, `serveur`/`actif` restent
+            // « ouverts » alors que l'appelant considère start() en échec, et un
+            // retry fuit le handle du premier serveur GATT (jamais fermé).
+            arreter()
+            throw e
         }
     }
 
@@ -278,11 +298,11 @@ class GattRadio(context: Context) : BleRadio {
     private val rappelServeur = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             if (newState != BluetoothProfile.STATE_DISCONNECTED) return
-            val pair = RadioPeer(device.address, RadioPeer.Role.PERIPHERAL)
-            val (r, motif) = synchronized(verrou) {
-                val c = connexions.remove(pair) ?: return
+            val (r, pair, motif) = synchronized(verrou) {
+                val p = pairActuel(device.address, RadioPeer.Role.PERIPHERAL) ?: return
+                val c = connexions.remove(p) ?: return
                 if (!c.pret) return
-                rappels to motifDeconnexion(status, c.fermetureDemandee)
+                Triple(rappels, p, motifDeconnexion(status, c.fermetureDemandee))
             }
             Log.i(TAG, "périphérique : ${device.address} déconnecté (status=$status → $motif)")
             r?.deconnecte(pair, motif)
@@ -305,17 +325,36 @@ class GattRadio(context: Context) : BleRadio {
         ) {
             if (responseNeeded) serveur?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
             if (descriptor.uuid != GattDengon.CCCD || descriptor.characteristic.uuid != GattDengon.CHAR_TX) return
-            if (!value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE)) return
-            val pair = RadioPeer(device.address, RadioPeer.Role.PERIPHERAL)
-            val r = synchronized(verrou) {
-                if (!actif) return
-                val c = connexionPeripherique(device)
-                if (c.pret) return
-                c.pret = true
-                rappels
+            when {
+                value.contentEquals(BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) -> {
+                    val (r, pair) = synchronized(verrou) {
+                        if (!actif) return
+                        val c = connexionPeripherique(device)
+                        if (c.pret) return
+                        c.pret = true
+                        rappels to c.pair
+                    }
+                    Log.i(TAG, "périphérique : ${device.address} abonné à CHAR_TX, lien prêt")
+                    r?.connecte(pair, null)
+                }
+                value.contentEquals(BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE) -> {
+                    // Désabonnement sans déconnexion (certaines piles centrales le
+                    // font, ex. en tâche de fond) : sans réabonnement on ne peut
+                    // plus livrer de notifications sur ce lien, donc on le ferme
+                    // proprement plutôt que de laisser `pret=true` indéfiniment
+                    // (ce qui bloquerait la file d'envoi sur des écritures jamais
+                    // confirmées par `onNotificationSent`).
+                    Log.w(TAG, "périphérique : ${device.address} s'est désabonné de CHAR_TX sans se déconnecter, fermeture du lien")
+                    synchronized(verrou) {
+                        pairActuel(device.address, RadioPeer.Role.PERIPHERAL)?.let { connexions[it]?.fermetureDemandee = true }
+                    }
+                    try {
+                        serveur?.cancelConnection(device)
+                    } catch (e: SecurityException) {
+                        Log.w(TAG, "désabonnement : permission retirée", e)
+                    }
+                }
             }
-            Log.i(TAG, "périphérique : ${device.address} abonné à CHAR_TX, lien prêt")
-            r?.connecte(pair, null)
         }
 
         override fun onCharacteristicWriteRequest(
@@ -329,19 +368,28 @@ class GattRadio(context: Context) : BleRadio {
         ) {
             if (responseNeeded) serveur?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, offset, null)
             if (characteristic.uuid != GattDengon.CHAR_RX) return
-            val pair = RadioPeer(device.address, RadioPeer.Role.PERIPHERAL)
-            val r = synchronized(verrou) { if (connexions[pair]?.pret == true) rappels else null }
+            val (r, pair) = synchronized(verrou) {
+                val p = pairActuel(device.address, RadioPeer.Role.PERIPHERAL) ?: return
+                if (connexions[p]?.pret != true) return
+                rappels to p
+            }
             r?.morceauRecu(pair, value)
         }
 
         override fun onNotificationSent(device: BluetoothDevice, status: Int) {
-            operationTerminee(RadioPeer(device.address, RadioPeer.Role.PERIPHERAL))
+            synchronized(verrou) {
+                val pair = pairActuel(device.address, RadioPeer.Role.PERIPHERAL) ?: return
+                val c = connexions[pair] ?: return
+                c.enVol = false
+                pomper(c)
+            }
         }
     }
 
-    /** Sous verrou. */
+    /** Sous verrou. Connexion existante pour cette adresse, ou nouvelle génération sinon. */
     private fun connexionPeripherique(device: BluetoothDevice): Connexion {
-        val pair = RadioPeer(device.address, RadioPeer.Role.PERIPHERAL)
+        pairActuel(device.address, RadioPeer.Role.PERIPHERAL)?.let { return connexions.getValue(it) }
+        val pair = RadioPeer(device.address, RadioPeer.Role.PERIPHERAL, prochaineGeneration++)
         return connexions.getOrPut(pair) { Connexion(pair, device) }
     }
 
@@ -372,7 +420,7 @@ class GattRadio(context: Context) : BleRadio {
                 if (maintenant - (derniersEssais[adresse] ?: 0L) < DELAI_ENTRE_ESSAIS_MS) return
                 derniersEssais[adresse] = maintenant
 
-                val pair = RadioPeer(adresse, RadioPeer.Role.CENTRAL)
+                val pair = RadioPeer(adresse, RadioPeer.Role.CENTRAL, prochaineGeneration++)
                 val connexion = Connexion(pair, result.device).apply { rssi = result.rssi.toShort() }
                 connexions[pair] = connexion
                 Log.i(TAG, "central : connexion à $adresse (rssi ${result.rssi})")

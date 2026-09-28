@@ -1401,3 +1401,29 @@ d'émission doit rester **sous** le quota du receveur, pas égale : l'`INVENTORY
 lui-même et le trafic direct comptent aussi.
 **Où c'est utilisé :** `crates/dengon-core/src/sync/inventory.rs:456`
 (`poll_push`), `tests/inventory_mock.rs`.
+### Génération (epoch) : désambiguïser deux connexions successives à la même identité
+
+**C'est quoi :** quand une identité stable (ici une adresse BLE) peut être
+réutilisée par deux connexions physiques différentes dans le temps
+(déconnexion puis reconnexion immédiate), un code qui la résout **sous
+verrou** à un instant T puis agit dessus **hors verrou** un peu plus tard
+peut agir sur la mauvaise connexion sans qu'aucune structure de données ne
+s'en aperçoive — l'identité seule ne suffit pas à détecter le changement.
+Parade : associer à l'identité un compteur monotone assigné à la création de
+chaque connexion (« génération »/« epoch »), inclus dans l'égalité de la
+valeur transportée ; toute opération résolue avant le changement échoue
+proprement au lieu de viser la nouvelle connexion.
+**Pourquoi dans dengon :** `AndroidTransport.send()` résout le `RadioPeer`
+d'un lien sous son verrou, puis appelle `GattRadio.ecrire()` **hors
+verrou** (nécessaire : la radio peut rappeler `deconnecte()` pendant
+l'écriture). Entre les deux, une reconnexion rapide à la même adresse MAC
+peut se produire côté radio.
+**Piège / surprise :** les rappels Android (`BluetoothGattServerCallback`)
+ne donnent qu'une adresse, jamais un identifiant de connexion — il faut donc
+un point de résolution séparé (« quel est le `RadioPeer` **actuel** pour
+cette adresse ? ») pour les rappels entrants, distinct de la génération
+figée dans une closure pour le rôle central (chaque `connectGatt` a son
+propre callback lié à une connexion précise).
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ble/transport/GattRadio.kt`
+(`RadioPeer.generation`, `pairActuel()`), corrigé en revue de la PR #98
+(US-213).

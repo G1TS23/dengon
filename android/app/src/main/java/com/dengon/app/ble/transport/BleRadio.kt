@@ -41,8 +41,17 @@ interface RappelsRadio {
     fun deconnecte(pair: RadioPeer, motif: DisconnectReason)
 }
 
-/** Une connexion GATT vue par la radio. */
-data class RadioPeer(val adresse: String, val role: Role) {
+/**
+ * Une connexion GATT vue par la radio.
+ *
+ * `generation` distingue deux connexions successives à la même adresse
+ * (déconnexion suivie d'une reconnexion immédiate) : sans elle, un
+ * [BleRadio.ecrire] résolu par [AndroidTransport] juste avant une
+ * reconnexion irait écrire sur la nouvelle [GattRadio.Connexion] au lieu
+ * d'échouer proprement — flux d'octets corrompu entre deux liens.
+ * Assignée par la radio ; jamais réutilisée pendant une exécution.
+ */
+data class RadioPeer(val adresse: String, val role: Role, val generation: Long = 0L) {
     enum class Role {
         /** Nous sommes client GATT : nous avons initié la connexion. */
         CENTRAL,

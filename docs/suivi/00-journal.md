@@ -1314,6 +1314,84 @@ BUILD SUCCESSFUL — 34/34 tests JVM verts (IdentiteLocaleTest 4/4, QrCodeTest 7
 - Critères US-215 : QR affiché + scan ✅, comparaison du code 60 chiffres
   avec confirmation explicite ✅, alimenté par le bouchon FFI ✅, testé sur
   2 appareils réels (caméra) ✅, tests unitaires ViewModel ✅.
+## 2026-09-28 — US-213 : 4 bugs de concurrence corrigés en revue de la PR #98 (`GattRadio`, `TransportActif`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/transport/{BleRadio.kt,GattRadio.kt,TransportActif.kt}`
+**Lot :** US-213 (correctifs post-revue, pas un nouveau lot)
+
+### Fait
+- **`GattRadio.demarrer()`** : le `catch` ne rattrapait que `SecurityException`. Un
+  `TransportException.Backend` levé par `demarrerServeurEtAnnonce()`/`demarrerScan()`
+  (annonce/scan non pris en charge) pouvait laisser `serveur`/`actif` « ouverts » alors
+  que l'appelant considère `start()` en échec — un retry ouvrait un second serveur GATT
+  et fuyait le handle du premier, jamais fermé. Ajout d'un `catch (e: TransportException)`
+  qui appelle `arreter()` avant de relever l'exception.
+- **`RadioPeer` porte désormais une `generation: Long`** (défaut `0`, transparent pour
+  les tests JVM qui passent par `FauxRadio`). `GattRadio` assigne une génération neuve à
+  chaque connexion physique (`connexionPeripherique()`, `onScanResult`) ; un nouveau
+  helper `pairActuel()` résout, sous verrou, le `RadioPeer` courant pour une adresse+rôle
+  (nécessaire côté serveur, dont les rappels Android ne donnent qu'une adresse, jamais un
+  identifiant de connexion). Corrige la race décrite en revue : un pair qui se déconnecte
+  puis se reconnecte à la même adresse **entre** la résolution du `pair` par
+  `AndroidTransport.send()` (sous son verrou) et l'appel à `GattRadio.ecrire()` (hors
+  verrou, volontairement, cf. commentaire dans `AndroidTransport.send()`) faisait
+  auparavant atterrir des fragments sur la `Connexion` du **nouveau** lien au lieu
+  d'échouer — flux d'octets corrompu/entrelacé, sans garde-fou. Avec la génération,
+  `connexions[pair]` ne correspond plus après une reconnexion : `ecrire()` renvoie
+  `false`, `send()` lève `UnknownPeer` au lieu de corrompre.
+- **`onDescriptorWriteRequest`** ne traitait que `ENABLE_NOTIFICATION_VALUE`. Un pair qui
+  se désabonne de `CHAR_TX` sans se déconnecter (arrive en tâche de fond sur certaines
+  piles centrales) était silencieusement ignoré : `pret` restait `true` indéfiniment, et
+  si la pile Android n'invoque jamais `onNotificationSent` pour une notification refusée
+  faute d'abonnement, la file d'envoi (`enVol`) restait bloquée pour toujours. Fix :
+  `DISABLE_NOTIFICATION_VALUE` marque `fermetureDemandee=true` et ferme le lien via
+  `cancelConnection()`, en réutilisant le chemin de fermeture existant
+  (`onConnectionStateChange` → `motifDeconnexion` → `DisconnectReason.LOCALE`).
+- **`TransportActif.transport`** : `var` simple, écrite uniquement sous `@Synchronized`
+  (`demarrer()`/`arreter()`) mais lue sans verrou ni barrière mémoire depuis
+  `sonder()`/`battre()` (thread du `ScheduledExecutorService`) et depuis
+  `diffuser()`/`basculerBattement()` (thread appelant) — aucune garantie de visibilité
+  inter-thread. Ajout de `@Volatile`.
+
+### Pourquoi / décisions
+- **Génération plutôt qu'un identifiant opaque dans l'interface `BleRadio`** : le contrat
+  `BleRadio`/`RappelsRadio` ne change pas de signature (toujours `RadioPeer`), donc
+  `AndroidTransport` et les tests JVM (`FauxRadio`, conformité, `AndroidTransportTest`)
+  sont inchangés — la génération est un détail interne à `GattRadio`, invisible ailleurs.
+- **Désabonnement traité comme une fermeture de lien**, pas un état « à moitié ouvert » :
+  réutilise `motifDeconnexion`/`DisconnectReason.LOCALE` déjà testés plutôt que d'ajouter
+  un troisième état au contrat `Transport`.
+
+### Écarts vs conception
+- aucun (correctifs de bugs de concurrence relevés en revue, pas de changement de
+  conception).
+
+### Appris
+- Note ajoutée à `04-apprentissages.md` : « Génération (epoch) : désambiguïser deux
+  connexions successives à la même identité ».
+
+### État après cette session
+- Les 4 points relevés par la revue de la PR #98 (commentaire GitHub, id 5872663432) sont
+  corrigés.
+- Fiche module mise à jour : `modules/android-app.md`.
+- 01-etat-du-code.md mis à jour : non (pointeurs toujours valides).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew --no-daemon -q testDebugUnitTest
+BUILD OK (exit 0) — 48 tests JVM (AndroidTransportConformiteTest, AndroidTransportTest,
+FragmentationBleTest, DengonNodeStubTest, BlePermissionsTest inchangés)
+```
+- **Pas re-testé sur appareil réel** : les 4 bugs sont des races/edge cases sur la pile
+  Android (chemins `GattRadio`/`TransportActif`) qui ne sont pas reproductibles à la main
+  de façon fiable sur 2 téléphones dans le temps disponible pour cette tâche ; la suite
+  JVM (`FauxRadio`) ne peut pas les exercer non plus car `FauxRadio` ne modélise pas les
+  rappels bruts par adresse Android — à couvrir par les prochains essais matériels
+  (US-306) si l'occasion se présente.
+
+---
+
 ## 2026-09-28 — US-213 : `AndroidTransport` — GATT server + advertiser + scanner, testé sur 2 vrais téléphones
 
 **Auteur :** Oswin + Claude (Sonnet 5)

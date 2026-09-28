@@ -46,6 +46,11 @@ object TransportActif {
     private val etatMutable = MutableStateFlow(Etat())
     val etat: StateFlow<Etat> = etatMutable.asStateFlow()
 
+    // Écrit uniquement sous @Synchronized (demarrer/arreter), mais lu sans
+    // verrou depuis le thread de sonder()/battre() et depuis diffuser() /
+    // basculerBattement() (thread appelant) : @Volatile garantit la visibilité
+    // inter-thread d'une écriture faite sous @Synchronized sur un autre thread.
+    @Volatile
     private var transport: AndroidTransport? = null
     private var boucle: ScheduledExecutorService? = null
     private var numeroBattement = 0
