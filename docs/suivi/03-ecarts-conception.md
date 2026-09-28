@@ -693,6 +693,9 @@ _(aucun écart pour l'instant)_
   implémentation `Signer` (Ed25519), elle se branchera sur `Ledger<S>` sans
   changer sa forme — et `verify_chain()` devra alors être étendue pour
   vérifier la signature de chaque entrée, ce qui n'est pas fait ici.
+  **Mise à jour (US-203, retour de revue #78) :** `crypto::SigningKey`
+  implémente désormais `ledger::Signer` (test `signe_le_journal_chaine`).
+  `verify_chain()` ne vérifie toujours pas les signatures.
 - **Doc de conception mise à jour ?** Non — la conception reste la cible
   réelle (signature Ed25519 vérifiée). Le point est documenté ici et dans
   `modules/dengon-core.md` (« Décisions d'implémentation » et « Limites
@@ -729,16 +732,6 @@ _(aucun écart pour l'instant)_
 - **Doc de conception mise à jour ?** Non — documenté ici et dans le
   docstring d'`export()` (`src/ledger.rs`), à trancher quand
   `dengon-verify` aura un vrai appelant.
-### `crypto` est un module de `dengon-core`, pas une crate séparée (US-203)
-
-- **Conception :** l'issue #17 parle de « la crate `crypto` ».
-- **Code :** `crates/dengon-core/src/crypto.rs`, déclaré par `pub mod crypto;`.
-- **Pourquoi :** `04-architecture.md` §2 place `crypto` parmi les modules de
-  `dengon-core`, et le workspace n'a que six crates (US-104). Une crate
-  supplémentaire aurait contredit l'architecture pour un gain nul.
-- **Conséquences :** aucune pour les appelants (`dengon_core::crypto`).
-- **Doc de conception mise à jour ?** Non : c'est l'intitulé de l'issue qui est
-  approximatif, pas la conception.
 
 ---
 
@@ -746,7 +739,7 @@ _(aucun écart pour l'instant)_
 
 - **Conception :** `06-securite.md` §8 impose `ed25519-dalek` v2 mais ne dit rien
   du mode de vérification.
-- **Code :** `crates/dengon-core/src/crypto.rs:143`, `VerifyingKey::verify` appelle
+- **Code :** `crates/dengon-core/src/crypto.rs`, `VerifyingKey::verify` appelle
   `verify_strict`.
 - **Pourquoi :** `verify_strict` rejette en plus les clés de faible ordre et les
   signatures malléables. Le journal chaîné est un objet d'audit : accepter deux

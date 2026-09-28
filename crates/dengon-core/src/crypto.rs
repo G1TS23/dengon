@@ -16,6 +16,12 @@
 //!   comme le décrit la conception (préfixe de paquet, `entry_hash`, JSON
 //!   canonique d'un batch). C'est à l'appelant de ne signer que des octets
 //!   dont le sens est non ambigu.
+//! - **Pas de mise en forme des paquets L3.** Un paquet ne se signe pas tel
+//!   qu'il circule : la signature couvre l'en-tête avec l'octet `ttl` mis
+//!   à 0, sinon elle casse au premier relais (qui décrémente `ttl`). Les
+//!   octets à signer et à vérifier sont fournis par `protocol::codec`
+//!   (`signing_input` à l'émission, `received_signing_input` à la
+//!   réception, US-201), jamais la trame brute.
 //!
 //! # `no_std`
 //!
@@ -27,20 +33,21 @@ use core::fmt;
 
 use ed25519_dalek::{Signature as DalekSignature, Signer as _};
 
-/// Longueur d'une signature Ed25519, en octets.
-pub const SIGNATURE_LEN: usize = 64;
+/// Longueur d'une signature Ed25519 et signature `R ‖ S` (64 octets).
+///
+/// Réexportées depuis `protocol` (US-108), seule source de vérité : les
+/// modules s'échangent des signatures sans conversion.
+pub use crate::protocol::{Signature, SIGNATURE_LEN};
+
+// `ledger` (US-206) a sa propre constante, faute de `crypto` au moment où il
+// a été écrit : elle doit rester égale à celle du protocole.
+const _: () = assert!(crate::ledger::SIG_LEN == SIGNATURE_LEN);
 
 /// Longueur d'une clé publique Ed25519, en octets.
 pub const PUBLIC_KEY_LEN: usize = 32;
 
 /// Longueur de la graine (clé privée) Ed25519, en octets.
 pub const SEED_LEN: usize = 32;
-
-/// Signature Ed25519 : `R ‖ S`, 64 octets.
-///
-/// Même forme que `ledger::Signature` et `protocol::Signature`, pour que les
-/// modules s'échangent des signatures sans conversion.
-pub type Signature = [u8; SIGNATURE_LEN];
 
 /// Erreur de la couche `crypto`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,14 +69,13 @@ impl fmt::Display for CryptoError {
     }
 }
 
-#[cfg(feature = "std")]
-impl std::error::Error for CryptoError {}
+impl core::error::Error for CryptoError {}
 
 /// Clé de signature Ed25519 (partie privée).
 ///
 /// Le secret est effacé de la mémoire à la destruction (feature `zeroize` de
-/// `ed25519-dalek`). `Debug` n'affiche jamais le secret.
-#[derive(Clone)]
+/// `ed25519-dalek`). `Debug` n'affiche jamais le secret. Pas de `Clone` :
+/// chaque copie serait un exemplaire de plus du secret en mémoire.
 pub struct SigningKey(ed25519_dalek::SigningKey);
 
 impl SigningKey {
@@ -94,6 +100,14 @@ impl SigningKey {
     #[must_use]
     pub fn sign(&self, message: &[u8]) -> Signature {
         self.0.sign(message).to_bytes()
+    }
+}
+
+/// Branche une vraie clé Ed25519 sur le journal chaîné, à la place de
+/// `ledger::NullSigner`.
+impl crate::ledger::Signer for SigningKey {
+    fn sign(&mut self, message: &[u8]) -> Signature {
+        SigningKey::sign(self, message)
     }
 }
 
@@ -277,7 +291,7 @@ mod tests {
         let sk = cle_de_test();
         let vk = sk.verifying_key();
         for len in [0usize, 1, 31, 32, 63, 64, 65, 1000] {
-            let message: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+            let message: Vec<u8> = (0..=250u8).cycle().take(len).collect();
             let sig = sk.sign(&message);
             assert_eq!(vk.verify(&message, &sig), Ok(()), "longueur {len}");
         }
@@ -433,6 +447,23 @@ mod tests {
         assert!(!affichage.contains("5a5a5a5a"));
         assert!(!affichage.contains("90, 90, 90"));
         assert!(affichage.contains("SigningKey"));
+    }
+
+    #[test]
+    fn signe_le_journal_chaine() {
+        use crate::ledger::{Ledger, Verdict};
+
+        let mut journal = Ledger::new(cle_de_test());
+        let entree = journal
+            .append("msg.queued", r#"{"msg_uuid":"x"}"#, 1_000)
+            .clone();
+        assert_eq!(journal.verify_chain(), Verdict::Ok);
+        assert_eq!(
+            cle_de_test()
+                .verifying_key()
+                .verify(&entree.entry_hash, &entree.sig),
+            Ok(())
+        );
     }
 
     #[test]

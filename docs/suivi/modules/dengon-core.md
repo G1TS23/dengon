@@ -59,7 +59,8 @@ Modules encore absents : `codec` (US-201), `identity`, `sync`,
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
 | `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
 | `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
-| `crypto::CryptoError` | `src/crypto.rs` | `InvalidPublicKey` / `InvalidSignature` — on ne distingue pas les causes d'un échec de `verify`. |
+| `crypto::CryptoError` | `src/crypto.rs` | `InvalidPublicKey` / `InvalidSignature` — on ne distingue pas les causes d'un échec de `verify`. Implémente `core::error::Error` (aussi en `no_std`). |
+| `impl ledger::Signer for crypto::SigningKey` | `src/crypto.rs` | Branche une vraie clé Ed25519 sur `Ledger<S>` à la place de `NullSigner`. `crypto::Signature`/`SIGNATURE_LEN` sont des réexports de `protocol`. |
 
 ## Flux principal (exemple)
 
@@ -302,10 +303,11 @@ chemin des messages.
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
   `PROTOCOL_VERSION`).
-- `src/crypto.rs`, module `tests` : 15 tests — 3 KAT RFC 8032 §7.1 sur 4 vecteurs
+- `src/crypto.rs`, module `tests` : 16 tests — 3 KAT RFC 8032 §7.1 sur 4 vecteurs
   (clé publique, signature octet à octet, `verify`), aller-retour, déterminisme,
   négatifs (forgée, bit-flip exhaustif message + signature, tronqué, mauvaise
-  clé, clé invalide, faible ordre).
+  clé, clé invalide, faible ordre), et `signe_le_journal_chaine` (un `Ledger`
+  signé par `SigningKey`, signature vérifiée sur `entry_hash`).
 - `src/ledger.rs`, module `tests` : 14 tests unitaires (chaîne vide valide,
   append→verify_chain toujours Ok, seq consécutives, trou détecté, doublon
   de seq détecté comme fork (adjacent **et** non adjacent — voir
@@ -353,10 +355,10 @@ chemin des messages.
   paquets **adressés** comme `ack-addressed`, pas seulement broadcast,
   contrairement à une formulation précédente de cette fiche — pas
   seulement pour les deux corrigés au round 2).
-- Commande : `cargo test -p dengon-core` → **46 passés** (42 lib + 4
-  intégration + 0 doc — 16 pour `ledger`, 13 pour `store`, 13 pour
-  `protocol::{consts,types}` et `lib.rs`), rejoué le
-  2026-09-28 après intégration de `ledger` (#75) et `store` (#76). `cargo
+- Commande : `cargo test -p dengon-core` → **62 passés** (58 lib + 4
+  intégration + 0 doc — 16 pour `crypto`, 16 pour `ledger`, 13 pour `store`,
+  13 pour `protocol::{consts,types}` et `lib.rs`), rejoué le 2026-09-28 après
+  le rebase de `crypto` (US-203, #78) sur `ledger` (#75) et `store` (#76). `cargo
   clippy --workspace --all-targets --all-features -- -D warnings` et `cargo
   fmt --all -- --check` verts. `cargo check -p dengon-core
   --no-default-features` (frontière `no_std`) vert.
@@ -376,8 +378,9 @@ chemin des messages.
   RFC 8032 « TEST 1024 » non repris. Cross-compilation xtensa prouvée par le
   Spike A sur une crate jouet, pas sur `crypto` (vérifié à la main sur
   `thumbv7em-none-eabi`, 2026-09-28).
-- `verify_chain()` ne vérifie pas la signature (voir « Décisions » —
-  dépend de `crypto`, US-203).
+- `verify_chain()` ne vérifie pas la signature (voir « Décisions »). La
+  brique existe depuis US-203 (`crypto::SigningKey` implémente
+  `ledger::Signer`) mais la vérification n'est pas câblée.
 - **`verify_chain()` ne peut pas re-vérifier un export partiel** (`seq` ne
   commençant pas à 0) — voir le docstring d'`export()` et l'écart consigné
   dans `03-ecarts-conception.md` (retour de revue #75). Pas encore
