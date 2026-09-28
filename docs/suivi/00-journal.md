@@ -10,6 +10,36 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-214 : rebase de la PR #87 sur `main` (après #84, #85)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/`
+**Lot :** US-214 (#28), PR #87 — branche `feat/US-214-ui-conversations`
+
+### Fait
+- `git rebase origin/main` du commit de la PR. Un seul conflit :
+  `docs/suivi/01-etat-du-code.md` (bloc « commandes ») — les deux côtés
+  gardés : commandes `dengon-core` de `main` + commandes Gradle de l'app
+  Android (US-214).
+- Fusion automatique (`merge=union`) fautive corrigée à la main : l'entrée
+  US-214 de `00-journal.md` s'était retrouvée au milieu du journal, sous
+  les entrées de `main` ; remise en haut.
+- `02-avancement.md`, `modules/_index.md`, `05-glossaire.md` : fusion
+  automatique relue, correcte (pas de ligne en double).
+
+### Vérifications
+- `main` n'a modifié aucun fichier sous `android/` depuis la base de la
+  branche (`git diff --stat <base> origin/main -- android/` vide) : le code
+  Kotlin est identique à celui relu.
+- Tests Gradle **non relancés** sur ce poste (pas de SDK Android :
+  `android/local.properties` absent) ; la CI de la PR fait foi.
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : aucune
+- 01-etat-du-code.md mis à jour : oui (résolution du conflit)
+
+---
+
 ## 2026-09-28 — US-214 : messagerie Compose sur bouchon FFI (conversations, fil, saisie, statuts)
 
 **Auteur :** OswinFreyr + Claude (Opus 5.5)
