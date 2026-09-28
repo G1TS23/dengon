@@ -10,6 +10,108 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-214 : rebase de la PR #87 sur `main` (après #84, #85)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/`
+**Lot :** US-214 (#28), PR #87 — branche `feat/US-214-ui-conversations`
+
+### Fait
+- `git rebase origin/main` du commit de la PR. Un seul conflit :
+  `docs/suivi/01-etat-du-code.md` (bloc « commandes ») — les deux côtés
+  gardés : commandes `dengon-core` de `main` + commandes Gradle de l'app
+  Android (US-214).
+- Fusion automatique (`merge=union`) fautive corrigée à la main : l'entrée
+  US-214 de `00-journal.md` s'était retrouvée au milieu du journal, sous
+  les entrées de `main` ; remise en haut.
+- `02-avancement.md`, `modules/_index.md`, `05-glossaire.md` : fusion
+  automatique relue, correcte (pas de ligne en double).
+
+### Vérifications
+- `main` n'a modifié aucun fichier sous `android/` depuis la base de la
+  branche (`git diff --stat <base> origin/main -- android/` vide) : le code
+  Kotlin est identique à celui relu.
+- Tests Gradle **non relancés** sur ce poste (pas de SDK Android :
+  `android/local.properties` absent) ; la CI de la PR fait foi.
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : aucune
+- 01-etat-du-code.md mis à jour : oui (résolution du conflit)
+
+---
+
+## 2026-09-28 — US-214 : messagerie Compose sur bouchon FFI (conversations, fil, saisie, statuts)
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ui/conversations/`
+(nouveau : `ConversationsViewModel.kt`, `ConversationsScreen.kt`,
+`LibelleStatut.kt`), `MainActivity.kt`, `ffi/DengonNodeStub.kt` (correctif),
+tests `ui/conversations/ConversationsViewModelTest.kt`, `ffi/DengonNodeStubTest.kt`
+**Lot :** US-214 (#28), branche `feat/US-214-ui-conversations`
+
+### Fait
+- **`ConversationsViewModel`** : état unique `StateFlow<ConversationsUiState>`
+  et actions `ouvrir` / `fermer` / `modifierBrouillon` / `envoyer` / `sonder`,
+  alimenté **uniquement** par `DengonNodeInterface` (bouchon US-106). Une
+  erreur du nœud (`DengonException`) est affichée, et le brouillon conservé.
+- **Écrans Compose** : liste des conversations (pseudo, aperçu du dernier
+  message, statut s'il est sortant, compteur de non lus), fil (bulles
+  entrantes/sortantes, statut sous chaque message sortant, défilement
+  automatique), saisie + bouton « Envoyer » actif seulement avec du texte.
+  Interrogation `pollEvents` toutes les secondes ; retour système
+  fil → liste → accueil. Libellés de statut de `synthese/07` §1.
+- **`MainActivity`** : bouton « Conversations » ; le ViewModel est créé par
+  `by viewModels { fabrique(DengonNodeStub(...)) }` (survit aux rotations).
+  Seul ce point d'injection changera à l'US-306.
+- **Correctif du bouchon Kotlin** : répondre dans la conversation canned
+  (`conv-canned`, pair `peer-canned`) créait une seconde conversation
+  `conv-peer-canned`, et la réponse n'apparaissait pas dans le fil ouvert.
+  `sendMessage` cherche d'abord la conversation du pair. Test de régression.
+
+### Pourquoi / décisions
+- **ViewModel synchrone** : le bouchon répond en mémoire. Les tests lisent
+  `etat.value` sans `kotlinx-coroutines-test`, et aucune dépendance n'est
+  ajoutée (`ViewModel`, `StateFlow`, `by viewModels` sont déjà sur le
+  classpath via `activity-compose` / `lifecycle-runtime-ktx`). Ajouter une
+  dépendance obligerait à régénérer `gradle.lockfile` et
+  `verification-metadata.xml`.
+- **Pas de `navigation-compose`**, pour la même raison : trois états booléens
+  dans `MainActivity` suffisent aujourd'hui.
+- Messagerie accessible **sans** permissions BLE : aucune radio n'est
+  utilisée tant que le vrai nœud n'est pas branché.
+
+### Écarts vs conception
+- Aucun. Limites notées dans la fiche : pas de `mark_read` dans le contrat
+  v0 (compteur de non lus jamais remis à zéro), le bouchon ne génère ni
+  réception ni changement de statut.
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- Critères US-214 : liste / fil / saisie / statuts ✅, bouchon exclusivement ✅,
+  tests ViewModel ✅, `assembleDebug` ✅. **Rendu sur la matrice d'appareils :
+  non fait** (aucun appareil ni émulateur sur le poste) — d'où `Refs #28`.
+- Fiche(s) module mise(s) à jour : `modules/android-app.md` (+ index).
+- 01-etat-du-code.md mis à jour : oui (commandes Android).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew testDebugUnitTest assembleDebug
+BUILD SUCCESSFUL — BlePermissionsTest 1/1, DengonNodeStubTest 11/11,
+ConversationsViewModelTest 9/9
+$ ./gradlew assembleRelease
+BUILD SUCCESSFUL (R8 minify/shrink)
+$ (correctif du bouchon retiré temporairement) ./gradlew :app:testDebugUnitTest
+21 tests, 3 échecs (régression détectée) — correctif restauré
+$ adb devices
+(aucun appareil) ; aucun AVD installé
+```
+- Non vérifié : rendu réel (tailles d'écran, clavier, thème sombre), faute
+  d'appareil. Les aperçus `@Preview` (360 dp) sont dans `ConversationsScreen.kt`.
+
+---
+
 ## 2026-09-28 — US-209 : rebase de la PR #85 sur `main` (après #84)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

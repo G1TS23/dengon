@@ -61,7 +61,12 @@ class DengonNodeStub(private val identity: Identity) : DengonNodeInterface {
 
     override fun sendMessage(destPeerId: String, body: String): String = synchronized(verrou) {
         val msgUuid = "msg-${messages.size}"
-        val convId = "conv-$destPeerId"
+        // Conversation existante avec ce pair d'abord : la conversation canned
+        // a l'identifiant `conv-canned` (et non `conv-peer-canned`). Sans cette
+        // recherche, répondre dans le fil canned créait une deuxième
+        // conversation et la réponse n'apparaissait pas dans le fil ouvert
+        // (constaté en écrivant l'UI, US-214).
+        val convId = conversations.firstOrNull { it.peerId == destPeerId }?.convId ?: "conv-$destPeerId"
         val status = if (destPeerId in connectedPeers) MessageStatus.IN_FLIGHT else MessageStatus.QUEUED
         val message = Message(
             msgUuid = msgUuid,

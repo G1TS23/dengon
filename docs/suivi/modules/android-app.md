@@ -1,15 +1,15 @@
 # Module : `android-app` (`android/`)
 
-**Rôle en une phrase :** l'application Android (Kotlin + Compose) — pour
-l'instant, un squelette qui déclare et fait tourner le service de fond BLE
-requis pour un nœud mesh (US-109).
+**Rôle en une phrase :** l'application Android (Kotlin + Compose) : le
+service de fond BLE requis pour un nœud mesh (US-109) et les écrans de
+messagerie (conversations, fil, saisie, statuts) sur le bouchon FFI (US-214).
 **Correspond à la conception :** `docs/synthese/04-architecture.md` §3
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109.
 **Dernière mise à jour :** 2026-09-28
-**État :** esquisse (squelette du service de fond ; pas de logique BLE réelle
-dans l'app elle-même — voir « Spike C » ci-dessous pour le code GATT jetable
+**État :** partiel (service de fond + messagerie sur bouchon FFI ; pas de
+logique BLE réelle dans l'app elle-même — voir « Spike C » ci-dessous pour le code GATT jetable
 qui dérisque `AndroidTransport`)
 
 ## Onboarding (US-103)
@@ -78,6 +78,11 @@ android/
     src/main/java/com/dengon/app/
       DengonApplication.kt   — Application vide (point d'extension futur)
       MainActivity.kt        — Compose : demande permissions, démarre/arrête le service, affiche l'état
+      ffi/                   — bouchon FFI (US-106) : DengonTypes.kt, DengonNodeStub.kt
+      ui/conversations/      — messagerie (US-214)
+        ConversationsViewModel.kt — état (StateFlow) + actions, alimenté par DengonNodeInterface
+        ConversationsScreen.kt    — Compose : MessagerieRoute, ListeConversations, FilConversation
+        LibelleStatut.kt          — statut → libellé UI (synthese/07 §1)
       ble/
         BlePermissions.kt        — liste des permissions requises selon Build.VERSION.SDK_INT
         MeshForegroundService.kt — service de fond, notification permanente, foregroundServiceType=connectedDevice
@@ -87,8 +92,10 @@ android/
           HelloMeshCentral.kt      — BluetoothLeScanner + BluetoothGatt (client)
           HelloMeshSpikeScreen.kt  — écran de debug Compose (accessible depuis MainActivity)
           SpikeResult.kt           — chiffres mesurés (MTU, timings, appareil)
-    src/test/java/com/dengon/app/ble/
-      BlePermissionsTest.kt  — test unitaire minimal (JVM, sans Robolectric)
+    src/test/java/com/dengon/app/
+      ble/BlePermissionsTest.kt  — test unitaire minimal (JVM, sans Robolectric)
+      ffi/DengonNodeStubTest.kt  — bouchon FFI (11 tests)
+      ui/conversations/ConversationsViewModelTest.kt — ViewModel de messagerie (9 tests)
 ```
 
 ## Concepts / types importants
@@ -99,6 +106,9 @@ android/
 | `BlePermissions.required()` | `app/src/main/java/com/dengon/app/ble/BlePermissions.kt:17` | Retourne le tableau de permissions à demander : `BLUETOOTH_SCAN/CONNECT/ADVERTISE` sur API 31+, `ACCESS_FINE_LOCATION` en dessous, `+POST_NOTIFICATIONS` sur API 33+. |
 | `BlePermissions.allGranted()` | `app/src/main/java/com/dengon/app/ble/BlePermissions.kt:29` | Vérifie si toutes les permissions requises sont déjà accordées. |
 | `MainActivity` | `app/src/main/java/com/dengon/app/MainActivity.kt:29` | `ComponentActivity` Compose : lance la demande de permissions (`RequestMultiplePermissions`), démarre `MeshForegroundService` via `ContextCompat.startForegroundService` dès qu'elles sont accordées, bouton Démarrer/Arrêter pour le test manuel. |
+| `ConversationsViewModel` | `ui/conversations/ConversationsViewModel.kt` | `StateFlow<ConversationsUiState>` (conversations, conversation ouverte, messages, brouillon, erreur) + actions `ouvrir`/`fermer`/`modifierBrouillon`/`envoyer`/`sonder`. Dépend seulement de `DengonNodeInterface` : le bouchon aujourd'hui, le nœud généré à l'US-306. **Synchrone** : testé en JVM pur, sans dispatcher de test. |
+| `MessagerieRoute` | `ui/conversations/ConversationsScreen.kt` | Liste ↔ fil selon l'état ; `pollEvents` toutes les secondes (`LaunchedEffect`) ; retour système : fil → liste → accueil. |
+| `libelleStatut` | `ui/conversations/LibelleStatut.kt` | `QUEUED` « En attente », `IN_FLIGHT` « Parti », `DELIVERED` « Distribué », `EXPIRED` « Échec », `CANCELLED` « Annulé » (`READ` « Lu » réservé v2). |
 | `HelloMeshPeripheral` | `ble/spike/HelloMeshPeripheral.kt:38` | Publie `SERVICE_UUID` (`BluetoothGattServer` + `BluetoothLeAdvertiser`), expose `CHAR_RX`/`CHAR_TX`, fait l'écho de ce qu'il reçoit. |
 | `HelloMeshCentral` | `ble/spike/HelloMeshCentral.kt:31` | Scanne `SERVICE_UUID`, se connecte, négocie le MTU (517 visé), écrit 20 o sur `CHAR_RX`, mesure le round-trip de l'écho sur `CHAR_TX`. |
 | `HelloMeshSpikeScreen` | `ble/spike/HelloMeshSpikeScreen.kt:41` | Écran Compose de debug (bouton dédié dans `MainActivity`) : bascule manuelle Central/Peripheral, journal en direct, carte de résultat (MTU, temps). |
@@ -328,6 +338,17 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
 
 ## Tests
 
+- **Messagerie (US-214, 2026-09-28)** : `ConversationsViewModelTest`, 9
+  tests JVM alimentés par le bouchon : liste initiale, ouvrir/fermer,
+  conversation inconnue, envoi (message ajouté au fil, statut `QUEUED`,
+  saisie vidée, dernier message suivi), pair connecté → `IN_FLIGHT` via
+  `sonder`, brouillon blanc sans effet, erreur du nœud affichée avec
+  brouillon conservé, libellés des 6 statuts, fabrique. + 1 test de
+  régression du bouchon (réponse dans la conversation canned). Mutation :
+  retirer le correctif du bouchon fait échouer 3 tests.
+  `./gradlew testDebugUnitTest assembleDebug assembleRelease` → BUILD
+  SUCCESSFUL (21 tests). **Rendu sur appareil non vérifié** (aucun appareil
+  ni émulateur sur le poste) : à faire sur la matrice, captures dans la PR.
 - `BlePermissionsTest` (`src/test/.../BlePermissionsTest.kt`) : vérifie que
   l'ensemble de permissions renvoyé couvre soit le triplet BLE moderne, soit
   la localisation legacy. Tourne en JVM pur (`unitTests.isReturnDefaultValues
@@ -371,7 +392,15 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
   prévue pour US-213 (`AndroidTransport`), qui implémentera le contrat
   `Transport` de `docs/synthese/04-architecture.md` §3 et remplacera ce
   squelette de service par le vrai relais.
-- Pas de branchement `dengon-ffi` (bouchon US-106 pas encore fait).
+- Messagerie branchée sur le **bouchon** FFI (US-106), pas sur le vrai nœud
+  (US-306). Le bouchon ne produit jamais de message entrant ni de
+  changement de statut : l'écran les affiche s'ils arrivent, mais la démo
+  ne montre que « En attente » / « Parti » à l'envoi.
+- `unreadCount` n'est jamais remis à zéro : le contrat v0 n'a pas de
+  `mark_read` (US-214 hors périmètre, à ajouter au contrat).
+- Pas de navigation Compose (`navigation-compose` non ajouté, pour ne pas
+  toucher au verrouillage des dépendances) : trois états booléens dans
+  `MainActivity`. À revoir quand l'écran QR (US-215) arrivera.
 - Pas de CI Android (`android.yml`) — relève de US-113/US-222 (issue #79
   créée pour un job `android.yml` minimal, retour de revue PR #72).
 - SDK Android installé localement pour vérifier le build de cette session,

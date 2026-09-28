@@ -36,6 +36,11 @@ cargo test -p dengon-core
 cargo test -p dengon-core crypto::          # crypto seul (Ed25519, US-203)
 cargo clippy --workspace --all-targets -- -D warnings
 cargo check -p dengon-core --no-default-features
+
+# App Android — depuis android/ (SDK local : local.properties → sdk.dir).
+# Tests JVM (ViewModel de messagerie, bouchon FFI), APK debug et release (R8).
+./gradlew testDebugUnitTest assembleDebug assembleRelease
+# Détail et pièges : docs/suivi/modules/android-app.md
 ```
 
 ```bash
