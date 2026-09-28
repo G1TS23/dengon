@@ -10,6 +10,54 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-211 : rebase de la PR #84 sur `main` (après #76, #78, #80, #81, #82, #83)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs}`, `docs/suivi/`
+**Lot :** US-211 (#25), PR #84 — branche `feat/US-211-sync-status`
+
+### Fait
+- `git rebase origin/main` des deux commits de la PR. Conflits résolus :
+  - `crates/dengon-core/Cargo.toml` : dev-dependencies de `main` gardées
+    (`proptest`/`serde_json` déjà en `workspace = true`) ; commentaire
+    complété pour `sync::status`.
+  - `crates/dengon-core/src/lib.rs` : `pub mod sync;` ajouté à la liste des
+    modules de `main` (`crypto`, `identity`, `ledger`, `store`) ; doc de
+    crate fusionnée.
+  - `Cargo.lock` : version de `main` reprise, `cargo metadata` n'y change
+    rien (aucune dépendance nouvelle).
+  - `modules/dengon-core.md` : état, arborescence (`codec/` + `sync/`) et
+    « modules encore absents » fusionnés.
+- Fusions automatiques de git **fausses** repérées et corrigées à la main :
+  - `00-journal.md` : l'entrée US-211 avait été insérée au milieu de
+    l'entrée US-206 et en avait supprimé la section « Vérification » —
+    journal reconstruit = version de `main` + entrée US-211 en tête.
+  - `02-avancement.md` : deux lignes `dengon-core` → une seule (ligne de
+    `main` + `sync::status`), 45 %.
+  - `modules/_index.md` : lignes `dengon-core` / `dengon-ble` en double
+    réapparues (celles de `main`) → une ligne par module.
+
+### Écarts vs conception
+- aucun
+
+### État après cette session
+- PR #84 à jour de `main`, sans conflit.
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check
+(vert)
+$ cargo clippy --workspace --all-targets -- -D warnings
+(vert)
+$ cargo test -p dengon-core
+194 passed (lib) ; 7 + 2 + 3 + 7 passed (intégration, 2 ignorés) ; 0 failed
+$ cargo check -p dengon-core --no-default-features
+(vert — frontière no_std)
+```
+
+---
+
 ## 2026-09-28 — Retour de revue #84 : dédoublonnage de l'index des modules
 
 **Auteur :** Oswin + Claude (Opus 5.5)
