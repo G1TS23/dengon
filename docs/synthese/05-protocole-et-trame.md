@@ -73,8 +73,15 @@ C'est aussi le **format binaire de trame** (il n'y a qu'une spec).
   20|28    2     payload_len         (N)
   22|30    N     payload             (cf. §4 selon type)
   +N      [64]   signature           (présent SSI flags.SIGNED ; Ed25519 sur
-                                      octets [0 .. début_signature])
+                                      octets [0 .. début_signature],
+                                      octet ttl mis à 0 — voir ci-dessous)
 ```
+
+**Le TTL est exclu de la signature** (octet 2 mis à 0 avant de signer et de
+vérifier) : chaque relais le décrémente, une signature qui le couvrirait ne se
+vérifierait plus après un saut. Contrepartie : un relais peut remonter le TTL,
+ce que borne la dédup du seen-set. Corrige `powl/03` §3 (qui signe TTL compris)
+— écart consigné dans `docs/suivi/03-ecarts-conception.md` (US-201, revue #80).
 
 En-tête : **22 o** (broadcast) ou **30 o** (adressé). Avec signature : **+64 o**.
 Endianness big-endian (réseau). Champ « réservé » = 0 à l'émission, ignoré à la

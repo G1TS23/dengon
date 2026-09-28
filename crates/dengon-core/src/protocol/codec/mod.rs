@@ -35,11 +35,18 @@
 //!
 //! # Signature
 //!
-//! La signature Ed25519 couvre les octets **reçus** `[0 .. signed_len]`
-//! (voir [`signed_len`]). Le vérificateur doit travailler sur les octets bruts
-//! et **pas** sur un ré-encodage du [`Packet`] décodé : un bit réservé posé par
-//! un pair plus récent est masqué au décodage, le ré-encodage ne serait donc
-//! plus identique aux octets signés.
+//! La signature Ed25519 couvre l'en-tête et le payload (octets
+//! `[0 .. début_signature]`) **avec l'octet `ttl` (offset [`TTL_OFFSET`]) mis
+//! à 0** : chaque relais décrémente le TTL (`synthese/05` §6.1), une signature
+//! qui le couvrirait ne se vérifierait plus après un saut (retour de revue
+//! #80, point de Paul — même choix que bitchat). Le TTL n'est donc **pas**
+//! protégé : un relais peut le remonter, borné par la dédup du seen-set.
+//!
+//! - Émission : [`signing_input`] donne les octets à signer d'un [`Packet`].
+//! - Réception : [`received_signing_input`] les donne à partir des octets
+//!   **reçus**, pas d'un ré-encodage : un bit réservé posé par un pair plus
+//!   récent est masqué par [`decode`], un ré-encodage ne serait donc plus
+//!   identique à ce que l'émetteur a signé.
 //!
 //! Les frames applicatives chiffrées (L4) sont dans [`app`].
 
@@ -55,6 +62,10 @@ use super::types::{Flags, Header, PacketType, PeerId, Signature};
 
 /// Taille maximale d'un payload : `payload_len` tient sur 2 octets.
 pub const PAYLOAD_MAX: usize = u16::MAX as usize;
+
+/// Position de l'octet `ttl` dans l'en-tête ; mis à 0 dans l'entrée de
+/// signature (voir la section « Signature » du module).
+pub const TTL_OFFSET: usize = 2;
 
 /// Paquet L3 complet : en-tête décodé, payload opaque, signature éventuelle.
 ///
@@ -227,22 +238,14 @@ impl From<FrameRule> for EncodeError {
 }
 
 /// Nombre d'octets couverts par la signature : en-tête + payload.
-///
-/// Sur un paquet reçu, la signature se vérifie sur `raw[..signed_len(&header)]`
-/// (octets bruts, voir la section « Signature » du module).
-#[must_use]
-pub const fn signed_len(header: &Header) -> usize {
+const fn signed_len(header: &Header) -> usize {
     header.header_len() + header.payload_len as usize
 }
 
-/// Sérialise `packet` à la fin de `out`. En cas d'erreur, `out` n'est pas
-/// modifié.
-///
-/// # Errors
-///
-/// [`EncodeError`] si le paquet viole un invariant de [`Packet`] ou une
-/// règle du format.
-pub fn encode_into(packet: &Packet, out: &mut Vec<u8>) -> Result<(), EncodeError> {
+/// Vérifie les invariants de [`Packet`] et les règles du format, sauf la
+/// présence de la signature (inconnue au moment de calculer
+/// [`signing_input`]).
+fn check_encodable(packet: &Packet) -> Result<(), EncodeError> {
     let h = &packet.header;
     if h.version != PROTO_VERSION {
         return Err(EncodeError::UnsupportedVersion(h.version));
@@ -262,12 +265,13 @@ pub fn encode_into(packet: &Packet, out: &mut Vec<u8>) -> Result<(), EncodeError
     if !h.flags_are_consistent() {
         return Err(EncodeError::RecipientMismatch);
     }
-    if packet.signature.is_some() != h.flags.contains(Flags::SIGNED) {
-        return Err(EncodeError::SignatureMismatch);
-    }
     check_rules(h.packet_type, h.flags)?;
+    Ok(())
+}
 
-    out.reserve(h.wire_len());
+/// Écrit l'en-tête puis le payload (tout sauf la signature).
+fn write_header_and_payload(packet: &Packet, out: &mut Vec<u8>) {
+    let h = &packet.header;
     out.push(h.version);
     out.push(h.packet_type.to_u8());
     out.push(h.ttl);
@@ -279,10 +283,74 @@ pub fn encode_into(packet: &Packet, out: &mut Vec<u8>) -> Result<(), EncodeError
     }
     out.extend_from_slice(&h.payload_len.to_be_bytes());
     out.extend_from_slice(&packet.payload);
+}
+
+/// Sérialise `packet` à la fin de `out`. En cas d'erreur, `out` n'est pas
+/// modifié.
+///
+/// # Errors
+///
+/// [`EncodeError`] si le paquet viole un invariant de [`Packet`] ou une
+/// règle du format.
+pub fn encode_into(packet: &Packet, out: &mut Vec<u8>) -> Result<(), EncodeError> {
+    check_encodable(packet)?;
+    if packet.signature.is_some() != packet.header.flags.contains(Flags::SIGNED) {
+        return Err(EncodeError::SignatureMismatch);
+    }
+    out.reserve(packet.header.wire_len());
+    write_header_and_payload(packet, out);
     if let Some(signature) = &packet.signature {
         out.extend_from_slice(signature);
     }
     Ok(())
+}
+
+/// Octets à signer d'un paquet à émettre : en-tête + payload, `ttl` à 0.
+///
+/// Le champ `packet.signature` est ignoré (c'est ce qu'on s'apprête à
+/// calculer) ; le paquet doit en revanche porter [`Flags::SIGNED`].
+/// Identique à [`received_signing_input`] sur les octets encodés, quel que
+/// soit le TTL au moment de la réception.
+///
+/// # Errors
+///
+/// [`EncodeError::SignatureMismatch`] si `SIGNED` est absent, sinon les mêmes
+/// erreurs que [`encode`].
+pub fn signing_input(packet: &Packet) -> Result<Vec<u8>, EncodeError> {
+    check_encodable(packet)?;
+    if !packet.header.flags.contains(Flags::SIGNED) {
+        return Err(EncodeError::SignatureMismatch);
+    }
+    let mut out = Vec::with_capacity(signed_len(&packet.header));
+    write_header_and_payload(packet, &mut out);
+    out[TTL_OFFSET] = 0;
+    Ok(out)
+}
+
+/// Octets sur lesquels vérifier la signature d'un paquet **reçu** : les
+/// octets bruts `[0 .. début_signature]`, `ttl` à 0.
+///
+/// `Ok(None)` si le paquet n'est pas signé.
+///
+/// # Errors
+///
+/// Les erreurs de [`decode`] : on ne calcule rien sur un paquet invalide.
+pub fn received_signing_input(raw: &[u8]) -> Result<Option<Vec<u8>>, DecodeError> {
+    let packet = decode(raw)?;
+    if packet.signature.is_none() {
+        return Ok(None);
+    }
+    // `decode` a vérifié raw.len() == signed_len + SIGNATURE_LEN : le `get`
+    // ne peut pas échouer, mais on évite l'indexage qui panique.
+    let mut out = raw
+        .get(..signed_len(&packet.header))
+        .ok_or(DecodeError::LengthMismatch {
+            expected: packet.header.wire_len(),
+            got: raw.len(),
+        })?
+        .to_vec();
+    out[TTL_OFFSET] = 0;
+    Ok(Some(out))
 }
 
 /// Sérialise `packet` dans un nouveau tampon de [`Header::wire_len`] octets.
@@ -472,9 +540,65 @@ mod tests {
         let p = announce();
         let raw = encode(&p).unwrap();
         assert_eq!(raw.len(), HEADER_LEN_BROADCAST + 4 + SIGNATURE_LEN);
-        assert_eq!(signed_len(&p.header), HEADER_LEN_BROADCAST + 4);
-        assert_eq!(&raw[signed_len(&p.header)..], &[0xcc; SIGNATURE_LEN]);
+        assert_eq!(&raw[HEADER_LEN_BROADCAST + 4..], &[0xcc; SIGNATURE_LEN]);
         assert_eq!(decode(&raw).unwrap(), p);
+    }
+
+    #[test]
+    fn entree_de_signature_survit_au_relais() {
+        // Retour de revue #80 (Paul) : Alice signe avec ttl=2, un relais
+        // décrémente à 1 — l'entrée de signature doit rester identique.
+        let p = announce();
+        let signe = signing_input(&p).unwrap();
+        assert_eq!(signe.len(), HEADER_LEN_BROADCAST + 4);
+        assert_eq!(signe[TTL_OFFSET], 0);
+
+        let mut raw = encode(&p).unwrap();
+        assert_eq!(&signe[..TTL_OFFSET], &raw[..TTL_OFFSET]);
+        assert_eq!(&signe[TTL_OFFSET + 1..], &raw[TTL_OFFSET + 1..signe.len()]);
+        assert_eq!(received_signing_input(&raw).unwrap(), Some(signe.clone()));
+
+        raw[TTL_OFFSET] -= 1; // relais
+        assert_eq!(received_signing_input(&raw).unwrap(), Some(signe));
+    }
+
+    #[test]
+    fn entree_de_signature_couvre_le_reste_de_l_en_tete() {
+        let base = received_signing_input(&encode(&announce()).unwrap())
+            .unwrap()
+            .unwrap();
+        let mut p = announce();
+        p.header.timestamp_ms += 1;
+        assert_ne!(signing_input(&p).unwrap(), base);
+
+        // Bit réservé posé par un pair v1.1 : conservé dans l'entrée (c'est
+        // ce que l'émetteur a signé), alors que `decode` le masque.
+        let mut raw = encode(&announce()).unwrap();
+        raw[3] |= 0x20;
+        let recue = received_signing_input(&raw).unwrap().unwrap();
+        assert_eq!(recue[3], raw[3]);
+        assert_ne!(recue, base);
+    }
+
+    #[test]
+    fn entree_de_signature_paquet_non_signe() {
+        let p = noise_msg(vec![1]);
+        assert_eq!(received_signing_input(&encode(&p).unwrap()), Ok(None));
+        assert_eq!(signing_input(&p), Err(EncodeError::SignatureMismatch));
+        assert_eq!(
+            received_signing_input(&[]),
+            Err(DecodeError::Truncated {
+                needed: HEADER_LEN_BROADCAST,
+                got: 0
+            })
+        );
+        // Le champ signature est ignoré à l'émission : on le calcule.
+        let mut a = announce();
+        a.signature = None;
+        assert_eq!(
+            signing_input(&a).unwrap(),
+            signing_input(&announce()).unwrap()
+        );
     }
 
     #[test]

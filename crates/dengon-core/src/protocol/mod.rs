@@ -31,7 +31,8 @@ pub use codec::app::{
     MessageFrame, MsgUuid,
 };
 pub use codec::{
-    decode, encode, encode_into, signed_len, DecodeError, EncodeError, FrameRule, Packet,
+    decode, encode, encode_into, received_signing_input, signing_input, DecodeError, EncodeError,
+    FrameRule, Packet, TTL_OFFSET,
 };
 pub use consts::*;
 pub use types::{AckStatus, AppFrameKind, Flags, Header, MsgId, PacketType, PeerId, Signature};

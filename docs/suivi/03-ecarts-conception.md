@@ -857,3 +857,11 @@ _(aucun écart pour l'instant)_
   peut alors le remonter — borné par la dédup). **À trancher en équipe avant
   US-203/US-209.**
 - **Doc de conception mise à jour ?** non — décision d'équipe requise.
+- **Mise à jour 2026-09-28 (revue PR #80, point bloquant de Paul) : tranché,
+  option (a).** L'octet `ttl` est mis à 0 dans l'entrée de signature
+  (`signing_input` / `received_signing_input`, `protocol::codec`) ;
+  `signed_len` n'est plus public. `docs/synthese/05` §3 corrigé ;
+  `docs/powl/03` §3 laissé tel quel (matière première figée) — c'est donc
+  désormais un **écart** entre le code et `powl/03`, dans ce sens : la zone
+  signée exclut le TTL. Le TTL n'est plus protégé contre un relais
+  malveillant, ce que borne la dédup du seen-set.

@@ -20,7 +20,7 @@
 
 use dengon_core::protocol::{
     consts::{HEADER_LEN_ADDRESSED, HEADER_LEN_BROADCAST, PROTO_VERSION, SIGNATURE_LEN},
-    decode, encode, signed_len, Flags, Header, PacketType,
+    decode, encode, received_signing_input, Flags, Header, PacketType, TTL_OFFSET,
 };
 use serde_json::Value;
 
@@ -336,7 +336,16 @@ fn decode_accepte_les_vecteurs_accept_avec_les_champs_attendus() {
             "{name}: payload"
         );
         if let Some(sig) = &p.signature {
-            assert_eq!(&raw[signed_len(h)..], sig.as_slice(), "{name}: signature");
+            let signed_end = raw.len() - SIGNATURE_LEN;
+            assert_eq!(&raw[signed_end..], sig.as_slice(), "{name}: signature");
+            // Entrée de signature = octets avant la signature, ttl à 0.
+            let mut expected = raw[..signed_end].to_vec();
+            expected[TTL_OFFSET] = 0;
+            assert_eq!(
+                received_signing_input(&raw).unwrap(),
+                Some(expected),
+                "{name}: entrée de signature"
+            );
         }
     }
 }

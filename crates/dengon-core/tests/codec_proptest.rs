@@ -8,9 +8,10 @@
 //!   `decode` / `decode_app_frame` — c'est le « fuzz léger » demandé par l'US.
 
 use dengon_core::protocol::consts::{PEER_ID_LEN, PROTO_VERSION, SIGNATURE_LEN};
+use dengon_core::protocol::TTL_OFFSET;
 use dengon_core::protocol::{
-    decode, decode_app_frame, encode, encode_app_frame, signed_len, AckFrame, AckStatus, AppFrame,
-    Flags, Header, MessageFrame, Packet, PacketType,
+    decode, decode_app_frame, encode, encode_app_frame, received_signing_input, signing_input,
+    AckFrame, AckStatus, AppFrame, Flags, Header, MessageFrame, Packet, PacketType,
 };
 use proptest::prelude::*;
 
@@ -113,9 +114,24 @@ proptest! {
         prop_assert_eq!(raw.len(), p.header.wire_len());
         let back = decode(&raw).unwrap();
         prop_assert_eq!(&back, &p);
-        // La signature suit exactement les octets signés.
+        // La signature occupe exactement les 64 derniers octets.
         if let Some(sig) = &p.signature {
-            prop_assert_eq!(&raw[signed_len(&p.header)..], &sig[..]);
+            prop_assert_eq!(&raw[raw.len() - SIGNATURE_LEN..], &sig[..]);
+        }
+    }
+
+    #[test]
+    fn entree_de_signature_identique_des_deux_cotes_quel_que_soit_le_ttl(
+        p in arb_packet(),
+        ttl_relais in any::<u8>(),
+    ) {
+        // Retour de revue #80 (Paul) : ce que l'émetteur signe = ce que le
+        // récepteur vérifie, même après décrémentation du TTL par un relais.
+        let mut raw = encode(&p).unwrap();
+        raw[TTL_OFFSET] = ttl_relais;
+        match signing_input(&p) {
+            Ok(signe) => prop_assert_eq!(received_signing_input(&raw).unwrap(), Some(signe)),
+            Err(_) => prop_assert_eq!(received_signing_input(&raw).unwrap(), None),
         }
     }
 

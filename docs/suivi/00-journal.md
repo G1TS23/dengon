@@ -1677,6 +1677,71 @@ partagé, pas les brouillons d'une même PR non encore mergée.
   appareils. Doze réel non testé sur aucun des deux (limite assumée,
   au-delà du critère d'acceptation qui demande « ≥ 5 min écran éteint »,
   pas Doze). Issue #9 refermée.
+## 2026-09-28 — US-201 : revue #80 (Paul), le TTL sort de la signature
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/protocol/codec/mod.rs`,
+`src/protocol/mod.rs`, `tests/codec_proptest.rs`, `tests/protocol_vectors.rs`,
+`docs/synthese/05-protocole-et-trame.md` §3
+**Lot :** US-201 (#15), PR #80
+
+### Fait
+- **Bug bloquant signalé par Paul** (commentaire en ligne sur `signed_len`) :
+  la zone signée incluait l'octet `ttl`, que chaque relais décrémente → un
+  paquet signé (`ANNOUNCE`, `SEALED_ENVELOPE`, `LOG_ATTEST`, `INVENTORY`…)
+  ne se vérifiait plus après un saut. C'était le « constat non tranché »
+  consigné plus tôt aujourd'hui dans `03-ecarts-conception.md`.
+- `signed_len` (public) **remplacé** par deux fonctions qui produisent les
+  octets normalisés, `ttl` (offset `TTL_OFFSET = 2`) à 0 :
+  `signing_input(&Packet)` côté émission, `received_signing_input(&[u8])`
+  côté réception (sur les octets **reçus**, pour conserver un bit réservé
+  posé par un pair plus récent). `signed_len` reste en privé.
+- `encode_into` découpé en `check_encodable` + `write_header_and_payload`,
+  partagés avec `signing_input` (qui ignore le champ `signature`, puisqu'il
+  sert à la calculer, mais exige `SIGNED`).
+- Tests : 3 unitaires (entrée identique après décrémentation du TTL ; le reste
+  de l'en-tête reste couvert ; bit réservé reçu conservé ; paquet non signé →
+  `None` / `SignatureMismatch`), 1 property (émetteur et récepteur calculent
+  la même entrée pour **tout** TTL reçu), vecteurs `accept` signés contrôlés.
+- `synthese/05` §3 : la zone signée exclut le TTL. `powl/03` non modifié
+  (matière première figée, cf. `CLAUDE.md`).
+
+### Pourquoi / décisions
+- Option (a) du constat, proposée par Paul en revue (même choix que
+  bitchat) : `ttl` mis à 0 plutôt que retiré de la zone (b), pour garder une
+  entrée de même longueur et de même disposition que le paquet.
+- Contrepartie assumée : le TTL n'est plus protégé ; un relais malveillant
+  peut le remonter. Borné par la dédup du seen-set (`SEEN_TTL_S`), qui empêche
+  un même `msgID` d'être relayé deux fois par un nœud honnête.
+
+### Écarts vs conception
+- L'entrée « Constat (non tranché) » de `03-ecarts-conception.md` reçoit une
+  mise à jour : tranché, option (a). `synthese/05` corrigé.
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- US-203 (Ed25519) signera/vérifiera `signing_input` /
+  `received_signing_input`, pas les octets bruts.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+Finished (0 warning)
+$ cargo check -p dengon-core --no-default-features --locked
+Finished
+$ cargo test --workspace --all-features --locked
+dengon-core : 34 unit + 7 proptest + 7 vecteurs, tous verts ; reste du workspace vert
+```
+- Mutation : suppression de la mise à 0 du TTL dans `received_signing_input`
+  → détectée (`entree_de_signature_survit_au_relais` échoue).
+- Couverture toujours non mesurée localement (`cargo-llvm-cov` absent).
+
+---
+
 ## 2026-09-28 — US-201 : `protocol::codec`, encode/decode L3 + frames L4, property tests
 
 **Auteur :** OswinFreyr + Claude (Opus 5.5)
