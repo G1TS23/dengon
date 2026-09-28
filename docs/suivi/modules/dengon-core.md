@@ -619,6 +619,10 @@ encore le codec (US-201).
   3 voisins → **60 relais, 120 trames**.
 - Commande (2026-09-28, US-209) : `cargo test -p dengon-core` → **86 passés**
   (74 lib + 4 `protocol_vectors` + 8 `routing_mock`).
+  Après rebase de la PR #85 sur `main` (avec `crypto`, `identity`, codec,
+  `sync::status`) : **264 passés** (226 lib + 7 `codec_proptest` + 2
+  `crypto_vectors` + 3 `identity_vectors` + 7 `protocol_vectors` + 8
+  `routing_mock`), 2 ignorés (générateurs), 0 échec.
 - Couverture `cargo llvm-cov -p dengon-core --summary-only` (2026-09-28) :
   `sync/routing.rs` **99,16 % des lignes**, 98,17 % des régions ; total
   crate 97,69 % des lignes.

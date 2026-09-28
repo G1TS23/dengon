@@ -10,6 +10,47 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-209 : rebase de la PR #85 sur `main` (après #84)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/sync/mod.rs}`,
+`Cargo.lock`, `docs/suivi/`
+**Lot :** US-209 (#23), PR #85 — branche `feat/US-209-routing`
+
+### Fait
+- `git rebase origin/main` des deux commits de la PR. Conflits résolus :
+  - `crates/dengon-core/Cargo.toml` : dev-dependencies de `main` gardées
+    (`rand_chacha`, `proptest`/`serde_json` en `workspace = true`) +
+    `dengon-ble` (US-209) ajouté.
+  - `crates/dengon-core/src/lib.rs` : doc de module fusionnée (`sync` livre
+    `status` US-211 et `routing` US-209).
+  - `crates/dengon-core/src/sync/mod.rs` (ajouté des deux côtés) : table des
+    sous-modules de US-209 gardée, `status` rendu lien ; `pub mod routing;`
+    + `pub mod status;`.
+  - `Cargo.lock` : version de `main`, régénérée par `cargo`.
+  - `docs/suivi/modules/dengon-core.md` : 5 blocs fusionnés (état, arbre des
+    fichiers — une seule entrée `sync/`, dépendances de dev, tests, résumé
+    oral).
+- Fusions automatiques fautives corrigées à la main : ligne `dengon-core`
+  en double dans `02-avancement.md` (fusionnée, 50 %) et trois lignes
+  périmées dans `modules/_index.md`.
+
+### Vérifications
+```
+$ cargo test -p dengon-core   → 264 passés, 2 ignorés, 0 échec
+$ cargo clippy --workspace --all-targets -- -D warnings   → OK
+$ cargo fmt --all -- --check                               → OK
+$ cargo check -p dengon-core --no-default-features         → OK
+```
+
+### État après cette session
+- `tests/routing_mock.rs` garde son codec de test provisoire alors que le
+  vrai codec (US-201) est désormais sur `main` : bascule non faite ici.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non
+
+---
+
 ## 2026-09-28 — US-211 : rebase de la PR #84 sur `main` (après #76, #78, #80, #81, #82, #83)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
