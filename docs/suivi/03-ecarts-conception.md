@@ -351,6 +351,40 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-16 — US-112 : deux écarts vs `powl/09` omis du journal (retour de revue #66, point de Paul)
+
+- **Prévu :** [`docs/powl/09-data-model.md`](../powl/09-data-model.md) §1
+  annote `messages.body` d'un commentaire SQL `-- clair local uniquement`, et
+  marque `identity.priv_static` / `identity.priv_sign` comme `BLOB`
+  « (chiffré) », sans préciser le mécanisme de chiffrement.
+- **Réel :** `06-securite.md` §5.1 (US-112) traite les deux différemment :
+  `messages.body` est reclassé **XChaCha20-Poly1305 champ par champ** (B-3),
+  le commentaire `powl/09` étant réinterprété comme décrivant le *contenu*
+  (texte déchiffré côté app) et non l'état de chiffrement au repos ; et
+  `identity.priv_static`/`priv_sign` sont confiées au **stockage de clés du
+  téléphone (Keystore/Keychain, Android/iOS)** plutôt qu'à un chiffrement
+  logiciel générique (XChaCha20 comme les autres colonnes sensibles) — c'est
+  le mécanisme qui change, pas le fait qu'elles soient chiffrées.
+- **Raison :** B-3 (chiffrement champ par champ des données sensibles) est une
+  décision postérieure à `powl/09`, qui ne pouvait pas l'anticiper ; et les
+  clés privées d'identité justifient le coffre matériel de la plateforme
+  plutôt qu'un chiffrement logiciel générique — c'est *le* cas d'usage du
+  Keystore.
+- **Conséquences :** aucune régression — les deux reclassements sont des
+  renforcements (chiffrement au repos de `messages.body` ; clés privées dans
+  le coffre matériel au lieu d'un chiffrement logiciel), pas des
+  affaiblissements, de ce que `powl/09` décrivait.
+  L'erreur signalée par Paul n'est pas dans le contenu de `06-securite.md`
+  (correct dès la PR initiale) mais dans **le journal** : les deux entrées du
+  2026-09-11 pour US-112 déclarent toutes deux « Écarts vs conception :
+  Aucun », alors que ces deux reclassements en sont, et auraient dû être
+  consignés ici dès leur rédaction plutôt que découverts en revue.
+- **Doc de conception mise à jour ?** non — `docs/powl/` reste inchangé par
+  convention (matière première figée) ; `06-securite.md` (le delta) portait
+  déjà la bonne information, seul le suivi (`00-journal.md`) était en faute.
+
+---
+
 ### 2026-09-10 — Vecteurs de conformité v0 dans `crates/dengon-core/tests/`, pas `contracts/packet/` (US-108)
 
 - **Prévu :** l'US-108 demande « un fichier partagé, consommé par le core, le
@@ -542,6 +576,41 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-20 — `dengon-ffi` v0 (US-106) : identité/QR/code de vérification sans vraie cryptographie
+
+- **Prévu :** [`docs/synthese/06-securite.md`](../synthese/06-securite.md)
+  décrit `peer_id = SHA-256(pub_static)[0..8]`, des clés X25519/Ed25519
+  réelles, un QR `dengon:v1:<base64url(...)>` avec de vraies clés publiques,
+  et un code de vérification 60 chiffres dérivé de
+  `SHA-512(min(fpA,fpB)‖max(fpA,fpB))`.
+- **Réel :** `crates/dengon-ffi/src/lib.rs` (`generate_identity`,
+  `verification_code`) et `android/.../ffi/DengonNodeStub.kt`
+  (`DengonIdentity`) produisent des octets **déterministes mais non
+  cryptographiques** (XOR du pseudo pour les « clés », FNV-1a pour le code de
+  vérification). Le format (types, `dengon:v1:` + base64url, 12 groupes de 5
+  chiffres) est bien celui de la conception ; le contenu ne l'est pas.
+- **Raison :** l'US-106 est un contrat FFI (`.udl` + bouchon), pas l'US
+  crypto. `dengon-core::identity`/`crypto` n'existent pas encore (US-108,
+  US-203, US-205, tous en sprint 2/S2). Or la DoR de l'US-106 exige un
+  bouchon qui **renvoie des valeurs typées exploitables par l'UI**
+  (US-214/US-215) dès maintenant — attendre la vraie crypto aurait bloqué
+  tout le sprint 2 côté Android sur le sprint 2 côté Rust, exactement ce que
+  le contrat gelé est censé éviter.
+- **Conséquences :** le format des types FFI est stable et peut être
+  développé contre dès maintenant. Le **contenu** des identités/codes générés
+  aujourd'hui est sans valeur de sécurité et **change complètement** quand
+  `identity`/`crypto` seront branchés (US-108/US-203/US-205 puis US-301/302) —
+  aucun test ni donnée canned actuelle ne doit être considéré comme un
+  vecteur de test cryptographique. Les implémentations Rust et Kotlin sont
+  volontairement **indépendantes** (pas le même algorithme, pas le même
+  résultat numérique pour la même identité) : documenté en commentaire des
+  deux côtés pour éviter la confusion le jour où on les compare.
+- **Doc de conception mise à jour ?** non — `06-securite.md` reste la cible
+  réelle. Le point est documenté dans `modules/dengon-ffi.md` et l'entrée de
+  journal du 2026-09-20.
+
+---
+
 ### `TransportConfig` et `LinkId` sont inventés ici, sans référence de conception
 
 - **Conception :** `04-architecture.md` §3 **les nomme** dans la signature du
@@ -598,3 +667,98 @@ _(aucun écart pour l'instant)_
 - **Conséquences :** bande passante, churn et dérive d'horloge à ajouter avec
   les scénarios qui en ont besoin.
 - **Doc de conception mise à jour ?** non.
+### `store` : clé de chiffrement différée derrière un trait `KeySource` (US-207)
+
+- **Conception :** `04-architecture.md` §2 dit `store : persistance ...
+  chiffrement XChaCha20-Poly1305 champ par champ des colonnes sensibles
+  (B-3)` — dépend de `rusqlite`. `docs/synthese/06-securite.md` (et le
+  tableau repris en `03-ecarts-conception.md` pour l'US-112) attend que la
+  clé privée du nœud (donc, transitivement, celle qui protège les colonnes
+  chiffrées) vive de préférence en Keystore/Keychain, gérée par `identity`.
+- **Code :** `crates/dengon-core/src/store.rs` — `Store<K: KeySource>` est
+  paramétré par un trait `KeySource` (une méthode `field_key(&self) -> [u8;
+  32]`), pas câblé sur une vraie dérivation Keystore/Keychain.
+  `FixedKeySource` (clé fixe codée en dur) sert de bouchon pour les tests.
+- **Pourquoi :** `identity` (US-205), qui génère et garde la vraie clé, est
+  dans le **même sprint** (S2) que `store` (US-207) — même raison que
+  l'écart symétrique sur `ledger::Signer` (US-206, voir l'entrée
+  précédente) : la règle du projet interdit qu'une US dépende d'une autre
+  US du même sprint. Les deux US sont d'ailleurs attribuées à des personnes
+  différentes ce sprint (`docs/suivi/repartition-sprint2.md`).
+- **Conséquences :** le **mécanisme** de chiffrement est réel et vérifié
+  (XChaCha20-Poly1305, nonce aléatoire par appel, test négatif qui prouve
+  qu'un message écrit n'apparaît pas en clair dans le fichier `.db`) — ce
+  n'est pas un bouchon qui ne chiffre rien. Ce qui est un bouchon, c'est la
+  **clé** : `FixedKeySource` est une clé fixe, connue de quiconque lit le
+  code source. Tant qu'`identity` ne fournit pas une vraie clé dérivée
+  (idéalement jamais lisible en clair par l'application elle-même, via
+  Keystore/Keychain), les colonnes chiffrées ne protègent que contre une
+  lecture accidentelle du fichier `.db`, pas contre un attaquant qui a lu
+  le code source.
+- **Doc de conception mise à jour ?** Non — la conception reste la cible
+  réelle (clé dérivée, gérée par `identity`/Keystore). Documenté ici et
+  dans `modules/dengon-core.md`.
+### `ledger` : signature différée derrière un trait `Signer` (US-206)
+
+- **Conception :** `04-architecture.md` §2 dit `ledger : append(event) ->
+  Entry, verify_chain(), export(range)` — dépend de `crypto`. Chaque entrée
+  du journal (`docs/powl/09-data-model.md` §1) porte un champ `sig` (Ed25519,
+  64 o).
+- **Code :** `crates/dengon-core/src/ledger.rs` — `Ledger<S: Signer>` est
+  paramétré par un trait `Signer` (une méthode `sign(&mut self, message:
+  &[u8]) -> Signature`), pas câblé sur `ed25519-dalek` ou toute autre
+  implémentation concrète. `NullSigner` (signature à zéro) sert de bouchon
+  pour les tests. `verify_chain()` ne vérifie **pas** la signature — il ne
+  vérifie que la chaîne de hash et l'absence de trou/fork.
+- **Pourquoi :** `crypto` (US-203, Ed25519) est dans le **même sprint**
+  (S2) que `ledger` (US-206), et la règle du projet interdit qu'une US
+  dépende d'une autre US du même sprint (`docs/olivier/proposition-organisation-github.md`
+  §5.2). Attendre `crypto` aurait bloqué `ledger` sans raison de fond — les
+  deux US sont attribuées à des personnes différentes ce sprint (voir
+  `docs/suivi/repartition-sprint2.md`) et n'ont aucune raison de se
+  séquencer.
+- **Conséquences :** la **forme** du contrat (un champ `sig` de 64 octets
+  par entrée, une méthode qui vérifie la chaîne) est déjà correcte et
+  stable. Le **contenu** cryptographique ne l'est pas : une entrée signée
+  par `NullSigner` ne prouve rien, et `verify_chain() == Verdict::Ok`
+  aujourd'hui ne garantit **que** l'intégrité du hash-chaînage, pas
+  l'authenticité de l'auteur. Quand `crypto` livrera une vraie
+  implémentation `Signer` (Ed25519), elle se branchera sur `Ledger<S>` sans
+  changer sa forme — et `verify_chain()` devra alors être étendue pour
+  vérifier la signature de chaque entrée, ce qui n'est pas fait ici.
+- **Doc de conception mise à jour ?** Non — la conception reste la cible
+  réelle (signature Ed25519 vérifiée). Le point est documenté ici et dans
+  `modules/dengon-core.md` (« Décisions d'implémentation » et « Limites
+  connues »).
+
+---
+
+### `ledger::verify_chain()` ne peut pas re-vérifier un export partiel (US-206, retour de revue #75)
+
+- **Conception :** `04-architecture.md` §2 dit `ledger : ... export(range)`
+  et `dengon-verify` (`crates/dengon-verify/src/main.rs`, doc de module)
+  affiche l'intention de « lire un export de journal ... et rendre l'un des
+  quatre verdicts ».
+- **Code :** `Ledger::export(range)` renvoie n'importe quelle tranche
+  `seq ∈ range` des entrées en mémoire. `Ledger::verify_chain()`, lui,
+  suppose toujours que la chaîne fournie démarre à `seq = 0` avec
+  `prev_hash == GENESIS_HASH` : reconstruire un `Ledger` via
+  `from_entries()` à partir d'un export dont `range` ne commence pas à 0
+  (ex. `export(3..6)`) fait donc rapporter `Gap` ou `Broken` par
+  `verify_chain()`, même si la tranche exportée est parfaitement intègre.
+- **Pourquoi :** au moment d'écrire `ledger`, il n'existait aucun appelant
+  réel de `export()` en dehors des tests (`dengon-verify::main` n'est pas
+  encore implémenté) — la question « comment vérifier une tranche qui ne
+  part pas de la genèse » n'avait donc pas de cas d'usage concret pour
+  trancher la bonne API (un point d'ancrage en paramètre de
+  `verify_chain` ? un `export` qui redémarre sa propre chaîne de hash
+  depuis l'ancre ?).
+- **Conséquences :** tant que `dengon-verify` (ou tout autre appelant) n'a
+  besoin que de vérifier un export **complet** depuis `seq = 0` (le cas
+  couvert par les tests actuels), rien n'est cassé. Le jour où un besoin
+  réel de vérifier un export partiel apparaît (ex. le dashboard ne
+  redemande que les entrées manquantes plutôt que tout le journal),
+  `verify_chain()` devra être étendu avant de pouvoir servir tel quel.
+- **Doc de conception mise à jour ?** Non — documenté ici et dans le
+  docstring d'`export()` (`src/ledger.rs`), à trancher quand
+  `dengon-verify` aura un vrai appelant.

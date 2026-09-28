@@ -1,0 +1,8 @@
+# Configuration des bindings UniFFI générés (US-302).
+#
+# Paquet Kotlin identique à celui du bouchon écrit à la main
+# (android/app/src/main/java/com/dengon/app/ffi/) : les bindings générés
+# remplaceront DengonTypes.kt / DengonNodeStub.kt sans changer les imports de
+# l'UI (revue PR #69, Paul).
+[bindings.kotlin]
+package_name = "com.dengon.app.ffi"

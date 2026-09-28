@@ -16,10 +16,24 @@
 //! `alloc` pour la cible ESP32. La feature `std` est activée par défaut ; la
 //! CI lance `cargo check -p dengon-core --no-default-features` pour détecter
 //! toute dépendance à `std` qui se serait glissée par inadvertance.
+//!
+//! # État
+//!
+//! Squelette livré par l'US-104. `protocol` livré par l'US-108. `ledger`
+//! livré par l'US-206. `store` livré par l'US-207.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+// `alloc` est nécessaire en no_std pour `Vec`/`String` (utilisés par
+// `ledger`) ; en mode `std`, `alloc` est déjà réexporté par la libstd, donc
+// cette déclaration ne coûte rien et le code de `ledger` reste identique
+// dans les deux configurations.
+extern crate alloc;
+
+pub mod ledger;
 pub mod protocol;
+#[cfg(feature = "std")]
+pub mod store;
 
 /// Version du protocole dengon implémentée par cette crate.
 ///
