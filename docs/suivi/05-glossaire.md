@@ -108,3 +108,4 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Signature malléable** | Signature valide qu'on peut transformer en une autre signature valide du même message. Refusée par `verify_strict`. |
 | **Graine (seed) / déterminisme** | Valeur de départ du générateur pseudo-aléatoire. Même graine → mêmes tirages → même exécution. C'est ce qui rend un scénario de `dengon-sim` rejouable à l'identique (US-221). |
 | **Empreinte de trace** | Hachage (FNV-1a 64 bits) de toute la trace d'une simulation. Deux exécutions à même graine doivent avoir la même empreinte : c'est ce que compare le job CI `sim`. |
+| **Property test** | Test qui vérifie une **propriété** (ex. « décoder(encoder(p)) = p ») sur des centaines d'entrées générées au hasard, plutôt que sur quelques exemples écrits à la main. En cas d'échec, l'outil (`proptest`) réduit l'entrée au plus petit contre-exemple. Utilisé pour le codec (US-201). |

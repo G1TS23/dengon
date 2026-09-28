@@ -777,3 +777,20 @@ vérifié qu'altérer un octet fait bien échouer les tests.
 
 **Où c'est utilisé :** `crates/dengon-core/src/crypto.rs`
 (`VerifyingKey::verify`, tests `cle_de_faible_ordre_*` et `kat_rfc8032_*`).
+### `core::error::Error` existe en `no_std` depuis Rust 1.81
+
+**C'est quoi :** le trait `Error` a longtemps vécu seulement dans `std`
+(`std::error::Error`). Depuis Rust 1.81 il est aussi dans `core`, et
+`std::error::Error` n'en est plus qu'un ré-export.
+
+**Pourquoi dans dengon :** `dengon-core` doit compiler en `no_std` pour
+l'ESP32. Les erreurs du codec (`DecodeError`, `EncodeError`, `AppDecodeError`)
+implémentent `core::error::Error` : elles restent utilisables avec `?` et
+`Box<dyn Error>` côté Android/CLI, sans feature `std` conditionnelle.
+
+**Piège / surprise :** beaucoup d'exemples en ligne mettent encore
+`#[cfg(feature = "std")] impl std::error::Error for …` — c'est inutile avec
+notre MSRV (1.85) et ça crée deux variantes de l'API selon la feature.
+
+**Où c'est utilisé :** `crates/dengon-core/src/protocol/codec/mod.rs`,
+`codec/app.rs`.

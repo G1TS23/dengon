@@ -5,17 +5,22 @@
 
 //! Contrôle des vecteurs de conformité v0 (`tests/vectors_v0.json`).
 //!
-//! US-108 ne livre **pas** de décodeur (`protocol::codec` = US-201). Ce test
-//! vérifie donc la **cohérence structurelle** des vecteurs : chaque octet
-//! `accept` doit correspondre à ses `expect` en s'appuyant sur
-//! `dengon_core::protocol::{consts, types}`, et chaque octet `reject` doit
-//! violer au moins une règle du format. US-201 branchera le vrai décodeur sur
-//! ce même fichier ; le job `cross-vectors` (US-222) le partagera avec le
-//! firmware et le dashboard.
+//! Deux niveaux :
+//!
+//! - **cohérence structurelle** des vecteurs (US-108, avant tout décodeur) :
+//!   chaque octet `accept` correspond à ses `expect` en s'appuyant sur
+//!   `dengon_core::protocol::{consts, types}`, chaque octet `reject` viole au
+//!   moins une règle du format (détecteur de référence `is_rejected`) ;
+//! - **vrai décodeur** `protocol::codec` (US-201) : `decode` accepte chaque
+//!   vecteur `accept` avec exactement les champs `expect`, refuse chaque
+//!   vecteur `reject`, et `encode` reproduit les octets.
+//!
+//! Le job `cross-vectors` (US-222) partagera ce fichier avec le firmware et le
+//! dashboard.
 
 use dengon_core::protocol::{
     consts::{HEADER_LEN_ADDRESSED, HEADER_LEN_BROADCAST, PROTO_VERSION, SIGNATURE_LEN},
-    Flags, Header, PacketType,
+    decode, encode, received_signing_input, Flags, Header, PacketType, TTL_OFFSET,
 };
 use serde_json::Value;
 
@@ -260,4 +265,116 @@ fn inventory_a_le_type_0x0d() {
         .find(|v| v["name"] == "inventory-addressed-signed")
         .expect("vecteur inventory présent");
     assert_eq!(hex(inv["hex"].as_str().unwrap())[1], 0x0D);
+}
+
+// --- US-201 : vrai décodeur --------------------------------------------------
+
+#[test]
+fn decode_accepte_les_vecteurs_accept_avec_les_champs_attendus() {
+    let doc: Value = serde_json::from_str(VECTORS_JSON).expect("JSON invalide");
+    for v in doc["accept"].as_array().expect("champ accept") {
+        let name = v["name"].as_str().unwrap();
+        let raw = hex(v["hex"].as_str().unwrap());
+        let e = &v["expect"];
+        let p = decode(&raw).unwrap_or_else(|err| panic!("{name}: refusé ({err})"));
+        let h = &p.header;
+
+        assert_eq!(
+            u64::from(h.version),
+            e["version"].as_u64().unwrap(),
+            "{name}"
+        );
+        assert_eq!(
+            u64::from(h.packet_type.to_u8()),
+            e["type"].as_u64().unwrap(),
+            "{name}: type"
+        );
+        assert_eq!(
+            format!("{:?}", h.packet_type),
+            e["type_name"].as_str().unwrap(),
+            "{name}: type_name"
+        );
+        assert_eq!(u64::from(h.ttl), e["ttl"].as_u64().unwrap(), "{name}: ttl");
+        assert_eq!(
+            u64::from(h.flags.bits()),
+            e["flags"].as_u64().unwrap(),
+            "{name}: flags (bits réservés masqués)"
+        );
+        assert_eq!(
+            h.flags.contains(Flags::ADDRESSED),
+            e["addressed"].as_bool().unwrap(),
+            "{name}: addressed"
+        );
+        assert_eq!(
+            p.signature.is_some(),
+            e["signed"].as_bool().unwrap(),
+            "{name}: signed"
+        );
+        assert_eq!(
+            h.flags.contains(Flags::FRAGMENT),
+            e["fragment"].as_bool().unwrap(),
+            "{name}: fragment"
+        );
+        assert_eq!(
+            h.sender_id.as_slice(),
+            hex(e["sender_id"].as_str().unwrap()).as_slice(),
+            "{name}: sender_id"
+        );
+        assert_eq!(
+            h.recipient_id.map(|r| r.to_vec()),
+            e["recipient_id"].as_str().map(hex),
+            "{name}: recipient_id"
+        );
+        assert_eq!(
+            u64::from(h.payload_len),
+            e["payload_len"].as_u64().unwrap(),
+            "{name}: payload_len"
+        );
+        assert_eq!(
+            p.payload,
+            hex(e["payload"].as_str().unwrap()),
+            "{name}: payload"
+        );
+        if let Some(sig) = &p.signature {
+            let signed_end = raw.len() - SIGNATURE_LEN;
+            assert_eq!(&raw[signed_end..], sig.as_slice(), "{name}: signature");
+            // Entrée de signature = octets avant la signature, ttl à 0.
+            let mut expected = raw[..signed_end].to_vec();
+            expected[TTL_OFFSET] = 0;
+            assert_eq!(
+                received_signing_input(&raw).unwrap(),
+                Some(expected),
+                "{name}: entrée de signature"
+            );
+        }
+    }
+}
+
+#[test]
+fn encode_reproduit_les_vecteurs_accept() {
+    let doc: Value = serde_json::from_str(VECTORS_JSON).expect("JSON invalide");
+    for v in doc["accept"].as_array().expect("champ accept") {
+        let name = v["name"].as_str().unwrap();
+        let raw = hex(v["hex"].as_str().unwrap());
+        let again = encode(&decode(&raw).unwrap()).unwrap();
+        // Seule différence admise : un bit réservé reçu est masqué au
+        // décodage, donc absent du ré-encodage (synthese/05:80).
+        let mut expected = raw.clone();
+        expected[3] &= !Flags::RESERVED_MASK;
+        assert_eq!(again, expected, "{name}: ré-encodage");
+    }
+}
+
+#[test]
+fn decode_refuse_les_vecteurs_reject() {
+    let doc: Value = serde_json::from_str(VECTORS_JSON).expect("JSON invalide");
+    for v in doc["reject"].as_array().expect("champ reject") {
+        let name = v["name"].as_str().unwrap();
+        let raw = hex(v["hex"].as_str().unwrap());
+        assert!(
+            decode(&raw).is_err(),
+            "{name}: accepté par decode alors qu'il viole « {} »",
+            v["reject"].as_str().unwrap_or("?")
+        );
+    }
 }

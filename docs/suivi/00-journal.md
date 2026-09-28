@@ -1677,6 +1677,164 @@ partagé, pas les brouillons d'une même PR non encore mergée.
   appareils. Doze réel non testé sur aucun des deux (limite assumée,
   au-delà du critère d'acceptation qui demande « ≥ 5 min écran éteint »,
   pas Doze). Issue #9 refermée.
+
+---
+
+## 2026-09-28 — US-201 : revue #80 (Paul), le TTL sort de la signature
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/protocol/codec/mod.rs`,
+`src/protocol/mod.rs`, `tests/codec_proptest.rs`, `tests/protocol_vectors.rs`,
+`docs/synthese/05-protocole-et-trame.md` §3
+**Lot :** US-201 (#15), PR #80
+
+### Fait
+- **Bug bloquant signalé par Paul** (commentaire en ligne sur `signed_len`) :
+  la zone signée incluait l'octet `ttl`, que chaque relais décrémente → un
+  paquet signé (`ANNOUNCE`, `SEALED_ENVELOPE`, `LOG_ATTEST`, `INVENTORY`…)
+  ne se vérifiait plus après un saut. C'était le « constat non tranché »
+  consigné plus tôt aujourd'hui dans `03-ecarts-conception.md`.
+- `signed_len` (public) **remplacé** par deux fonctions qui produisent les
+  octets normalisés, `ttl` (offset `TTL_OFFSET = 2`) à 0 :
+  `signing_input(&Packet)` côté émission, `received_signing_input(&[u8])`
+  côté réception (sur les octets **reçus**, pour conserver un bit réservé
+  posé par un pair plus récent). `signed_len` reste en privé.
+- `encode_into` découpé en `check_encodable` + `write_header_and_payload`,
+  partagés avec `signing_input` (qui ignore le champ `signature`, puisqu'il
+  sert à la calculer, mais exige `SIGNED`).
+- Tests : 3 unitaires (entrée identique après décrémentation du TTL ; le reste
+  de l'en-tête reste couvert ; bit réservé reçu conservé ; paquet non signé →
+  `None` / `SignatureMismatch`), 1 property (émetteur et récepteur calculent
+  la même entrée pour **tout** TTL reçu), vecteurs `accept` signés contrôlés.
+- `synthese/05` §3 : la zone signée exclut le TTL. `powl/03` non modifié
+  (matière première figée, cf. `CLAUDE.md`).
+
+### Pourquoi / décisions
+- Option (a) du constat, proposée par Paul en revue (même choix que
+  bitchat) : `ttl` mis à 0 plutôt que retiré de la zone (b), pour garder une
+  entrée de même longueur et de même disposition que le paquet.
+- Contrepartie assumée : le TTL n'est plus protégé ; un relais malveillant
+  peut le remonter. Borné par la dédup du seen-set (`SEEN_TTL_S`), qui empêche
+  un même `msgID` d'être relayé deux fois par un nœud honnête.
+
+### Écarts vs conception
+- L'entrée « Constat (non tranché) » de `03-ecarts-conception.md` reçoit une
+  mise à jour : tranché, option (a). `synthese/05` corrigé.
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- US-203 (Ed25519) signera/vérifiera `signing_input` /
+  `received_signing_input`, pas les octets bruts.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+Finished (0 warning)
+$ cargo check -p dengon-core --no-default-features --locked
+Finished
+$ cargo test --workspace --all-features --locked
+dengon-core : 34 unit + 7 proptest + 7 vecteurs, tous verts ; reste du workspace vert
+```
+- Mutation : suppression de la mise à 0 du TTL dans `received_signing_input`
+  → détectée (`entree_de_signature_survit_au_relais` échoue).
+- Couverture toujours non mesurée localement (`cargo-llvm-cov` absent).
+
+---
+
+## 2026-09-28 — US-201 : `protocol::codec`, encode/decode L3 + frames L4, property tests
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/protocol/codec/{mod.rs, app.rs}` (nouveaux),
+`src/protocol/mod.rs`, `src/lib.rs`, `Cargo.toml` (+ `proptest` en dev),
+`tests/codec_proptest.rs` (nouveau), `tests/protocol_vectors.rs`, `Cargo.lock`
+**Lot :** US-201 (#15), branche `feat/US-201-protocol-codec`
+
+### Fait
+- **`protocol::codec`** (`src/protocol/codec/mod.rs`) : `Packet { header,
+  payload, signature }`, `encode` / `encode_into` / `decode`, `signed_len`.
+  `decode` ne panique sur aucune entrée (curseur `Reader` qui renvoie `None`
+  hors bornes, aucun indexage direct) et renvoie une `DecodeError` typée
+  (`Truncated`, `UnsupportedVersion`, `UnknownType`, `LengthMismatch`,
+  `Rule(FrameRule)`). `encode` refuse tout `Packet` que `decode` ne
+  rendrait pas à l'identique (`EncodeError`).
+- **Frames L4** (`src/protocol/codec/app.rs`) : `AppFrame::{Message, Ack}`,
+  `MessageFrame`, `AckFrame`, `encode_app_frame` / `decode_app_frame`
+  (`synthese/05` §4.1). `ReadReceipt` (v2) et `Profile` (post-MVP) refusés
+  (`UnsupportedKind`) sans deviner leur format.
+- **Vecteurs v0 branchés sur le vrai décodeur** (`tests/protocol_vectors.rs`,
+  3 tests ajoutés) : les 8 `accept` décodent avec exactement leurs `expect`,
+  se ré-encodent à l'identique (au bit réservé masqué près), les 5 `reject`
+  sont refusés. Les 4 tests structurels d'US-108 sont conservés.
+- **Property tests** (`tests/codec_proptest.rs`, `proptest`, 512 cas) :
+  `decode(encode(p)) == p` sur les 13 types ; tout préfixe strict refusé ;
+  octet muté / octets arbitraires → jamais de panic ; round-trip `AppFrame`.
+- `extern crate alloc` dans `lib.rs` : `Vec`/`String` du codec en `no_std`.
+
+### Pourquoi / décisions
+- **`decode` applique les colonnes `ADDRESSED`/`SIGNED` de `synthese/05` §4**
+  (`FrameRule`), en plus de la forme. Raison de sécurité : le pipeline §6.1
+  ne vérifie la signature que « si SIGNED » ; sans ce contrôle, retirer le
+  bit `SIGNED` d'un `ANNOUNCE` forgé (et tronquer la signature) contournait
+  la vérification. Test : `decode_refuse_announce_sans_signed`.
+- **`FRAGMENT` ⇔ type `0x09`** imposé dans les deux sens : précision de la
+  spec, consignée dans `03-ecarts-conception.md`.
+- **Pas d'anti-rejeu, de contrôle TTL ni de filtre MVP dans `decode`** : ce
+  sont des règles de `sync::routing` (pipeline §6.1). C'est aussi ce qui
+  lève la limite notée en US-108 (« un décodeur qui appliquerait l'anti-rejeu
+  rejetterait les 8 vecteurs `accept` ») : le codec est une fonction pure,
+  sans horloge.
+- **Signature vérifiée sur les octets reçus, pas sur un ré-encodage** :
+  `decode` masque les bits réservés (`from_bits_truncate`, `synthese/05:80`),
+  un ré-encodage ne reproduirait donc pas les octets signés d'un pair v1.1.
+  `signed_len(&header)` donne la borne ; documenté en tête de module.
+- **Types v2 (`GOSSIP_*`) décodés** : c'est un format, pas une politique ;
+  `PacketType::is_mvp()` reste le filtre, côté routage.
+- `AckStatus::Read` (v2) décodé : l'enum d'US-108 le porte déjà ; le refus
+  éventuel relève de `sync::status` (US-211).
+
+### Écarts vs conception
+- 2 entrées dans `03-ecarts-conception.md` : précision `FRAGMENT` ⇔ `0x09` ;
+  **incohérence de conception constatée** : la signature couvre l'octet
+  `ttl`, qu'un relais décrémente (non tranché ici, voir l'entrée).
+
+### Appris
+- `core::error::Error` utilisable en `no_std` (stable depuis 1.81) → ajouté
+  à `04-apprentissages.md`.
+
+### État après cette session
+- US-201 : les 5 critères d'acceptation sont couverts, sauf la mesure de
+  couverture (voir « Vérification »).
+- Débloque US-202 (fragmentation), qui s'écrira contre `Packet`/`encode`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non (l'avancement est suivi dans
+  `02-avancement.md`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+Finished (0 warning)
+$ cargo check -p dengon-core --no-default-features --locked
+Finished
+$ cargo test --workspace --all-features --locked
+dengon-core : 31 unit + 6 proptest + 7 vecteurs, tous verts ; reste du workspace vert
+$ RUSTDOCFLAGS="-D warnings" cargo doc -p dengon-core --no-deps
+3 erreurs « unresolved link » : protocol/mod.rs:3-4 et consts.rs:3,
+  préexistantes (même résultat sur main sans ce diff), aucune dans codec/
+```
+- **Mutations manuelles** (chaque mutant appliqué puis annulé) : bits
+  réservés non masqués, `check_rules` retiré du décodage, `payload_len` en
+  little-endian, octets en trop acceptés → **4/4 détectés** par la suite.
+- **Couverture ≥ 85 % non mesurée localement** : `cargo-llvm-cov` n'est pas
+  installé sur ce poste. À lire dans le résumé du job CI `core` (qui lance
+  `cargo llvm-cov`).
+
+---
+
 ## 2026-09-28 — `contracts/events` : round 5 de revue (OswinFreyr) sur la PR #60
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
