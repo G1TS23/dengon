@@ -10,6 +10,56 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-220 : retour de revue de la PR #101 — MTU enregistré par un seul chemin
+
+**Auteur :** Paul + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/transport_nimble.c`
+**Lot :** US-220 (#34), suite de la PR #101 (mergée avant ce correctif)
+
+### Fait
+- `on_mtu` (callback de `ble_gattc_exchange_mtu`, rôle central) n'appelle
+  plus `dengon_tc_link_set_mtu()` : il ne fait plus que journaliser un refus
+  et enchaîner sur la découverte du service. Le MTU d'un lien n'est désormais
+  enregistré **que** par `BLE_GAP_EVENT_MTU`, dans les deux rôles.
+
+### Pourquoi / décisions
+- Commentaire de revue (PR #101, `transport_nimble.c:658`) : le MTU était
+  réglé deux fois par connexion centrale. Pas un bogue (`set_mtu` est
+  idempotent), mais deux chemins pour une même donnée.
+- **Vérifié dans le code NimBLE de l'image épinglée avant de retirer
+  l'appel**, parce que le rôle central n'a jamais tourné sur carte :
+  `ble_att_clt_rx_mtu()` (`components/bt/host/nimble/nimble/nimble/host/src/ble_att_clt.c`)
+  appelle `ble_gap_mtu_event()` **puis** `ble_gattc_rx_mtu()`, qui déclenche
+  `on_mtu`. Le MTU est donc déjà sur le lien quand la découverte démarre.
+- Le second commentaire de la revue (rôle central jamais exercé contre un vrai
+  pair) n'appelle pas de correctif de code : c'est l'essai 2 cartes.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (ordre des événements NimBLE noté dans le commentaire du code).
+
+### État après cette session
+- Inchangé fonctionnellement. Essai 2 cartes toujours à faire.
+- Fiche(s) module mise(s) à jour : `modules/firmware-relay.md` (décision).
+- 01-etat-du-code.md mis à jour : non (plus à toucher).
+
+### Vérification (commandes réellement exécutées)
+```
+$ idf.py build   (firmware/dengon-relay)
+rc=0, 0 warning (-Werror sur main)
+
+$ idf.py build && ./build/test_dengon_transport_core.elf   (test_apps, cible linux)
+32 Tests 0 Failures 0 Ignored — OK
+```
+- **Non vérifié sur carte** : la carte n'était plus rattachée à WSL
+  (`/dev/ttyUSB0` absent) au moment du correctif. Le chemin périphérique
+  (`BLE_GAP_EVENT_MTU`, seul exercé par l'essai téléphone) n'est pas modifié ;
+  le chemin central ne l'a jamais été.
+
+---
+
 ## 2026-09-28 — US-217 : rebase de la PR #93 sur `main` (après #91, #99)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

@@ -507,15 +507,17 @@ on_mtu(uint16_t conn_handle, const struct ble_gatt_error *error, uint16_t mtu, v
 {
     int rc;
 
+    (void)mtu;
     (void)arg;
 
-    /* Un refus d'échange n'est pas fatal : on reste à 23 (20 octets utiles),
+    /* Le MTU n'est PAS enregistré ici : BLE_GAP_EVENT_MTU l'a déjà fait, et
+       c'est le seul chemin (il sert aussi au rôle périphérique). NimBLE émet
+       cet événement AVANT d'appeler ce callback (ble_att_clt_rx_mtu :
+       ble_gap_mtu_event() puis ble_gattc_rx_mtu()) : le lien porte donc déjà
+       le bon MTU quand la découverte démarre.
+       Un refus d'échange n'est pas fatal : on reste à 23 (20 octets utiles),
        le cœur fragmentera plus fin. */
-    if (error->status == 0) {
-        lock();
-        dengon_tc_link_set_mtu(&s_tc, conn_handle, mtu);
-        unlock();
-    } else {
+    if (error->status != 0) {
         ESP_LOGW(TAG, "conn=%u : échange MTU refusé (status=%d), on reste à 23",
                  conn_handle, error->status);
     }
@@ -655,6 +657,8 @@ gap_event(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_MTU:
+        /* SEUL endroit où le MTU d'un lien est enregistré, dans les deux
+           rôles : que l'échange vienne de nous (central) ou du pair. */
         lock();
         dengon_tc_link_set_mtu(&s_tc, event->mtu.conn_handle, event->mtu.value);
         unlock();

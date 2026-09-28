@@ -306,6 +306,9 @@ Deux cartes A (peerID `1a2b…`) et B (peerID `7f00…`) sont allumées :
 - **Codes HCI → motif** : seul ce qui est *annoncé* par le pair est « Propre ».
 - **Aucun appel NimBLE sous le verrou du cœur** : évite tout interblocage avec
   le verrou interne du host.
+- **Le MTU d'un lien n'est enregistré qu'à `BLE_GAP_EVENT_MTU`**, dans les
+  deux rôles. `on_mtu` (central) ne fait qu'enchaîner la découverte : NimBLE
+  émet l'événement GAP avant d'appeler ce callback (retour de revue PR #101).
 - **Contre-pression** : la file jette des trames entrantes, jamais un
   événement de cycle de vie (docs/synthese/08 §4).
 - **Démo désactivable** par Kconfig : `CONFIG_DENGON_TRANSPORT_DEMO`.
