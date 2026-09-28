@@ -745,6 +745,9 @@ _(aucun écart pour l'instant)_
   implémentation `Signer` (Ed25519), elle se branchera sur `Ledger<S>` sans
   changer sa forme — et `verify_chain()` devra alors être étendue pour
   vérifier la signature de chaque entrée, ce qui n'est pas fait ici.
+  **Mise à jour (US-203, retour de revue #78) :** `crypto::SigningKey`
+  implémente désormais `ledger::Signer` (test `signe_le_journal_chaine`).
+  `verify_chain()` ne vérifie toujours pas les signatures.
 - **Doc de conception mise à jour ?** Non — la conception reste la cible
   réelle (signature Ed25519 vérifiée). Le point est documenté ici et dans
   `modules/dengon-core.md` (« Décisions d'implémentation » et « Limites
@@ -781,3 +784,41 @@ _(aucun écart pour l'instant)_
 - **Doc de conception mise à jour ?** Non — documenté ici et dans le
   docstring d'`export()` (`src/ledger.rs`), à trancher quand
   `dengon-verify` aura un vrai appelant.
+
+---
+
+### Vérification Ed25519 stricte (`verify_strict`)
+
+- **Conception :** `06-securite.md` §8 impose `ed25519-dalek` v2 mais ne dit rien
+  du mode de vérification.
+- **Code :** `crates/dengon-core/src/crypto.rs`, `VerifyingKey::verify` appelle
+  `verify_strict`.
+- **Pourquoi :** `verify_strict` rejette en plus les clés de faible ordre et les
+  signatures malléables. Le journal chaîné est un objet d'audit : accepter deux
+  signatures distinctes d'un même message, ou une clé qui « valide » n'importe quoi,
+  serait un défaut. Constaté par test : le point neutre (`y = 1`) se décode sans
+  erreur mais ne valide aucune signature.
+- **Conséquences :** une implémentation tierce (dashboard Python, `dengon-verify`)
+  qui vérifierait en mode non strict acceptera des signatures que le cœur rejette,
+  jamais l'inverse. À garder en tête pour le job `cross-vectors` (US-222) : les
+  vecteurs partagés doivent inclure des cas de rejet.
+- **Doc de conception mise à jour ?** Non — à verser dans `06-securite.md` §8 si
+  l'équipe valide le choix.
+
+---
+
+### Signatures sur octets bruts, sans séparation de domaine
+
+- **Conception :** rien n'est spécifié. Les signatures portent sur des octets
+  bruts (préfixe de paquet, `entry_hash`, JSON canonique d'un batch). Le seul
+  préfixe de domaine de la conception est `"dengon-tag"` (HMAC `recipient_tag`, D-2).
+- **Code :** `SigningKey::sign(&self, message: &[u8])` signe exactement les octets
+  reçus.
+- **Pourquoi :** ne pas inventer un format de signature que ni le ledger (US-206)
+  ni le dashboard (US-216) n'attendent, sous peine de casser l'interopérabilité
+  entre Rust et Python.
+- **Conséquences :** c'est à l'appelant de garantir qu'un message signé pour un
+  usage (ex. batch) ne peut pas être rejoué comme un autre (ex. entrée de journal).
+  Aujourd'hui les formats sont assez distincts pour que ce soit peu probable, mais
+  ce n'est pas garanti par construction.
+- **Doc de conception mise à jour ?** Non — question ouverte à poser en réunion.

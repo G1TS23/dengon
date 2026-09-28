@@ -31,6 +31,14 @@ docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp \
 ```
 
 ```bash
+# dengon-core (protocol, crypto, ledger, store) — tests, lints, frontière no_std
+cargo test -p dengon-core
+cargo test -p dengon-core crypto::          # crypto seul (Ed25519, US-203)
+cargo clippy --workspace --all-targets -- -D warnings
+cargo check -p dengon-core --no-default-features
+```
+
+```bash
 # Labels du dépôt vs fichier versionné
 gh label list --limit 100 --json name,color,description
 

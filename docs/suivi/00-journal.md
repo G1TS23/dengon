@@ -10,6 +10,87 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-203 : `crypto`, rebase sur `main` et retours de revue de #78
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/crypto.rs`, `Cargo.toml`, `Cargo.lock`,
+`crates/dengon-core/Cargo.toml`, `crates/dengon-core/src/lib.rs`, `docs/suivi/`.
+**Lot :** US-203 (issue #17), PR #78. Branche `feat/US-203-crypto-ed25519`.
+
+### Fait
+
+- **Rebase sur `main`** (`a59905b`, qui contient US-108, US-106, US-206 et
+  US-207). Conflits résolus en gardant les deux côtés : `Cargo.toml`
+  (`ed25519-dalek` à côté de `rusqlite`/`chacha20poly1305`/`sha2`/`uniffi`),
+  `crates/dengon-core/Cargo.toml` (le `std = ["dep:rusqlite", "dep:chacha20poly1305"]`
+  de `store` est conservé), `lib.rs` (`pub mod crypto;` avant `ledger`),
+  `modules/dengon-core.md`. `Cargo.lock` régénéré par `cargo check`.
+- **Clippy (bloquant 1)** : `(i % 251) as u8` tombait sous `cast_possible_truncation`
+  (activé par US-108). Remplacé par `(0..=250u8).cycle().take(len).collect()`.
+- **Une seule source pour la signature (point 3)** : `crypto` réexporte
+  `protocol::{Signature, SIGNATURE_LEN}` au lieu de les redéfinir. Une assertion
+  de compilation garantit que `ledger::SIG_LEN` reste égal à `SIGNATURE_LEN`.
+- **`impl ledger::Signer for SigningKey`** : le raccord prévu dans l'entrée
+  US-203 (« à faire quand les deux branches seront sur `main` ») est fait. Test
+  `signe_le_journal_chaine` : on ajoute une entrée signée par une vraie clé, et
+  sa signature se vérifie sur `entry_hash`.
+- **Signature des paquets L3 (point 4)** : la doc du module précise qu'un paquet
+  se signe avec `ttl = 0` dans l'en-tête, via `protocol::codec::signing_input` /
+  `received_signing_input` (US-201, PR #80, pas encore sur `main` : renvoi en
+  texte, pas en lien rustdoc).
+- **Mineurs** : `impl core::error::Error` sans condition (au lieu de
+  `std::error::Error` sous `cfg(feature = "std")`), et `Clone` retiré de
+  `SigningKey` (aucun appelant, y compris dans US-204 et US-205).
+- **Écart consigné à tort (bloquant 2)** : l'entrée « `crypto` est un module de
+  `dengon-core`, pas une crate séparée » est retirée de `03-ecarts-conception.md`.
+  L'entrée de journal US-203 plus bas passe de « trois écarts » à deux. C'est une
+  correction d'une entrée **pas encore mergée**, faite à la demande de la revue.
+- `03-ecarts` : le numéro de ligne `crypto.rs:143` (devenu faux) est retiré de
+  l'écart `verify_strict`, et l'écart `ledger::Signer` note le branchement.
+- `01-etat-du-code.md` : ajout des commandes de test de `dengon-core` / `crypto`
+  (point DoD §7.1-5 relevé en revue).
+
+### Pourquoi / décisions
+
+- Réexport plutôt que nouvelle constante : `protocol` (US-108) est la source de
+  vérité du format ; `ledger` garde sa constante (hors périmètre de cette US),
+  mais toute divergence casse maintenant la compilation.
+- `Signer` implémenté dans `crypto` et pas dans `ledger` : `ledger` ne doit pas
+  dépendre d'un algorithme (voir sa note de module).
+
+### Écarts vs conception
+
+- Un de moins (module et non crate : pas un écart). Aucun nouveau.
+
+### Appris
+
+- Rien de nouveau.
+
+### État après cette session
+
+- Tous les points de la revue de #78 sont traités. `verify_chain()` ne vérifie
+  toujours pas les signatures (limite de `ledger`, inchangée).
+- Fiche module mise à jour : [`modules/dengon-core.md`](modules/dengon-core.md).
+- 01-etat-du-code.md mis à jour : oui (commandes).
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo clippy -p dengon-core --all-targets -- -D warnings   # avant correction
+error: casting `usize` to `u8` may truncate the value (crypto.rs:280)
+$ cargo fmt --all
+$ cargo clippy --workspace --all-targets -- -D warnings
+OK
+$ cargo test -p dengon-core
+OK — 58 unitaires + 4 vecteurs protocole, 0 échec
+$ cargo check -p dengon-core --no-default-features
+OK
+$ cargo doc -p dengon-core --no-deps
+3 avertissements, tous dans protocol/ (déjà présents sur main), aucun dans crypto
+```
+
+---
+
 ## 2026-09-28 — Nettoyage post-merge : retours de revue arrivés après le merge de #60 et #63
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -1865,6 +1946,98 @@ aucun code modifié
   (limite Spike B levée), [modules/_index.md](modules/_index.md) (dates)
 
 ---
+---
+
+## 2026-09-28 — US-203 : `crypto` — Ed25519 sign/verify, signature forgée rejetée
+
+**Auteur :** Paul Claverie + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/crypto.rs` (créé), `crates/dengon-core/src/lib.rs`,
+`crates/dengon-core/Cargo.toml`, `Cargo.toml` (racine), `Cargo.lock`, `docs/suivi/`.
+**Lot :** US-203 (issue #17), Sprint 2, jalon J1. Branche `feat/US-203-crypto-ed25519`.
+
+### Fait
+
+- `crypto.rs` : `SigningKey::from_seed` / `sign`, `VerifyingKey::from_bytes` /
+  `verify` / `to_bytes`, `CryptoError` (`InvalidPublicKey`, `InvalidSignature`),
+  constantes `SIGNATURE_LEN` / `PUBLIC_KEY_LEN` / `SEED_LEN`, alias
+  `Signature = [u8; 64]`. Enveloppe fine sur `ed25519-dalek` 2.2.0.
+- Dépendance `ed25519-dalek = { version = "2.2", default-features = false,
+  features = ["zeroize"] }` déclarée dans `[workspace.dependencies]` (la
+  configuration exacte du Spike A, US-101).
+- 15 tests dans `crypto.rs` : 4 vecteurs RFC 8032 §7.1 (TEST 1, 2, 3, SHA(abc))
+  vérifiés en clé publique, en signature octet à octet et en `verify` ; aller-retour
+  sur 8 longueurs ; déterminisme ; négatifs (signature forgée ×3, bit-flip
+  **exhaustif** du message et de la signature, message tronqué/allongé, mauvaise
+  clé, clé publique invalide, clé de faible ordre) ; `Debug` sans fuite du secret.
+
+### Pourquoi / décisions
+
+- **Module de `dengon-core`, pas une crate `crypto`** : l'issue dit « crate »,
+  mais l'architecture (`04-architecture.md` §2) et le workspace n'ont qu'une
+  crate `dengon-core`. Ce n'est pas un écart : c'est l'intitulé de l'issue qui
+  est approximatif (entrée d'écart retirée après la revue de #78).
+- **`verify_strict`** plutôt que `verify` : rejette clés de faible ordre et
+  signatures malléables. Pour un journal d'audit, deux signatures valides du
+  même message seraient une porte ouverte. Voir écart.
+- **Pas de génération de clé** : la graine vient de l'appelant, ce qui évite
+  `getrandom` sur `no_std` (le firmware fournira `esp_fill_random`, US-307).
+- **Pas de `proptest`** : le bit-flip exhaustif couvre le critère sans ajouter de
+  dev-dépendance (la PR #75 ajoute la sienne, autant éviter un conflit).
+- **Vecteurs recoupés indépendamment** : les 4 KAT ont été recalculés avec
+  Python `cryptography` (OpenSSL), pas seulement recopiés. TEST 1024 non repris
+  (message de 1023 octets, pas de cas de plus).
+- **Pas de couplage avec `ledger::Signer`** (PR #75, non mergée) : le raccord
+  `impl Signer for crypto::SigningKey` est à faire dans US-206 quand les deux
+  branches seront sur `main`.
+
+### Écarts vs conception
+
+- Deux, reportés dans [`03-ecarts-conception.md`](03-ecarts-conception.md) :
+  `verify_strict` ; pas de séparation de domaine.
+- Critère `no_std` : **atteint**, aucun écart (US-101 concluait que c'était possible).
+
+### Appris
+
+- Reporté dans `04-apprentissages.md` : ce que `verify_strict` change, et pourquoi
+  le décodage d'une clé publique ne suffit pas à rejeter un point de faible ordre.
+
+### État après cette session
+
+- `crypto` livre les critères d'acceptation de l'US-203. Reste hors périmètre :
+  génération de clé, Noise, `recipient_tag`, XChaCha20, padding (US suivantes).
+- Fiche module mise à jour : [`modules/dengon-core.md`](modules/dengon-core.md).
+- `01-etat-du-code.md` mis à jour : non (fichier non concerné par cette entrée).
+- Conflits attendus au merge avec les PR #75 (ledger), #76 (store), #63
+  (protocol) sur `lib.rs`, `Cargo.toml`, `Cargo.lock` et les fichiers de suivi.
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo fmt --all -- --check
+OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+OK (une erreur au premier passage : clippy::wrong_self_convention sur
+    `VerifyingKey::to_bytes(&self)`, type Copy → corrigé en `self`)
+$ cargo test --workspace --all-features --locked
+OK — dengon-core : 17 passés (15 crypto + 2 existants), 0 échec
+$ cargo test --workspace --all-features --locked --doc
+OK
+$ cargo check -p dengon-core --no-default-features --locked
+OK (gate no_std de la CI, cible hôte)
+$ cargo check -p dengon-core --no-default-features --locked --target thumbv7em-none-eabi
+OK (vraie cible bare-metal no_std, ajoutée avec rustup)
+Contrôle de mutation : un octet d'un KAT altéré → 2 tests KAT échouent
+(signature, verify) ; fichier restauré ensuite.
+```
+- Une sonde jetable a corrigé une supposition fausse : `0xFF…FF` **n'est pas**
+  rejeté par `VerifyingKey::from_bytes` (dalek le décode). Le test « clé invalide »
+  utilise donc `y = 2`, seul cas constaté rejeté.
+- **Non vérifié** : compilation pour `xtensa-esp32-none-elf` (toolchain `espup`
+  absente ici ; seul le Spike A l'a prouvée, sur une crate jouet) ; exécution
+  sur matériel ; `cargo audit` (n'existe pas encore en CI, US-222) ; couverture
+  (`cargo llvm-cov` non lancé).
+- Il n'y avait aucune toolchain Rust sur la machine : rustup installé
+  (`--profile minimal --no-modify-path`, toolchain 1.98.1 de `rust-toolchain.toml`).
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`

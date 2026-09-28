@@ -68,6 +68,10 @@ sha2 = { version = "0.10", default-features = false }
 # on n'invoque jamais `uniffi-bindgen` en CLI) ; dengon-ffi ajoute la feature
 # "build" seulement sur sa dépendance de build.
 uniffi = { version = "=0.28.3", default-features = false }
+# no_std : configuration exacte validée par le Spike A (US-101), qui compile
+# pour xtensa-esp32-none-elf. On n'active PAS `rand_core` : la génération de
+# clé (RNG) est fournie par l'appelant (firmware : esp_fill_random, US-307).
+ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
 
 # ---------------------------------------------------------------------------
 # Lints centralisés (Cargo >= 1.74). C'est la « configuration clippy

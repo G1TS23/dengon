@@ -30,6 +30,7 @@
 // dans les deux configurations.
 extern crate alloc;
 
+pub mod crypto;
 pub mod ledger;
 pub mod protocol;
 #[cfg(feature = "std")]

@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame).
 **Dernière mise à jour :** 2026-09-28
-**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207).
+**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` Ed25519 (US-203).
 
 ## À quoi ça sert
 
@@ -22,6 +22,7 @@ charge de transporter (le trait `Transport` de `dengon-ble`).
 dengon-core/
   src/
     lib.rs              — bascule no_std, extern crate alloc, PROTOCOL_VERSION, VERSION, pub mod store (feature std)
+    crypto.rs           — Ed25519 sign/verify (US-203)
     ledger.rs           — journal chaîné append-only (US-206)
     store.rs            — persistance SQLite, chiffrement champ par champ (US-207)
     protocol/
@@ -34,7 +35,7 @@ dengon-core/
     protocol_vectors.rs — contrôle structurel de ces vecteurs
 ```
 
-Modules encore absents : `codec` (US-201), `crypto`, `identity`, `sync`,
+Modules encore absents : `codec` (US-201), `identity`, `sync`,
 `observability`, `api` (sprint 2).
 
 ## Concepts / types importants
@@ -56,6 +57,10 @@ Modules encore absents : `codec` (US-201), `crypto`, `identity`, `sync`,
 | `store::Store<K: KeySource>` | `src/store.rs` | Connexion SQLite + migrations. `open()`/`open_in_memory()`, puis `set_identity`/`get_identity_private_keys`, `upsert_contact`, `insert_conversation`, `insert_message`/`get_message_body`, `set_noise_session`/`get_noise_session_state`. |
 | `store::KeySource` / `store::FixedKeySource` | `src/store.rs` | Trait qui fournit la clé de chiffrement des champs sensibles + bouchon à clé fixe (tests uniquement) — voir « Décisions », même schéma que `ledger::Signer` (US-206). |
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
+| `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
+| `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
+| `crypto::CryptoError` | `src/crypto.rs` | `InvalidPublicKey` / `InvalidSignature` — on ne distingue pas les causes d'un échec de `verify`. Implémente `core::error::Error` (aussi en `no_std`). |
+| `impl ledger::Signer for crypto::SigningKey` | `src/crypto.rs` | Branche une vraie clé Ed25519 sur `Ledger<S>` à la place de `NullSigner`. `crypto::Signature`/`SIGNATURE_LEN` sont des réexports de `protocol`. |
 
 ## Flux principal (exemple)
 
@@ -106,12 +111,12 @@ chemin des messages.
   dépendance sortante de `dengon-core` serait une dépendance imposée au
   firmware ESP32.
 - **Externes (runtime) :** `sha2` (`default-features = false`, no_std) pour
-  `ledger`. `protocol` n'utilise que `core`.
+  `ledger` ; `ed25519-dalek` 2.2 (`default-features = false`, feature
+  `zeroize`) pour `crypto`. `protocol` n'utilise que `core`.
 - **Externes (crates), `store` seulement (feature `std`) :** `rusqlite`
   (`features = ["bundled"]` — sqlite3 vendorisé en C, pas de dépendance
   système) et `chacha20poly1305` (`features = ["getrandom"]`, pour
-  `aead::OsRng`). Viendront encore `ed25519-dalek`, `snow`, `x25519-dalek`,
-  `serde`.
+  `aead::OsRng`). Viendront encore `snow`, `x25519-dalek`, `serde`.
 - **Externes (dev) :** `proptest` (property tests de `ledger`) ; `serde_json`
   — lecture de `tests/vectors_v0.json` via `Value` (pas de derive, donc
   `serde` n'est pas tiré comme dépendance de proc-macro). N'affecte pas la
@@ -298,6 +303,11 @@ chemin des messages.
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
   `PROTOCOL_VERSION`).
+- `src/crypto.rs`, module `tests` : 16 tests — 3 KAT RFC 8032 §7.1 sur 4 vecteurs
+  (clé publique, signature octet à octet, `verify`), aller-retour, déterminisme,
+  négatifs (forgée, bit-flip exhaustif message + signature, tronqué, mauvaise
+  clé, clé invalide, faible ordre), et `signe_le_journal_chaine` (un `Ledger`
+  signé par `SigningKey`, signature vérifiée sur `entry_hash`).
 - `src/ledger.rs`, module `tests` : 14 tests unitaires (chaîne vide valide,
   append→verify_chain toujours Ok, seq consécutives, trou détecté, doublon
   de seq détecté comme fork (adjacent **et** non adjacent — voir
@@ -346,11 +356,13 @@ chemin des messages.
   paquet, pas seulement broadcast) garantit que cet invariant
   (`synthese/05:203`) reste vrai vecteur par vecteur, pas seulement pour
   les deux corrigés au round 2).
-- `src/lib.rs` — 2 tests fumigènes (inchangés).
-- Commande : `cargo test -p dengon-core` → **19 passés** (15 lib + 4 intégration
-  + 0 doc), vérifié le 2026-09-28 (round 3 de revue). `clippy -D warnings`
-  propre, y compris avec
-  `cast_possible_truncation`/`cast_sign_loss`/`cast_possible_wrap` activés.
+- Commande : `cargo test -p dengon-core` → **62 passés** (58 lib + 4
+  intégration + 0 doc — 16 pour `crypto`, 16 pour `ledger`, 13 pour `store`,
+  13 pour `protocol::{consts,types}` et `lib.rs`), rejoué le 2026-09-28 après
+  le rebase de `crypto` (US-203, #78) sur `ledger` (#75) et `store` (#76). `cargo
+  clippy --workspace --all-targets --all-features -- -D warnings` et `cargo
+  fmt --all -- --check` verts. `cargo check -p dengon-core
+  --no-default-features` (frontière `no_std`) vert.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
   temporairement fait échouer `accept_vectors_are_structurally_consistent`
   sur le nouveau vecteur `noise-msg-addressed-reserved-bit-ignored` (30
@@ -363,8 +375,13 @@ chemin des messages.
 
 ## Limites connues / TODO
 
-- `verify_chain()` ne vérifie pas la signature (voir « Décisions » —
-  dépend de `crypto`, US-203).
+- `crypto` : pas de génération de clé, pas de séparation de domaine ; vecteur
+  RFC 8032 « TEST 1024 » non repris. Cross-compilation xtensa prouvée par le
+  Spike A sur une crate jouet, pas sur `crypto` (vérifié à la main sur
+  `thumbv7em-none-eabi`, 2026-09-28).
+- `verify_chain()` ne vérifie pas la signature (voir « Décisions »). La
+  brique existe depuis US-203 (`crypto::SigningKey` implémente
+  `ledger::Signer`) mais la vérification n'est pas câblée.
 - **`verify_chain()` ne peut pas re-vérifier un export partiel** (`seq` ne
   commençant pas à 0) — voir le docstring d'`export()` et l'écart consigné
   dans `03-ecarts-conception.md` (retour de revue #75). Pas encore
