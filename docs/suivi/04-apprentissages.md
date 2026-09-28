@@ -97,6 +97,143 @@ tard côté ESP32.
 **Où c'est utilisé :** `firmware/dengon-relay/main/transport_nimble.c`
 (`on_disconnect`, `ensure_scanning`), `dengon_tc_map_hci_reason`.
 **Pour aller plus loin :** Core Spec v5.4, Vol 1 Part F (codes d'erreur).
+### `merge=union` est un pilote LOCAL — GitHub ne l'applique pas
+
+**C'est quoi :** dans `.gitattributes`, `fichier merge=union` demande à git, en
+cas de conflit sur ce fichier, de garder **les deux côtés** au lieu d'écrire des
+marqueurs. C'est le filet posé par l'US-115 sur les six fichiers de suivi en
+append (journal, avancement, écarts, apprentissages, glossaire, index).
+
+**Pourquoi dans dengon :** six à sept PR sont ouvertes en permanence et **toutes**
+écrivent dans `00-journal.md`, au même endroit (juste sous le marqueur
+« NOUVELLES ENTRÉES ICI »). Sans le filet, chaque PR conflicterait avec toutes
+les autres.
+
+**Piège / surprise :** deux, découverts le même jour sur la PR #105.
+
+1. **Le filet ne marche que sur le poste.** Les pilotes de fusion de
+   `.gitattributes` sont exécutés par le git **local** ; le serveur GitHub
+   fusionne avec le pilote par défaut et **ignore** `merge=union`. La PR est
+   donc sortie en `mergeStateStatus: DIRTY` sur le seul `00-journal.md`, alors
+   qu'un `git rebase origin/main` en local passait sans un conflit. Le remède
+   est le rebase local puis un `push --force-with-lease` — pas un réglage de
+   dépôt. L'en-tête de `02-avancement.md` promet « fusion automatique ;
+   `merge=union` sert de filet » : à lire comme « en local ».
+2. **Union ≠ fusion juste.** Sur un fichier en *append* (le journal), garder les
+   deux côtés donne le bon résultat. Sur une **table éditée en place**
+   (`02-avancement.md`), si deux branches touchent la **même ligne**, union
+   garde les **deux versions** — la périmée et la neuve. C'est arrivé sur trois
+   lignes (`Workflow firmware`, `dashboard`, `contracts`) et il a fallu retirer
+   les doublons à la main. La consigne « on modifie uniquement la ligne du
+   composant touché » n'y suffit pas : il faut que deux PR ne touchent pas la
+   **même** ligne.
+
+**Où c'est utilisé :** `.gitattributes`, `docs/suivi/*`.
+
+**Pour aller plus loin :** `gitattributes(5)`, section « Defining a custom merge
+driver » — et `git check-attr merge -- docs/suivi/00-journal.md` pour vérifier
+que l'attribut est bien actif localement.
+
+---
+
+### Unification des features de Cargo : `--no-default-features` ne fait pas ce qu'on croit
+
+**C'est quoi :** quand plusieurs paquets d'un même graphe de build dépendent
+d'une même crate avec des features différentes, Cargo ne compile **pas** cette
+crate plusieurs fois : il fait l'**union** des features demandées et compile
+une seule version. C'est ce qui garde les temps de build raisonnables — et
+c'est très bien, sauf quand la configuration *est* ce qu'on veut tester.
+
+**Pourquoi dans dengon :** l'US-222 devait rejouer les vecteurs de trame
+contre `dengon-core` compilé **sans `std`**, la configuration que l'ESP32
+embarquera. Le réflexe — `cargo test -p dengon-core --no-default-features` —
+ne marche pas : `dengon-core` a `dengon-ble` en **dev-dependency** (pour les
+tests de `sync::routing`), `dengon-ble` dépend de `dengon-core` avec ses
+features par défaut, donc `std` revient par la porte de derrière, avec
+`rusqlite` et son sqlite3 en C. Le test aurait tourné vert en n'ayant rien
+prouvé.
+
+**Piège / surprise :** trois pièges empilés, découverts dans cet ordre.
+
+1. `cargo tree -p dengon-core --no-default-features -e features | grep rusqlite`
+   le montre en une ligne. À réflexe pour toute question « quelle feature est
+   réellement active ? » — l'intuition se trompe, l'arbre non.
+2. La crate séparée (`crates/dengon-conformance/`) ne suffit pas non plus si
+   elle écrit `dengon-core = { workspace = true, default-features = false }` :
+   avec l'héritage de workspace, **`default-features` est ignoré** tant que
+   la ligne de `[workspace.dependencies]` ne le déclare pas elle-même. Cargo
+   le dit, en avertissement facile à survoler : *« `default-features` is
+   ignored for dengon-core »*. Il a fallu écrire la dépendance **en chemin**.
+3. Une assertion « je suis bien sans `std` » compilée dans la crate
+   (`const _: () = assert!(...)`) casse `cargo clippy --workspace` : un build
+   `--workspace` unifie tout le graphe, `std` revient par `dengon-node`, et
+   l'assertion échoue **à raison**. La garantie ne vit que dans la résolution
+   **isolée** (`-p dengon-conformance`), donc le garde-fou doit être à
+   l'extérieur : une étape de CI qui inspecte `cargo tree`.
+
+**Où c'est utilisé :** `crates/dengon-conformance/Cargo.toml`,
+`crates/dengon-conformance/src/lib.rs`,
+`.github/workflows/cross-vectors.yml` (étape « 2/4 bis »).
+
+**Pour aller plus loin :** *The Cargo Book*, « Features — Feature unification »
+et « Dependencies — Inheriting a dependency from a workspace ».
+
+---
+
+### `dorny/paths-filter` n'a pas de base de comparaison sur `schedule`
+
+**C'est quoi :** l'action calcule un diff entre deux références git pour dire
+quels chemins ont changé. Sur `pull_request` elle compare à la base de la PR,
+sur `push` au commit précédent. Sur `schedule` (un cron), il n'y a **ni PR ni
+push** : rien à comparer.
+
+**Pourquoi dans dengon :** le job `audit` tourne sur PR **et** en cron
+quotidien. Sur PR, on veut le filtrage par chemin (ne pas relancer un audit
+pour une PR documentaire) ; sur cron, on veut **tout** exécuter — c'est
+justement le cas où le dépôt n'a pas bougé mais où un avis RUSTSEC vient de
+paraître. Les deux besoins sont opposés, et un seul `if` ne les couvre pas.
+
+**Piège / surprise :** il faut désactiver l'**étape de filtre elle-même**
+(`if: github.event_name != 'schedule'`), pas seulement l'ignorer ensuite —
+sinon elle échoue avant d'avoir servi. Et comme un `steps.filtre.outputs.*`
+d'une étape sautée vaut la chaîne vide, chaque étape réelle porte
+`if: github.event_name == 'schedule' || steps.filtre.outputs.deps == 'true'`.
+
+**Où c'est utilisé :** `.github/workflows/audit.yml`.
+
+---
+
+### `cargo-deny` : quatre contrôles, un seul fichier, et le piège du code privé
+
+**C'est quoi :** `cargo deny check` lit `Cargo.lock` et vérifie quatre choses
+d'un coup — `advisories` (avis RUSTSEC), `licenses` (celles qu'on autorise),
+`bans` (doublons de version, dépendances en `"*"`), `sources` (d'où viennent
+les crates). `cargo audit`, lui, ne fait que le premier, mais avec une base
+d'avis rafraîchie à chaque exécution.
+
+**Pourquoi dans dengon :** les deux sont dans le job `audit`
+(`synthese/10` §4.7). Ils se recouvrent sur les avis, et c'est voulu : ils ne
+rafraîchissent pas leur base au même moment.
+
+**Piège / surprise :** trois.
+
+1. **Notre propre code fait échouer le job** si on ne dit rien : nos sept
+   crates sont `publish = false` et sans champ `license` (la licence du
+   projet n'est pas tranchée), donc cargo-deny les compte *unlicensed*.
+   `[licenses.private].ignore = true` règle ça.
+2. **La liste `allow` dépend de `[graph].targets`.** Deux licences
+   (`Apache-2.0 WITH LLVM-exception`, `BSD-1-Clause`) n'apparaissaient que sur
+   des cibles qu'on ne construit pas ; cargo-deny les a signalées en
+   `license-not-encountered`. Une entrée inutile dans `allow` est une
+   permission qu'on ne comprend plus six mois après.
+3. **`cargo audit` ne lit pas `deny.toml`** (son fichier serait
+   `.cargo/audit.toml`). Deux listes d'exceptions dérivent au premier oubli :
+   le workflow **dérive** ses `--ignore` de `deny.toml` par un `grep` sur les
+   identifiants `RUSTSEC-AAAA-NNNN`.
+
+**Où c'est utilisé :** `deny.toml`, `.github/workflows/audit.yml`.
+
+**Pour aller plus loin :** <https://embarkstudios.github.io/cargo-deny/>
 
 ---
 

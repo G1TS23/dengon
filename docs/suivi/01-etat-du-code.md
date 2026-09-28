@@ -44,6 +44,27 @@ cargo check -p dengon-core --no-default-features
 ```
 
 ```bash
+# Conformité inter-composants (ce que le job CI `cross-vectors` exécute).
+# Les mêmes fichiers de contracts/ relus par quatre implémentations écrites
+# séparément — détail : docs/suivi/modules/processus-github.md
+cargo test -p dengon-core --test protocol_vectors --test crypto_vectors \
+                          --test identity_vectors --test event_fixtures
+cargo test -p dengon-conformance          # le MÊME décodeur, compilé sans std
+cargo tree -p dengon-conformance -e features | grep rusqlite   # doit être VIDE
+(cd contracts     && uv run python tools/validate_packets.py && uv run python tools/validate.py)
+(cd dashboard/api && uv run pytest tests/test_cross_vectors.py)
+```
+
+```bash
+# Audit des dépendances (job CI `audit`, bloquant + cron quotidien).
+# Les exceptions RUSTSEC vivent dans deny.toml, source de vérité unique ;
+# cargo audit ne le lit pas, le workflow lui passe les --ignore extraits.
+cargo deny --all-features check
+cargo audit --deny warnings --file Cargo.lock \
+  $(grep -oE 'RUSTSEC-[0-9]{4}-[0-9]{4}' deny.toml | sort -u | sed 's/^/--ignore /')
+```
+
+```bash
 # Labels du dépôt vs fichier versionné
 gh label list --limit 100 --json name,color,description
 

@@ -15,6 +15,100 @@ et le mentionner dans l'entrée de journal.
 ## Modèle d'entrée
 
 
+
+---
+
+### 2026-09-28 — `cross-vectors` : la patte « firmware » est un proxy `no_std`, pas le firmware (US-222)
+
+- **Prévu :** `docs/synthese/10-benchmarks-mvp-tests.md` §4.7 — le job
+  `cross-vectors` compare « core ↔ firmware ↔ dashboard » sur les mêmes
+  vecteurs de conformité. DoD §7.2, ligne *Firmware* : « vecteurs de
+  conformité identiques au core ».
+- **Réel :** le firmware ne lit **aucun** vecteur. `firmware/dengon-relay/`
+  ne contient que le BLE (advertising, table GATT) ; le pont
+  `dengon_core_ffi` qui lui donnerait un décodeur est l'US-307, non livrée.
+  La troisième lecture est donc faite par `crates/dengon-conformance/`, une
+  crate sans code dont la seule fonction est de lier `dengon-core` en
+  `default-features = false` — la configuration `no_std` + `alloc` que
+  l'ESP32 embarquera — et de rejouer les mêmes
+  `contracts/packet/vectors_v0.json` contre ce build.
+- **Pourquoi :** c'est ce qui s'approche le plus de la promesse « mêmes
+  octets in → mêmes décisions out » sans attendre l'US-307, qui est au
+  sprint 3. Le décodeur exercé est **le même code** que celui que le
+  firmware liera ; ce qui manque, c'est la traversée du FFI et l'exécution
+  sur la cible.
+- **Détail technique qui a dicté la forme :** `cargo test -p dengon-core
+  --no-default-features` ne donne **pas** un build `no_std`. La
+  dev-dependency `dengon-ble` dépend de `dengon-core` avec ses features par
+  défaut, et l'unification du résolveur v2 réactive `std` dans le même
+  graphe — visible avec `cargo tree -p dengon-core --no-default-features -e
+  features | grep rusqlite`. Un paquet séparé est le seul moyen d'obtenir
+  la bonne résolution. Deux conséquences :
+  - la dépendance y est écrite **en chemin**, pas en `{ workspace = true }` :
+    avec l'héritage de workspace, `default-features = false` est ignoré tant
+    que `[workspace.dependencies]` ne le déclare pas, et le déclarer là-bas
+    priverait les autres crates de `std` ;
+  - aucune assertion « je suis sans `std` » n'est compilée dans la crate :
+    un build `--workspace` (celui de `core.yml`) unifie les features et
+    ferait échouer l'assertion à tort. Le garde-fou est une étape du job
+    `cross-vectors`, qui inspecte la résolution **isolée** :
+    `cargo tree -p dengon-conformance -e features | grep rusqlite`.
+- **Conséquence :** à lever par l'**US-307**. Le jour où `dengon_core_ffi`
+  est branché, ajouter au job une étape qui fait tourner les vecteurs
+  **sur la cible** (tests Unity, ou host-tests de `libdengon_core`) ; le
+  filtre de chemins de `cross-vectors.yml` couvre déjà `firmware/**`.
+  `crates/dengon-conformance/` garde alors sa valeur propre : il prouve la
+  compilation `no_std` sans matériel.
+
+---
+
+### 2026-09-28 — CLÔTURE : les vecteurs de conformité ont rejoint `contracts/packet/` (US-222)
+
+- **Écart clos :** celui du 10/09, « Vecteurs de conformité v0 dans
+  `crates/dengon-core/tests/`, pas `contracts/packet/` (US-108) ». Il était
+  motivé par le fait que `contracts/` n'était pas encore sur `main`
+  (PR #60 en vol) et par le conflit prévisible sur `pyproject.toml` /
+  `uv.lock` / `contracts.yml`.
+- **Fait :** `#60` est mergée depuis. `vectors_v0.json`, `crypto_v0.json`
+  et `identity_v0.json` sont désormais dans `contracts/packet/`, avec leur
+  `README.md`. Les trois tests Rust pointent l'emplacement final, le
+  `validate_packets.py` annoncé existe, et il est branché dans
+  `contracts.yml` **et** dans `cross-vectors.yml`.
+- **Reste :** le filtre de chemins de `core.yml` a dû être élargi à
+  `contracts/packet/**` et `contracts/events/**` — les tests Rust lisent ces
+  fichiers, donc les modifier doit déclencher `core`. Sans ça, un vecteur
+  cassé n'aurait plus fait rougir `core` sur une PR qui ne touche que
+  `contracts/`.
+
+---
+
+### 2026-09-28 — `audit` : deux avis RUSTSEC acceptés, tenus par l'épinglage d'uniffi (US-222)
+
+- **Prévu :** `docs/synthese/10` §4.7 — job `audit` = `cargo audit`,
+  `cargo deny check`, **SBOM**, sur PR et en quotidien.
+- **Réel :** `cargo audit` et `cargo deny` sont livrés et **bloquants**.
+  Le **SBOM ne l'est pas** : il n'apparaît dans aucun critère d'acceptation
+  de l'US-222, et le livrer à la va-vite en fin de sprint aurait donné un
+  artefact que personne ne consomme. À ouvrir en issue de suite.
+- **Deux exceptions consignées dans `deny.toml`**, la seule soupape prévue :
+  `RUSTSEC-2024-0436` (`paste` non maintenu) et `RUSTSEC-2025-0141`
+  (`bincode` 1.3.3 non maintenu). Ni l'une ni l'autre n'est une
+  vulnérabilité : ce sont deux dépendances de **macros de compilation**,
+  arrivées en transitif par `uniffi 0.28.3`, épinglé à l'exact `=0.28.3`
+  parce que les bindings Kotlin générés doivent correspondre au runtime de
+  l'APK. Les lever demande une montée d'uniffi et une régénération des
+  bindings Android — hors périmètre, et inopportun au milieu du sprint
+  Android. À rouvrir à la prochaine montée d'uniffi.
+- **`multiple-versions = "warn"`, pas `"deny"` :** deux versions de `syn`
+  cohabitent aujourd'hui, en transitif, et rien dans notre code ne peut le
+  corriger. Bloquer là-dessus aurait rendu le job inutilisable dès le
+  premier jour.
+- **`[licenses.private].ignore = true` :** nos sept crates sont
+  `publish = false` et n'ont pas de champ `license`, la licence du projet
+  n'étant pas tranchée (`synthese/01-sujets-a-trancher.md`). Sans cette
+  ligne, cargo-deny les compterait comme *unlicensed* et échouerait sur
+  notre propre code.
+
 ---
 
 ### 2026-09-28 — Transport NimBLE (US-220) : pas de fragmentation BLE, `PeerConnected` à l'abonnement, quota borné, anti-boucle sur 4 octets

@@ -27,7 +27,7 @@ de son area (proposition d'organisation §10.3 point 3).
 | `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-28 |
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
 | `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **contrat v0 gelé** (US-106) | 2026-09-28 |
-| `process` (`.github/`) | [processus-github.md](processus-github.md) | — | 2026-09-09 |
+| `process` (`.github/`) | [processus-github.md](processus-github.md) | 4 workflows requis présents (US-222) ; checks requis de `main` pas encore élargis | 2026-09-28 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + messagerie sur bouchon, US-214) | 2026-09-28 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | partiel (transport NimBLE US-220 ; essai 2 cartes à faire) | 2026-09-28 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + appairage QR, US-215) | 2026-09-28 |
