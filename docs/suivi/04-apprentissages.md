@@ -507,6 +507,35 @@ séquencement des opérations ; issue tracker AOSP historique sur ce
 comportement (recherche « BluetoothGatt operation already in progress »).
 ---
 
+### Régénérer `verification-metadata.xml` ne couvre que l'OS de la machine qui régénère
+
+**C'est quoi :** certains artefacts Maven publient une variante **par
+plateforme**, via un *classifier* (`aapt2-<version>-osx.jar`,
+`-linux.jar`, `-windows.jar` : trois fichiers distincts, pas trois copies
+du même). Gradle ne résout que le classifier de l'OS courant, donc
+`--write-verification-metadata` n'enregistre jamais que le checksum de
+**cette** plateforme.
+**Pourquoi dans dengon :** la PR #56 a régénéré `verification-metadata.xml`
+sur macOS (voir la note ci-dessus sur le cache chaud) — ça a bien corrigé
+l'entrée `osx`, mais a laissé le fichier sans checksum `linux`, invisible
+tant que personne ne clone sur Linux ou en CI. Découvert en pratique par
+Paul (poste Linux) puis recorrigé dans la PR #72.
+**Piège / surprise :** la procédure « vider le cache + régénérer »
+(apprentissage précédent) **ne suffit pas** à elle seule pour ce cas — elle
+corrige le cache chaud, pas l'absence structurelle des autres plateformes.
+Le seul moyen de couvrir un classifier qu'on n'a pas la machine pour
+résoudre soi-même : télécharger le jar officiel depuis
+`dl.google.com/android/maven2/...` et calculer `sha256sum` à la main.
+Reviendra identiquement à chaque montée de version d'AGP tant que
+`aapt2` (ou tout autre artefact à classifier) change de version.
+**Où c'est utilisé :** `android/gradle/verification-metadata.xml`, entrées
+`com.android.tools.build:aapt2`.
+**Pour aller plus loin :** `docs/suivi/modules/android-app.md`, section
+« Décisions d'implémentation » (puce `aapt2`) ; la section « Trois pièges
+rencontrés » (onboarding) couvre le piège voisin du cache chaud.
+
+---
+
 ### `$` en regex Python matche avant un `\n` final — piège pour un motif JSON Schema
 
 **C'est quoi :** en Python (`re`, sans `re.MULTILINE`), `$` matche soit la fin
@@ -625,3 +654,79 @@ nulle part ailleurs, CI comprise.
 
 **Où c'est utilisé :** `firmware/dengon-relay/sdkconfig.defaults` (l'avertissement
 est en tête du fichier), rappelé dans `docs/suivi/modules/firmware-relay.md`.
+### `isReturnDefaultValues = true` fait taire les API Android en test, pas les exécuter
+
+**C'est quoi :** sans Robolectric, un test JVM pur ne peut pas exécuter le
+vrai code du framework Android (`android.jar` fourni au classpath de test est
+un bouchon dont chaque méthode lève par défaut). `unitTests
+.isReturnDefaultValues = true` (`app/build.gradle.kts`) remplace ce lever
+d'exception par un **retour silencieux** de la valeur par défaut du type de
+retour (`null` pour un objet, `0`/`false` pour un primitif).
+**Pourquoi dans dengon :** en écrivant le bouchon `DengonIdentity` (US-106),
+la première version du QR code utilisait `android.util.Base64.encodeToString`.
+Un test d'aller-retour (encoder puis décoder) aurait **passé silencieusement**
+en comparant deux valeurs dérivées de `null` — ou aurait produit un NPE
+confus, selon l'endroit — sans jamais exercer le vrai algorithme.
+**Piège / surprise :** ce n'est pas un échec bruyant : `isReturnDefaultValues`
+existe justement pour qu'un code qui *appelle accidentellement* une API
+Android ne fasse pas planter tous les tests JVM purs du projet. Ça veut dire
+qu'un test peut être vert **pour la mauvaise raison** — il faut se demander,
+pour chaque appel à une classe `android.*` dans du code testé en JVM pur, si
+le test l'exerce réellement ou observe juste sa valeur par défaut.
+**Parade :** n'utiliser des API `android.*` que dans du code qui ne sera
+testé qu'en instrumenté/Robolectric ; sinon, écrire l'équivalent en Kotlin/
+Java pur (ici : un encodeur/décodeur base64url à la main).
+**Où c'est utilisé :** `android/.../ffi/DengonNodeStub.kt` (repéré avant
+d'écrire le test, pas après un échec silencieux) ; réglage source :
+`android/app/build.gradle.kts`.
+
+### UniFFI en mode UDL : le contrat vit dans un fichier séparé, pas dans les macros
+
+**C'est quoi :** UniFFI a deux façons de décrire une interface FFI : des
+macros procédurales (`#[uniffi::export]` directement sur le code Rust) ou un
+fichier `.udl` séparé, lu par `build.rs`
+(`uniffi::generate_scaffolding("src/x.udl")`) puis inclus dans `lib.rs`
+(`uniffi::include_scaffolding!("x")`). Le `.udl` déclare les types
+(`dictionary`, `enum`, `[Enum] interface` pour un enum à données associées,
+`[Error] enum`, `interface` pour un objet avec état) ; le Rust doit fournir
+des types du **même nom**, avec les **mêmes champs**, mais reste du Rust
+ordinaire (pas d'attribut spécial dessus).
+**Pourquoi dans dengon :** la DoR de l'US-106 impose explicitement un fichier
+`.udl` (pas les macros) — c'est un contrat qu'on veut pouvoir lire et geler
+sans lire le code Rust qui l'implémente.
+**Piège / surprise :** le scaffolding généré ne produit **que** le pont côté
+Rust (fonctions `extern "C"`) — pas les classes Kotlin. Ça, c'est une
+commande séparée (`uniffi-bindgen generate`, avec la feature `"bindgen"`/`
+"cli"`), volontairement pas activée ici : l'US-106 ne demande qu'un bouchon
+Kotlin écrit à la main, pas une génération réelle (ça viendra avec l'US-302).
+**Où c'est utilisé :** `crates/dengon-ffi/src/dengon.udl`, `build.rs`,
+`src/lib.rs`.
+**Pour aller plus loin :** doc officielle UniFFI, section « UDL » vs
+« Procedural macros ».
+
+---
+
+### UniFFI 0.28 : la forme Kotlin générée ne se devine pas depuis le `.udl`
+
+**C'est quoi :** UniFFI traduit le `.udl` en Kotlin avec des choix qui ne
+sont pas évidents : `sequence<u8>` devient `List<UByte>` (et non
+`ByteArray`, réservé au type `bytes`), `u64`/`u32` deviennent
+`ULong`/`UInt`, une `interface X` devient `open class X` **plus**
+`interface XInterface`, un `[Error] enum` devient une exception **scellée**
+avec une sous-classe par variante, les fonctions d'un `namespace` sont de
+premier niveau, et un `dictionary` devient une `data class` à champs `var`.
+
+**Pourquoi dans dengon :** l'UI Android est écrite contre un bouchon Kotlin
+écrit à la main (US-106), censé être remplacé par les bindings générés à
+l'US-302 sans casser l'UI. Écrit « de tête », il divergeait sur six points
+(revue PR #69).
+
+**Piège / surprise :** une `data class` avec des champs `ByteArray` n'a
+**pas** d'égalité par contenu (tableaux comparés par référence). Le bouchon
+qui corrigeait ça « proprement » créait une égalité que le code généré ne
+fournira pas. Seul remède fiable : **générer** les bindings de référence et
+compiler le code client contre eux.
+
+**Où c'est utilisé :** `crates/dengon-ffi/src/dengon.udl`,
+`crates/dengon-ffi/uniffi.toml`, `android/.../ffi/DengonTypes.kt`.
+

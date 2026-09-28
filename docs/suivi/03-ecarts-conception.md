@@ -28,6 +28,30 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-09 — Dashboard : migrations en littéral Python, pas en fichiers `.sql`
+
+- **Prévu :** l'issue #10 (US-110) demande une « migration SQLite initiale
+  **versionnée** ». Le premier jet a suivi le pattern classique : un dossier
+  `dashboard/api/migrations/` avec `0001_initial.sql`, lu et exécuté au
+  démarrage.
+- **Réel :** les migrations sont une liste `(version, nom, sql)` dans
+  `dashboard/api/app/migrations.py`, où `sql` est un littéral de chaîne. `db.py`
+  itère cette liste. Plus de dossier `migrations/`.
+- **Raison :** SonarCloud (`pythonsecurity:S3649`, **BLOCKER**, gate de sécurité
+  du nouveau code) flaggait le chemin `Path.read_text()` → `executescript()`
+  comme « SQL construit depuis une donnée contrôlée par l'utilisateur ». C'est
+  un faux positif — la donnée est un fichier versionné, pas de l'entrée
+  requête — mais corriger à la racine est ici plus propre qu'une suppression
+  `# NOSONAR` : un littéral de module est tout aussi versionné, n'ajoute aucune
+  dépendance au système de fichiers au déploiement, et supprime le motif que
+  l'analyseur (à raison, en général) surveille.
+- **Conséquences :** le mot « versionné » de l'AC reste satisfait (git + numéro
+  de version + table `schema_migrations`). Si le nombre de migrations grossit
+  au point de rendre un seul fichier Python pénible, repasser à des `.sql`
+  lus est un refactor localisé à `db.py` + `migrations.py`.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` ne prescrit pas
+  la forme des migrations, seulement le schéma cible (§11.2).
+
 ### 2026-09-09 — Protection de `main` : un seul check requis (`core`) au lieu de quatre
 
 - **Prévu :** l'issue #13 (US-113) et
@@ -327,6 +351,40 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-16 — US-112 : deux écarts vs `powl/09` omis du journal (retour de revue #66, point de Paul)
+
+- **Prévu :** [`docs/powl/09-data-model.md`](../powl/09-data-model.md) §1
+  annote `messages.body` d'un commentaire SQL `-- clair local uniquement`, et
+  marque `identity.priv_static` / `identity.priv_sign` comme `BLOB`
+  « (chiffré) », sans préciser le mécanisme de chiffrement.
+- **Réel :** `06-securite.md` §5.1 (US-112) traite les deux différemment :
+  `messages.body` est reclassé **XChaCha20-Poly1305 champ par champ** (B-3),
+  le commentaire `powl/09` étant réinterprété comme décrivant le *contenu*
+  (texte déchiffré côté app) et non l'état de chiffrement au repos ; et
+  `identity.priv_static`/`priv_sign` sont confiées au **stockage de clés du
+  téléphone (Keystore/Keychain, Android/iOS)** plutôt qu'à un chiffrement
+  logiciel générique (XChaCha20 comme les autres colonnes sensibles) — c'est
+  le mécanisme qui change, pas le fait qu'elles soient chiffrées.
+- **Raison :** B-3 (chiffrement champ par champ des données sensibles) est une
+  décision postérieure à `powl/09`, qui ne pouvait pas l'anticiper ; et les
+  clés privées d'identité justifient le coffre matériel de la plateforme
+  plutôt qu'un chiffrement logiciel générique — c'est *le* cas d'usage du
+  Keystore.
+- **Conséquences :** aucune régression — les deux reclassements sont des
+  renforcements (chiffrement au repos de `messages.body` ; clés privées dans
+  le coffre matériel au lieu d'un chiffrement logiciel), pas des
+  affaiblissements, de ce que `powl/09` décrivait.
+  L'erreur signalée par Paul n'est pas dans le contenu de `06-securite.md`
+  (correct dès la PR initiale) mais dans **le journal** : les deux entrées du
+  2026-09-11 pour US-112 déclarent toutes deux « Écarts vs conception :
+  Aucun », alors que ces deux reclassements en sont, et auraient dû être
+  consignés ici dès leur rédaction plutôt que découverts en revue.
+- **Doc de conception mise à jour ?** non — `docs/powl/` reste inchangé par
+  convention (matière première figée) ; `06-securite.md` (le delta) portait
+  déjà la bonne information, seul le suivi (`00-journal.md`) était en faute.
+
+---
+
 ### 2026-09-10 — Vecteurs de conformité v0 dans `crates/dengon-core/tests/`, pas `contracts/packet/` (US-108)
 
 - **Prévu :** l'US-108 demande « un fichier partagé, consommé par le core, le
@@ -515,6 +573,41 @@ _(aucun écart pour l'instant)_
   version. À trancher au point d'équipe qui gèle le contrat : soit on met la
   conception à jour, soit on retire le champ. Le laisser diverger en silence
   serait le pire des trois.
+
+---
+
+### 2026-09-20 — `dengon-ffi` v0 (US-106) : identité/QR/code de vérification sans vraie cryptographie
+
+- **Prévu :** [`docs/synthese/06-securite.md`](../synthese/06-securite.md)
+  décrit `peer_id = SHA-256(pub_static)[0..8]`, des clés X25519/Ed25519
+  réelles, un QR `dengon:v1:<base64url(...)>` avec de vraies clés publiques,
+  et un code de vérification 60 chiffres dérivé de
+  `SHA-512(min(fpA,fpB)‖max(fpA,fpB))`.
+- **Réel :** `crates/dengon-ffi/src/lib.rs` (`generate_identity`,
+  `verification_code`) et `android/.../ffi/DengonNodeStub.kt`
+  (`DengonIdentity`) produisent des octets **déterministes mais non
+  cryptographiques** (XOR du pseudo pour les « clés », FNV-1a pour le code de
+  vérification). Le format (types, `dengon:v1:` + base64url, 12 groupes de 5
+  chiffres) est bien celui de la conception ; le contenu ne l'est pas.
+- **Raison :** l'US-106 est un contrat FFI (`.udl` + bouchon), pas l'US
+  crypto. `dengon-core::identity`/`crypto` n'existent pas encore (US-108,
+  US-203, US-205, tous en sprint 2/S2). Or la DoR de l'US-106 exige un
+  bouchon qui **renvoie des valeurs typées exploitables par l'UI**
+  (US-214/US-215) dès maintenant — attendre la vraie crypto aurait bloqué
+  tout le sprint 2 côté Android sur le sprint 2 côté Rust, exactement ce que
+  le contrat gelé est censé éviter.
+- **Conséquences :** le format des types FFI est stable et peut être
+  développé contre dès maintenant. Le **contenu** des identités/codes générés
+  aujourd'hui est sans valeur de sécurité et **change complètement** quand
+  `identity`/`crypto` seront branchés (US-108/US-203/US-205 puis US-301/302) —
+  aucun test ni donnée canned actuelle ne doit être considéré comme un
+  vecteur de test cryptographique. Les implémentations Rust et Kotlin sont
+  volontairement **indépendantes** (pas le même algorithme, pas le même
+  résultat numérique pour la même identité) : documenté en commentaire des
+  deux côtés pour éviter la confusion le jour où on les compare.
+- **Doc de conception mise à jour ?** non — `06-securite.md` reste la cible
+  réelle. Le point est documenté dans `modules/dengon-ffi.md` et l'entrée de
+  journal du 2026-09-20.
 
 ---
 
