@@ -1,16 +1,21 @@
 # Module : `android-app` (`android/`)
 
-**Rôle en une phrase :** l'application Android (Kotlin + Compose) : le
-service de fond BLE requis pour un nœud mesh (US-109) et les écrans de
-messagerie (conversations, fil, saisie, statuts) sur le bouchon FFI (US-214).
+**Rôle en une phrase :** l'application Android (Kotlin + Compose) — le service
+de fond BLE (US-109) possède maintenant une implémentation réelle du contrat
+`Transport` (US-213) : GATT server + advertiser + scanner, testée sur 2 vrais
+téléphones ; s'y ajoutent les écrans de messagerie (US-214) et d'appairage QR
+(US-215) sur le bouchon FFI.
 **Correspond à la conception :** `docs/synthese/04-architecture.md` §3
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
-US-109.
+US-109, US-213 ; `crates/dengon-ble/src/transport.rs` (le contrat, US-105) et
+`crates/dengon-ble/src/conformance.rs` (la suite de conformité).
 **Dernière mise à jour :** 2026-09-28
-**État :** partiel (service de fond + messagerie sur bouchon FFI ; pas de
-logique BLE réelle dans l'app elle-même — voir « Spike C » ci-dessous pour le code GATT jetable
-qui dérisque `AndroidTransport`)
+**État :** partiel — service de fond (US-109) + transport BLE réel (US-213) +
+messagerie sur bouchon FFI (US-214) + appairage QR (US-215) ; pas encore
+branché sur `dengon-core` ni sur la vraie identité (`peerID`, US-306) — voir
+« Spike C » ci-dessous pour le code GATT jetable qui a dérisqué
+`AndroidTransport` avant cette US
 
 ## Onboarding (US-103)
 
@@ -77,12 +82,19 @@ android/
     src/main/AndroidManifest.xml
     src/main/java/com/dengon/app/
       DengonApplication.kt   — Application vide (point d'extension futur)
-      MainActivity.kt        — Compose : demande permissions, démarre/arrête le service, affiche l'état
+      MainActivity.kt        — Compose : demande permissions, démarre/arrête le service, affiche l'état,
+                               ouvre la messagerie (US-214) et l'écran d'appairage (US-215)
       ffi/                   — bouchon FFI (US-106) : DengonTypes.kt, DengonNodeStub.kt
       ui/conversations/      — messagerie (US-214)
         ConversationsViewModel.kt — état (StateFlow) + actions, alimenté par DengonNodeInterface
         ConversationsScreen.kt    — Compose : MessagerieRoute, ListeConversations, FilConversation
         LibelleStatut.kt          — statut → libellé UI (synthese/07 §1)
+      identite/
+        IdentiteLocale.kt    — identité provisoire par installation (pseudo hexadécimal 8 octets), US-215
+      ui/appairage/          — US-215
+        AppairageViewModel.kt — étapes de l'appairage, StateFlow, JVM pur
+        AppairageScreen.kt   — mon QR, scan caméra, code 60 chiffres, confirmation explicite
+        QrCode.kt            — matrice QR (zxing-core) garantie détectable, format du code
       ble/
         BlePermissions.kt        — liste des permissions requises selon Build.VERSION.SDK_INT
         MeshForegroundService.kt — service de fond, notification permanente, foregroundServiceType=connectedDevice
@@ -96,6 +108,9 @@ android/
       ble/BlePermissionsTest.kt  — test unitaire minimal (JVM, sans Robolectric)
       ffi/DengonNodeStubTest.kt  — bouchon FFI (11 tests)
       ui/conversations/ConversationsViewModelTest.kt — ViewModel de messagerie (9 tests)
+      ui/appairage/AppairageViewModelTest.kt — parcours, erreurs de scan, lecture croisée (US-215)
+      ui/appairage/QrCodeTest.kt          — QR rastérisé puis relu par ZXing, régression « alice »
+      identite/IdentiteLocaleTest.kt  — pas de collision de `peerId` entre pseudos hexadécimaux
 ```
 
 ## Concepts / types importants
@@ -239,6 +254,78 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
 |---|---|---|---|---|---|---|
 | 2026-09-25 | iPhone 13 Pro Max (iOS 27.2 beta, nRF Connect) — *pas notre code, scanner générique* | Samsung Galaxy A16 (SM-A165F) | 16 (SDK 36) | non mesurable (limitation iOS) | non chronométré | non chronométré |
 | 2026-09-28 | **Pixel 8 Pro** — exécute `HelloMeshCentral` | **Samsung Galaxy A16** (SM-A165F) — exécute `HelloMeshPeripheral` | Central : 17 (SDK 37) · Peripheral : 16 (SDK 36) | **517** | **354 ms** | **1308 ms** |
+
+## `AndroidTransport` — transport BLE réel (US-213)
+
+Implémentation Kotlin du contrat `Transport` gelé par US-105
+(`crates/dengon-ble/src/transport.rs`), qui remplace le spike jetable
+ci-dessus. Un nœud dengon est **en même temps** serveur GATT (annonce le
+service `dengon`, rôle périphérique) et scanner/client GATT (rôle central) :
+`GattRadio` porte les deux rôles simultanément.
+
+```
+android/app/src/main/java/com/dengon/app/ble/transport/
+  Transport.kt          — miroir Kotlin du contrat Rust (LinkId, TransportConfig,
+                           DisconnectReason, TransportEvent, TransportException)
+  AndroidTransport.kt   — toute la logique du contrat : LinkId, file d'événements,
+                           quota, réassemblage, règles de déconnexion. Zéro API Android.
+  BleRadio.kt            — l'interface entre AndroidTransport et la radio (RadioPeer,
+                           RappelsRadio) : ce qui rend le contrat testable en JVM pur
+  GattRadio.kt           — la vraie radio : BluetoothGattServer + advertiser + scanner
+                           + BluetoothGatt client, une seule écriture en vol par lien
+  FragmentationBle.kt   — fragmentation/réassemblage L1 (distincte de la
+                           fragmentation protocole de dengon-core), + Reassembleur
+  Annonce.kt             — UUIDs GATT, manufacturer data (préfixe de peerID), règle
+                           anti-boucle de connexion, motifDeconnexion(status GATT)
+  TransportActif.kt      — singleton qui possède le transport du processus : boucle
+                           poll(), journal (CRC + aperçu), battement périodique
+  TransportDebugScreen.kt — écran Compose de debug (essais manuels 2 téléphones)
+```
+
+### Ce qui a été vérifié sur 2 vrais téléphones (Google Pixel 8 Pro Android 17,
+Samsung Galaxy A16 Android 16)
+
+| Vérification | Résultat |
+|---|---|
+| Découverte + connexion | Un **seul** lien s'ouvre entre les deux nœuds (règle anti-boucle confirmée) : le nœud au plus petit préfixe de `peerID` initie en central. |
+| Message court (< MTU) | Reçu intact des deux côtés, CRC32 vérifié. |
+| Grande trame (5000 o, fragmentée) | Reçue intacte des deux côtés, CRC32 vérifié — la fragmentation/réassemblage BLE fonctionne sur un vrai MTU négocié (517). |
+| Déconnexion brutale (éloignement physique réel, pas un `disconnect()` propre) | **Asymétrique** : `BRUTALE` côté central, `PROPRE` côté périphérique pour le **même** événement — limite Android, voir « Décisions » et l'écart consigné. |
+| Service de fond, écran éteint | Battement 30 s sans interruption pendant 5 min 40 (12 allers-retours, CRC vérifié à chaque fois). |
+
+Détail complet, y compris le lien dupliqué par rotation d'adresse BLE trouvé
+pendant l'essai « écran éteint » : `00-journal.md`, entrée du 2026-09-28
+« US-213 ».
+
+### Suite de conformité (US-105) — transcrite, pas encore exécutée depuis Rust
+
+`crates/dengon-ble/src/conformance.rs` est écrite en Rust et ne peut piloter un
+objet Kotlin qu'à travers une *callback interface* UniFFI (US-302). En
+attendant, `AndroidTransportConformiteTest` **transcrit** les 12 cas un pour
+un (mêmes noms `cas_…`, mêmes messages), pilotés par une `FauxRadio` qui
+fragmente réellement les trames comme le ferait l'autre téléphone. Écart
+assumé, à résorber à l'US-302 (le fichier disparaîtra au profit de la suite
+Rust elle-même).
+
+### Corrections post-revue (PR #98) : 4 bugs de concurrence
+
+Relevés par une revue automatisée de la PR #98 (commentaire GitHub id
+`5872663432`), corrigés dans la foulée (voir `00-journal.md`, entrée du
+2026-09-28 « 4 bugs de concurrence corrigés en revue de la PR #98 ») :
+
+| # | Fichier | Bug | Correctif |
+|---|---|---|---|
+| 1 | `GattRadio.kt`, `demarrer()` | Le `catch` ne rattrapait que `SecurityException` : un `TransportException.Backend` (annonce/scan non pris en charge) laissait `serveur`/`actif` « ouverts », fuite d'un `BluetoothGattServer` au retry. | `catch (e: TransportException)` supplémentaire, appelle `arreter()` avant de relever. |
+| 2 | `GattRadio.kt`, `ecrire()` | `connexions` indexée par `RadioPeer(adresse, rôle)` seul : une reconnexion rapide à la même adresse, entre la résolution du `pair` par `AndroidTransport.send()` (sous verrou) et l'appel à `radio.ecrire()` (hors verrou), envoyait des fragments de l'ancien lien sur la `Connexion` du nouveau — flux corrompu, sans garde-fou. | `RadioPeer` porte une `generation: Long` assignée par `GattRadio` à chaque connexion physique ; `ecrire()`/`chargeUtile()`/`deconnecter()` ne matchent plus après une reconnexion → `UnknownPeer` au lieu de corrompre. Helper `pairActuel()` pour les rappels serveur (adresse seule, sans génération). |
+| 3 | `GattRadio.kt`, `onDescriptorWriteRequest` | `DISABLE_NOTIFICATION_VALUE` (désabonnement de `CHAR_TX` sans déconnexion) était silencieusement ignoré : `pret` restait `true`, file d'envoi potentiellement bloquée pour toujours si `onNotificationSent` n'arrive jamais pour une notification refusée. | Traité comme une fermeture de lien (`fermetureDemandee=true` + `cancelConnection()`), réutilise le chemin `onConnectionStateChange` → `DisconnectReason.LOCALE`. |
+| 4 | `TransportActif.kt`, `transport` | `var` écrite sous `@Synchronized` mais lue sans verrou depuis un autre thread (`sonder()`/`battre()`) : aucune garantie de visibilité inter-thread. | `@Volatile`. |
+
+Le point 2 est le plus structurant : voir `04-apprentissages.md` (« Génération
+(epoch) : désambiguïser deux connexions successives à la même identité ») pour
+le principe général. Non re-testé sur appareil réel (races non reproductibles
+à la main de façon fiable) ; suite JVM inchangée (`FauxRadio` ne modélise pas
+les rappels Android par adresse brute, donc n'exerçait pas ces 4 chemins) —
+48/48 tests toujours verts après correctif.
 
 ## Flux principal (exemple)
 
@@ -385,22 +472,46 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
     (2 modèles, 2 versions Android) mais **aucun des deux ne couvre Doze
     réel** — voir « Limites connues » ci-dessous pour la procédure à
     suivre plus tard.
+- **US-213, 2026-09-28, même couple d'appareils (Pixel 8 Pro / Galaxy A16),
+  toujours en charge USB** : 48 tests JVM (`AndroidTransportConformiteTest`,
+  `AndroidTransportTest`, `FragmentationBleTest`), 0 échec, plus une session
+  d'essais réels — connexion (un seul lien, règle anti-boucle confirmée),
+  message court et grande trame (5000 o) dans les deux sens vérifiés par
+  CRC32, déconnexion brutale par éloignement physique réel (asymétrique
+  `BRUTALE`/`PROPRE` selon le rôle GATT — limite Android, pas un bug),
+  battement 30 s sans interruption pendant 5 min 40 écran éteint (12
+  allers-retours). **Même limite « en charge »** que les tests US-109
+  ci-dessus : pas de vrai Doze testé. Détail complet, y compris le lien
+  dupliqué par rotation d'adresse BLE trouvé en cours d'essai :
+  `00-journal.md`, entrée du 2026-09-28 « US-213 ».
 
 ## Limites connues / TODO
 
-- Aucune logique BLE réelle (`BluetoothGattServer`/`Scanner`/`Advertiser`) :
-  prévue pour US-213 (`AndroidTransport`), qui implémentera le contrat
-  `Transport` de `docs/synthese/04-architecture.md` §3 et remplacera ce
-  squelette de service par le vrai relais.
-- Messagerie branchée sur le **bouchon** FFI (US-106), pas sur le vrai nœud
-  (US-306). Le bouchon ne produit jamais de message entrant ni de
+- ~~Aucune logique BLE réelle~~ **`BluetoothGattServer`/`Scanner`/`Advertiser`
+  implémentés par US-213** (`AndroidTransport` + `GattRadio`), testés sur 2
+  appareils réels — voir la section dédiée ci-dessus. Reste : brancher sur
+  `dengon-core` (US-306) et la vraie identité (`peerID`).
+- **Détection de déconnexion brutale asymétrique selon le rôle GATT** (limite
+  Android, US-213) : fiable côté central, pas côté périphérique (le rappel
+  serveur `onConnectionStateChange` rend quasi toujours `status=0`). Écart
+  consigné dans `03-ecarts-conception.md`.
+- **Liens dupliqués possibles** si l'adresse BLE annoncée par un pair change
+  en cours de session (rotation d'adresse privée résolvable côté Android) :
+  `GattRadio` déduplique par adresse MAC, pas par identité cryptographique.
+  Observé une fois en test réel (US-213). Résolution prévue côté `sync`
+  (identité par `peerID`/`ANNOUNCE`), pas côté `Transport`. Écart consigné.
+- Messagerie et appairage branchés sur le **bouchon** FFI (US-106), pas sur le
+  vrai nœud (US-306). Le bouchon ne produit jamais de message entrant ni de
   changement de statut : l'écran les affiche s'ils arrivent, mais la démo
-  ne montre que « En attente » / « Parti » à l'envoi.
+  ne montre que « En attente » / « Parti » à l'envoi. `AndroidTransport`
+  (US-213) n'est pas non plus branché sur `dengon-core` : c'est un
+  `Transport` qui fonctionne, sans encore transporter le protocole dengon.
 - `unreadCount` n'est jamais remis à zéro : le contrat v0 n'a pas de
   `mark_read` (US-214 hors périmètre, à ajouter au contrat).
 - Pas de navigation Compose (`navigation-compose` non ajouté, pour ne pas
-  toucher au verrouillage des dépendances) : trois états booléens dans
-  `MainActivity`. À revoir quand l'écran QR (US-215) arrivera.
+  toucher au verrouillage des dépendances) : quatre états booléens dans
+  `MainActivity` (messagerie, appairage, transport, spike). À revoir si un
+  cinquième écran s'ajoute.
 - Pas de CI Android (`android.yml`) — relève de US-113/US-222 (issue #79
   créée pour un job `android.yml` minimal, retour de revue PR #72).
 - SDK Android installé localement pour vérifier le build de cette session,
@@ -419,6 +530,52 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
   2026-09-28** (2 vrais Android, 4/4 critères de l'issue #3 démontrés — voir
   « Spike C » ci-dessus). Cette puce était encore au stade « partiel » ici
   après le merge de la PR #67, corrigé au passage.
+
+## Appairage par QR + code 60 chiffres (US-215)
+
+Le scénario 1 du DoD commence ici : deux personnes vérifient qu'elles
+parlent bien l'une à l'autre, **sans serveur** (`powl/04` §2.2-2.3).
+
+1. Chacun affiche son QR (`dengon:v1:<base64url(pseudo ‖ pub_static ‖ pub_sign)>`).
+2. Chacun scanne celui de l'autre (caméra, `zxing-android-embedded`).
+3. Les deux écrans affichent le **même** code de 60 chiffres (3 lignes de 4
+   groupes) ; on le lit à voix haute et on **confirme explicitement** —
+   ou on signale une différence (possible interception).
+
+Sous le code, l'écran rappelle mon QR : l'autre téléphone doit encore le
+scanner (défaut trouvé sur appareil, voir ci-dessous).
+
+| Élément | Fichier | Rôle |
+|---|---|---|
+| `AppairageViewModel` | `ui/appairage/AppairageViewModel.kt` | État `StateFlow` ; `onQrScanne`, `confirmer`, `refuser`, `recommencer`. JVM pur. |
+| `AppairageScreen` | `ui/appairage/AppairageScreen.kt` | Affichage, lancement du scanner (`ScanContract`), boutons. |
+| `matriceQr` | `ui/appairage/QrCode.kt` | QR garanti détectable : essaie les 8 masques si besoin. |
+| `IdentiteLocale` | `identite/IdentiteLocale.kt` | Identité provisoire, pseudo hexadécimal (8 octets, tous aléatoires). |
+
+**Testé sur Pixel 8 Pro (Android 17) + Galaxy A16 (Android 16)** : lecture
+croisée caméra, codes identiques (`99083 88326 31081 93212 49943 35746 33429 06232 54259 64334 82577 91716`), contacts marqués vérifiés.
+Captures : [`../assets/us-215/`](../assets/us-215/).
+
+**Défauts trouvés en route :** QR indétectable pour certains contenus
+(corrigé par le choix du masque) ; même `peerId` pour tous les téléphones
+(pseudo `appareil-xxxx`, corrigé en `tel-xxxx`) ; mon QR masqué après mon
+scan (corrigé). Détail : `00-journal.md`, entrée US-215.
+
+**Corrections de la revue de la PR #94 (2026-09-28) :**
+1. `tel-xxxx` ne faisait encore varier que 2 des 8 octets du `peerId` (le
+   préfixe `tel-` étant constant, 2^16 valeurs) — pseudo maintenant purement
+   hexadécimal, sans préfixe, les 4 octets de source aléatoire couvrant
+   toute la fenêtre du `peerId` (2^32 valeurs).
+2. Repli silencieux de `matriceQr` sur un QR connu indétectable → `Log.w`
+   ajouté.
+3. Encodage du QR (`matriceQr`) exécuté sur le thread UI dans `remember` →
+   déplacé sur `Dispatchers.Default` via `produceState`.
+
+**Limites :** contacts vérifiés en mémoire seulement (pas d'appel FFI
+« marquer vérifié ») ; identité et code = bouchon (vraie crypto à l'US-306) ;
+navigation minimale, à fusionner avec celle de US-214 (PR #87) ; corrections
+ci-dessus non revérifiées sur appareil réel (couvertes par les tests JVM
+existants/adaptés).
 
 ## Pour l'oral
 

@@ -8,8 +8,10 @@ message.
 **Dernière mise à jour :** 2026-09-28
 **État :** `/healthz` + `/ingest/batch` **validé** (schéma + JWT + signature
 Ed25519 + dédup, US-216) + `/api/nodes` (enregistrement, US-216) + projection
-`messages` recalculée à chaque batch ingéré (US-217). Pas encore de
-`links`/`message_hops`, pas de SSE, pas de route de lecture des projections.
+`messages` recalculée à chaque batch ingéré (US-217) + `GET /api/stream` en
+SSE, rattrapage + diffusion live (US-218) + `GET /api/messages`/
+`GET /api/messages/{id}`, lecture des projections pour `dashboard/web`
+(US-219). Pas encore de `links` (topologie).
 
 Cette fiche tient aussi lieu de **note d'onboarding de l'area `dashboard-api`**
 (proposition d'organisation §10.3 point 3).
@@ -41,12 +43,16 @@ dashboard/api/
     schemas.py            — batch_validator() : jsonschema Draft202012Validator contre contracts/events/batch.schema.json
     auth.py               — create_token()/node_id_from_authorization_header() : JWT HS256 courts (24h)
     projections.py        — project_message()/project_messages() : reconstruction de statut (US-217), pure, sans I/O
-    ingest.py             — pipeline complet de validation + rafraîchissement des projections (voir Flux principal)
-    main.py             — app FastAPI ; lifespan → migrations + connexion partagée + jwt_secret() ; routes /healthz, /ingest/batch, /api/nodes
+    stream.py              — StreamEvent (formatage SSE)/Broadcaster (diffusion thread-safe, US-218)
+    messages_api.py        — list_messages()/get_message()/get_message_hops() : lecture pour dashboard/web (US-219)
+    ingest.py             — pipeline complet de validation + rafraîchissement des projections + publication SSE (voir Flux principal)
+    main.py             — app FastAPI ; CORS (GET, US-219) ; lifespan → migrations + connexion partagée + jwt_secret() + Broadcaster ; routes /healthz, /ingest/batch, /api/nodes, /api/stream, /api/messages[/{id}]
   tests/
     conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan, secret JWT de test
     test_api.py          — 38 tests (voir plus bas)
     test_projections.py  — 24 tests, dont 2 bout-en-bout sur les 20 fixtures golden via /ingest/batch
+    test_stream.py        — 7 tests (US-218), dont 5 sur un vrai serveur uvicorn (voir Tests)
+    test_messages_api.py  — 7 tests (US-219), sur les 20 fixtures golden via /ingest/batch
 ```
 
 ## Concepts / types importants
@@ -73,6 +79,12 @@ dashboard/api/
 | `_read_limited_body()` | `app/main.py` | lit `request.stream()` par morceaux, coupe dès que `max_batch_bytes()` est dépassé (`Content-Length` en fast-path, comptage réel sinon) ; vide le flux restant avant de lever dans les **deux** branches |
 | `POST /ingest/batch` | `app/main.py` | JWT vérifié **avant** de lire le corps (voir décisions) → corps borné (413 si trop gros) → `run_in_threadpool(ingest.ingest_batch, …)` → `202` avec `new_event_count` ; `ingest.IngestError` → `exc.status_code`/`exc.detail` ; `503` + `Retry-After` si la base est verrouillée |
 | `POST /api/nodes` | `app/main.py` | enregistre un nœud (`node_id`/`kind`/`pub_sign` hex 32 octets), upsert dans `nodes` (`whitelisted=1` — pas d'auth opérateur, voir Limites), renvoie `{"node_id", "token"}` (201) |
+| `StreamEvent` | `app/stream.py` | un événement tel que diffusé en SSE ; `rowid` = identifiant SSE (`id:`), curseur de reprise `Last-Event-ID` ; `to_sse()` formate la trame |
+| `Broadcaster` | `app/stream.py` | ensemble d'abonnés (`asyncio.Queue`) ; `publish()` appelable depuis N'IMPORTE QUEL thread via `loop.call_soon_threadsafe` (le seul mécanisme sûr pour toucher une `asyncio.Queue` depuis le threadpool d'ingestion) |
+| `GET /api/stream` | `app/main.py` | SSE : rattrapage (`_events_since`, `rowid > Last-Event-ID` ou 0) puis abonnement live ; `: keep-alive` toutes les 15 s (voir décisions) |
+| `list_messages()`/`get_message()` | `app/messages_api.py` | lecture directe de `messages` — liste triée par `last_event_ms DESC`, ou une ligne par `msg_log_id` |
+| `get_message_hops()` | `app/messages_api.py` | le « parcours » d'un message (§11.2 `message_hops`) **dérivé à la lecture** depuis `events` (pas une table à part, voir décisions) ; `kind` mappé depuis le nom d'événement (`pkt.relayed`→`relay`, etc.), sinon le nom brut |
+| `GET /api/messages` / `GET /api/messages/{id}` | `app/main.py` | routes **sync** (comme `/healthz`, lecture SQLite seule) ; la seconde renvoie 404 si le `msg_log_id` est inconnu, sinon le message + son tableau `hops` |
 
 ## Flux principal (exemple)
 
@@ -90,12 +102,26 @@ un nœud : POST /ingest/batch   Authorization: Bearer <jwt>   body = {batch sign
        _verify_event_ids(body, node_kind)       → 400 si event_id recalculé != envoyé,
                                                     ou si node_id/node_kind d'un événement
                                                     diffère du batch/de node_kind enregistré
-       new_count = _insert_events(...)          → INSERT OR IGNORE par event_id, idempotent
+       inserted = _insert_events(...)           → INSERT OR IGNORE par event_id, idempotent ;
+                                                    rend la liste des `StreamEvent` insérés
+                                                    (pas juste un compte, US-218 en a besoin
+                                                    pour `broadcaster.publish`)
           pour chaque msg_log_id touché par ce batch :
              _refresh_message_projection(...)   → relit TOUS les événements de ce msg_log_id
                                                     en base, reprojette, UPSERT dans `messages`
           └─ sqlite3.OperationalError ?          → 503 + Retry-After: 1
+       broadcaster.publish(inserted)             → réveille les abonnés GET /api/stream (US-218)
   → 202  {"batch_id": "...", "node_id": "...", "event_count": 2, "new_event_count": 2}
+
+un client dashboard : GET /api/stream   [Last-Event-ID: 41]
+  main.stream_events → StreamingResponse(_event_stream(request), "text/event-stream")
+    queue = broadcaster.subscribe()                     → abonné AVANT le rattrapage (voir décisions)
+    for event in _events_since(db, after_rowid=41): yield event.to_sse()   → rattrapage
+    boucle : await wait_for(queue.get(), timeout=15s)
+       → événement neuf (rowid > dernier servi) : yield event.to_sse()
+       → déjà servi pendant le rattrapage : ignoré (fenêtre subscribe-avant-lecture)
+       → timeout : yield ": keep-alive\n\n", reboucle
+       → request.is_disconnected() : fin du générateur, broadcaster.unsubscribe(queue)
 ```
 
 `raw_batches` (US-110) n'est plus écrite depuis l'US-216 — `/ingest/batch`
@@ -449,6 +475,90 @@ dans `03-ecarts-conception.md`.
     topologie ni l'historique détaillé des sauts. `hop_count` (colonne de
     `messages`) est une approximation — nombre de `pkt.relayed` vus pour ce
     `msg_log_id`, pas un décompte par nœud — documentée comme telle.
+- **US-218 (SSE) :**
+  - **`rowid` SQLite comme identifiant SSE** plutôt qu'une colonne dédiée :
+    `events` n'est pas déclarée `WITHOUT ROWID`, donc chaque ligne a déjà un
+    entier strictement croissant à l'insertion — exactement ce qu'exige le
+    mécanisme standard `id:`/`Last-Event-ID` de SSE. Une colonne `stream_seq`
+    séparée aurait dupliqué une propriété déjà garantie par SQLite.
+  - **`cur.lastrowid` gardé seulement si `cur.rowcount`** : sur un `INSERT OR
+    IGNORE` ignoré (conflit `event_id`, rejeu d'un batch), sqlite3 laisse
+    `lastrowid` à sa valeur précédente au lieu de lever ou de le mettre à
+    `None` — le lire sans vérifier `rowcount` aurait republié un événement
+    déjà vu sous l'identité SSE d'un autre événement, au hasard de l'ordre
+    d'itération. Vérifié par test (rejeu exact d'un batch → 0 événement
+    publié, `subscriber_count()` reçoit rien).
+  - **Publication du `Broadcaster` APRÈS le `COMMIT`**, jamais avant : un
+    abonné ne doit jamais recevoir en SSE un événement que la base
+    elle-même ne contient pas encore (ex. si le `COMMIT` échoue après coup
+    pour une raison imprévue) — l'ordre inverse casserait l'invariant « SSE
+    est un reflet de `events`, jamais en avance sur lui ».
+  - **Abonnement (`broadcaster.subscribe()`) AVANT la lecture de
+    rattrapage**, pas après : un événement publié pendant la lecture du
+    rattrapage doit être vu une fois, pas zéro (fenêtre de perte si abonné
+    après) ni deux fois (géré par le filtre `rowid <= last_rowid` déjà en
+    place pour l'autre sens).
+  - **`loop.call_soon_threadsafe` obligatoire** pour publier depuis
+    l'ingestion : celle-ci tourne dans le threadpool FastAPI
+    (`run_in_threadpool`), donc dans un thread différent de la boucle
+    asyncio qui sert `GET /api/stream`. Appeler `queue.put_nowait`
+    directement depuis ce thread ne lèverait pas forcément d'erreur
+    immédiate mais corromprait l'état interne de la `Queue` sous
+    contention — `call_soon_threadsafe` est le seul mécanisme qu'asyncio
+    garantit sûr entre threads.
+  - **Boucle live bornée par un `timeout` (`asyncio.wait_for`), pas un
+    `await queue.get()` nu** : sans ça, un client déconnecté sans
+    événement à venir ne serait jamais détecté (`request.is_disconnected()`
+    n'est vérifié qu'à chaque itération de la boucle) — la connexion et son
+    abonné resteraient vivants indéfiniment. Le timeout double comme
+    heartbeat (`: keep-alive`), utile contre un reverse-proxy qui coupe une
+    connexion HTTP inactive (US-224).
+  - **`Last-Event-ID` illisible → 0 (tout l'historique)**, pas un rejet
+    4xx : cet en-tête est renvoyé automatiquement par le navigateur à la
+    RECONNEXION avec la dernière valeur `id:` vue — un client qui se
+    connecte pour la première fois n'en envoie aucun, un rejet casserait
+    donc la connexion initiale, pas seulement un cas d'erreur réel.
+  - **Pas de route de lecture des projections** (`GET /api/messages` ou
+    équivalent) : hors périmètre de l'US-218 (SSE des événements bruts, pas
+    des projections) et de l'US-217 — couvert par l'US-219 (voir ci-dessous).
+- **US-219 (lecture pour le web) :**
+  - **`message_hops` (§11.2) dérivée à la lecture depuis `events`, jamais
+    stockée** : la conception prévoit une table alimentée à l'écriture ;
+    l'implémentation la reconstruit à chaque `GET /api/messages/{id}`
+    (`SELECT ... WHERE json_extract(payload,'$.msg_log_id') = ?`, la même
+    requête que `_refresh_message_projection`). Moins de code à maintenir
+    en écriture (pas de nouvelle migration, pas de nouvel `INSERT` à greffer
+    dans `ingest.py`), coût de lecture négligeable au volume visé (démo
+    5-8 appareils, B-4). Si le volume grossissait, cette requête deviendrait
+    le premier goulot à revoir — pas avant.
+  - **`kind` d'un saut = le nom d'événement brut si aucun des 4 noms §11.2
+    ne correspond** (ex. `msg.queued` reste `msg.queued`) plutôt qu'un
+    filtrage qui ne garderait que `pkt.relayed`/`envelope.*`/`delivered` :
+    montre TOUT ce qui est arrivé pour ce message, pas seulement les sauts
+    réseau — plus proche de « tient avec des données partielles » (les
+    événements applicatifs du cycle de vie du message comptent aussi comme
+    du parcours, pas seulement les relais physiques).
+  - **CORS `GET` ouvert (`allow_origins=["*"]`, `allow_methods=["GET"]`,
+    `allow_headers=["Last-Event-ID"]`)** : `dashboard/web` est une page
+    statique potentiellement servie depuis un port/domaine différent (voire
+    `file://`, origine `null`) — sans CORS, le navigateur bloque
+    `fetch`/`EventSource` avant le départ de la requête. Limité aux méthodes
+    `GET` : ces routes ne renvoient que des données déjà redigées, sans
+    cookie/session, et `POST /ingest/batch`/`POST /api/nodes` restent hors de
+    la portée CORS ouverte (ils exigent un JWT qu'aucune origine tierce ne
+    peut deviner). `allow_headers` **corrigé après revue de la PR #100** :
+    sans `Last-Event-ID` explicitement autorisé, le preflight cross-origine
+    de la reconnexion `EventSource` (rattrapage SSE, US-218) était rejeté par
+    Starlette dès que `dashboard/web` et l'API n'étaient pas sur la même
+    origine — silencieusement, sans `onerror` géré côté `api.js`.
+  - **`get_message_hops()` trié sur `(ts_ms, rowid)`**, pas seulement
+    `ts_ms` — **corrigé après revue de la PR #100** : deux événements du même
+    message peuvent partager le même `ts_ms` (résolution milliseconde,
+    plusieurs relais rapprochés) ; sans clé secondaire, leur ordre dans
+    `hops` dépendait de l'ordre d'arrivée des batches côté serveur plutôt que
+    d'un ordre stable. `rowid` (ordre d'insertion) ne garantit pas la
+    chronologie exacte en cas d'égalité stricte, mais donne un résultat
+    reproductible.
 
 ## Tests
 
@@ -524,24 +634,52 @@ dans `03-ecarts-conception.md`.
 - Commande : `uv run pytest tests/test_projections.py` → **24 passed** ;
   suite complète (`test_api.py` + `test_projections.py`) → **62 passed**
   (vérifié le 2026-09-28, après rebase sur `main`).
+- `tests/test_stream.py` — **7 tests** (US-218). 2 purs (`StreamEvent.to_sse()`
+  format, `Broadcaster.publish()` livre à plusieurs abonnés / ne lève pas
+  sans abonné). **5 sur un vrai serveur `uvicorn`** (fixture `live_server`,
+  port OS, thread dédié) — piège trouvé en les écrivant : `TestClient`
+  (`starlette.testclient`) fait tourner la coroutine ASGI complète avant de
+  rendre la main (`portal.call(self.app, ...)`), donc bufferise toute la
+  réponse au lieu de la streamer ; `/api/stream` ne se terminant jamais,
+  `client.stream(...)` restait bloqué indéfiniment à l'entrée du `with`
+  (confirmé avec un script de reproduction + `faulthandler.dump_traceback()`
+  avant de changer d'approche). Tests : rattrapage sur un événement déjà
+  ingéré ; **reconnexion** — `Last-Event-ID` = id du premier événement ne
+  fait pas revoir cet événement, seulement les suivants ; `Last-Event-ID`
+  illisible → rattrapage depuis le début ; **diffusion live réelle** — un
+  client connecté AVANT l'ingestion (attente bornée sur
+  `broadcaster.subscriber_count()`, pas un `sleep` fixe) reçoit l'événement
+  via `Broadcaster.publish()`, pas via le rattrapage.
+- Commande : `uv run pytest tests/test_stream.py` → **7 passed** ; suite
+  complète → **69 passed** (vérifié le 2026-09-28, après rebase sur `main`).
+- `tests/test_messages_api.py` — **7 tests** (US-219), tous sur les 20
+  fixtures golden ingérées via `POST /ingest/batch` : liste vide avant toute
+  ingestion ; 404 sur un id inconnu ; la liste après ingestion contient
+  exactement les `msg_log_id` des fixtures, triée par activité décroissante ;
+  le détail de `1122…` a le bon statut/latence et des `hops` en ordre
+  chronologique ; `pkt.relayed` se mappe en `kind: "relay"` avec
+  ttl/fanout renseignés ; les champs radio absents (`aabbccdd…`, pas de
+  `pkt.relayed`) restent `null`, jamais un champ manquant ; aucune réponse
+  n'expose `event_id` ni un champ hors du schéma attendu (cohérence avec la
+  redaction, critère d'acceptation de l'US-219).
+- Commande : `uv run pytest tests/test_messages_api.py` → **7 passed** ;
+  suite complète → **99 passed** (vérifié le 2026-09-29, après rebase sur `main`).
 
 ## Limites connues / TODO
 
-- **Pas de SSE**, pas de routes REST de lecture des projections. →
-  US-218, US-219.
-- **`POST /api/nodes` sans auth opérateur** : n'importe qui peut enregistrer
-  un `node_id` **inédit** et obtenir un JWT valide (**re**-enregistrer un
-  `node_id` déjà pris est bloqué depuis la revue de la PR #91 — 409, plus
-  d'upsert). Aucune US actuelle ne couvre l'auth admin/opérateur — écart
-  consigné dans `03-ecarts-conception.md`.
+- **`POST /api/nodes`, `GET /api/stream` et `GET /api/messages*` sans auth
+  opérateur** : n'importe qui peut enregistrer un nœud, obtenir un JWT
+  valide, ou lire le flux d'événements/les projections. Aucune US actuelle
+  ne couvre l'auth admin/opérateur — écarts consignés dans
+  `03-ecarts-conception.md`.
 - **Pas de vérification de journal chaîné** : `dengon-verify` n'est pas
   appelé, `integrity` reste toujours `'unverified'`. → hors périmètre US-216.
 - **Nœud inconnu traité comme un 401 direct**, pas comme la quarantaine +
   alerte décrite par la conception (`docs/synthese/09` §3) — écart consigné.
-- **`links`/`message_hops` (§11.2) non créées** : topologie et historique
-  détaillé des sauts par message restent hors périmètre — écart consigné
-  (US-217 ne couvre que le statut). `messages.hop_count` est une
-  approximation (compte de `pkt.relayed`), pas un journal par nœud.
+- **`links` (§11.2) non créée** : topologie du réseau hors périmètre —
+  écart consigné. `message_hops` n'est plus une limite depuis l'US-219 (voir
+  décisions : dérivée à la lecture, pas stockée). `messages.hop_count` reste
+  une approximation (compte de `pkt.relayed`), pas un décompte par nœud.
 - **Statut `read` (v2) jamais produit** : `msg.read` n'est pas traité par la
   projection — écart consigné.
 - **Pas de déploiement** : tourne en local via `uvicorn`. Les migrations

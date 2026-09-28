@@ -66,6 +66,232 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 ### Écarts vs conception
 - Aucun nouveau — écarts déjà consignés pour US-301 inchangés.
+## 2026-09-29 — US-305 : corrections suite à la revue de la PR #92
+
+**Auteur :** Oswin (Tanguy) + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-verify/src/main.rs`, `crates/dengon-core/src/ledger.rs`,
+`docs/suivi/`.
+**Lot :** US-305 (issue #43). Branche `feat/US-305-dengon-verify` (PR #92), base
+`main`.
+
+### Fait
+- **Retour bloquant potentiel de Paul (revue non bloquante mais corrigée)** :
+  `main.rs` utilisait `std::env::args()`, qui panique (code de sortie 101, pas
+  de message exploitable) sur un argument non UTF-8 (chemin de fichier
+  exotique). Remplacé par `std::env::args_os()` + conversion explicite ;
+  un argument non convertible rend maintenant `EXIT_USAGE` (64) avec un
+  message sur stderr, conforme au contrat de sortie documenté dans le module.
+- **Commentaire obsolète signalé par Paul** : `ledger.rs::verify_entries`,
+  le commentaire de la passe 1 parlait encore de « trou dans `0..=max` » (avant
+  l'introduction de `Anchor`) et la passe 2 de `self.entries` (avant
+  l'extraction en fonction libre). Mis à jour en `anchor.first_seq..=max` et
+  `entries`.
+- La branche locale avait divergé de `origin` (rebase déjà effectué côté
+  origin sur `main` à jour, incluant tout le Sprint 2/3 mergé depuis) : `git
+  reset --hard origin/feat/US-305-dengon-verify` pour repartir de l'état
+  poussé, sans perdre les deux corrections (appliquées après le reset).
+- PR sortie du brouillon, revue demandée à Paul (`POWLAIR`, codeowner
+  `/crates/`), commentaire posté récapitulant les corrections, checklist DoD
+  §7.1 items 3 (CI verte) et 4 (revue demandée) cochés dans le corps de la PR.
+
+### Pourquoi / décisions
+- Correction ciblée des deux points « non bloquants » de la revue plutôt que
+  de les laisser en dette : ce sont des corrections d'une ligne chacune, sans
+  risque, et elles lèvent tout doute avant la seconde revue.
+
+### Écarts vs conception
+- Aucun nouvel écart ; ceux déjà consignés (JSON canonique vs binaire,
+  `Signer` Ed25519 non branché) restent inchangés, cf. `03-ecarts-conception.md`
+  (entrée 2026-09-28, US-305).
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- `dengon-verify` (US-305) : implémentation inchangée sur le fond, corrections
+  de revue appliquées. En attente de l'approbation de Paul avant merge.
+- Fiche(s) module mise(s) à jour : aucune (pas de changement de comportement
+  ni de contrat à documenter au-delà du journal).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-verify -p dengon-core --quiet
+172 tests, 0 échec
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(aucun avertissement)
+
+$ rustfmt --check (sur copie LF des deux fichiers touchés, contournant le
+  faux positif CRLF de `core.autocrlf=true` en local)
+OK après un point de format corrigé (eprintln! multi-lignes)
+```
+- `cargo fmt --check` direct sur le dépôt local signale une CRLF sur
+  l'ensemble des fichiers du dépôt (artefact `core.autocrlf=true` local,
+  préexistant, sans lien avec cette PR) — non retenu comme signal fiable ici.
+
+---
+## 2026-09-29 — US-219 : rebase de la PR #100 sur `main`
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{config,ingest,main,migrations}.py`,
+`dashboard/api/tests/test_api.py`, `docs/suivi/modules/dashboard-api.md`.
+**Lot :** US-219 (PR #100), branche `feat/US-219-web-timeline`, rebase sur
+`main` (qui avait avancé jusqu'à `54f143e`, incluant le rebase de la PR #98).
+
+### Fait
+- `gh pr view 100` signalait `mergeable: CONFLICTING` (checks CI verts par
+  ailleurs). Rebase interactif via `git rebase origin/main` dans un worktree
+  dédié (`dengon-us219`).
+- Conflits sur les 4 premiers commits de la branche (US-216/217/218) :
+  chacun rejouait une version de `dashboard/api/app/{config,ingest,main,
+  migrations}.py` et de `docs/suivi/modules/dashboard-api.md` déjà dépassée —
+  `main` contenait une version strictement plus complète (revues de PR #91
+  déjà appliquées). Résolu en gardant systématiquement le côté `HEAD`
+  (`git checkout --ours`) après vérification manuelle, chunk par chunk, que
+  le côté entrant n'ajoutait rien d'absent de `HEAD`.
+- Conflit réel sur le commit US-219 lui-même : uniquement
+  `docs/suivi/modules/dashboard-api.md` (compteurs de tests + section
+  « Limites connues »). Fusionné à la main (garde les deux apports :
+  description de `test_messages_api.py` + mention `GET /api/messages*` dans
+  les limites d'auth).
+- Suite complète (`python -m pytest`, `dashboard/api/`) réexécutée après le
+  rebase : **99 passed** (le chiffre affiché dans `dashboard-api.md` avant le
+  rebase, 69/72, datait d'avant la fusion de plusieurs PR indépendantes sur
+  `main` entre-temps) — mis à jour dans la fiche module.
+- `git push --force-with-lease` sur `feat/US-219-web-timeline` : PR #100
+  passe à `mergeable: MERGEABLE`.
+
+### Écart / point d'attention
+- Environnement de test local sans `uv` : dépendances installées via
+  `pip install -e ".[dev]"` (système Python 3.13) pour pouvoir exécuter la
+  suite après résolution des conflits — pas la méthode habituelle du projet
+  (`uv run pytest`), mais résultat équivalent (mêmes fichiers, mêmes tests).
+
+## 2026-09-28 — US-224 : corrections suite à la revue de la PR #97
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `.uv-version` (nouveau), `.dockerignore`,
+`.github/workflows/{dashboard,deploy-vps}.yml`, `dashboard/api/Dockerfile`,
+`dashboard/deploy/{docker-compose.yml,Caddyfile,.env.example,purge-demo.sh}`,
+`docs/suivi/`.
+**Lot :** US-224 (issue #38). Branche `feat/US-224-deploy-vps` (PR #97), base
+`main`.
+
+### Fait
+- **Fusion de `main` dans la branche** : la PR indiquait un conflit de merge
+  côté GitHub (`mergeable_state: dirty`) ; en local, `git merge origin/main`
+  s'est terminé sans aucun conflit (probablement un état de calcul GitHub pas
+  encore à jour). Vérifié après fusion : 72 tests + ruff toujours au vert.
+- **Revue formelle POWLAIR (APPROVED, 5 remarques) + revue inline
+  OswinFreyr (10 commentaires, COMMENTED)** — tous vérifiés contre le code
+  réel, tous corrigés :
+  1. **Smoke test d'ingestion (bloquant)** — `deploy-vps.yml` attendait un
+     `202` sur `POST /ingest/batch` sans `Authorization`. Or US-216 (PR #91)
+     est déjà mergée sur `main` (donc dans cette branche après la fusion) :
+     l'appel renvoie maintenant `401`. Changé pour vérifier ce `401` (teste
+     que l'auth est bien active en prod), comme suggéré par POWLAIR — signer
+     un batch réel dans un smoke test bash aurait demandé de reproduire la
+     signature Ed25519 hors de portée de ce script.
+  2. **`StrictHostKeyChecking accept-new`** → `VPS_KNOWN_HOSTS` (nouveau
+     secret, `ssh-keyscan` vérifié une fois à la main) + `StrictHostKeyChecking
+     yes`. `accept-new` sur un runner éphémère acceptait la clé d'hôte sans
+     vérification à CHAQUE run, pas seulement au premier contact.
+  3. **Port `8443` dupliqué à 4 endroits** (Caddyfile, `docker-compose.yml`,
+     2× `deploy-vps.yml`) → `CADDY_HTTPS_PORT`/`CADDY_HTTP_PORT` (`.env`,
+     optionnels), une seule variable relue partout.
+  4. **`localhost` (défaut `CADDY_SITE_ADDRESS`) tripé dans le Caddyfile** →
+     le défaut vit maintenant uniquement dans `docker-compose.yml`
+     (`${CADDY_SITE_ADDRESS:-localhost}`), le Caddyfile lit juste
+     `{$CADDY_SITE_ADDRESS}` (toujours présente côté conteneur).
+  5. **Ce même défaut silencieux, incohérent avec le `:?` du secret JWT** →
+     Caddy émet maintenant un avertissement au démarrage (`entrypoint`/
+     `command` shell dans `docker-compose.yml`) si `CADDY_SITE_ADDRESS` vaut
+     encore `localhost`.
+  6. **`uv==0.9.25` dupliqué** entre `Dockerfile` et `dashboard.yml` →
+     `.uv-version` (racine), lu par les deux.
+  7. **`DENGON_DASHBOARD_MAX_BATCH_BYTES: "2097152"` redondant** avec le
+     défaut de `config.py` → ligne supprimée.
+  8. **Pas de garde `api`/`caddy`** → `HEALTHCHECK` (Dockerfile, `python3`,
+     pas de dépendance `curl` ajoutée) + `depends_on: condition:
+     service_healthy`.
+  9. **`docker volume rm ... || echo "(déjà absent)"`** avalait toute erreur,
+     pas seulement « absent » → `docker volume inspect` avant `rm`.
+  10. **`sleep 2` non vérifiant** (`purge-demo.sh`) → poll sur `/healthz` via
+      `docker compose exec`.
+  11. **`context: ../..` envoie tout le monorepo** → `.dockerignore` exclut
+      `android/`, `crates/`, `docs/`, `firmware/`, `dashboard/web/` (seuls
+      `contracts/`+`dashboard/api/` sont `COPY`-és).
+  12. **`encode gzip` sur le SSE** (remarque POWLAIR, anticipant #95) →
+      exclu de `/api/stream` via un matcher `@nostream not path /api/stream`.
+  13. **`tar xzf` ne purge pas les fichiers retirés du dépôt** → `rm -rf` sur
+      le VPS avant extraction, limité à `dashboard/api`/`contracts` — **pas**
+      `dashboard/deploy` (contrairement à la suggestion initiale de la
+      revue) : `dashboard/deploy/.env` (secret JWT, adresse Caddy) vit sur le
+      disque du VPS, jamais dans l'archive transférée, et ce workflow
+      s'interdit explicitement d'y toucher (voir son commentaire d'en-tête).
+  14. **Un seul worker uvicorn** (`Broadcaster` en mémoire, US-218) →
+      documenté en commentaire près du `CMD` du Dockerfile, pas de
+      changement de comportement.
+
+### Pourquoi / décisions
+- Correctifs appliqués directement sur `feat/US-224-deploy-vps` (branche de
+  la PR #97), pas sur une branche séparée — même raisonnement que pour la PR
+  #100 : ce sont des correctifs de revue sur une PR déjà ouverte.
+- Smoke test d'ingestion réduit à vérifier un `401` plutôt qu'une ingestion
+  complète : signer un batch Ed25519 dans un script bash de smoke test
+  aurait dupliqué une part significative de la logique de `contracts/tools/
+  validate.py`/des tests Python, pour un script qui n'a besoin que de
+  prouver que le déploiement a bien pris en compte l'auth de #91.
+- **Non vérifié dans cette session** : aucun démon Docker disponible dans cet
+  environnement (`docker build`/`docker compose up` échouent avec « no such
+  file or directory » sur `/var/run/docker.sock`) — donc pas de build réel
+  de l'image ni de run des services. Compensé par `docker compose config`
+  (résolution des variables/`depends_on`/healthcheck vérifiée), `bash -n`/
+  `sh -n` sur les scripts modifiés, et relecture attentive de la syntaxe
+  Caddyfile (matcher `@nostream`, `{$VAR}`) contre la documentation Caddy —
+  **à revérifier sur le VPS réel avant le prochain déploiement**.
+
+### Écarts vs conception
+- Aucun nouveau — écarts déjà consignés pour US-224 inchangés (ports
+  8080/8443, TLS auto-signé).
+## 2026-09-28 — US-219 : corrections suite à la revue de la PR #100
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,messages_api}.py`,
+`dashboard/api/tests/{conftest,test_projections,test_messages_api}.py`,
+`docs/suivi/`.
+**Lot :** US-219 (issue #33). Branche `feat/US-219-web-timeline` (PR #100).
+
+### Fait
+- Revue de la PR #100 par un autre collaborateur (Oswin Freyr, commentaire
+  automatisé sur la PR) : 3 constats vérifiés contre le code réel, tous
+  confirmés, puis corrigés.
+- `app/main.py` — `CORSMiddleware` : ajout de
+  `allow_headers=["Last-Event-ID"]`. Sans lui, le preflight cross-origine
+  déclenché par la reconnexion automatique d'un `EventSource` (`GET
+  /api/stream`, US-218 — le navigateur renvoie `Last-Event-ID` pour le
+  rattrapage) était rejeté par Starlette dès que `dashboard/web` et l'API ne
+  partagent pas la même origine — exactement le cas d'usage documenté pour
+  ce CORS. Le flux ne rattrapait plus après coupure, silencieusement.
+- `app/messages_api.py::get_message_hops()` — tri `ORDER BY ts_ms` →
+  `ORDER BY ts_ms, rowid`. Deux événements du même message peuvent partager
+  le même `ts_ms` (résolution ms, plusieurs relais rapprochés) ; sans clé
+  secondaire, leur ordre dans `hops` dépendait de l'ordre d'arrivée des
+  batches côté serveur, pas de la chronologie réelle.
+- `dashboard/api/tests/test_messages_api.py` dupliquait mot pour mot
+  `FIXTURES_DIR`/`_load_fixture_batches()`/`_register_and_authorize()`/
+  l'équivalent de `_ingest_fixture_batches()`, déjà présents dans
+  `test_projections.py`. Helpers déplacés dans `conftest.py` (jusque-là
+  limité à la fixture `client`), les deux fichiers de test les important
+  désormais.
+
+### Pourquoi / décisions
+- Correctifs appliqués directement sur `feat/US-219-web-timeline` (branche
+  de la PR #100 elle-même), pas sur une branche séparée : ce sont des
+  correctifs de revue sur une PR déjà ouverte, pas un nouveau lot de travail.
+
+### Écarts vs conception
+- Aucun nouveau — écarts déjà consignés pour US-219 inchangés.
 
 ### Appris
 - Rien de nouveau pour `04-apprentissages.md`.
@@ -73,6 +299,93 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ### État après cette session
 - Les 5 constats de la revue de la PR #102 sont corrigés et testés.
 - Fiche module mise à jour : `modules/dengon-core.md` (section `api`).
+- Les 3 constats de la revue de la PR #100 sont corrigés. Toujours en
+  attente avant de fermer l'issue : vérification visuelle réelle en
+  navigateur (voir entrée précédente), revue humaine.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` : pas de changement de périmètre/pourcentage, pas
+  édité.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q        # dashboard/api
+72 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+```
+
+## 2026-09-28 — US-219 : écran « parcours d'un message » branché sur l'API réelle
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{messages_api,main}.py`,
+`dashboard/api/tests/test_messages_api.py`, `dashboard/web/{api.js,app.js,
+index.html}` (suppression de `data.js`), `docs/suivi/`.
+**Lot :** US-219 (issue #33). Branche `feat/US-219-web-timeline`, basée sur
+`feat/US-218-sse-stream` (PR #95, pas encore mergée — dépendance formelle de
+l'issue = US-110/US-111 seulement, tous deux mergés).
+
+### Fait
+- `app/messages_api.py` — `list_messages()`/`get_message()`/
+  `get_message_hops()` : lecture de la projection `messages` (US-217) +
+  reconstruction du « parcours » (`message_hops`, §11.2) **à la lecture**
+  depuis `events`, plutôt qu'une table alimentée à l'écriture (pas encore
+  créée par US-217 — écart déjà consigné, refermé autrement ici).
+- `app/main.py` — deux nouvelles routes `GET /api/messages` et
+  `GET /api/messages/{msg_log_id}` (404 si inconnu) ; ajout de
+  `CORSMiddleware` (GET uniquement, toute origine) pour que `dashboard/web`
+  fonctionne servi depuis un port/domaine différent de l'API.
+- `dashboard/web/api.js` (nouveau) — `fetchMessages()`/`fetchMessage()`
+  (fetch vers les deux routes ci-dessus) et `abonnerFlux()` (`EventSource`
+  sur `/api/stream`, US-218).
+- `dashboard/web/app.js` — mêmes gabarits que l'US-111
+  (`carteMessage`/`ligneHop`), mais `route()`/`renderListe()`/
+  `renderDetail()` deviennent asynchrones et chargent leurs données via
+  `api.js` ; jeton de génération pour qu'une réponse `fetch` périmée
+  n'écrase pas un écran plus récent ; rafraîchissement automatique sur
+  chaque événement SSE reçu (débit borné à 1/500 ms) ; écrans
+  « Chargement… »/« Erreur de connexion » ajoutés.
+- `data.js` (données bidon US-111) **supprimé** — plus utilisé.
+- Tests : 7 nouveaux (`test_messages_api.py`), sur les 20 fixtures golden
+  réelles via le vrai pipeline HTTP (`POST /ingest/batch`) : liste vide
+  avant ingestion, 404 sur id inconnu, liste triée après ingestion, détail
+  + `hops` chronologiques et corrects pour 3 scénarios nommés, `pkt.relayed`
+  mappé en `kind: "relay"` avec ttl/fanout, champs radio absents restent
+  `null` (jamais un champ manquant), aucune réponse n'expose `event_id` ou
+  un champ hors schéma (cohérence avec la redaction).
+
+### Pourquoi / décisions
+- Détail dans `docs/suivi/modules/dashboard-api.md` (US-219) et
+  `modules/dashboard-web.md` : `message_hops` dérivée à la lecture plutôt
+  que stockée (même discipline que le recalcul complet de `messages`,
+  US-217) ; `kind` d'un saut retombe sur le nom d'événement brut si hors des
+  4 valeurs §11.2, pour ne rien masquer ; CORS `GET` ouvert (données déjà
+  redigées, pas de cookie/session) ; `file://` abandonné pour `dashboard/web`
+  (anticipé par le texte de l'US-111 elle-même).
+
+### Écarts vs conception
+- `GET /api/messages`/`GET /api/messages/{id}` sans authentification
+  opérateur — consigné (même famille que `GET /api/stream`, US-218).
+- `message_hops` dérivée à la lecture, jamais stockée — consigné.
+- Vérification visuelle US-219 **non refaite dans un navigateur** : aucun
+  outil de navigation disponible dans cette session — consigné, à refaire
+  dès que possible. Compensé par `node --check` (syntaxe) + vérification
+  bout en bout par `curl` contre une vraie instance de l'API (fixtures
+  golden, CORS testé entre deux ports).
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les 5 remarques de la revue POWLAIR et les 10 commentaires inline
+  d'OswinFreyr sur la PR #97 sont corrigés. Le conflit de merge signalé par
+  GitHub s'est résorbé après un simple `git merge origin/main` local.
+- Reste à faire avant de fermer l'issue : **exécuter réellement le workflow
+  sur le VPS** (jamais fait depuis GitHub Actions, voir
+  `modules/deploiement-vps.md` §Limites) — ce qui suppose de configurer le
+  nouveau secret `VPS_KNOWN_HOSTS` (procédure documentée) en plus des 4
+  secrets déjà listés.
+- Fiche module mise à jour : `modules/deploiement-vps.md`.
 - `02-avancement.md` : pas de changement de périmètre/pourcentage, pas édité.
 
 ### Vérification (commandes réellement exécutées)
@@ -183,6 +496,555 @@ $ cargo build --workspace
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md` (nouvelle section
   « Sous-module `api` (US-301) »).
 - 01-etat-du-code.md mis à jour : non (pas de changement de statut global).
+$ git merge origin/main --no-edit   # sur feat/US-224-deploy-vps
+(fusion sans conflit — 46 fichiers, voir détail dans le diff)
+
+$ uv run --extra dev pytest -q      # dashboard/api, après fusion + fix Dockerfile
+- Les 4 critères d'acceptation de l'US-219 sont couverts côté données :
+  timeline alimentée par l'API réelle, tolérance aux données partielles
+  (champs `null` plutôt que masqués), aucun identifiant en clair (vérifié
+  par test). Le critère « rendu correct sur mobile » n'a **pas** pu être
+  revérifié visuellement cette session (voir Écarts) — les gabarits
+  HTML/CSS sont inchangés depuis la vérification US-111 (2026-09-25), mais
+  ce n'est pas une preuve pour le nouveau chemin de données asynchrone.
+- Manque encore avant de fermer l'issue : vérification visuelle réelle
+  (navigateur), ouvrir la PR (vers `feat/US-218-sse-stream`, tant que #95
+  n'est pas mergée), revue par une personne d'une autre `area:`.
+- Fiches module mises à jour : `modules/dashboard-api.md`,
+  `modules/dashboard-web.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q   # dashboard/api
+72 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+
+$ docker compose --env-file <test> config   # dashboard/deploy/
+(résolution des variables CADDY_*/DENGON_*, depends_on.condition,
+healthcheck — conforme à l'attendu)
+
+$ bash -n dashboard/deploy/purge-demo.sh
+(rien — syntaxe valide)
+
+$ python3 -c "import yaml; yaml.safe_load(open(f))" # sur les 3 fichiers YAML modifiés
+OK (×3)
+```
+- `docker build`/`docker compose up` réels **non exécutés** (pas de démon
+  Docker dans cette session) — voir Pourquoi/décisions.
+
+## 2026-09-28 — US-224 : rebase de la PR #97 + 4 findings SonarCloud corrigés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/Dockerfile`, `docs/suivi/modules/deploiement-vps.md`.
+**Lot :** suite de l'US-224 (issue #38), PR #97.
+
+### Fait
+- Rebase de `feat/US-224-deploy-vps` sur `main` (après le merge de #84,
+  US-211) — sans conflit, `merge=union` a même dédupliqué au passage les
+  lignes de `docs/suivi/modules/_index.md`.
+- SonarCloud a fait échouer le Quality Gate de la PR (« C Security Rating
+  on New Code »), 4 findings sur `dashboard/api/Dockerfile` — tous corrigés :
+  - `docker:S6471` (ligne 8) : image `python` tournant root par défaut →
+    utilisateur `app` dédié, `USER app` juste avant `CMD`.
+  - `docker:S8541` ×2 (lignes 13, 21) : `pip install`/`uv sync` sans forcer
+    les wheels → `--only-binary :all:` et `--no-build` respectivement,
+    empêchant l'exécution d'un `setup.py` arbitraire depuis une sdist.
+  - `docker:S6597` (ligne 21) : `cd` préféré à `WORKDIR`.
+- **Piège rencontré en redéployant sur le VPS réel** : le volume
+  `dengon_api_db` existant appartenait à `root` (créé par l'ancien conteneur
+  root) — le nouveau conteneur non-root ne pouvait plus y écrire
+  (`attempt to write a readonly database`). Résolu en relançant
+  `purge-demo.sh` : le volume recréé hérite des permissions posées dans
+  l'image (`app`). Confirme que le script de purge sert aussi de procédure
+  de récupération pour ce genre de migration de permissions.
+- Re-vérifié en HTTPS externe après correctif : `/healthz` (200),
+  `POST /ingest/batch` (202).
+
+### Écarts vs conception
+- Aucun nouveau — les 2 écarts déjà consignés pour l'US-224 tiennent
+  toujours.
+
+### État après cette session
+- Les 4 findings SonarCloud sont corrigés, image reconstruite et
+  redéployée avec succès sur le VPS réel.
+- Reste à vérifier : le nouveau run SonarCloud sur la PR #97 (Quality Gate
+  devrait repasser au vert).
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker build -f dashboard/api/Dockerfile -t dengon-dashboard-api:sonar-fix .
+[...] réussi
+
+$ docker run ... dengon-dashboard-api:sonar-fix && docker exec ... whoami
+app
+
+$ ssh dengon-vps "cd ~/dengon/dashboard/deploy && docker compose up -d --build"
+[...]
+$ curl -sk https://51.255.38.214:8443/healthz
+HTTP 502   # volume root, attendu (voir Piège ci-dessus)
+
+$ ssh dengon-vps "cd ~/dengon/dashboard/deploy && ./purge-demo.sh"
+$ curl -sk https://51.255.38.214:8443/healthz
+{"status":"ok"}   # HTTP 200, corrigé
+```
+## 2026-09-28 — US-210 : rebase de la PR #96 sur `main` + retours de revue
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/inventory.rs`,
+`sync/inventory/tests.rs`, `tests/inventory_mock.rs`, `lib.rs`,
+`sync/mod.rs`, `docs/suivi/`
+**Lot :** US-210, PR #96 (revue de G1TS23)
+
+### Fait
+- Rebase : seul le commit US-210 est rejoué sur `main` (`git rebase --onto
+  origin/main 7df55d9`) ; les deux commits US-209 empilés étaient déjà sur
+  `main` via #85 (contenu identique, vérifié par `git diff`). Conflits
+  résolus dans `lib.rs`, `sync/mod.rs` (liste des modules : **`courier`,
+  `inventory`, `routing`, `status`** — point 1 de la revue, rien de perdu) et
+  `modules/dengon-core.md`. Les auto-merges avaient dupliqué la ligne
+  `dengon-core` de `02-avancement.md` et de `modules/_index.md`, et placé
+  l'entrée US-210 du journal au milieu du fichier : corrigé à la main.
+- Revue point 2 : `next_deadline(now)` prend l'heure et ignore une file
+  dont aucun paquet n'est encore valide — plus de réveil promis sur une
+  file de paquets expirés. Reste un cas assumé (documenté) : un paquet qui
+  expire entre `now` et l'échéance donne un `poll_push` vide.
+- Revue point 3 : `purge` amortie, sans allocation — index `order`
+  (réception) et nouvel index `by_ts` (horodatage), parcourus depuis le plus
+  ancien avec arrêt au premier valide, comme `SeenSet`. `remove_entry`
+  maintient les trois structures.
+- Revue point 4 : octets stockés en `Arc<[u8]>` avec le TTL de push **déjà
+  écrit** (`codec::TTL_OFFSET`) ; `PushOrder::bytes` est partagé et
+  s'envoie tel quel (`Transport::send` prend `&[u8]`) → zéro copie par push.
+- 4 tests ajoutés (32 unitaires dans `inventory/tests.rs`).
+
+### Pourquoi / décisions
+- `Arc` plutôt que `Rc` (suggéré par la revue) : `Rc` rendrait `Inventory`
+  non `Send`, gênant pour le runtime async de `dengon-node` ; `Arc` existe
+  sur la cible ESP32 (Xtensa, atomiques).
+- Écrire le TTL à la mise en cache plutôt qu'au push : il est fixe pour
+  une entrée, et c'est ce qui rend le partage sans copie possible (sinon
+  l'appelant devait copier pour réécrire l'octet 2).
+- Codec de test provisoire (`tests/common/mod.rs`) **pas** remplacé par
+  `protocol::codec` : le vrai codec impose `ADDRESSED` sur `NOISE_MSG` et
+  `SIGNED` sur `SEALED_ENVELOPE`, que les scénarios n'utilisent pas ;
+  migration laissée à une PR dédiée (noté dans la fiche module).
+
+### Écarts vs conception
+- aucun nouveau.
+
+### Appris
+- rien de nouveau.
+
+### État après cette session
+- PR #96 à jour sur `main`, retours de revue traités.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+## 2026-09-28 — US-305 : rebase de la PR #92 sur `main` (après #90, #91, #99)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/00-journal.md`
+**Lot :** US-305, PR #92 — branche `feat/US-305-dengon-verify`
+
+### Fait
+- `git rebase origin/main` du commit de la PR : aucun conflit signalé par
+  git (`ledger.rs`, fiches `modules/`, `02-avancement.md`,
+  `03-ecarts-conception.md` fusionnés automatiquement et relus).
+- Fusion automatique fautive du journal corrigée à la main : l'entrée US-305
+  s'était glissée **dans** l'entrée US-212 (bloc « Vérification » coupé, sa
+  fin rattachée à US-305). Journal reconstruit : version `main` intacte +
+  entrée US-305 d'origine remise en haut.
+
+### Vérifications
+- `cargo fmt --all --check` : OK.
+- `cargo clippy --workspace --all-targets -- -D warnings` : OK.
+- `cargo test --workspace` : tous passés, 0 échec (dont 289 unitaires
+  `dengon-core`), 2 ignorés (régénération de vecteurs).
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : aucune (fusion automatique conservée).
+
+---
+
+## 2026-09-28 — US-305 : `dengon-verify` — binaire `ok / broken / fork / gap`
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-verify/{src/lib.rs, src/main.rs, src/tests.rs, tests/cli.rs, tests/fixtures/}`, `crates/dengon-core/src/ledger.rs`
+**Lot :** US-305 (#43), sprint 3, jalon J4
+
+### Fait
+- **`dengon-verify` devient un vrai binaire** : lit un export de journal
+  (fichier ou entrée standard ; suite d'entrées `Entry::to_bytes` bout à
+  bout), rend une ligne JSON (`{"verdict":"ok","entries":5,"first_seq":0,
+  "last_seq":4,"signatures":"unchecked"}`) et un **code de sortie par
+  verdict** : `0` ok, `1` broken, `2` fork, `3` gap ; `64` / `65` / `66`
+  (`sysexits`) pour un appel invalide, un export illisible, un fichier
+  introuvable — sans rien écrire sur la sortie standard.
+- Logique dans `src/lib.rs` (testable sans processus), `main.rs` réduit à
+  l'appel et au code de sortie.
+- **`ledger` : vérification ancrée** — `Anchor { first_seq, prev_hash }`,
+  `Anchor::GENESIS`, `Anchor::after(entry)`, et `verify_entries(entries,
+  anchor)` ; `verify_chain()` en devient le cas `GENESIS` (comportement
+  inchangé). Option `--from-seq N --prev-hash HEX` du binaire.
+- **`ledger::verify_signatures(entries, key)`** (Ed25519 sur `entry_hash`,
+  crypto US-203) ; option `--pubkey HEX` : une signature invalide rend
+  `broken`. Sans clé, la sortie dit `"signatures":"unchecked"`.
+- **Journaux de démonstration commités** : `tests/fixtures/{ok, broken,
+  fork, gap, signed}.bin`, déterministes, régénérables
+  (`DENGON_REGEN_FIXTURES=1`), protégés de toute conversion de fin de ligne
+  (`.gitattributes` local `*.bin binary`).
+
+### Pourquoi / décisions
+- **L'ancre dans `dengon-core`, pas dans le binaire** : une seule règle de
+  vérification (B-5). Elle tranche l'écart ouvert par US-206 (« un export
+  partiel n'est pas re-vérifiable ») : le dashboard reçoit des **tranches**
+  par batch, pas des journaux complets.
+- **Une `seq` antérieure à l'ancre = `fork`** : elle revendique une position
+  déjà vérifiée, donc un historique concurrent.
+- **Signatures vérifiées seulement si la chaîne est intègre** : une
+  signature valide sur un `entry_hash` qui ne correspond pas au contenu ne
+  prouve rien.
+- **Pas de `clap`** : 4 options, analyse à la main, aucune dépendance
+  ajoutée (rien à ajouter au `Cargo.lock`).
+- **Fixtures binaires commitées** : utilisables telles quelles par le
+  dashboard (US-310) et pour la démo de soutenance (« on casse une chaîne et
+  l'outil le dit »).
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-305) : format
+  d'entrée = export binaire `Entry::to_bytes` (pas le JSON canonique de
+  `synthese/09` §11) ; pas de `LOG_ATTEST` ; écart US-206 sur l'export
+  partiel **résolu**.
+
+### Appris
+- Rien de nouveau à consigner.
+
+### État après cette session
+- Critères US-305 : binaire à 4 verdicts ✅, un cas de test par verdict sur un
+  journal fabriqué ✅, code de sortie exploitable ✅, `clippy -D warnings` ✅.
+- Le dashboard (US-310) n'appelle pas encore le binaire.
+- Fiche(s) module mise(s) à jour : `modules/dengon-verify.md` (réécrite),
+  `modules/dengon-core.md` (ledger)
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                → OK
+$ cargo clippy --workspace --all-targets -- -D warnings     → OK
+$ cargo check -p dengon-core --no-default-features          → OK (no_std)
+$ cargo test -p dengon-core
+  lib : 322 passés · inventory_mock : 6 · routing_mock : 8 · autres OK — 0 échec
+$ cargo llvm-cov -p dengon-core --summary-only
+  sync/inventory.rs  98,20 % lignes · TOTAL crate 97,32 %
+```
+
+---
+
+## 2026-09-28 — US-210 : `sync::inventory` — échange d'inventaire, push du manquant
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/inventory.rs` +
+`sync/inventory/tests.rs` (nouveaux), `sync/{mod,routing}.rs`, `lib.rs`,
+`crates/dengon-core/tests/{common/mod.rs,inventory_mock.rs}` (nouveaux),
+`tests/routing_mock.rs`, `docs/suivi/`
+**Lot :** US-210, issue #24 — J1 « Cœur en simulation » ; branche empilée
+sur `feat/US-209-routing` (PR #85 pas encore mergée)
+
+### Fait
+- **`Inventory<L>`** (`src/sync/inventory.rs:284`) : cache de
+  réconciliation **sans I/O**, générique sur le lien comme `Router`.
+  `remember` (`:356`) garde les octets bruts d'un paquet (cap 120, fenêtre
+  6 h en horloge monotone, `MSG_TTL_S` en horloge murale, éviction du plus
+  ancien) ; `forget` (`:393`) pour l'ACK ; `link_up` (`:412`) rend notre
+  inventaire (les `max_ids` plus récents) ; `on_inventory` (`:433`) met en
+  file ce que le voisin n'a pas annoncé ; `poll_push` (`:456`) rend les
+  `PushOrder` **cadencés** à `PUSH_MAX_PER_MIN = 15` par lien et par
+  minute ; `next_deadline` (`:488`).
+- **Payload `INVENTORY`** : `encode_payload` / `decode_payload`
+  (`count(2) ‖ msgID[count]`, big-endian, `PayloadError`), borne
+  `INVENTORY_MAX_IDS = 2047` (tient dans `payload_len`).
+- **`cacheable(&Header, &Decision) -> Option<u8>`** (`:183`) : quoi mettre
+  en cache (types `SEALED_ENVELOPE` / `NOISE_MSG` / `ACK`, accepté et non
+  livré ici, `RELAY_OK` et `ttl > 1`) et avec quel TTL le pousser.
+- `routing::RateWindow` passé en `pub(super)` + `next_free` : la cadence
+  de push réutilise la fenêtre glissante du routeur.
+- Codec de test extrait de `tests/routing_mock.rs` vers
+  `tests/common/mod.rs` (partagé avec `inventory_mock.rs`).
+- **Tests** : 28 unitaires dont 4 property (convergence A/B vers l'union,
+  jamais de push d'un `msgID` annoncé, aller-retour du payload, décodage
+  sans panique) ; 6 de bout en bout dans `tests/inventory_mock.rs`
+  (`MockTransport` + `Router` + `Inventory` par nœud).
+
+### Pourquoi / décisions
+- **Push cadencé** : le routeur du receveur refuse au-delà de 20 nouveaux
+  `msgID`/min par voisin. Mesuré par le test témoin : sans cadence, A
+  pousse 25 paquets d'un bloc → **6 rejetés** `FloodLimited` chez B (1
+  `INVENTORY` + 19 acceptés) ; avec la cadence à 15/min → **0 rejet**,
+  convergence en 2 fenêtres.
+- Pas de TTL « gratuit » au push : un push est un saut, le TTL poussé est
+  `ttl − 1` (ou celui du relais programmé) ; un paquet sans `RELAY_OK` ou
+  à `ttl ≤ 1` n'entre pas au cache.
+- Payload `INVENTORY` codé ici et non dans `protocol::codec` : le codec
+  (US-201, sur `main` depuis) laisse le payload opaque ; à déplacer si
+  Oswin préfère l'y mettre.
+- Branche **empilée** sur US-209 plutôt que rebasée sur `main` : garde un
+  diff limité à US-210 ; le codec de test provisoire est donc conservé
+  (`codec::{encode, decode}` au rebase).
+
+### Écarts vs conception
+- 3 entrées dans `03-ecarts-conception.md` : push cadencé, réglages du
+  cache sans constante de conception, types mis en cache.
+
+### Appris
+- Réconciliation ↔ anti-inondation (`04-apprentissages.md`).
+
+### État après cette session
+- `sync::inventory` utilisable ; **pas encore branché** dans `dengon-node`
+  ni `dengon-sim` ; `status`/`courier` (US-211/212) devront appeler
+  `Inventory::forget` sur ACK, en plus de `Router::cancel`.
+- La fenêtre de cadence est **par lien** (pas par `peerID` comme
+  l'anti-inondation du routeur) : une reconnexion immédiate peut faire
+  rejeter quelques pushs, rattrapés à la rencontre suivante.
+- Fiche module mise à jour : `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all
+$ cargo clippy --workspace --all-targets -- -D warnings      → OK
+$ cargo check -p dengon-core --no-default-features           → OK (no_std)
+$ cargo test -p dengon-core
+  → 116 lib + 6 inventory_mock + 4 protocol_vectors + 8 routing_mock, 0 échec
+$ cargo llvm-cov -p dengon-core --summary-only
+  → sync/inventory.rs 96,88 % des lignes, 97,68 % des régions ;
+    total crate 97,61 % des lignes
+```
+- Texte de l'issue #24 : seul le commentaire d'attribution était lisible ;
+  critères pris dans `synthese/10` §4.2.
+
+---
+
+## 2026-09-28 — US-220 : retour de revue de la PR #101 — MTU enregistré par un seul chemin
+
+**Auteur :** Paul + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/transport_nimble.c`
+**Lot :** US-220 (#34), suite de la PR #101 (mergée avant ce correctif)
+
+### Fait
+- `on_mtu` (callback de `ble_gattc_exchange_mtu`, rôle central) n'appelle
+  plus `dengon_tc_link_set_mtu()` : il ne fait plus que journaliser un refus
+  et enchaîner sur la découverte du service. Le MTU d'un lien n'est désormais
+  enregistré **que** par `BLE_GAP_EVENT_MTU`, dans les deux rôles.
+
+### Pourquoi / décisions
+- Commentaire de revue (PR #101, `transport_nimble.c:658`) : le MTU était
+  réglé deux fois par connexion centrale. Pas un bogue (`set_mtu` est
+  idempotent), mais deux chemins pour une même donnée.
+- **Vérifié dans le code NimBLE de l'image épinglée avant de retirer
+  l'appel**, parce que le rôle central n'a jamais tourné sur carte :
+  `ble_att_clt_rx_mtu()` (`components/bt/host/nimble/nimble/nimble/host/src/ble_att_clt.c`)
+  appelle `ble_gap_mtu_event()` **puis** `ble_gattc_rx_mtu()`, qui déclenche
+  `on_mtu`. Le MTU est donc déjà sur le lien quand la découverte démarre.
+- Le second commentaire de la revue (rôle central jamais exercé contre un vrai
+  pair) n'appelle pas de correctif de code : c'est l'essai 2 cartes.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (ordre des événements NimBLE noté dans le commentaire du code).
+
+### État après cette session
+- Inchangé fonctionnellement. Essai 2 cartes toujours à faire.
+- Fiche(s) module mise(s) à jour : `modules/firmware-relay.md` (décision).
+- 01-etat-du-code.md mis à jour : non (plus à toucher).
+
+### Vérification (commandes réellement exécutées)
+```
+$ idf.py build   (firmware/dengon-relay)
+rc=0, 0 warning (-Werror sur main)
+
+$ idf.py build && ./build/test_dengon_transport_core.elf   (test_apps, cible linux)
+32 Tests 0 Failures 0 Ignored — OK
+```
+- **Non vérifié sur carte** : la carte n'était plus rattachée à WSL
+  (`/dev/ttyUSB0` absent) au moment du correctif. Le chemin périphérique
+  (`BLE_GAP_EVENT_MTU`, seul exercé par l'essai téléphone) n'est pas modifié ;
+  le chemin central ne l'a jamais été.
+
+---
+## 2026-09-28 — US-222 : jobs CI `audit` et `cross-vectors`, vecteurs déplacés dans `contracts/packet/`
+
+**Auteur :** Paul Claverie + Claude (Opus 5)
+**Périmètre :** `.github/workflows/{audit,cross-vectors,core,contracts}.yml`,
+`deny.toml`, `crates/dengon-conformance/`, `crates/dengon-core/tests/`,
+`contracts/packet/`, `contracts/tools/validate_packets.py`,
+`dashboard/api/tests/test_cross_vectors.py`
+**Lot :** US-222 — CI, sprint S2, area `process`
+
+### Fait
+
+**Constat d'entrée.** Deux des cinq critères d'acceptation étaient déjà
+satisfaits sur `main` : le job `sim` a été livré par l'US-221
+(`.github/workflows/sim.yml`, 4 scénarios `.ron`, double exécution + `diff`),
+et le filtrage par chemin **dans le job** est appliqué par `core`, `sim`,
+`firmware`, `contracts` et `dashboard` depuis les revues #59/#60/#63. Le
+travail réel portait donc sur `audit`, `cross-vectors` et les checks requis.
+
+- **Vecteurs déplacés** vers `contracts/packet/` (`vectors_v0.json`,
+  `crypto_v0.json`, `identity_v0.json`, + `README.md`), ce que l'écart du
+  10/09 prévoyait « une fois #60 mergé ». Chemins ajustés dans les trois
+  tests Rust, `core.yml` filtre désormais aussi `contracts/packet/**` et
+  `contracts/events/**`.
+- **Crate `crates/dengon-conformance/`** : aucun code, seulement une table de
+  dépendances qui tire `dengon-core` en `default-features = false`, plus
+  `tests/packet_vectors_nostd.rs` qui rejoue les vecteurs de trame contre ce
+  build. C'est la « patte firmware » de `cross-vectors`.
+- **`crates/dengon-core/tests/event_fixtures.rs`** : les 20 fixtures golden
+  lues **depuis le disque** (les tests existants de `observability`
+  comparaient à des octets écrits en dur). Recalcul d'`event_id` et de
+  `batch_id`, JSON canonique comparé octet à octet à `serde_json`, et
+  vérification par le Rust des signatures Ed25519 produites par Python.
+- **`contracts/tools/validate_packets.py`** : décodeur de trame Python écrit
+  indépendamment, piloté par `header_layout_be` / `flag_bits` / `type_names`
+  du fichier de vecteurs. Branché dans `contracts.yml` en plus de
+  `cross-vectors.yml`.
+- **`dashboard/api/tests/test_cross_vectors.py`** : les 20 fixtures rejouées
+  dans `POST /ingest/batch` (pipeline réel : schéma, JWT, Ed25519, dédup),
+  plus l'idempotence du corpus complet et un test négatif.
+- **`deny.toml`** + **`.github/workflows/audit.yml`** : `cargo audit` et
+  `cargo deny`, bloquants, sur PR et en cron quotidien à 06:00 UTC.
+- **`.github/workflows/cross-vectors.yml`** : quatre lectures des mêmes
+  fichiers (Rust `std`, Rust `no_std`, Python contrat, Python dashboard) +
+  un récapitulatif « qui a lu quoi » dans le résumé du job.
+- **`type_names`** ajouté à `vectors_v0.json` : la table numéro → nom est
+  désormais une **donnée** lue par les deux implémentations, plus une
+  constante recopiée de chaque côté.
+
+### Pourquoi / décisions
+
+- **La patte firmware est un proxy `no_std`, pas le firmware.**
+  `firmware/dengon-relay/` ne contient que le BLE ; le pont `dengon_core_ffi`
+  est l'US-307. Compiler le même décodeur dans la configuration que l'ESP32
+  embarquera est ce qui s'en approche le plus aujourd'hui. Écart consigné.
+- **Une crate séparée, parce que `--no-default-features` ne suffit pas.**
+  `cargo test -p dengon-core --no-default-features` ne donne pas un build
+  `no_std` : la dev-dependency `dengon-ble` tire `dengon-core` avec ses
+  features par défaut, et l'unification du résolveur v2 réactive `std`.
+  Vérifié : `cargo tree -p dengon-core --no-default-features -e features`
+  montre bien `rusqlite`.
+- **Dépendance de chemin, pas `{ workspace = true }`.** Cargo l'a signalé
+  lui-même : `default-features` est **ignoré** avec l'héritage de workspace
+  tant que `[workspace.dependencies]` ne le déclare pas — et le déclarer
+  là-bas priverait `dengon-ble`/`dengon-node` de `std`.
+- **Pas d'assertion « je suis sans std » compilée dans la crate.** Essayée
+  (`const _: () = assert!(...)`), elle fait échouer `cargo clippy --workspace`
+  et donc `core.yml` : un build `--workspace` unifie les features de tout le
+  graphe, `std` revient par `dengon-node`/`dengon-ble`, et c'est normal. Le
+  garde-fou est à sa place dans `cross-vectors`, qui inspecte la résolution
+  **isolée** : `cargo tree -p dengon-conformance -e features | grep rusqlite`.
+- **`audit` bloquant dès le premier jour.** Un check requis qui ne rougit
+  jamais n'est pas un check. La soupape est `[advisories].ignore` de
+  `deny.toml`, qui exige un RUSTSEC nommé, daté et justifié.
+- **Une seule liste d'exceptions.** `cargo audit` ne lit pas `deny.toml` (son
+  fichier serait `.cargo/audit.toml`) : le workflow **dérive** ses `--ignore`
+  de `deny.toml` par un `grep`, plutôt que d'entretenir deux listes qui
+  dériveraient l'une de l'autre au premier oubli.
+- **`schedule` contourne le filtre de chemins.** `dorny/paths-filter` n'a pas
+  de base de comparaison sur un cron, et de toute façon le cron doit tout
+  exécuter — une vulnérabilité paraît sans que le dépôt bouge. D'où le
+  `github.event_name == 'schedule' ||` répété sur chaque étape réelle.
+- **Liste de licences calée sur les cibles réellement construites.**
+  `[graph].targets` limite à `x86_64-unknown-linux-gnu` et
+  `aarch64-linux-android` ; les deux entrées qui ne servaient qu'à d'autres
+  cibles ont été retirées, cargo-deny les signalait
+  (`license-not-encountered`).
+
+### Écarts vs conception
+
+- Deux entrées ajoutées à `03-ecarts-conception.md` : la patte firmware en
+  proxy `no_std`, et la **clôture** de l'écart « vecteurs dans
+  `crates/dengon-core/tests/` ».
+- SBOM : nommé par `synthese/10` §4.7 pour le job `audit`, **absent** des
+  critères d'acceptation de l'US-222 et non livré. À ouvrir en issue de
+  suite plutôt qu'à bâcler.
+
+### Appris
+
+- Unification des features de Cargo entre dépendances normales et de dev.
+- `dorny/paths-filter` sur `schedule`.
+- `cargo-deny` : `[licenses.private].ignore` pour un workspace `publish = false`.
+- `merge=union` **duplique** les lignes éditées en place quand deux branches
+  touchent la MÊME ligne : au rebase sur `main` (après #101 et #94), les lignes
+  `Workflow firmware/dashboard/contracts` de `02-avancement.md` se sont
+  retrouvées en double, et il a fallu retirer les exemplaires périmés à la
+  main. Le filet évite le conflit, il ne produit pas un texte juste.
+- **GitHub n'applique PAS `merge=union`** : les pilotes de fusion de
+  `.gitattributes` sont locaux, le serveur fusionne avec le pilote par défaut.
+  La PR #105 est donc sortie en `mergeStateStatus: DIRTY` sur le seul
+  `00-journal.md`, alors qu'un `git rebase` local passait sans un conflit.
+  Conséquence pratique : **toute** PR qui écrit dans le journal s'affichera en
+  conflit sur GitHub jusqu'à un rebase local. L'en-tête de `02-avancement.md`
+  annonce « fusion automatique ; `merge=union` sert de filet » — c'est vrai en
+  local, faux côté serveur.
+Quatre notes ajoutées à `04-apprentissages.md`, six termes à `05-glossaire.md`.
+
+### État après cette session
+
+- Les quatre workflows requis existent : `core`, `sim`, `audit`,
+  `cross-vectors`. **Les checks requis de `main` n'ont pas été élargis** —
+  la commande est documentée dans `modules/processus-github.md`, à jouer
+  **après** le merge, sinon la PR se bloque sur des checks absents de `main`.
+- La patte firmware reste un proxy jusqu'à l'US-307.
+- Fiche(s) module mise(s) à jour : `modules/processus-github.md`.
+- `02-avancement.md` mis à jour : oui (lignes outillage).
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo fmt --all -- --check                                   OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+                                                               OK (0 warning)
+$ cargo test --workspace --all-features --locked                385 passed, 2 ignored
+$ cargo test -p dengon-conformance                              3 passed
+$ cargo tree -p dengon-conformance -e features | grep -c rusqlite   0
+$ cargo tree -p dengon-ble          -e features | grep -c rusqlite   6
+$ cargo deny --all-features check                  advisories ok, bans ok, licenses ok, sources ok
+$ cargo audit --deny warnings --file Cargo.lock --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141
+                                                               exit 0
+$ cargo audit --deny warnings --file Cargo.lock                 exit 1  (prouve que les --ignore servent)
+$ cd contracts   && uv run python tools/validate_packets.py     8 accept + 5 reject
+$ cd contracts   && uv run python tools/validate.py             20 fixtures, 28 noms d'événements
+$ cd dashboard/api && uv run pytest                             85 passed
+$ cd dashboard/api && uv run ruff check .                       OK
+```
+
+Tests **négatifs**, joués à la main puis annulés — sans eux, rien ne prouve
+que les jobs détectent quoi que ce soit :
+
+```
+1 octet modifié dans contracts/packet/vectors_v0.json
+  → Rust std      échec
+  → Rust no_std   échec (exit 101)
+  → Python        échec (exit 1)          les trois lisent bien le MÊME fichier
+type_names["2"] renommé
+  → Rust          échec                   la table de types ne peut plus dériver
+1 champ modifié dans contracts/events/fixtures/01-pkt-seen.json
+  → event_fixtures.rs   échec
+  → dashboard pytest    échec
+  → contracts/validate.py échec
+"Unicode-3.0" retiré de deny.toml
+  → cargo deny check    exit 4
+```
+
+- **Pas pu vérifier :** l'état réel de la protection de `main`.
+  `gh api repos/G1TS23/dengon/branches/main/protection` renvoie 404 depuis un
+  compte non admin — ce qui, comme le rappelle `modules/processus-github.md`,
+  ne prouve rien dans un sens ni dans l'autre.
+- **Pas pu vérifier :** que les workflows tournent réellement sur GitHub. La
+  preuve demandée par l'US (« les workflows sont eux-mêmes la preuve : verts
+  sur une PR de test ») se fera sur la PR.
 
 ## 2026-09-28 — US-217 : rebase de la PR #93 sur `main` (après #91, #99)
 
@@ -217,6 +1079,94 @@ All checks passed!
 - Fiche(s) module mise(s) à jour : `dashboard-api.md` (résolution du conflit)
 
 ---
+$ node --check dashboard/web/app.js dashboard/web/api.js
+(rien — syntaxe valide)
+
+$ curl -s http://127.0.0.1:18010/api/messages   # API locale, 20 fixtures ingérées
+[... 20 messages, triés par last_event_ms ...]
+
+$ curl -s -D - -o /dev/null -H "Origin: http://127.0.0.1:18011" http://127.0.0.1:18010/api/messages
+access-control-allow-origin: *
+```
+- Pas de vérification dans un vrai navigateur cette session (voir Écarts).
+
+## 2026-09-28 — US-218 : `GET /api/stream` en SSE, rattrapage + diffusion live
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{stream,ingest,main}.py`,
+`dashboard/api/tests/test_stream.py`, `docs/suivi/`.
+**Lot :** US-218 (issue #32). Branche `feat/US-218-sse-stream`, basée sur
+`feat/US-217-dashboard-projections` (PR #93, pas encore mergée — dépendance
+formelle de l'issue = US-110 seulement, déjà mergée).
+
+### Fait
+- `app/stream.py` — `StreamEvent` (formatage SSE, `rowid` comme identifiant
+  de reprise) et `Broadcaster` (ensemble d'abonnés `asyncio.Queue`,
+  `publish()` thread-safe via `loop.call_soon_threadsafe`, pont entre le
+  threadpool d'ingestion et la boucle asyncio qui sert les connexions SSE).
+- `app/ingest.py::_insert_events()` — capture désormais les lignes
+  RÉELLEMENT insérées (avec leur `rowid`, via `cur.lastrowid` gardé
+  seulement quand `cur.rowcount`) ; `ingest_batch()` publie ces événements
+  sur le `Broadcaster` après le `COMMIT`.
+- `app/main.py` — `lifespan` capture la boucle asyncio courante et pose un
+  `Broadcaster` sur `app.state` ; nouvelle route `GET /api/stream`
+  (`StreamingResponse`) : abonnement avant rattrapage (`_events_since`,
+  `rowid > Last-Event-ID` ou 0), puis boucle live bornée par un timeout de
+  15 s (`asyncio.wait_for`) doublé d'un heartbeat SSE.
+- Tests : 7 nouveaux (`test_stream.py`). 2 purs (formatage `StreamEvent`,
+  `Broadcaster.publish`). 5 sur un **vrai serveur `uvicorn`** (fixture
+  `live_server`, port OS, thread dédié) : rattrapage, reconnexion
+  (`Last-Event-ID` ne refait pas revoir l'événement déjà vu),
+  `Last-Event-ID` illisible → depuis le début, et **diffusion live réelle**
+  (client connecté avant l'ingestion, attente bornée sur
+  `subscriber_count()`, événement reçu via `Broadcaster.publish`).
+
+### Pourquoi / décisions
+- `docs/suivi/modules/dashboard-api.md` §Décisions (US-218) : `rowid`
+  SQLite comme identifiant SSE plutôt qu'une colonne dédiée ; abonnement
+  avant rattrapage (pas l'inverse) pour ne perdre ni dupliquer un événement
+  publié pendant la lecture de rattrapage ; timeout sur la boucle live pour
+  détecter une déconnexion sans nouvel événement et doubler comme
+  heartbeat anti-reverse-proxy (US-224) ; `Last-Event-ID` illisible traité
+  comme absent plutôt que rejeté (c'est le navigateur qui le fournit
+  automatiquement à la RECONNEXION, jamais à la connexion initiale).
+- **Piège de test découvert en cours de route** : `starlette.testclient.
+  TestClient` fait tourner la coroutine ASGI complète avant de rendre la
+  main (bufferise toute la réponse), incompatible avec un flux qui ne se
+  termine jamais — `client.stream(...)` restait bloqué indéfiniment.
+  Confirmé avec un script de reproduction + `faulthandler.dump_traceback()`
+  avant de changer d'approche pour un vrai serveur `uvicorn` en thread.
+
+### Écarts vs conception
+- `GET /api/stream` sans authentification opérateur — consigné dans
+  `03-ecarts-conception.md` (même famille que l'écart déjà noté pour
+  `POST /api/nodes`, US-216).
+
+### Appris
+- `docs/suivi/04-apprentissages.md` : à enrichir sur le piège
+  `TestClient`/ASGI streaming (voir ci-dessus) — utile pour toute future US
+  qui testerait un endpoint SSE/streaming.
+
+### État après cette session
+- Les 4 critères d'acceptation de l'US-218 sont couverts : SSE sur
+  `GET /api/stream`, reconnexion gérée (`Last-Event-ID`), test d'intégration
+  batch → SSE (via un vrai serveur), `pytest` vert.
+- Manque encore avant de fermer l'issue : ouvrir la PR (vers
+  `feat/US-217-dashboard-projections`, tant que #93 n'est pas mergée),
+  revue par une personne d'une autre `area:`.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q
+65 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+```
+- CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
+  ouverte au moment de cette entrée).
 
 ## 2026-09-28 — US-217 : projections dashboard — reconstruction de statut par message
 
@@ -290,6 +1240,151 @@ All checks passed!
 ```
 - CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
   ouverte au moment de cette entrée).
+
+---
+
+## 2026-09-28 — US-220 : `transport_nimble.c`, transport BLE à rôle double sur l'ESP32
+
+**Auteur :** Paul + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/{main/*, components/dengon_transport_core/**, sdkconfig.defaults}`, `.github/workflows/firmware.yml`, `.gitignore`
+**Lot :** US-220 (#34), sprint 2, jalon J4
+
+### Fait
+- **Cœur pur `components/dengon_transport_core/`** (C, sans NimBLE) : miroirs C
+  de `LinkId`, `TransportEvent`, `DisconnectReason`, `TransportError`,
+  `TransportConfig` ; table `conn_handle ↔ LinkId` (compteur monotone) ; file
+  FIFO unique de 32 événements avec réserve pour le cycle de vie ; validation
+  de `send` / `broadcast` ; mapping code HCI → motif. `dengon_adv.c` :
+  manufacturer data (format US-114 inchangé) et règle anti-boucle.
+- **Glue `main/transport_nimble.c`** + API `main/dengon_transport.h`
+  (start / poll / send / broadcast / event_free) : annonce, scan par passes de
+  10 s, connexion sortante selon l'anti-boucle, chaîne MTU → service →
+  caractéristiques → CCCD → abonnement côté central, abonnement reçu côté
+  périphérique, RX par notification ou écriture, émission hors verrou,
+  réarmement annonce + scan à chaque fin de lien.
+- `dengon_gatt.c` : les écritures sur `CHAR_RX` partent au transport (au lieu
+  d'être jetées) ; UUID RX/TX exportés pour la découverte.
+- `main.c` réduit à NVS + peerID + `dengon_transport_start()` ; annonce et
+  événements GAP déplacés dans le transport.
+- **Tâche de démo** `main/dengon_demo.c` (Kconfig `DENGON_TRANSPORT_DEMO`) :
+  trames opaques à motif vérifiable, sonde MTU-3 / MTU-2 à chaque lien,
+  `send` sur lien fermé, bouton BOOT = fermer tous les liens.
+- `sdkconfig.defaults` : `ROLE_CENTRAL=y`, `ROLE_OBSERVER=y`.
+- **Tests Unity** `components/dengon_transport_core/test_apps/` : 12 cas de
+  conformité portés 1:1 depuis `conformance.rs` + 14 cas propres au C + 6 cas
+  d'annonce = 32. Cible `linux` (hôte) et `esp32`.
+- **CI** `firmware.yml` : exécution des tests sur la cible linux, compilation
+  de leur version carte. `.gitignore` : `sdkconfig` et `build-*/` des
+  `test_apps`.
+
+### Pourquoi / décisions
+- **Cœur pur + glue** : seul ce qui touche NimBLE exige deux cartes ; tout le
+  reste est testé en CI. Alternative écartée : tests Unity sur la glue avec
+  une NimBLE simulée — trop de surface à bouchonner pour peu de preuve.
+- **1 trame = 1 PDU ATT** : `protocol::fragment` (US-202) découpe déjà à
+  MTU-3 ; pas de format de trame BLE à inventer ni à partager avec Android.
+- **`PeerConnected` à l'abonnement**, pas à la connexion GAP : sinon le premier
+  `ANNOUNCE` du cœur partirait avant que le pair écoute.
+- **Aucun appel NimBLE sous le verrou du cœur** (route prise sous verrou,
+  émission hors verrou).
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-220) : pas de
+  fragmentation BLE, `PeerConnected` à l'abonnement, quota borné à 3,
+  anti-boucle sur 4 octets, mapping des motifs HCI.
+
+### Appris
+- 3 entrées dans `04-apprentissages.md` : `conn_handle` recyclé vs `LinkId` ;
+  cœur pur + cible linux d'ESP-IDF ; ce qui s'arrête tout seul en BLE (annonce,
+  scan, filtre de doublons). Glossaire : `conn_handle`, `LinkId`, supervision
+  timeout, règle anti-boucle, cible linux.
+
+### État après cette session
+- Le firmware compile, le cœur passe ses 32 tests **sur l'hôte et sur la
+  carte**, et le rôle **périphérique** a été exercé de bout en bout contre un
+  téléphone (connexion, abonnement, trames dans les deux sens, MTU 23 puis
+  517, déconnexion propre, **coupure brutale réelle**, réannonce, `LinkId`
+  neuf sur `conn_handle` recyclé). Reste pour clore l'US : l'essai sur
+  **2 cartes** (rôle central jamais exécuté), et la revue par une personne
+  d'une autre `area:`.
+- Fiche(s) module mise(s) à jour : `modules/firmware-relay.md` (réécrite hors
+  onboarding), `modules/dengon-ble.md` (règle 3), `modules/_index.md`.
+- 01-etat-du-code.md mis à jour : non (plus à toucher, `docs/suivi/README.md`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker run … -w …/dengon_transport_core/test_apps $IDF sh -ec \
+    'idf.py --preview set-target linux && idf.py build && ./build/test_dengon_transport_core.elf'
+32 Tests 0 Failures 0 Ignored — OK (exit 0)
+
+# mutation : purge de la file dans dengon_tc_link_close (code restauré ensuite)
+32 Tests 2 Failures — cas_trame_recue_avant_coupure_est_livree,
+test_file_saturee_garde_la_fermeture — exit 1
+
+$ docker run … test_apps $IDF idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build
+OK
+
+$ docker run … -w /repo/firmware/dengon-relay $IDF sh -c 'idf.py fullclean; rm -f sdkconfig; idf.py build'
+Project build complete — 0 warning dans main et dengon_transport_core (-Werror)
+
+$ docker run … idf.py size
+Total image 507 865 o (bin 507 984 o, 463,5 Ko en US-114) ; DRAM 22,58 % (96 452 o libres) ; IRAM 75,08 %
+```
+- `gcc -Wall -Wextra -Werror` hôte sur le cœur : OK (avant l'image Docker).
+- **Sur carte (une seule ESP32-D0WD-V3, CH340 via `usbipd`)** :
+```
+$ idf.py -B build-esp32 … -p /dev/ttyUSB0 flash   (test_apps) + lecture série (pyserial)
+32 Tests 0 Failures 0 Ignored — OK
+
+$ idf.py -p /dev/ttyUSB0 flash   (firmware relais) + captures série de 4 et 10 min
+annonce « dengon-relay-39e1 », scan toutes les 10 s, 0 reset, 0 panic
+```
+- **Pair réel : Pixel 8 Pro (Android 17) + nRF Connect 4.29.1**, piloté par
+  `adb.exe` (winget `Google.PlatformTools`) depuis WSL : `uiautomator dump`
+  pour lire l'écran, `input tap` pour agir, `screencap` quand `uiautomator`
+  cessait de répondre. Observé sur la carte :
+  - abonnement → `PeerConnected link#1` ; sondes `20 o -> ok`, `21 o -> trame
+    trop grande` (MTU 23) ; le téléphone lit « DGN0 » + motif intact ;
+  - écriture `DEADBEEF` → `FrameReceived 4 o, crc32=7c9ca35a` (= `zlib.crc32`
+    sur PC) ;
+  - Request MTU 517 → `ATT MTU négocié = 517` ;
+  - DISCONNECT → `HCI 0x13 -> Propre` ; reconnexion → `conn=0` redonné,
+    `link#2` ;
+  - Bluetooth du téléphone désactivé → `HCI 0x15 -> Propre` (Android prévient :
+    **pas** une coupure brutale — première tentative ratée, constatée) ;
+  - `am force-stop com.google.android.bluetooth` pendant un lien annoncé →
+    ~5 s plus tard `HCI 0x08 -> Brutale -> PeerDisconnected link#1, motif
+    Brutale`, `send` → pair inconnu ; nouveau scan : carte toujours annoncée,
+    `PeerConnected link#2`.
+  - Incidents de manipulation (pas du firmware) : après un `force-stop`, la
+    pile du téléphone refusait de se reconnecter jusqu'à un `bluetooth_manager
+    disable/enable` ; une première coupure brutale a eu lieu sur un lien pas
+    encore abonné → `HCI 0x08 -> Brutale (lien jamais annoncé)`, sans
+    événement, conforme au contrat mais refaite sur un lien annoncé.
+- **Non vérifié :** le rôle **central** (scan d'un pair dengon, anti-boucle,
+  découverte GATT, `NOTIFY_RX`) et le relais **entre deux cartes** — une seule
+  carte disponible. Workflow CI pas encore exécuté au moment de l'écriture.
+---
+
+$ cargo test --workspace --all-features
+172 tests passés, 0 échec (dont 9 unitaires + 9 bout en bout pour dengon-verify,
+2 nouveaux dans ledger)
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+aucun avertissement
+$ cargo check -p dengon-core --no-default-features
+Finished (no_std OK)
+$ cargo llvm-cov -p dengon-verify -p dengon-core --summary-only
+dengon-verify/src/lib.rs  lignes 97,02 %   main.rs 100 %
+dengon-core/src/ledger.rs lignes 99,15 %
+$ dengon-verify tests/fixtures/{ok,broken,fork,gap}.bin
+verdicts ok / broken / fork / gap, codes de sortie 0 / 1 / 2 / 3
+```
+- Échecs rencontrés en route : (1) un test prenait pour clé Ed25519
+  invalide des octets qui décodent en fait un point valide — remplacé par
+  `y = 2`, comme le test de `crypto` ; (2) `clippy` refusait les `unwrap()`
+  des fonctions utilitaires de `tests/cli.rs` — ajouté le
+  `#![allow(clippy::unwrap_used, clippy::expect_used)]` utilisé par les
+  autres tests d'intégration du workspace.
 
 ---
 
@@ -575,6 +1670,369 @@ Finished (observability compile en no_std + alloc)
 - Pas encore appelé : le branchement (émission par `Transport`, réception
   avant `sync::routing`) viendra avec le codec et le pipeline.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+## 2026-09-28 — US-215 : corrections de la revue de la PR #94
+
+**Auteur :** Oswin + Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/identite/IdentiteLocale.kt`, `android/app/src/main/java/com/dengon/app/ui/appairage/{QrCode.kt,AppairageScreen.kt}`, tests `identite/IdentiteLocaleTest.kt`, `ui/appairage/QrCodeTest.kt`
+**Lot :** US-215 (#29), suite de la revue automatisée (Claude Code) sur PR #94
+
+### Fait
+- **Entropie du `peerId` corrigée** (`IdentiteLocale.kt`) : le pseudo
+  provisoire `tel-xxxx` ne faisait varier que 2 des 8 octets pris par le
+  `peerId` du bouchon FFI (`tel-` occupant, constant, les 4 premiers) —
+  2^16 valeurs possibles au lieu de 2^8 octets = jusqu'à 2^64 en théorie.
+  Le préfixe est abandonné : pseudo purement hexadécimal (8 octets UTF-8,
+  4 octets de source aléatoire, `OCTETS_ALEATOIRES` 2 → 4). Les 8 octets du
+  `peerId` tombent désormais tous dans la fenêtre aléatoire — 2^32 valeurs
+  possibles (le hexadécimal double la taille en octets, donc pas 2^64
+  malgré ce que suggérait la revue automatisée — voir « Écarts vs revue »).
+- **Repli silencieux sur QR indétectable signalé** (`QrCode.kt`) :
+  `matriceQr` retombait sur la matrice par défaut sans un mot si aucun des
+  8 masques n'est détectable. Ajout d'un `Log.w` (tag `QrCode`) dans ce cas ;
+  la matrice reste affichée (mieux qu'un QR vide) mais le défaut est
+  désormais traçable en `logcat` plutôt qu'invisible jusqu'au scan réel sur
+  le terrain.
+- **Encodage QR déplacé hors du thread UI** (`AppairageScreen.kt`) :
+  `ImageQr` appelait `matriceQr` directement dans `remember { }`, donc sur le
+  thread de composition — jusqu'à 9 cycles encode+rastérisation+decode dans
+  le pire cas (repli ci-dessus). Remplacé par `produceState` +
+  `withContext(Dispatchers.Default)` ; le canvas ne dessine rien tant que la
+  matrice n'est pas prête (état initial `null`).
+
+### Pourquoi / décisions
+- Pas touché à `generateIdentity` (bouchon partagé, même algorithme que le
+  bouchon Rust `crates/dengon-ffi`) : le corriger aurait fait diverger les
+  deux bouchons. Le point de correction reste côté appelant Android
+  (`IdentiteLocale`), conforme à l'ancre de la revue.
+- Hexadécimal conservé (plutôt qu'un alphabet plus dense type base64url) :
+  reste lisible/imprimable à l'affichage, cohérent avec l'ancien format, et
+  le gain (2^16 → 2^32) est déjà large pour une identité **provisoire**
+  vouée à disparaître à l'US-306.
+
+### Écarts vs conception
+- Aucun nouveau (l'écart « identité provisoire / bouchon » était déjà
+  consigné dans `03-ecarts-conception.md`, entrée US-215 du 2026-09-28 ;
+  seul le format exact du pseudo change, détail non repris là-bas).
+
+### Écarts vs revue
+- La revue automatisée annonçait « 2^64 valeurs possibles » en utilisant
+  les 8 octets pour l'aléatoire. En pratique, encoder N octets aléatoires en
+  hexadécimal produit 2×N caractères ASCII, donc 2×N octets UTF-8 : pour
+  tenir dans la fenêtre de 8 octets du `peerId` sans prefixe gaspillé, seuls
+  4 octets de source aléatoire (donnant 2^32) y tiennent, pas 8. Repéré en
+  implémentant le correctif — voir `04-apprentissages.md`.
+
+### Appris
+- Entrée ajoutée à `04-apprentissages.md` (encodage hexadécimal double la
+  taille en octets — piège pour tout calcul d'entropie « en octets
+  disponibles » qui suppose une correspondance 1:1 octet source ↔ octet
+  transporté).
+
+### État après cette session
+- Les 3 constats de la revue de la PR #94 sont traités. `AppairageViewModelTest`
+  non touché (n'appelle pas `IdentiteLocale` directement). Fiche module mise
+  à jour : `modules/android-app.md`.
+- 01-etat-du-code.md : non touché (règle projet : ne plus le mettre à jour,
+  voir README de `docs/suivi/`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew --no-daemon -q assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 34/34 tests JVM verts (IdentiteLocaleTest 4/4, QrCodeTest 7/7)
+```
+- Pas revérifié sur appareil réel (scan caméra, comparaison des deux
+  téléphones) : les 3 changements sont couverts par les tests JVM existants
+  et adaptés ; un nouveau passage sur 2 téléphones physiques n'a pas été
+  refait pour cette correction de revue.
+
+---
+
+## 2026-09-28 — US-215 : écran QR (affichage + scan) + comparaison du code 60 chiffres
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/{ui/appairage/, identite/, MainActivity.kt}`, `AndroidManifest.xml`, `res/values/strings.xml`, `app/build.gradle.kts`, `gradle/libs.versions.toml`, `app/gradle.lockfile`, `gradle/verification-metadata.xml`, tests `ui/appairage/`, `identite/`
+**Lot :** US-215 (#29), sprint 2, jalon J2
+
+### Fait
+- **Écran d'appairage** (`ui/appairage/AppairageScreen.kt`) : mon QR
+  (`dengon:v1:…`, dessiné en Compose) + bouton « Scanner le QR de mon
+  correspondant » (scanner caméra de `zxing-android-embedded`) ; puis le
+  **code de 60 chiffres** en 3 lignes de 4 groupes, avec deux boutons
+  explicites « Les codes sont identiques » / « Les codes sont différents ».
+- **`AppairageViewModel`** (JVM pur, `StateFlow`) : étapes
+  `AfficherMonQr → Comparaison → Verifie | Refuse`, erreurs « QR non dengon »
+  et « votre propre QR », scan annulé sans effet, contacts vérifiés gardés en
+  mémoire. Alimenté **uniquement** par le bouchon FFI de US-106
+  (`identityQrCode`, `identityFromQrCode`, `verificationCode`).
+- **`IdentiteLocale`** : identité provisoire par installation, pseudo
+  aléatoire `tel-xxxx` conservé dans les préférences.
+- Dépendances : `com.google.zxing:core:3.5.3`,
+  `com.journeyapps:zxing-android-embedded:4.3.0` ; `gradle.lockfile` (+2)
+  et `verification-metadata.xml` (+86) régénérés
+  (`--write-verification-metadata sha256 :app:dependencies --write-locks`,
+  puis `… assembleDebug testDebugUnitTest assembleRelease`). Les nouveaux
+  artefacts n'étaient pas en cache : pas de piège « cache chaud ».
+- `CaptureActivity` du scanner en `fullSensor` (manifest) pour scanner
+  téléphone tenu droit.
+
+### Trois défauts trouvés et corrigés en route (règle n°7)
+1. **QR illisible par le détecteur** : en test JVM, le QR de l'identité
+   « alice » n'était **jamais détecté** par ZXing (`NotFoundException` à
+   toute échelle, même `TRY_HARDER`), alors qu'en `PURE_BARCODE` il se
+   décodait : données justes, repères introuvables avec le masque par
+   défaut. Le scanner caméra utilise ce même détecteur. Correctif :
+   `matriceQr` vérifie la relecture **par détection** et essaie les 8
+   masques. Test de régression + balayage de 300 identités.
+2. **Tous les téléphones avaient le même `peerId`** (constaté sur appareil :
+   « C'est votre propre QR » au premier scan). Le bouchon fait `peerId` = 8
+   premiers octets du pseudo, et mes pseudos `appareil-xxxx` commençaient
+   tous par « appareil ». Correctif : `tel-xxxx` (8 octets) ; tests : 65 536
+   tirages → 65 536 `peerId` distincts.
+3. **Mon QR disparaissait après mon scan** (constaté sur appareil) : l'écran
+   de comparaison remplaçait le QR, l'autre téléphone n'avait plus rien à
+   viser. Invisible aux tests unitaires (un téléphone par test). Correctif :
+   l'écran de comparaison affiche aussi mon QR, avec un rappel.
+
+### Vérification sur appareils réels
+- **Google Pixel 8 Pro** (Android 17, API 37) et **Samsung Galaxy A16**
+  (SM-A165F, Android 16, API 36), en USB (`adb`).
+- Lecture croisée complète : Samsung scanne le Pixel, Pixel scanne le
+  Samsung (caméra, téléphone tenu à la main). Le Pixel (`tel-9e95`) nomme
+  `tel-612d`, le Samsung nomme `tel-9e95` ; **codes identiques chiffre pour
+  chiffre** (lus par `adb`/`uiautomator`) : `99083 88326 31081 93212 49943 35746 33429 06232 54259 64334 82577 91716`.
+  « Les codes sont identiques » → « ✔ tel-612d est vérifié » /
+  « ✔ tel-9e95 est vérifié ».
+- Captures : `docs/suivi/assets/us-215/`.
+- L'app déjà installée était signée par une autre clé debug
+  (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) : désinstallée sur les deux
+  téléphones avec l'accord de l'utilisateur ; `pm clear` ensuite pour
+  oublier l'ancien pseudo `appareil-xxxx`.
+
+### Pourquoi / décisions
+- **`zxing-core` + `zxing-android-embedded`** plutôt que CameraX + ML Kit :
+  2 artefacts au lieu d'une dizaine, pas de modèle Google Play à
+  télécharger, et `zxing-core` (Java pur) rend le QR testable en JVM.
+- **ViewModel synchrone** comme US-214 : le bouchon calcule en mémoire.
+- **Navigation minimale** (un booléen dans `MainActivity`), comme US-214 —
+  conflit attendu avec la PR #87 sur ce fichier.
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-215) : contact
+  vérifié gardé en mémoire (pas d'appel FFI « marquer vérifié ») ;
+  identité provisoire `tel-xxxx` ; code de vérification = placeholder du
+  bouchon (forme conforme, pas le SHA-512 de `powl/04` §2.3).
+
+### Appris
+- Note « Un QR code peut être valide et pourtant indétectable » dans
+  `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-215 : QR affiché + scan ✅, comparaison du code 60 chiffres
+  avec confirmation explicite ✅, alimenté par le bouchon FFI ✅, testé sur
+  2 appareils réels (caméra) ✅, tests unitaires ViewModel ✅.
+## 2026-09-28 — US-213 : 4 bugs de concurrence corrigés en revue de la PR #98 (`GattRadio`, `TransportActif`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/transport/{BleRadio.kt,GattRadio.kt,TransportActif.kt}`
+**Lot :** US-213 (correctifs post-revue, pas un nouveau lot)
+
+### Fait
+- **`GattRadio.demarrer()`** : le `catch` ne rattrapait que `SecurityException`. Un
+  `TransportException.Backend` levé par `demarrerServeurEtAnnonce()`/`demarrerScan()`
+  (annonce/scan non pris en charge) pouvait laisser `serveur`/`actif` « ouverts » alors
+  que l'appelant considère `start()` en échec — un retry ouvrait un second serveur GATT
+  et fuyait le handle du premier, jamais fermé. Ajout d'un `catch (e: TransportException)`
+  qui appelle `arreter()` avant de relever l'exception.
+- **`RadioPeer` porte désormais une `generation: Long`** (défaut `0`, transparent pour
+  les tests JVM qui passent par `FauxRadio`). `GattRadio` assigne une génération neuve à
+  chaque connexion physique (`connexionPeripherique()`, `onScanResult`) ; un nouveau
+  helper `pairActuel()` résout, sous verrou, le `RadioPeer` courant pour une adresse+rôle
+  (nécessaire côté serveur, dont les rappels Android ne donnent qu'une adresse, jamais un
+  identifiant de connexion). Corrige la race décrite en revue : un pair qui se déconnecte
+  puis se reconnecte à la même adresse **entre** la résolution du `pair` par
+  `AndroidTransport.send()` (sous son verrou) et l'appel à `GattRadio.ecrire()` (hors
+  verrou, volontairement, cf. commentaire dans `AndroidTransport.send()`) faisait
+  auparavant atterrir des fragments sur la `Connexion` du **nouveau** lien au lieu
+  d'échouer — flux d'octets corrompu/entrelacé, sans garde-fou. Avec la génération,
+  `connexions[pair]` ne correspond plus après une reconnexion : `ecrire()` renvoie
+  `false`, `send()` lève `UnknownPeer` au lieu de corrompre.
+- **`onDescriptorWriteRequest`** ne traitait que `ENABLE_NOTIFICATION_VALUE`. Un pair qui
+  se désabonne de `CHAR_TX` sans se déconnecter (arrive en tâche de fond sur certaines
+  piles centrales) était silencieusement ignoré : `pret` restait `true` indéfiniment, et
+  si la pile Android n'invoque jamais `onNotificationSent` pour une notification refusée
+  faute d'abonnement, la file d'envoi (`enVol`) restait bloquée pour toujours. Fix :
+  `DISABLE_NOTIFICATION_VALUE` marque `fermetureDemandee=true` et ferme le lien via
+  `cancelConnection()`, en réutilisant le chemin de fermeture existant
+  (`onConnectionStateChange` → `motifDeconnexion` → `DisconnectReason.LOCALE`).
+- **`TransportActif.transport`** : `var` simple, écrite uniquement sous `@Synchronized`
+  (`demarrer()`/`arreter()`) mais lue sans verrou ni barrière mémoire depuis
+  `sonder()`/`battre()` (thread du `ScheduledExecutorService`) et depuis
+  `diffuser()`/`basculerBattement()` (thread appelant) — aucune garantie de visibilité
+  inter-thread. Ajout de `@Volatile`.
+
+### Pourquoi / décisions
+- **Génération plutôt qu'un identifiant opaque dans l'interface `BleRadio`** : le contrat
+  `BleRadio`/`RappelsRadio` ne change pas de signature (toujours `RadioPeer`), donc
+  `AndroidTransport` et les tests JVM (`FauxRadio`, conformité, `AndroidTransportTest`)
+  sont inchangés — la génération est un détail interne à `GattRadio`, invisible ailleurs.
+- **Désabonnement traité comme une fermeture de lien**, pas un état « à moitié ouvert » :
+  réutilise `motifDeconnexion`/`DisconnectReason.LOCALE` déjà testés plutôt que d'ajouter
+  un troisième état au contrat `Transport`.
+
+### Écarts vs conception
+- aucun (correctifs de bugs de concurrence relevés en revue, pas de changement de
+  conception).
+
+### Appris
+- Note ajoutée à `04-apprentissages.md` : « Génération (epoch) : désambiguïser deux
+  connexions successives à la même identité ».
+
+### État après cette session
+- Les 4 points relevés par la revue de la PR #98 (commentaire GitHub, id 5872663432) sont
+  corrigés.
+- Fiche module mise à jour : `modules/android-app.md`.
+- 01-etat-du-code.md mis à jour : non (pointeurs toujours valides).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew --no-daemon -q testDebugUnitTest
+BUILD OK (exit 0) — 48 tests JVM (AndroidTransportConformiteTest, AndroidTransportTest,
+FragmentationBleTest, DengonNodeStubTest, BlePermissionsTest inchangés)
+```
+- **Pas re-testé sur appareil réel** : les 4 bugs sont des races/edge cases sur la pile
+  Android (chemins `GattRadio`/`TransportActif`) qui ne sont pas reproductibles à la main
+  de façon fiable sur 2 téléphones dans le temps disponible pour cette tâche ; la suite
+  JVM (`FauxRadio`) ne peut pas les exercer non plus car `FauxRadio` ne modélise pas les
+  rappels bruts par adresse Android — à couvrir par les prochains essais matériels
+  (US-306) si l'occasion se présente.
+
+---
+
+## 2026-09-28 — US-213 : `AndroidTransport` — GATT server + advertiser + scanner, testé sur 2 vrais téléphones
+
+**Auteur :** Oswin + Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/transport/` (nouveau : `Transport.kt`,
+`AndroidTransport.kt`, `BleRadio.kt`, `GattRadio.kt`, `FragmentationBle.kt`, `Annonce.kt`,
+`TransportActif.kt`, `TransportDebugScreen.kt`), `MeshForegroundService.kt`, `MainActivity.kt`,
+tests `app/src/test/java/com/dengon/app/ble/transport/`
+
+### Fait
+
+- **`AndroidTransport`** : implémentation Kotlin du contrat `Transport` (US-105,
+  `crates/dengon-ble/src/transport.rs`), sans une ligne d'API Android — attribution
+  des `LinkId`, file d'événements, quota `maxConnections`, fragmentation/réassemblage
+  BLE, et les 5 règles de déconnexion brutale. La radio réelle est injectée derrière
+  l'interface `BleRadio`, ce qui rend tout le contrat testable en JVM pur.
+- **`GattRadio`** : la vraie radio Android — serveur GATT + annonce (rôle périphérique)
+  **et** scan + client GATT (rôle central) simultanément, comme l'exige un nœud mesh.
+  Gère : une seule opération GATT en vol par connexion (file d'écriture), la **règle
+  anti-boucle de connexion** (`Annonce.doitInitier`, comparaison non signée des 4
+  premiers octets du `peerID`), le morcellement à 512 o max par valeur GATT même avec
+  un MTU négocié plus grand, et la traduction `status` GATT → `DisconnectReason`.
+- **`FragmentationBle`** : fragmentation **BLE** (L1, distincte de la fragmentation
+  *protocole* de `dengon-core`), format `en-tête(1) ‖ données` avec un seul bit SUITE
+  (GATT garantit l'ordre sur une connexion).
+- **`TransportActif`** + **écran de debug** : objet singleton qui possède le transport
+  du processus, journalise les événements (CRC + aperçu), et expose diffusion de
+  messages courts/grandes trames + un battement périodique — l'outillage qui a servi
+  à tous les essais ci-dessous.
+- **Suite de conformité transcrite** (`AndroidTransportConformiteTest`, 12 cas un pour
+  un avec `crates/dengon-ble/src/conformance.rs`, via `FauxRadio`) + tests hors suite
+  partagée (`AndroidTransportTest`, `FragmentationBleTest`) : règle 3 (trame partielle
+  jetée à la coupure — explicitement hors de la suite Rust, renvoyée aux bancs
+  matériels), fragmentation à l'envoi, quota, rappels radio anormaux, arrêt. **48 tests
+  JVM, 0 échec.**
+
+### Vérifié sur 2 vrais téléphones (Google Pixel 8 Pro Android 17, Samsung Galaxy A16
+Android 16), via `adb` + l'écran de debug
+
+- **Connexion** : les deux nœuds se découvrent et **un seul lien** s'ouvre entre eux
+  (règle anti-boucle confirmée) — le nœud au plus petit préfixe de `peerID`
+  (`ae7c53fd`, Samsung) initie en central (RSSI reçu), l'autre (`cf51d537`, Pixel) est
+  périphérique (RSSI absent, cohérent avec la limite Android documentée dans le code).
+- **Messages courts et grandes trames (5000 o, fragmentées)**, dans les deux sens :
+  reçus intacts, vérifiés par CRC32 des deux côtés.
+- **Déconnexion brutale — résultat asymétrique important** : en éloignant physiquement
+  les téléphones (perte radio réelle, pas un `disconnect()` propre), le **même**
+  événement de coupure est rapporté différemment selon le rôle : `BRUTALE` côté
+  central (Samsung, `BluetoothGattCallback`, code de statut HCI exploitable) mais
+  `PROPRE` côté périphérique (Pixel, `BluetoothGattServerCallback`, qui rend
+  quasi-systématiquement `status=0` quelle que soit la cause réelle). C'est une
+  **limitation de la plateforme Android**, pas un bug du code — déjà anticipée dans
+  un commentaire de `motifDeconnexion` avant l'essai, et confirmée ici. Écart
+  consigné (voir ci-dessous).
+- **Lien dupliqué par rotation d'adresse BLE** : en cours d'essai (écran éteint), un
+  second lien GATT s'est ouvert entre les deux mêmes téléphones déjà connectés
+  (`link#2`+`link#3` côté Pixel, `link#1`+`link#2` côté Samsung), les deux recevant le
+  même battement. Cause probable : l'adresse BLE annoncée par le pair a changé (Android
+  fait tourner les adresses privées résolubles), et la déduplication de `GattRadio` se
+  fait par adresse MAC — un pair déjà connecté sous une nouvelle adresse est vu comme
+  neuf. Aucune donnée corrompue, aucun crash ; juste un lien redondant. Écart consigné :
+  résoudre par identité cryptographique (`peerID` via `ANNOUNCE`) est le travail de
+  `sync`, pas de `Transport`, qui par contrat ne connaît pas le `peerID` (voir la
+  rustdoc du contrat, « il ne route pas »).
+- **Service de fond, écran éteint** : les deux écrans éteints (`mWakefulness=Dozing`
+  confirmé par `adb shell dumpsys power`), le battement (toutes les 30 s) a circulé
+  sans interruption pendant les 5 min 40 de l'essai (12 allers-retours, CRC vérifié à
+  chaque fois). **Réserve méthodologique honnête** : à la fin de l'essai, le Pixel
+  est ressorti `Awake` — cause non tranchée avec certitude (`stay_on_while_plugged_in`
+  vérifié à `0`, donc pas ce réglage) ; l'explication la plus probable est l'activité
+  `adb shell`/`logcat` du protocole d'observation lui-même (interrogé toutes les 15 s
+  pendant 5+ minutes), pas le transport. Le Samsung, lui, est resté `Dozing` jusqu'au
+  bout. Aucune coupure ni aucune perte de trame n'est corrélée à cet épisode dans les
+  deux cas — le flux de données n'a jamais été interrompu.
+- Panne annexe rencontrée : `svc bluetooth disable` (test initial de coupure) donne un
+  arrêt **propre** du contrôleur (négociation de déconnexion normale), pas une coupure
+  brutale — utile à savoir pour de futurs essais, mais ce n'est pas le test qu'il
+  fallait ; la vraie coupure brutale a demandé l'éloignement physique.
+
+### Pourquoi / décisions
+
+- **Toute la logique du contrat dans `AndroidTransport`, zéro dans `GattRadio`** :
+  `GattRadio` ne fait que traduire les rappels Android ↔ l'interface `BleRadio`,
+  ce qui permet de tester 100 % des règles du contrat sans jamais toucher un
+  vrai `BluetoothManager`.
+- **Une seule opération GATT en vol par connexion** (file `Connexion.file` +
+  `enVol`) : BluetoothGatt ne met pas en file les écritures côté Android — lancer
+  la suivante avant le rappel de fin de la précédente échoue silencieusement.
+- **Dédup par adresse MAC à la connexion, pas par `peerID`** (limite trouvée en
+  test, voir ci-dessus) : `Transport` ne connaît pas le `peerID` par contrat ;
+  la vraie déduplication de nœud appartient à `sync` (US-209/210), une fois
+  `ANNOUNCE` échangé.
+
+### Écarts vs conception
+
+- Deux écarts ajoutés à `03-ecarts-conception.md` (2026-09-28, US-213) :
+  asymétrie `BRUTALE`/`PROPRE` selon le rôle GATT (limite Android), et liens
+  dupliqués possibles par rotation d'adresse BLE (limite de la déduplication
+  par adresse, résolution renvoyée à `sync`).
+- Format des morceaux de fragmentation BLE **proposé** dans `FragmentationBle.kt`
+  (en-tête 1 octet, bit SUITE) : à aligner avec le firmware NimBLE (US-220) —
+  déjà noté dans le fichier, confirmé ici comme écart ouvert.
+
+### Appris
+
+- Le rappel de déconnexion **serveur** GATT d'Android (`BluetoothGattServerCallback
+  .onConnectionStateChange`) ne peut pas être considéré comme une source fiable de
+  la cause de déconnexion — seul le rappel **client** (`BluetoothGattCallback`) le
+  peut. Un nœud mesh est les deux à la fois, donc **aucune implémentation Android
+  du contrat ne peut garantir la règle 1 (`BRUTALE` fiable) sur son rôle
+  périphérique** ; seul le rôle central le peut. Conséquence pratique : un nœud qui
+  veut fiabiliser la détection de coupure a intérêt à préférer le rôle central
+  quand il le peut (cohérent avec la règle anti-boucle, qui laisse déjà un seul
+  des deux nœuds initier).
+
+### État après cette session
+
+- Critères US-213 : GATT server + advertiser + scanner opérationnels ✅ ; implémente
+  le contrat `Transport` ✅ ; suite de conformité transcrite et passée (12/12, écart
+  UniFFI consigné) — **pas encore passée via la vraie suite Rust** (dépend de
+  l'US-302, callback interface UniFFI) ; testé sur 2 appareils réels ✅ (modèles :
+  Google Pixel 8 Pro Android 17, Samsung Galaxy A16 Android 16) ; comportement en
+  déconnexion brutale documenté ✅ (et son asymétrie de plateforme, ci-dessus) ;
+  pas de régression du service de fond ✅ (battement continu 5 min 40, écran
+  éteint sur au moins un des deux appareils tout du long).
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
 
 ### Vérification (commandes réellement exécutées)
@@ -734,6 +2192,24 @@ $ cargo check -p dengon-core --no-default-features         → OK
 
 ---
 
+```
+$ ./gradlew --no-daemon -q assembleDebug testDebugUnitTest
+BUILD OK — 48 nouveaux tests JVM (dont les 12 cas de conformité transcrits), 0 échec
+$ adb -s <Pixel> install -r app-debug.apk && adb -s <Samsung> install -r app-debug.apk
+Success sur les deux
+```
+
+Essais matériels via `adb shell input`/`logcat`/`dumpsys` pilotés depuis la session
+(voir le détail ci-dessus) : connexion, message court, grande trame fragmentée
+(5000 o), déconnexion brutale par éloignement physique, battement 30 s pendant
+5 min 40 écran éteint. Deux comportements de plateforme inattendus trouvés et
+consignés en écarts plutôt que masqués (asymétrie `BRUTALE`/`PROPRE`, lien
+dupliqué par rotation d'adresse). Réserve honnête sur l'état d'écran final du
+Pixel (probable artefact de la méthode d'observation `adb`, pas du transport).
+
+---
+
+
 ## 2026-09-28 — US-211 : rebase de la PR #84 sur `main` (après #76, #78, #80, #81, #82, #83)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
@@ -870,6 +2346,9 @@ une seule ligne par module
   `dengon-sim`) viendra avec les US suivantes.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+---
+
 ## 2026-09-28 — US-209 : retours de revue #85 (OswinFreyr) sur `sync::routing`
 
 **Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
@@ -1014,6 +2493,102 @@ TOTAL dengon-core      lignes  98,96 %
   périmètre. La CI (Linux) n'est pas concernée.
 
 ---
+## 2026-09-28 — US-224 : déploiement VPS — reverse-proxy TLS, purge, workflow manuel
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/Dockerfile`, `.dockerignore` (racine),
+`dashboard/deploy/{docker-compose.yml,Caddyfile,.env.example,purge-demo.sh}`,
+`.github/workflows/deploy-vps.yml`, `docs/suivi/`.
+**Lot :** US-224 (issue #38). Branche `feat/US-224-deploy-vps`, basée sur `main`
+(seule dépendance formelle : US-110, déjà mergée).
+
+### Fait
+- Accès SSH mis en place : paire de clés dédiée (`~/.ssh/dengon_vps`), alias
+  `dengon-vps` dans `~/.ssh/config`, testé.
+- **Investigation du VPS avant tout code** : `docker ps -a` montre des
+  conteneurs d'autres groupes du cours (`jdr`, `onsort`, `tavern`,
+  `partybox`, `substrata-web`) — le VPS est **partagé**, pas dédié à dengon.
+  `/proc/net/tcp` confirme que les ports 80/443 sont déjà occupés par un
+  processus **root**, sans qu'aucun conteneur visible ne les publie ; `sudo`
+  demande un mot de passe que nous n'avons pas. Décision (validée avec
+  Olivier) : improviser avec des ports non privilégiés plutôt que risquer de
+  casser le service d'un autre groupe.
+- `dashboard/api/Dockerfile` — contexte de build = racine du dépôt (anticipe
+  la dépendance de l'US-216 à `contracts/events/*.schema.json`, pas encore
+  mergée). Construit et testé en local avant tout déploiement réel.
+- `dashboard/deploy/` — `docker-compose.yml` (services `api` + `caddy`,
+  volumes nommés fixes), `Caddyfile` (`tls internal`, `default_sni`),
+  `purge-demo.sh`, `.env.example`.
+- **Déployé pour de vrai sur le VPS du groupe** (51.255.38.214) : transfert
+  par `tar`+`ssh` (pas de `rsync` sur le VPS), `.env` créé une fois à la
+  main, `docker compose up -d --build`.
+- **Bug rencontré et corrigé en testant en conditions réelles** : `curl
+  https://<IP publique>:8443/healthz` échouait (`tlsv1 alert internal
+  error`) alors que la même configuration fonctionnait en local avec
+  `localhost`. Diagnostic : `openssl s_client -servername <IP>` réussissait
+  (SNI forcé manuellement) mais `curl` échouait toujours — la preuve qu'un
+  client réel se connectant à une IP littérale n'envoie pas de SNI, et que
+  Caddy n'avait donc aucun certificat à proposer. Corrigé avec `default_sni`
+  dans le Caddyfile.
+- `.github/workflows/deploy-vps.yml` — `workflow_dispatch` seul
+  déclencheur, `environment: vps-prod`, transfert `tar`+`ssh`, deux smoke
+  tests (`/healthz` HTTPS, un batch ingéré) exécutés depuis le runner
+  (donc depuis l'extérieur, comme un vrai client).
+- `docs/suivi/modules/deploiement-vps.md` (nouvelle fiche) — inclut la
+  procédure d'accès SSH pour les 3 personnes.
+
+### Pourquoi / décisions
+- Détail complet dans `docs/suivi/modules/deploiement-vps.md` §Décisions :
+  ports non standard et TLS auto-signé (contrainte du VPS partagé),
+  `default_sni` (bug SNI/IP), pas de `rsync` (absent, pas de `sudo`), `.env`
+  jamais recréé par le workflow (préserverait les jetons JWT déjà émis).
+
+### Écarts vs conception
+- Déploiement sur 8080/8443 plutôt que 80/443 — consigné dans
+  `03-ecarts-conception.md`.
+- TLS auto-signé (CA interne Caddy) plutôt que Let's Encrypt, faute de nom
+  de domaine — consigné.
+
+### Appris
+- `docs/suivi/04-apprentissages.md` : à enrichir sur le piège SNI/IP-littérale
+  avec Caddy (voir ci-dessus) — utile pour toute future US qui déploierait
+  un service TLS sans nom de domaine.
+
+### État après cette session
+- Les 5 critères d'acceptation de l'US-224 sont couverts : reverse-proxy TLS
+  devant `uvicorn`, `/healthz` joignable en HTTPS depuis l'extérieur
+  (vérifié depuis un poste hors du VPS), script de purge testé, workflow
+  `deploy-vps.yml` créé (`vps-prod`, déclenchement manuel), procédure
+  d'accès documentée pour les 3 personnes.
+- Manque encore avant de fermer l'issue : configurer les secrets GitHub
+  (`VPS_HOST`/`VPS_PORT`/`VPS_USER`/`VPS_SSH_KEY`) dans l'environment
+  `vps-prod` — décision à prendre avec Olivier avant de les pousser (accès
+  qui touche un secret d'infrastructure partagée) ; premier run réel du
+  workflow depuis GitHub Actions (la procédure manuelle a été vérifiée,
+  pas encore le workflow lui-même) ; ouvrir la PR, revue par une personne
+  d'une autre `area:`.
+- Fiche module créée : `modules/deploiement-vps.md` + ligne dans
+  `modules/_index.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ curl -sk https://51.255.38.214:8443/healthz
+{"status":"ok"}   # HTTP 200
+
+$ curl -sI http://51.255.38.214:8080/healthz
+HTTP/1.1 301 Moved Permanently
+Location: https://51.255.38.214:8443/healthz
+
+$ curl -sk -X POST https://51.255.38.214:8443/ingest/batch -d '[]'
+{"stored":true,...}   # HTTP 202
+
+$ ssh dengon-vps "cd ~/dengon/dashboard/deploy && ./purge-demo.sh"
+→ Base repartie de zéro. (vérifié : /healthz répond de nouveau 200 après)
+```
+- Workflow `deploy-vps.yml` : adapté à la syntaxe GitHub Actions par
+  relecture, PAS ENCORE exécuté (secrets manquants) — à vérifier au premier
+  run réel.
 
 ## 2026-09-28 — US-205 : rebase sur `main` après le merge de #81 (US-204), relecture
 
@@ -1798,6 +3373,18 @@ $ uv run --extra dev pytest -q
 ```
 - CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
   ouverte au moment de cette entrée).
+
+$ ./gradlew --no-daemon -q --write-verification-metadata sha256 assembleDebug testDebugUnitTest assembleRelease
+BUILD OK — 34 tests JVM, 0 échec (dont 23 nouveaux : 12 AppairageViewModelTest,
+7 QrCodeTest, 4 IdentiteLocaleTest) ; assembleRelease (R8) OK sans règle proguard
+$ adb -s <série> install -r app/build/outputs/apk/debug/app-debug.apk
+Success (Pixel 8 Pro, Galaxy A16)
+```
+- Non vérifié sur appareil : le bouton « Les codes sont différents » (couvert
+  par `codes differents - contact rejete et non enregistre`), et l'affichage
+  d'un QR non dengon (couvert par test unitaire).
+
+---
 
 ## 2026-09-28 — US-203 : `crypto`, rebase sur `main` et retours de revue de #78
 

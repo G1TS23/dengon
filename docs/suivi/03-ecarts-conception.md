@@ -15,6 +15,149 @@ et le mentionner dans l'entrée de journal.
 ## Modèle d'entrée
 
 
+
+---
+
+### 2026-09-28 — `cross-vectors` : la patte « firmware » est un proxy `no_std`, pas le firmware (US-222)
+
+- **Prévu :** `docs/synthese/10-benchmarks-mvp-tests.md` §4.7 — le job
+  `cross-vectors` compare « core ↔ firmware ↔ dashboard » sur les mêmes
+  vecteurs de conformité. DoD §7.2, ligne *Firmware* : « vecteurs de
+  conformité identiques au core ».
+- **Réel :** le firmware ne lit **aucun** vecteur. `firmware/dengon-relay/`
+  ne contient que le BLE (advertising, table GATT) ; le pont
+  `dengon_core_ffi` qui lui donnerait un décodeur est l'US-307, non livrée.
+  La troisième lecture est donc faite par `crates/dengon-conformance/`, une
+  crate sans code dont la seule fonction est de lier `dengon-core` en
+  `default-features = false` — la configuration `no_std` + `alloc` que
+  l'ESP32 embarquera — et de rejouer les mêmes
+  `contracts/packet/vectors_v0.json` contre ce build.
+- **Pourquoi :** c'est ce qui s'approche le plus de la promesse « mêmes
+  octets in → mêmes décisions out » sans attendre l'US-307, qui est au
+  sprint 3. Le décodeur exercé est **le même code** que celui que le
+  firmware liera ; ce qui manque, c'est la traversée du FFI et l'exécution
+  sur la cible.
+- **Détail technique qui a dicté la forme :** `cargo test -p dengon-core
+  --no-default-features` ne donne **pas** un build `no_std`. La
+  dev-dependency `dengon-ble` dépend de `dengon-core` avec ses features par
+  défaut, et l'unification du résolveur v2 réactive `std` dans le même
+  graphe — visible avec `cargo tree -p dengon-core --no-default-features -e
+  features | grep rusqlite`. Un paquet séparé est le seul moyen d'obtenir
+  la bonne résolution. Deux conséquences :
+  - la dépendance y est écrite **en chemin**, pas en `{ workspace = true }` :
+    avec l'héritage de workspace, `default-features = false` est ignoré tant
+    que `[workspace.dependencies]` ne le déclare pas, et le déclarer là-bas
+    priverait les autres crates de `std` ;
+  - aucune assertion « je suis sans `std` » n'est compilée dans la crate :
+    un build `--workspace` (celui de `core.yml`) unifie les features et
+    ferait échouer l'assertion à tort. Le garde-fou est une étape du job
+    `cross-vectors`, qui inspecte la résolution **isolée** :
+    `cargo tree -p dengon-conformance -e features | grep rusqlite`.
+- **Conséquence :** à lever par l'**US-307**. Le jour où `dengon_core_ffi`
+  est branché, ajouter au job une étape qui fait tourner les vecteurs
+  **sur la cible** (tests Unity, ou host-tests de `libdengon_core`) ; le
+  filtre de chemins de `cross-vectors.yml` couvre déjà `firmware/**`.
+  `crates/dengon-conformance/` garde alors sa valeur propre : il prouve la
+  compilation `no_std` sans matériel.
+
+---
+
+### 2026-09-28 — CLÔTURE : les vecteurs de conformité ont rejoint `contracts/packet/` (US-222)
+
+- **Écart clos :** celui du 10/09, « Vecteurs de conformité v0 dans
+  `crates/dengon-core/tests/`, pas `contracts/packet/` (US-108) ». Il était
+  motivé par le fait que `contracts/` n'était pas encore sur `main`
+  (PR #60 en vol) et par le conflit prévisible sur `pyproject.toml` /
+  `uv.lock` / `contracts.yml`.
+- **Fait :** `#60` est mergée depuis. `vectors_v0.json`, `crypto_v0.json`
+  et `identity_v0.json` sont désormais dans `contracts/packet/`, avec leur
+  `README.md`. Les trois tests Rust pointent l'emplacement final, le
+  `validate_packets.py` annoncé existe, et il est branché dans
+  `contracts.yml` **et** dans `cross-vectors.yml`.
+- **Reste :** le filtre de chemins de `core.yml` a dû être élargi à
+  `contracts/packet/**` et `contracts/events/**` — les tests Rust lisent ces
+  fichiers, donc les modifier doit déclencher `core`. Sans ça, un vecteur
+  cassé n'aurait plus fait rougir `core` sur une PR qui ne touche que
+  `contracts/`.
+
+---
+
+### 2026-09-28 — `audit` : deux avis RUSTSEC acceptés, tenus par l'épinglage d'uniffi (US-222)
+
+- **Prévu :** `docs/synthese/10` §4.7 — job `audit` = `cargo audit`,
+  `cargo deny check`, **SBOM**, sur PR et en quotidien.
+- **Réel :** `cargo audit` et `cargo deny` sont livrés et **bloquants**.
+  Le **SBOM ne l'est pas** : il n'apparaît dans aucun critère d'acceptation
+  de l'US-222, et le livrer à la va-vite en fin de sprint aurait donné un
+  artefact que personne ne consomme. À ouvrir en issue de suite.
+- **Deux exceptions consignées dans `deny.toml`**, la seule soupape prévue :
+  `RUSTSEC-2024-0436` (`paste` non maintenu) et `RUSTSEC-2025-0141`
+  (`bincode` 1.3.3 non maintenu). Ni l'une ni l'autre n'est une
+  vulnérabilité : ce sont deux dépendances de **macros de compilation**,
+  arrivées en transitif par `uniffi 0.28.3`, épinglé à l'exact `=0.28.3`
+  parce que les bindings Kotlin générés doivent correspondre au runtime de
+  l'APK. Les lever demande une montée d'uniffi et une régénération des
+  bindings Android — hors périmètre, et inopportun au milieu du sprint
+  Android. À rouvrir à la prochaine montée d'uniffi.
+- **`multiple-versions = "warn"`, pas `"deny"` :** deux versions de `syn`
+  cohabitent aujourd'hui, en transitif, et rien dans notre code ne peut le
+  corriger. Bloquer là-dessus aurait rendu le job inutilisable dès le
+  premier jour.
+- **`[licenses.private].ignore = true` :** nos sept crates sont
+  `publish = false` et n'ont pas de champ `license`, la licence du projet
+  n'étant pas tranchée (`synthese/01-sujets-a-trancher.md`). Sans cette
+  ligne, cargo-deny les compterait comme *unlicensed* et échouerait sur
+  notre propre code.
+
+---
+
+### 2026-09-28 — Transport NimBLE (US-220) : pas de fragmentation BLE, `PeerConnected` à l'abonnement, quota borné, anti-boucle sur 4 octets
+
+- **Prévu :** `docs/synthese/04-architecture.md` §3 et `docs/powl/03` §6.2 :
+  « `Transport::send` gère le découpage **BLE** (MTU) de façon transparente » ;
+  la rustdoc de `TransportEvent::FrameReceived` parle de fragmentation BLE
+  « déjà réassemblée par l'implémentation ». `TransportConfig::default()` :
+  8 liens. `docs/powl/03` §6.1 : « celui dont le **`peerID`** est le plus petit
+  initie ». `PeerConnected` = « un lien est établi et utilisable », sans plus.
+- **Réel :**
+  1. **1 trame = 1 PDU ATT.** `send` au-delà de `ATT_MTU - 3` rend
+     `FRAME_TOO_LARGE { max: mtu - 3 }` ; `broadcast` refuse au-delà de 514 et
+     saute les liens au MTU trop petit. Aucune fragmentation BLE dans le
+     transport.
+  2. **`PeerConnected` émis quand le lien marche dans les deux sens** : côté
+     central après échange MTU + découverte + abonnement au `CHAR_TX` du
+     pair ; côté périphérique à l'abonnement du pair. Si le pair écrit avant
+     de s'abonner, `PeerConnected` est émis juste avant sa première trame. Un
+     lien jamais annoncé qui tombe ne produit **aucun** `PeerDisconnected`.
+  3. **`max_connections` borné** à `CONFIG_BT_NIMBLE_MAX_CONNECTIONS` (3) avec
+     un avertissement, au lieu d'échouer ; quota plein = annonce et scan
+     suspendus, connexion entrante excédentaire fermée sans être annoncée.
+  4. **Anti-boucle sur `peerID[0..4]`** (seuls 4 octets sont dans l'annonce),
+     égalité départagée par l'adresse BLE.
+  5. **Motifs** : HCI `0x13`/`0x14`/`0x15` → `Propre`, `0x16` → `Locale`, tout
+     le reste (dont `0x08` supervision timeout) → `Brutale`.
+- **Raison :** (1) `protocol::fragment` (US-202) découpe déjà à `ATT_MTU - 3`
+  (`chunk_capacity`) : une seconde fragmentation dans le transport serait
+  morte, et imposerait un format de trame BLE à partager avec Android. En
+  prime, la règle n°3 de la déconnexion brutale (jeter les trames partielles)
+  est tenue par construction. (2) Émettre `PeerConnected` à la connexion GAP
+  laisserait le cœur envoyer son `ANNOUNCE` avant que le pair soit abonné :
+  perdu. (3) Le contrôleur de l'ESP32 est configuré à 3 liens (US-114) ; un
+  relais qui refuse de démarrer avec la configuration par défaut du contrat
+  serait pire. (4) C'est tout ce que l'annonce transporte. (5) Seul ce que le
+  pair *annonce* (`LL_TERMINATE_IND`) est propre.
+- **Conséquences :** l'appelant **doit** fragmenter (c'est le cas de
+  `dengon-core`). L'implémentation Android (US-213) doit faire les mêmes choix
+  (1) et (2) pour que les deux moitiés du maillage se comprennent. Les écarts
+  d'US-114 sur le manufacturer data (Company ID `0xFFFF` à sauter, bitfield
+  `flags`) sont maintenant **lus** par du code (`dengon_adv_parse_mfg`) et
+  vérifiés par des tests Unity : ils passent de « contrat de fait non vérifié »
+  à « contrat vérifié côté firmware ».
+- **Doc de conception mise à jour ?** non. À remonter dans `docs/powl/03` §6
+  (point 1, format du manufacturer data) et dans la rustdoc de
+  `TransportEvent::FrameReceived` (point 1) — changement de contrat US-105 à
+  proposer en point d'équipe, pas à faire seul.
+
 ---
 
 ### 2026-09-28 — `api` (US-301) : construction, extensions hors `.udl`, périmètre réduit
@@ -108,6 +251,76 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-28 — `AndroidTransport` (US-213) : détection de déconnexion brutale asymétrique selon le rôle GATT
+
+- **Prévu :** `crates/dengon-ble/src/transport.rs`, rustdoc de `Transport`,
+  règle 1 : « émettre exactement un `PeerDisconnected` avec
+  `DisconnectReason::Brutale`, au plus tard au *supervision timeout* BLE »,
+  sans distinction de rôle (central/périphérique).
+- **Réel :** sur appareil réel, en provoquant une vraie perte radio
+  (éloignement physique, pas un `disconnect()` logiciel), le **même**
+  événement de coupure est rapporté différemment selon le rôle GATT du
+  nœud sur ce lien :
+  - côté **central** (`BluetoothGattCallback.onConnectionStateChange`) :
+    code de statut HCI exploitable, correctement traduit en `BRUTALE` par
+    `motifDeconnexion` — confirmé (Samsung Galaxy A16, 2026-09-28).
+  - côté **périphérique** (`BluetoothGattServerCallback
+    .onConnectionStateChange`) : Android rend quasi systématiquement
+    `status=0`, quelle que soit la cause réelle de la coupure — le même
+    événement, vu du Pixel 8 Pro (périphérique sur ce lien), a été rapporté
+    `PROPRE`.
+- **Raison :** limitation documentée de l'API Android (le rappel serveur ne
+  reçoit pas les codes HCI détaillés que reçoit le rappel client) — pas un
+  bug de `motifDeconnexion`, dont la logique de traduction status→motif est
+  correcte pour les deux rôles et a été écrite en anticipant ce cas (voir
+  le commentaire du code, confirmé par cet essai).
+- **Conséquences :** un nœud Android **ne peut pas garantir de façon fiable**
+  la règle 1 du contrat quand il joue le rôle périphérique sur un lien
+  donné — seul le rôle central le peut. Comme la règle anti-boucle de
+  connexion (`Annonce.doitInitier`) fait déjà qu'un seul des deux nœuds
+  initie (donc est central), la moitié des liens d'un nœud donné n'auront
+  pas de détection fiable de coupure brutale. Impact pour `sync` (US-209) :
+  ne pas se fier uniquement à `DisconnectReason` pour décider de retenter —
+  un timeout applicatif (pas de trafic depuis N secondes) reste nécessaire
+  en complément, y compris pour capturer les cas mal classés `PROPRE`.
+- **Doc de conception mise à jour ?** non — c'est une contrainte de
+  plateforme, pas un choix de conception à documenter dans `synthese/`.
+
+---
+
+### 2026-09-28 — `GattRadio` (US-213) : dédup de connexion par adresse MAC, pas par identité de nœud
+
+- **Prévu :** `crates/dengon-ble/src/transport.rs`, rustdoc de `LinkId` :
+  « un `LinkId` ne doit jamais être réutilisé pour un autre pair », et
+  implicitement, un nœud physique ne devrait porter qu'un lien actif à la
+  fois (l'esprit de la règle anti-boucle de `synthese/05` §6, reprise dans
+  `TransportConfig::local_peer_id`).
+- **Réel :** observé une fois en test réel (session écran éteint,
+  2026-09-28) : un **second** lien GATT s'est ouvert entre les deux mêmes
+  téléphones déjà connectés et actifs (Pixel : `link#2` + `link#3` tous deux
+  vivants ; Samsung : `link#1` + `link#2`), les deux liens relayant le même
+  battement en double. `GattRadio.rappelScan` déduplique les connexions
+  entrantes par adresse BLE (`RadioPeer.adresse`) ; l'hypothèse la plus
+  probable est qu'Android a fait tourner l'adresse privée résolvable
+  annoncée par le pair entre deux scans, et que le pair est alors apparu
+  comme un « nouvel » appareil sous cette nouvelle adresse.
+- **Raison :** `Transport` ne connaît **par contrat** que des identifiants
+  de lien locaux et une adresse radio — jamais un `peerID` cryptographique
+  (rustdoc du contrat : « il ne route pas », « il ne fait pas de crypto »).
+  Il ne peut donc pas, par construction, savoir que deux adresses
+  différentes désignent le même nœud : c'est le rôle d'`ANNOUNCE` et de la
+  couche `sync` (US-209/210), qui verront le même `peerID` sur les deux
+  liens et pourront fermer le doublon.
+- **Conséquences :** aucune donnée corrompue ni crash — juste un lien
+  redondant (trafic et batterie gaspillés tant qu'il n'est pas fermé).
+  `sync::routing` devra fermer explicitement un lien dont le `peerID`
+  annoncé fait déjà l'objet d'un autre lien actif ; ce n'est pas fait
+  aujourd'hui (aucun code `sync` n'existe encore côté Android). À garder en
+  tête pour US-213 → US-306 (branchement réel) et pour `sync::routing`.
+- **Doc de conception mise à jour ?** non.
+
+---
+
 ### 2026-09-28 — `sync::status` (US-211) : deux transitions en plus, `msg.cancelled` hors catalogue, `RESEND_MAX` local, outbox en clé → octets
 
 - **Prévu :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §2 : `DELIVERED`
@@ -165,6 +378,49 @@ _(aucun écart pour l'instant)_
   signaler) un lien dont le MTU négocié est < 46. La déduplication de paquets
   reste le rôle du seen-set de `sync::routing` ; celle du réassembleur ne
   vaut que pour `timeout_ms`.
+### 2026-09-28 — Appairage (US-215) : contact vérifié en mémoire, identité provisoire, code placeholder
+
+- **Prévu :** `powl/04` §2.3 : « Match → contact marqué ✔ vérifié (stocké
+  dans `contacts.verified_at`) » ; code = `SHA-512(min(fpA,fpB) ‖ max(fpA,fpB))`,
+  12 groupes de `u16 mod 100000`.
+- **Réel :**
+  1. Le contrat FFI v0 (US-106) n'a pas d'appel « marquer vérifié » : les
+     contacts vérifiés vivent dans `AppairageViewModel` (perdus au
+     redémarrage de l'app).
+  2. Identité locale provisoire : `generateIdentity("tel-xxxx")` du
+     bouchon, pseudo aléatoire par installation. Le bouchon dérivant le
+     `peerId` des 8 premiers octets du pseudo, l'aléa doit y tenir.
+  3. Le code affiché est celui du bouchon (FNV-1a) : forme conforme (12 × 5
+     chiffres, identique des deux côtés, ordre-indépendant), calcul non
+     conforme — comme prévu par US-106.
+- **Raison :** l'US est explicitement « sur bouchon FFI » ; le branchement
+  réel est l'US-306.
+- **Conséquences :** US-302/US-306 devront ajouter au FFI un appel
+  « marquer vérifié » (et la persistance `contacts.verified_at`), et
+  remplacer `IdentiteLocale` par la vraie identité (US-205).
+### 2026-09-28 — `dengon-verify` (US-305) : export binaire, pas de `LOG_ATTEST` ; écart « export partiel » d'US-206 résolu
+
+- **Prévu :** `synthese/09` §11 : entrée de journal hachée sous forme de
+  **JSON canonique** (`entry_hash = SHA-256(json_utf8)`) ; `dengon-verify`
+  (doc de module d'US-104) « lit un export de journal accompagné de son
+  `LOG_ATTEST` ».
+- **Réel :**
+  1. L'export lu est la suite binaire des `Entry::to_bytes` de `ledger`, et
+     `entry_hash` est celui que `ledger` calcule réellement (encodage
+     binaire à longueurs préfixées, US-206) — pas le JSON canonique de
+     `synthese/09` §11. Le binaire suit le code, seule source de vérité (B-5).
+  2. Pas de `LOG_ATTEST` : ce paquet n'a pas encore de format côté
+     `protocol` ni de producteur.
+  3. **Écart US-206 « `verify_chain()` ne peut pas re-vérifier un export
+     partiel » résolu** : `ledger::Anchor` + `verify_entries(entries,
+     anchor)` ; `dengon-verify --from-seq N --prev-hash HEX`.
+- **Raison :** (1) aligner le vérificateur sur ce que le journal produit
+  vraiment ; (2) rien à consommer ; (3) le dashboard reçoit des tranches.
+- **Conséquences :** le dashboard (US-310) devra transmettre l'export
+  binaire (ou le reconstruire depuis les colonnes `seq`, `ts_ms`,
+  `event_name`, `payload_json`, `prev_hash`, `entry_hash`, `sig`). L'écart
+  JSON canonique vs binaire entre `synthese/09` §11 et `ledger` reste à
+  trancher en équipe.
 - **Doc de conception mise à jour ?** non.
 
 ---
@@ -1220,6 +1476,59 @@ _(aucun écart pour l'instant)_
 - **Conséquences :** l'app Android doit encoder sans padding
   (`Base64.URL_SAFE or NO_PADDING or NO_WRAP`).
 - **Doc de conception mise à jour ?** Non (précision, pas contradiction).
+
+---
+
+### 2026-09-28 — Déploiement sur ports 8080/8443, pas 80/443 (US-224)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §7 décrit un
+  reverse-proxy classique devant `uvicorn`, sans préciser de port — l'usage
+  implicite pour un reverse-proxy TLS est 80/443.
+- **Réel :** Caddy publie 8080 (HTTP) et 8443 (HTTPS) sur l'hôte
+  (`dashboard/deploy/docker-compose.yml`).
+- **Raison :** en investiguant le VPS attribué au groupe (US-224), les ports
+  80/443 se sont révélés déjà occupés par un processus **root** — confirmé
+  via `/proc/net/tcp` (uid du socket = 0) — alors qu'aucun conteneur Docker
+  visible (`docker ps -a`, qui montre pourtant des conteneurs d'autres
+  groupes du cours) ne les publie. Le VPS est **partagé**, sans accès
+  `sudo` pour nous ; prendre 80/443 nous-mêmes est impossible sans risquer
+  de casser ou d'entrer en conflit avec ce processus système, dont nous ne
+  connaissons ni le rôle ni le propriétaire.
+- **Conséquences :** `GET /healthz` reste joignable en HTTPS depuis
+  l'extérieur (critère d'acceptation de l'issue #38), juste pas sur le port
+  443 standard — une URL de démo doit préciser `:8443`. Si l'équipe obtient
+  un jour un accès `sudo` ou une convention documentée pour ce VPS partagé,
+  reprendre 80/443 est un changement de deux lignes dans
+  `docker-compose.yml`.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` ne
+  spécifiait pas de port ; documenté ici et dans
+  `docs/suivi/modules/deploiement-vps.md`.
+
+---
+
+### 2026-09-28 — TLS auto-signé (CA interne Caddy), pas Let's Encrypt (US-224)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §7 : « le
+  reverse-proxy obtient le certificat TLS pour `dashboard.<domaine>` » —
+  implicitement un certificat public (Let's Encrypt étant l'option standard
+  et gratuite pour ce cas).
+- **Réel :** `dashboard/deploy/Caddyfile` utilise `tls internal` : Caddy
+  émet un certificat depuis sa propre CA locale, jamais soumis à une
+  autorité publique.
+- **Raison :** aucun nom de domaine n'est disponible pour ce VPS — identifié
+  uniquement par son IP (`51.255.38.214`). Let's Encrypt (HTTP-01 et
+  TLS-ALPN-01, les deux défis que Caddy sait automatiser) exige un nom
+  d'hôte résolvable, pas seulement une IP.
+- **Conséquences :** `/healthz` est bien joignable en HTTPS (chiffré), mais
+  un vrai navigateur affiche un avertissement de sécurité (certificat non
+  reconnu) — à anticiper pour la démo (importer la CA interne à l'avance,
+  ou simplement cliquer « continuer »). Si l'équipe obtient un nom de
+  domaine pointant vers ce VPS, remplacer `tls internal` par l'adresse du
+  domaine (Caddy gère alors Let's Encrypt automatiquement) est un
+  changement d'une ligne.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` visait un
+  déploiement avec domaine, non disponible ici ; documenté dans
+  `docs/suivi/modules/deploiement-vps.md`.
 ### 2026-09-28 — `sync::routing` : un doublon pendant le jitter n'annule plus le relais, il en faut deux (US-209)
 
 - **Prévu :** `docs/synthese/05-protocole-et-trame.md` §6.1 et `docs/powl/03`
@@ -1537,3 +1846,142 @@ _(aucun écart pour l'instant)_
   projection les ignore.
 - **Doc de conception mise à jour ?** non — cohérent avec le marquage *v2*
   déjà présent dans `docs/synthese/09`.
+
+---
+
+### 2026-09-28 — `GET /api/stream` sans authentification opérateur (US-218)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §6 liste
+  `GET /api/stream` parmi les routes de l'API sans préciser d'exigence
+  d'authentification particulière pour la lecture ; §9 rappelle que les
+  événements diffusés sont déjà anonymisés/redigés à la source (aucun
+  `msg_uuid`, texte ou identifiant de destinataire en clair).
+- **Réel :** la route ne vérifie aucune identité — quiconque atteint l'API
+  peut ouvrir le flux SSE et voir tous les événements ingérés (bruts, pas
+  seulement ceux d'un nœud particulier).
+- **Raison :** même situation que `POST /api/nodes` (écart déjà consigné,
+  US-216) — l'auth opérateur/admin (session, cookie, rôle) n'est couverte
+  par aucune US du backlog actuel. Contrairement à `/ingest/batch`
+  (authentifie un NŒUD), `/api/stream` sert un OPÉRATEUR humain, cas que
+  l'US-218 ne couvre pas.
+- **Conséquences :** acceptable pour une démo locale (B-4, réseau de
+  confiance), mais un vrai trou avant tout déploiement exposé (US-224) : le
+  flux d'événements (topologie, statuts de messages, santé des relais) est
+  lisible par quiconque atteint le port. Les événements restent redigés
+  (pas de fuite de contenu de message), mais la topologie/l'activité du
+  réseau ne l'est pas.
+- **Doc de conception mise à jour ?** non — à couvrir par une future US
+  d'auth opérateur, si elle est priorisée.
+### 2026-09-28 — `sync::inventory` : le push du manquant est cadencé (US-210)
+
+- **Prévu :** `synthese/05` §6.2 — après l'échange d'`INVENTORY`, « chacun
+  pousse à l'autre ce qui lui manque » ; repli « pousser toute la file ».
+  Rien sur le débit.
+- **Réel :** file de push par lien, vidée à au plus `PUSH_MAX_PER_MIN = 15`
+  paquets par minute (`src/sync/inventory.rs:70`).
+- **Raison :** le même document impose `FLOOD_MAX_PER_MIN_PEER = 20`
+  nouveaux `msgID`/min par voisin (§6.1). Les deux règles se contredisent
+  dès que le manquant dépasse 20 paquets : mesuré par
+  `temoin_sans_cadence_l_anti_inondation_rejette`, 6 paquets sur 25 rejetés
+  en une rencontre. 15 laisse de la place à l'`INVENTORY` lui-même et au
+  trafic direct.
+- **Conséquences :** un cache plein (120 paquets) met ~8 min à passer à un
+  voisin ; ce qui n'est pas passé avant la séparation l'est à la rencontre
+  suivante. Réglable (`InventoryConfig::push_max_per_min`).
+- **Doc de conception mise à jour ?** non — à valider à trois.
+
+---
+
+### 2026-09-28 — `sync::inventory` : réglages du cache sans constante de conception (US-210)
+
+- **Prévu :** `synthese/08` §5 — « cache de réconciliation ~120 paquets,
+  éviction LRU + 6 h », sans constante dans `protocol::consts`.
+- **Réel :** `INVENTORY_CACHE_CAP = 120`, `INVENTORY_WINDOW_MS = 6 h`,
+  `PUSH_MAX_PER_MIN = 15`, `INVENTORY_MAX_IDS = 2047` : constantes du
+  module, portées par `InventoryConfig`, pas dans `protocol::consts`
+  (contrat « revue à trois »). Éviction du **plus ancien reçu** (FIFO), pas
+  LRU : un paquet n'est jamais « utilisé » autrement que poussé.
+- **Raison :** même choix que les trois réglages de `sync::routing`.
+- **Conséquences :** un téléphone peut monter le cap ; l'inventaire annoncé
+  est tronqué à `max_ids` (les plus récents) — le receveur pousse alors
+  aussi les plus anciens, rejetés en `Duplicate` s'il les a encore.
+
+---
+
+### 2026-09-28 — `GET /api/messages`/`GET /api/messages/{id}` sans authentification opérateur (US-219)
+
+- **Prévu :** même situation que `GET /api/stream` (écart ci-dessus) —
+  `docs/synthese/09` ne précise pas d'exigence d'auth pour la lecture des
+  projections.
+- **Réel :** aucune vérification d'identité sur ces deux routes non plus.
+- **Raison :** identique à `GET /api/stream` — l'auth opérateur n'est
+  couverte par aucune US actuelle.
+- **Conséquences :** identiques — acceptable pour une démo locale, à
+  couvrir avant tout déploiement exposé.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `sync::inventory` : ce qui entre au cache (US-210)
+
+- **Prévu :** `powl/03` §7.2 — le cache contient « messages publics
+  récents, ACK non encore confirmés livrés, enveloppes » ; `synthese/05`
+  §6.2 ne précise pas.
+- **Réel :** `cacheable` (`src/sync/inventory.rs:183`) retient les
+  `SEALED_ENVELOPE`, `NOISE_MSG` et `ACK` acceptés par le routeur **et non
+  livrés ici**, avec `RELAY_OK` et `ttl > 1` ; TTL poussé = `ttl − 1` (ou
+  celui du relais programmé). Exclus : `ANNOUNCE`, `LOG_ATTEST`
+  (périodiques), `NOISE_HS` (propre à une session), `ENVELOPE_*` et
+  `INVENTORY` (autres mécanismes), `FRAGMENT` (réassemblé avant).
+- **Raison :** pousser un paquet sans `RELAY_OK` ou à TTL épuisé
+  contournerait la portée voulue par l'émetteur.
+- **Conséquences :** le payload `INVENTORY` est codé dans `sync::inventory`
+  (`encode_payload` / `decode_payload`) et non dans `protocol::codec`, qui
+  laisse les payloads opaques.
+- **Doc de conception mise à jour ?** non.
+### 2026-09-28 — `message_hops` (§11.2) dérivée à la lecture, jamais stockée (US-219)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §11.2 décrit
+  `message_hops` comme une table à part, avec une ligne par saut,
+  alimentée à l'ingestion (même logique que `messages`).
+- **Réel :** `app/messages_api.py::get_message_hops()` reconstruit le
+  parcours d'un message **à la lecture**, en relisant `events` et en
+  mappant chaque événement pertinent (`pkt.relayed`, `envelope.stored`,
+  `envelope.handoff`, `msg.delivered`/`ack.observed`, et tout autre
+  événement portant ce `msg_log_id`) vers la forme `message_hops`. Aucune
+  table `message_hops` n'existe, aucune migration ne l'a créée.
+- **Raison :** au volume visé (démo 5-8 appareils, B-4), reconstruire à la
+  lecture coûte moins cher que de maintenir une table à l'écriture (pas de
+  nouvelle migration, pas de nouvel `INSERT` à greffer dans le chemin
+  d'ingestion déjà chargé de `_refresh_message_projection`) — même
+  discipline que le choix déjà fait pour `messages` (US-217, recalcul
+  complet plutôt qu'incrémental).
+- **Conséquences :** un `GET /api/messages/{id}` coûte un `SELECT` de plus
+  sur `events` filtré par `json_extract` — négligeable au volume visé, à
+  revoir en priorité si le nombre d'événements par message grossissait
+  significativement.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` §11.2 reste
+  la description du modèle cible ; ce fichier documente que
+  l'implémentation obtient le même résultat par un autre chemin.
+
+---
+
+### 2026-09-28 — Vérification visuelle US-219 non refaite dans un navigateur
+
+- **Prévu :** l'US-219 demande un « rendu correct sur mobile », comme
+  l'US-111 (vérifiée le 2026-09-25 avec Chromium headless, voir
+  `docs/suivi/modules/dashboard-web.md`).
+- **Réel :** aucun outil de navigation n'était disponible dans cette
+  session — la vérification s'est limitée à `node --check` (syntaxe JS) et
+  à des appels `curl` bout en bout contre une vraie instance de l'API
+  (fixtures golden ingérées, réponses JSON conformes, CORS vérifié entre
+  deux ports différents).
+- **Raison :** contrainte d'environnement, pas un choix de conception — les
+  gabarits HTML/CSS n'ont pas changé depuis la vérification visuelle de
+  l'US-111 (seule la source des données change, via `fetch`), donc le
+  risque de régression purement visuelle est faible, mais pas nul (états
+  « Chargement… »/« Erreur » sont nouveaux, jamais vus dans un vrai
+  navigateur).
+- **Conséquences :** à revérifier visuellement dès qu'un navigateur est
+  disponible, en particulier les nouveaux états de chargement/erreur.
+- **Doc de conception mise à jour ?** sans objet.

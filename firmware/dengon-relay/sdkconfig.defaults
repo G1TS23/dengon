@@ -43,15 +43,16 @@ CONFIG_BTDM_CTRL_MODE_BR_EDR_ONLY=n
 CONFIG_BTDM_CTRL_MODE_BTDM=n
 CONFIG_BTDM_CTRL_BLE_MAX_CONN=3
 
-# --- 3. Rôles NimBLE : périphérique seul pour CETTE US -----------------------
-# US-220 rebasculera CENTRAL et OBSERVER à `y` pour le rôle GATT double décrit
-# par docs/powl/03-network-protocol.md §6.1. Les couper ici rend le périmètre de
-# l'US-114 vérifiable par la machine : le firmware est techniquement incapable
-# de scanner, il ne peut donc pas déborder sur l'US suivante.
+# --- 3. Rôles NimBLE : les quatre, pour le rôle GATT double (US-220) --------
+# docs/powl/03-network-protocol.md §6.1 : chaque nœud est en permanence
+# périphérique (annonce + serveur GATT) ET central (scan + client GATT).
+# L'US-114 coupait CENTRAL et OBSERVER pour borner son périmètre ; l'US-220 les
+# rallume. Sans OBSERVER, ble_gap_disc() n'existe pas au link ; sans CENTRAL,
+# ble_gap_connect() non plus — l'erreur tombe à l'édition de liens, pas avant.
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=y
-CONFIG_BT_NIMBLE_ROLE_CENTRAL=n
-CONFIG_BT_NIMBLE_ROLE_OBSERVER=n
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 
 # --- 4. GATT / ATT -----------------------------------------------------------
 # docs/powl/03 §6.3 : négocier ATT_MTU = 517, repli automatique sur 23.

@@ -60,3 +60,10 @@ jobs:
       - name: Valider fixtures + schémas + signatures + redaction
         if: steps.filtre.outputs.events == 'true'
         run: uv run --no-sync --no-build python tools/validate.py
+      - name: Valider les vecteurs de trame (packet/)
+        if: steps.filtre.outputs.events == 'true'
+        # Doublon assumé avec le job `cross-vectors`, qui lance la même
+        # commande : le contrat doit rester auto-vérifié même si on regarde
+        # `contracts/` tout seul, et `cross-vectors` est le seul à comparer
+        # ce résultat au Rust. Les deux ne prouvent pas la même chose.
+        run: uv run --no-sync --no-build python tools/validate_packets.py

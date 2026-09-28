@@ -306,95 +306,142 @@ impl<S: Signer> Ledger<S> {
     }
 
     /// Vérifie la cohérence de la chaîne : hashes, absence de trou, absence
-    /// de position dupliquée.
+    /// de position dupliquée. Équivaut à [`verify_entries`] ancré sur
+    /// [`Anchor::GENESIS`].
     ///
-    /// Ne vérifie PAS la signature (voir la note de module — `Signer` est un
-    /// bouchon tant que `crypto` n'existe pas ; vérifier une signature nulle
-    /// ne prouverait rien). US-305/US-310 brancheront la vérification de
-    /// signature ici une fois `crypto` livré.
+    /// Ne vérifie PAS la signature : voir [`verify_signatures`] (US-305).
     pub fn verify_chain(&self) -> Verdict {
-        // Deux passes, volontairement séparées :
-        //
-        // 1. Positions (`seq`) : un doublon est un fork, un trou dans 0..=max
-        //    en est un. Vérifié sur l'ENSEMBLE des `seq`, pas seulement
-        //    contre l'entrée immédiatement précédente — un premier essai qui
-        //    ne comparait qu'à la précédente classait à tort `[0, 1, 2, 1]`
-        //    (rejeu d'une ancienne entrée en fin de chaîne — un vrai cas de
-        //    fork) comme `Gap`, parce que la comparaison ne portait que sur
-        //    l'entrée d'avant (`2`), jamais revue par rapport aux `seq` déjà
-        //    vues plus tôt (`1`, trouvé en relecture de revue). Rien n'était
-        //    accepté à tort dans ce cas (le chaînage de hash ci-dessous
-        //    aurait fini par détecter une incohérence de toute façon), mais
-        //    le verdict précis était faux.
-        //
-        // 2. Chaîne de hash, dans l'ORDRE DE STOCKAGE (`self.entries`), qui
-        //    doit correspondre à l'ordre de production (`append` empile
-        //    dans cet ordre) : une entrée déplacée ou rejouée à la mauvaise
-        //    position casse ce chaînage même si sa `seq` est par ailleurs
-        //    valide.
-        let mut seen = alloc::collections::BTreeSet::new();
-        let mut max_seq: Option<u64> = None;
-        for entry in &self.entries {
-            if !seen.insert(entry.seq) {
-                return Verdict::Fork;
-            }
-            max_seq = Some(max_seq.map_or(entry.seq, |m| core::cmp::max(m, entry.seq)));
-        }
-        if let Some(max) = max_seq {
-            // Arithmétique en `u128` plutôt que `max + 1` en `u64` (retour
-            // de revue #75, OswinFreyr) : un export corrompu ou hostile
-            // portant `seq = u64::MAX` faisait paniquer ce calcul en
-            // debug/test et le faisait reboucler silencieusement à 0 en
-            // release — un vérificateur qui panique ou ment sur une entrée
-            // hostile est exactement ce que `verify_chain()` doit éviter.
-            if u128::from(seen.len() as u64) != u128::from(max) + 1 {
-                return Verdict::Gap;
-            }
-        }
-
-        let mut expected_prev = GENESIS_HASH;
-        for entry in &self.entries {
-            let recomputed = Entry::compute_hash(
-                entry.seq,
-                entry.ts_ms,
-                &entry.event_name,
-                &entry.payload_json,
-                &entry.prev_hash,
-            );
-            if recomputed != entry.entry_hash || entry.prev_hash != expected_prev {
-                return Verdict::Broken;
-            }
-            expected_prev = entry.entry_hash;
-        }
-
-        Verdict::Ok
+        verify_entries(&self.entries, Anchor::GENESIS)
     }
 
     /// Les entrées dont `seq` tombe dans `range`, dans l'ordre du journal.
     ///
-    /// # Limite connue : un export dont `range` ne commence pas à 0 n'est
-    /// pas re-vérifiable tel quel
+    /// # Re-vérifier un export qui ne commence pas à 0
     ///
-    /// `verify_chain()` suppose toujours que la chaîne démarre à `seq = 0`
-    /// avec `prev_hash == GENESIS_HASH` (retour de revue #75, OswinFreyr,
-    /// point plausible). Reconstruire un `Ledger` à partir d'un export
-    /// `range` qui ne commence pas à 0 (ex. `export(3..6)`) et appeler
-    /// `verify_chain()` dessus rapportera donc `Gap` ou `Broken` même si la
-    /// tranche exportée est intègre — il manque un point d'ancrage (le
-    /// `seq` de départ attendu et son `prev_hash`) que `verify_chain()`
-    /// n'accepte pas aujourd'hui. Écart consigné dans
-    /// `03-ecarts-conception.md` : `dengon-verify`, dont la vocation
-    /// affichée est justement de vérifier un export de journal, n'est pas
-    /// encore implémenté — la bonne API (un `verify_chain` paramétré par un
-    /// ancrage, ou un `export` qui redémarre sa propre chaîne de hash
-    /// depuis l'ancre) sera tranchée quand ce binaire aura un vrai
-    /// appelant.
+    /// `verify_chain()` suppose une chaîne démarrant à `seq = 0` avec
+    /// `prev_hash == GENESIS_HASH` (retour de revue #75, OswinFreyr). Pour une
+    /// tranche (`export(3..6)`), utiliser [`verify_entries`] avec
+    /// [`Anchor::after`] la dernière entrée vérifiée auparavant (US-305).
     pub fn export(&self, range: core::ops::Range<u64>) -> Vec<&Entry> {
         self.entries
             .iter()
             .filter(|e| range.contains(&e.seq))
             .collect()
     }
+}
+
+/// Point de départ d'une vérification : la `seq` que doit porter la première
+/// entrée, et le `prev_hash` qu'elle doit citer (US-305).
+///
+/// [`Anchor::GENESIS`] pour un journal complet. Pour une **tranche** exportée
+/// (`export(3..6)`, ou un batch reçu par le dashboard), l'ancre est la
+/// dernière entrée déjà vérifiée : `first_seq = seq + 1`, `prev_hash =
+/// entry_hash`. C'est l'API qui manquait pour re-vérifier un export ne
+/// commençant pas à 0 (limite notée sur [`Ledger::export`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Anchor {
+    /// `seq` attendue de la première entrée.
+    pub first_seq: u64,
+    /// `prev_hash` attendu de la première entrée.
+    pub prev_hash: Hash,
+}
+
+impl Anchor {
+    /// Début d'un journal : `seq = 0`, `prev_hash` à zéro.
+    pub const GENESIS: Self = Self {
+        first_seq: 0,
+        prev_hash: GENESIS_HASH,
+    };
+
+    /// Ancre qui prolonge `entry` : la tranche suivante commence juste après.
+    #[must_use]
+    pub fn after(entry: &Entry) -> Self {
+        Self {
+            first_seq: entry.seq.saturating_add(1),
+            prev_hash: entry.entry_hash,
+        }
+    }
+}
+
+/// Vérifie une suite d'entrées à partir de `anchor` : positions (`Fork`,
+/// `Gap`) puis chaîne de hash (`Broken`). Une suite vide est `Ok`.
+///
+/// Ne vérifie PAS les signatures : voir [`verify_signatures`].
+#[must_use]
+pub fn verify_entries(entries: &[Entry], anchor: Anchor) -> Verdict {
+    // Deux passes, volontairement séparées :
+    //
+    // 1. Positions (`seq`) : un doublon est un fork, un trou dans
+    //    anchor.first_seq..=max en est un. Vérifié sur l'ENSEMBLE des
+    //    `seq`, pas seulement
+    //    contre l'entrée immédiatement précédente — un premier essai qui
+    //    ne comparait qu'à la précédente classait à tort `[0, 1, 2, 1]`
+    //    (rejeu d'une ancienne entrée en fin de chaîne — un vrai cas de
+    //    fork) comme `Gap`, parce que la comparaison ne portait que sur
+    //    l'entrée d'avant (`2`), jamais revue par rapport aux `seq` déjà
+    //    vues plus tôt (`1`, trouvé en relecture de revue). Rien n'était
+    //    accepté à tort dans ce cas (le chaînage de hash ci-dessous
+    //    aurait fini par détecter une incohérence de toute façon), mais
+    //    le verdict précis était faux.
+    //
+    // 2. Chaîne de hash, dans l'ORDRE DE STOCKAGE (`entries`), qui
+    //    doit correspondre à l'ordre de production (`append` empile
+    //    dans cet ordre) : une entrée déplacée ou rejouée à la mauvaise
+    //    position casse ce chaînage même si sa `seq` est par ailleurs
+    //    valide.
+    let mut seen = alloc::collections::BTreeSet::new();
+    let mut max_seq: Option<u64> = None;
+    for entry in entries {
+        // Une `seq` antérieure à l'ancre revendique une position déjà
+        // couverte par la partie vérifiée auparavant : historique
+        // concurrent, donc fork (US-305).
+        if entry.seq < anchor.first_seq || !seen.insert(entry.seq) {
+            return Verdict::Fork;
+        }
+        max_seq = Some(max_seq.map_or(entry.seq, |m| core::cmp::max(m, entry.seq)));
+    }
+    if let Some(max) = max_seq {
+        // Arithmétique en `u128` plutôt que `max + 1` en `u64` (retour
+        // de revue #75, OswinFreyr) : un export corrompu ou hostile
+        // portant `seq = u64::MAX` faisait paniquer ce calcul en
+        // debug/test et le faisait reboucler silencieusement à 0 en
+        // release — un vérificateur qui panique ou ment sur une entrée
+        // hostile est exactement ce que `verify_chain()` doit éviter.
+        if u128::from(seen.len() as u64) != u128::from(max) - u128::from(anchor.first_seq) + 1 {
+            return Verdict::Gap;
+        }
+    }
+
+    let mut expected_prev = anchor.prev_hash;
+    for entry in entries {
+        let recomputed = Entry::compute_hash(
+            entry.seq,
+            entry.ts_ms,
+            &entry.event_name,
+            &entry.payload_json,
+            &entry.prev_hash,
+        );
+        if recomputed != entry.entry_hash || entry.prev_hash != expected_prev {
+            return Verdict::Broken;
+        }
+        expected_prev = entry.entry_hash;
+    }
+
+    Verdict::Ok
+}
+
+/// Vérifie la signature de chaque entrée (`Ed25519(entry_hash)`) avec la clé
+/// publique de signature du nœud (US-305). `Some(seq)` = première entrée dont
+/// la signature est invalide, `None` si toutes sont valides.
+///
+/// À appeler **après** [`verify_entries`] : une signature valide sur un
+/// `entry_hash` qui ne correspond pas au contenu ne prouve rien.
+#[must_use]
+pub fn verify_signatures(entries: &[Entry], key: &crate::crypto::VerifyingKey) -> Option<u64> {
+    entries
+        .iter()
+        .find(|e| key.verify(&e.entry_hash, &e.sig).is_err())
+        .map(|e| e.seq)
 }
 
 #[cfg(test)]
@@ -405,6 +452,69 @@ mod tests {
 
     fn ledger() -> Ledger<NullSigner> {
         Ledger::new(NullSigner)
+    }
+
+    #[test]
+    fn une_tranche_ancree_se_verifie() {
+        let mut l = ledger();
+        for i in 0..6 {
+            l.append("pkt.relayed", "{}", i);
+        }
+        let tranche: Vec<Entry> = l.export(3..6).into_iter().cloned().collect();
+        // Sans ancre : la tranche paraît trouée / cassée.
+        assert_ne!(verify_entries(&tranche, Anchor::GENESIS), Verdict::Ok);
+        // Ancrée sur l'entrée 2 : intègre.
+        let ancre = Anchor::after(&l.entries()[2]);
+        assert_eq!(ancre.first_seq, 3);
+        assert_eq!(verify_entries(&tranche, ancre), Verdict::Ok);
+        // Ancre trop tôt (après l'entrée 1) : la position 2 manque.
+        assert_eq!(
+            verify_entries(&tranche, Anchor::after(&l.entries()[1])),
+            Verdict::Gap
+        );
+        // Ancre trop tard (après l'entrée 3) : la tranche réécrit la position 3.
+        assert_eq!(
+            verify_entries(&tranche, Anchor::after(&l.entries()[3])),
+            Verdict::Fork
+        );
+        // Bonne position, mauvais `prev_hash` : chaîne cassée.
+        let fausse = Anchor {
+            first_seq: 3,
+            prev_hash: l.entries()[1].entry_hash,
+        };
+        assert_eq!(verify_entries(&tranche, fausse), Verdict::Broken);
+        // Tranche commençant après l'ancre : trou.
+        assert_eq!(verify_entries(&tranche[1..], ancre), Verdict::Gap);
+        assert_eq!(verify_entries(&[], ancre), Verdict::Ok);
+    }
+
+    #[test]
+    fn signatures_verifiees_avec_la_cle_du_noeud() {
+        use crate::crypto::SigningKey;
+
+        struct Ed25519(SigningKey);
+        impl Signer for Ed25519 {
+            fn sign(&mut self, message: &[u8]) -> Signature {
+                self.0.sign(message)
+            }
+        }
+
+        let cle = SigningKey::from_seed(&[7; 32]);
+        let publique = cle.verifying_key();
+        let mut l = Ledger::new(Ed25519(cle));
+        for i in 0..3 {
+            l.append("msg.queued", "{}", i);
+        }
+        assert_eq!(verify_signatures(l.entries(), &publique), None);
+
+        // Clé d'un autre nœud : première entrée rejetée.
+        let autre = SigningKey::from_seed(&[8; 32]).verifying_key();
+        assert_eq!(verify_signatures(l.entries(), &autre), Some(0));
+
+        // Signature altérée sur l'entrée 1.
+        let mut entries = l.entries().to_vec();
+        entries[1].sig[0] ^= 1;
+        assert_eq!(verify_signatures(&entries, &publique), Some(1));
     }
 
     #[test]

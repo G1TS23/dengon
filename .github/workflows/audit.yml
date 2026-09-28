@@ -1,0 +1,164 @@
+# ---------------------------------------------------------------------------
+# Workflow `audit` — vulnérabilités, licences, provenance des dépendances.
+# Référence : docs/synthese/10-benchmarks-mvp-tests.md §4.7 (US-222).
+#
+# Deux outils, deux angles, tous deux lus depuis `Cargo.lock` (d'où le
+# versionnement du lock, cf. 03-ecarts-conception.md) :
+#   cargo audit — avis RUSTSEC sur les versions exactes du lock ;
+#   cargo deny  — licences autorisées, sources autorisées, doublons, et les
+#                 mêmes avis relus avec nos exceptions nommées (deny.toml).
+#
+# ⚠ TROIS RÈGLES À NE PAS CASSER
+#
+# 1. Comme `core`, le check exigé par la protection de `main` est le nom du
+#    JOB (`audit`) : pas de `strategy.matrix`, pas de workflow réutilisable,
+#    ne pas renommer le job.
+#
+# 2. Le filtrage par chemin est fait DANS le job (même raison que core.yml :
+#    un filtre au niveau du déclencheur ne crée aucun check run, et la PR
+#    reste bloquée sur « Expected — Waiting for status to be reported »).
+#
+# 3. Le déclencheur `schedule` n'a PAS de base de comparaison : dorny/paths-
+#    filter échouerait, et de toute façon le cron doit tout exécuter. C'est
+#    toute sa raison d'être — une vulnérabilité paraît sans que le dépôt
+#    bouge, et personne n'ouvre de PR ce jour-là. D'où le
+#    `github.event_name == 'schedule'` répété sur chaque étape réelle.
+#
+# Bloquant dès le premier jour, sans `continue-on-error` : la soupape est
+# `[advisories].ignore` de deny.toml, qui exige un RUSTSEC nommé, daté et
+# justifié. Un check requis qui ne rougit jamais n'est pas un check.
+# ---------------------------------------------------------------------------
+name: audit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # 06:00 UTC chaque jour. Heure creuse : le rapport est là avant que
+    # quiconque ouvre une PR, et le run ne dispute pas les runners aux PR.
+    - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  # On n'annule jamais un run sur main : il fait foi pour l'historique.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nécessaire au filtre de chemins sur les événements push.
+          fetch-depth: 0
+
+      - name: Détecter les changements de dépendances
+        # Voir la règle 3 de l'en-tête : sur `schedule`, il n'y a ni base ni
+        # diff à calculer.
+        if: github.event_name != 'schedule'
+        id: filtre
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            deps:
+              - 'crates/**/Cargo.toml'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - 'deny.toml'
+              - '.github/workflows/audit.yml'
+
+      - name: Aucun changement de dépendances
+        if: github.event_name != 'schedule' && steps.filtre.outputs.deps != 'true'
+        run: |
+          {
+            echo '### audit — ignoré'
+            echo
+            echo "Aucun manifeste, lock ni deny.toml modifié : l'audit est sauté."
+            echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
+            echo "Le cron quotidien, lui, audite l'état réel de \`main\` sans condition."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Lire la toolchain figée
+        if: github.event_name == 'schedule' || steps.filtre.outputs.deps == 'true'
+        id: toolchain
+        run: |
+          canal=$(grep -oP '(?<=^channel\s=\s")[^"]+' rust-toolchain.toml)
+          if [ -z "$canal" ]; then
+            echo "Impossible de lire 'channel' dans rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "canal=$canal" >> "$GITHUB_OUTPUT"
+
+      - name: Installer Rust
+        if: github.event_name == 'schedule' || steps.filtre.outputs.deps == 'true'
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master au 2026-09-03
+        with:
+          toolchain: ${{ steps.toolchain.outputs.canal }}
+
+      - name: Installer cargo-audit et cargo-deny
+        if: github.event_name == 'schedule' || steps.filtre.outputs.deps == 'true'
+        # Binaires pré-construits : les compiler depuis les sources coûterait
+        # plusieurs minutes pour un job qui ne compile rien d'autre.
+        uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
+        with:
+          tool: cargo-audit,cargo-deny
+
+      - name: cargo audit (avis RUSTSEC sur Cargo.lock)
+        if: github.event_name == 'schedule' || steps.filtre.outputs.deps == 'true'
+        # `--deny warnings` : sans lui, un avis « unmaintained » sort en
+        # simple avertissement et le job reste vert — or c'est justement la
+        # catégorie qu'on a aujourd'hui (uniffi).
+        #
+        # cargo-audit ne lit PAS deny.toml (son fichier à lui serait
+        # `.cargo/audit.toml`). Plutôt que deux listes d'exceptions qui
+        # dérivent l'une de l'autre au premier oubli, on dérive les `--ignore`
+        # de deny.toml, qui reste la seule source de vérité. `grep -o` isole
+        # les identifiants, sans dépendre de la mise en forme du fichier.
+        run: |
+          mapfile -t exceptions < <(grep -oE 'RUSTSEC-[0-9]{4}-[0-9]{4}' deny.toml | sort -u)
+          flags=()
+          for id in "${exceptions[@]}"; do
+            flags+=(--ignore "$id")
+          done
+          echo "Exceptions reprises de deny.toml : ${exceptions[*]:-(aucune)}"
+          cargo audit --deny warnings --file Cargo.lock "${flags[@]}"
+
+      - name: cargo deny (licences, sources, doublons, avis)
+        if: github.event_name == 'schedule' || steps.filtre.outputs.deps == 'true'
+        # `--all-features` : sans ça, les dépendances derrière une feature
+        # (rusqlite via `std`, uniffi via dengon-ffi) échapperaient à
+        # l'audit — exactement celles qui embarquent du C et des macros.
+        run: cargo deny --all-features check
+
+      - name: Résumé du job
+        # `always()` : le résumé est surtout utile quand le job a ÉCHOUÉ.
+        if: always() && (github.event_name == 'schedule' || steps.filtre.outputs.deps == 'true')
+        run: |
+          {
+            echo '### audit'
+            echo
+            echo "| Contrôle | Outil |"
+            echo "| --- | --- |"
+            echo "| Avis RUSTSEC | \`cargo audit --deny warnings\` |"
+            echo "| Licences, sources, doublons, avis | \`cargo deny --all-features check\` |"
+            echo
+            echo "Exceptions en vigueur (\`deny.toml\`, section \`[advisories].ignore\`) :"
+            echo '```'
+            grep -E '^\s+"RUSTSEC-' deny.toml || echo '(aucune)'
+            echo '```'
+            echo
+            echo "Déclencheur : \`${{ github.event_name }}\`."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -278,6 +278,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dengon-conformance"
+version = "0.1.0"
+dependencies = [
+ "dengon-core",
+ "serde_json",
+]
+
+[[package]]
 name = "dengon-core"
 version = "0.1.0"
 dependencies = [

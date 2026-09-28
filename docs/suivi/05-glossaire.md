@@ -45,6 +45,8 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Outbox** | File locale des messages envoyés mais pas encore confirmés distribués ; rejouée à chaque reconnexion. |
 | **Statut terminal** | Statut qui n'évolue plus : `delivered`, `expired`, `cancelled`. Le message sort alors de l'outbox. |
 | **Property test** | Test qui vérifie une propriété générale (« le statut ne redescend jamais ») sur des centaines d'entrées générées aléatoirement, au lieu de quelques exemples écrits à la main. En Rust : crate `proptest`. |
+| **Lecture croisée** | Vérification d'un contact où chaque téléphone scanne le QR de l'autre, puis les deux personnes comparent à voix haute le code de 60 chiffres affiché des deux côtés. |
+| **Masque (QR)** | Motif appliqué aux modules d'un QR code (8 possibles) pour éviter les zones qui perturbent la lecture ; le choix du masque change le dessin, pas le contenu. |
 | **ACK / read-receipt** | Accusés signés : « reçu par l'appareil » / « ouvert par l'utilisateur ». |
 | **Relais / `dengon-relay`** | Nœud fixe (ESP32) branché au secteur : densifie le maillage, met en cache, dépose des enveloppes, remonte des logs. Ne déchiffre rien. |
 | **`btleplug::api::Peripheral`** (piège de nommage) | Dans `btleplug`, ce trait désigne l'appareil **distant** trouvé en scannant (le serveur GATT d'en face), **pas** « notre rôle peripheral » : `btleplug` ne sait tenir que le rôle central (voir *Rôle central / peripheral* plus bas et B-6) — [`suivi/spikes/US-102-btleplug-peripheral.md`](spikes/US-102-btleplug-peripheral.md). |
@@ -70,6 +72,11 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Caractéristique** (*characteristic*) | Une valeur exposée par un service GATT, avec ses permissions. Le service `dengon` en a deux : `RX` (on écrit dedans) et `TX` (elle notifie). |
 | **ATT MTU** | Taille maximale d'un message GATT. Négociée à la connexion : 517 octets visés, 23 au pire. En dessous, il faut fragmenter. |
 | **CCCD** (`0x2902`) | Petit interrupteur attaché à une caractéristique notifiable : c'est en l'écrivant qu'un pair s'abonne aux notifications. NimBLE l'ajoute tout seul. |
+| **`conn_handle`** | Numéro qu'une pile BLE donne à une connexion ouverte. **Recyclé** dès la fermeture — à ne jamais confondre avec le `LinkId` du contrat `Transport`, qui ne l'est jamais. |
+| **`LinkId`** | Identifiant d'un **lien** (une connexion) dans le contrat `Transport` : local au processus, monotone, jamais réutilisé. Ce n'est pas un `peerID`. |
+| **Supervision timeout** | Délai de silence radio au-delà duquel une connexion BLE est déclarée morte (code HCI `0x08`). C'est ainsi qu'on détecte une **coupure brutale** : le pair n'envoie rien, on constate son absence. |
+| **Règle anti-boucle** | Quand deux nœuds se découvrent, seul celui au plus petit `peerID` initie la connexion — sinon chacun se connecte à l'autre et un lien est gâché. |
+| **Cible `linux` (ESP-IDF)** | Mode de compilation d'ESP-IDF qui produit un programme pour le PC au lieu de la carte : sert à exécuter des tests Unity de code sans matériel, en CI. |
 | **`sdkconfig` / `sdkconfig.defaults`** | Configuration d'un projet ESP-IDF. Les `defaults` sont écrits à la main et versionnés ; `sdkconfig` en est **généré une seule fois**, et c'est lui que lit la compilation. |
 | **usbipd** | Passerelle qui expose un périphérique USB de Windows à WSL2. Sans elle, aucune carte ESP32 n'est visible depuis Linux — donc pas de flash. |
 | **DoR** (*Definition of Ready*) | Les 8 conditions pour qu'une issue entre dans un sprint (§6) : livrable nommé, critères vérifiables, référence documentaire, dépendances fermées, contrat disponible, estimation, stratégie de test, contrainte dure. |
@@ -132,3 +139,12 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Fenêtre anti-rejeu** | Mémoire des N derniers numéros de message reçus (ici 64) : un message déjà vu ou trop ancien est refusé, un message en retard mais récent est accepté. |
 | **Nonce** | Numéro à usage unique qui accompagne chaque chiffrement ; ne doit jamais se répéter avec la même clé. Dans une session dengon, c'est un compteur envoyé en clair devant le chiffré. |
 | **ViewModel / StateFlow** | Android : le `ViewModel` garde l'état d'un écran et survit aux rotations ; l'écran observe un `StateFlow` (valeur courante + notifications de changement) et appelle les actions du ViewModel. La messagerie (US-214) en a un seul : `ConversationsViewModel`. |
+| **`cargo audit`** | Compare les versions de `Cargo.lock` à la base d'avis **RUSTSEC** et signale les dépendances vulnérables ou non maintenues. |
+| **`cargo deny`** | Contrôle quatre choses depuis `Cargo.lock` : avis de sécurité, licences autorisées, doublons de version / dépendances en `"*"`, et provenance des crates. Configuré par `deny.toml`. |
+| **RUSTSEC** | Identifiant d'un avis de la *RustSec Advisory Database* (`RUSTSEC-AAAA-NNNN`). Couvre les vulnérabilités **et** les crates abandonnées. |
+| **SBOM** | *Software Bill of Materials* — inventaire machine des composants d'un logiciel et de leurs versions, pour retrouver vite qui est touché par une faille. Prévu par `synthese/10` §4.7, **pas encore livré**. |
+| **Unification de features (Cargo)** | Cargo compile une dépendance **une seule fois** par graphe, avec l'**union** des features demandées par tous ceux qui en dépendent. Conséquence : `--no-default-features` sur un paquet ne garantit pas que la dépendance soit compilée sans ses features par défaut. |
+| **Proxy `no_std`** | Ici : `crates/dengon-conformance/`, crate sans code qui lie `dengon-core` sans `std` pour rejouer les vecteurs dans la configuration que le firmware ESP32 embarquera — en attendant que l'US-307 branche le vrai pont `dengon_core_ffi`. |
+| **Inventaire (`INVENTORY`)** | Paquet `0x0D` : la liste des `msgID` qu'un nœud détient, envoyée à un voisin qui arrive. Le voisin répond en poussant ce qui manque. Remplace le gossip GCS au MVP. |
+| **Cache de réconciliation** | Paquets récents qu'un nœud porte pour d'autres (octets bruts, 120 max, 6 h), annoncés dans son inventaire et poussés aux voisins qui ne les ont pas. |
+| **Push cadencé** | Envoi du manquant limité à 15 paquets/min par voisin, pour rester sous son anti-inondation (20/min). |

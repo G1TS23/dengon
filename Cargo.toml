@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
 # Workspace Rust dengon — voir docs/synthese/04-architecture.md §5
 #
-# Six crates :
+# Sept crates :
 #   dengon-core    lib      LE protocole (protocol, crypto, identity, store,
 #                           sync, ledger, observability, api)
 #   dengon-ble     lib      trait Transport + implémentation btleplug (desktop)
@@ -10,6 +10,10 @@
 #   dengon-verify  bin      vérification de journal chaîné (appelé par le
 #                           dashboard Python en sous-processus)
 #   dengon-ffi     lib      bindings UniFFI vers Kotlin (cdylib)
+#   dengon-conformance      vecteurs de contracts/packet/ rejoués contre un
+#                  lib      dengon-core SANS std — la patte « firmware » du
+#                           job cross-vectors (US-222). Aucun code : c'est sa
+#                           table de dépendances qui est le test.
 #
 # US-104 ne livre que les squelettes : chaque crate compile, expose une
 # constante et un test fumigène. Les implémentations réelles arrivent au

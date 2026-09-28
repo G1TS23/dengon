@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// Table GATT du service `dengon` (US-114).
+// Table GATT du service `dengon` (US-114, branchée sur le transport en US-220).
 //
 // ⚠ BLE_UUID128_INIT ATTEND LES OCTETS EN LITTLE-ENDIAN.
 //
@@ -28,6 +28,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 
 #include "dengon_gatt.h"
+#include "dengon_transport.h"
 
 static const char *TAG = "dengon-gatt";
 
@@ -37,12 +38,12 @@ const ble_uuid128_t dengon_svc_uuid =
                      0x6e, 0x65, 0x64, 0x2d, 0x67, 0x6e, 0x65, 0x6d);
 
 /* 6d656e67-2d64-656e-676f-6e2d76310001  —  RX : pair -> nœud, write sans réponse */
-static const ble_uuid128_t dengon_chr_rx_uuid =
+const ble_uuid128_t dengon_chr_rx_uuid =
     BLE_UUID128_INIT(0x01, 0x00, 0x31, 0x76, 0x2d, 0x6e, 0x6f, 0x67,
                      0x6e, 0x65, 0x64, 0x2d, 0x67, 0x6e, 0x65, 0x6d);
 
 /* 6d656e67-2d64-656e-676f-6e2d76310002  —  TX : nœud -> pair, notification */
-static const ble_uuid128_t dengon_chr_tx_uuid =
+const ble_uuid128_t dengon_chr_tx_uuid =
     BLE_UUID128_INIT(0x02, 0x00, 0x31, 0x76, 0x2d, 0x6e, 0x6f, 0x67,
                      0x6e, 0x65, 0x64, 0x2d, 0x67, 0x6e, 0x65, 0x6d);
 
@@ -74,9 +75,10 @@ static const struct ble_gatt_svc_def dengon_gatt_svcs[] = {
             },
             {
                 /* CHAR_TX — le nœud pousse ses paquets par notification.
-                   .val_handle est OBLIGATOIRE : sans lui, l'US-220 n'aura
-                   aucun handle à passer à ble_gatts_notify_custom() et ne
-                   pourra jamais émettre. C'est NimBLE qui le renseigne. */
+                   .val_handle est OBLIGATOIRE : sans lui, le transport
+                   n'aurait aucun handle à passer à ble_gatts_notify_custom()
+                   et ne pourrait jamais émettre. C'est NimBLE qui le
+                   renseigne. */
                 .uuid       = &dengon_chr_tx_uuid.u,
                 .access_cb  = dengon_chr_access,
                 .flags      = BLE_GATT_CHR_F_NOTIFY,
@@ -102,11 +104,10 @@ dengon_chr_access(uint16_t conn_handle, uint16_t attr_handle,
 
     switch (ctxt->op) {
     case BLE_GATT_ACCESS_OP_WRITE_CHR:
-        /* US-114 : on constate la réception et on jette. Le pipeline de
-           routage (déduplication, TTL, relais) est l'US-220 ; le décodage du
-           paquet de couche 3 viendra de dengon-core par le FFI de l'US-307. */
-        ESP_LOGI(TAG, "RX : %u octets reçus (conn=%u, handle=%u) — ignorés (US-220)",
-                 (unsigned)OS_MBUF_PKTLEN(ctxt->om), conn_handle, attr_handle);
+        /* Rôle périphérique : le pair (central) nous écrit une trame. Elle
+           part telle quelle au transport, opaque — son décodage viendra de
+           dengon-core par le FFI de l'US-307. Le mbuf reste à la pile. */
+        dengon_transport_on_rx(conn_handle, ctxt->om);
         return 0;
 
     default:

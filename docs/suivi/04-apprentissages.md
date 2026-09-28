@@ -45,6 +45,217 @@ chaque relecture du code semblait correcte isolément.
 **Où c'est utilisé :** `crates/dengon-core/src/api.rs`,
 `handle_handshake_message` ; découvert via `crates/dengon-core/tests/api_mock.rs`.
 **Pour aller plus loin :** [spécification Noise, patron `XX`](https://noiseprotocol.org/noise.html#interactive-handshake-patterns-fundamental).
+### `conn_handle` NimBLE vs `LinkId` : un identifiant recyclé n'est pas une identité
+
+**C'est quoi :** NimBLE désigne chaque connexion par un `conn_handle`
+(`uint16_t`) et **redonne le même numéro** à la connexion suivante dès que le
+précédent est libéré. Le contrat `Transport` exige au contraire un `LinkId`
+**jamais réutilisé** au cours d'une exécution.
+**Pourquoi dans dengon :** une trame en retard sur un lien mort, ou un
+événement GAP traité après la fermeture, serait attribué au pair **suivant** —
+et la déduplication en amont ne rattraperait rien, elle raisonne sur le
+`msgID`. Le cœur du transport tient donc une table `conn_handle ↔ LinkId`,
+rompue à la fermeture ; le `LinkId` vient d'un compteur monotone 64 bits.
+**Piège / surprise :** un test naïf (« deux connexions successives ont deux
+`LinkId` différents ») passe même avec le bug si le banc donne des
+`conn_handle` différents. Le banc Unity imite NimBLE et redonne le **plus
+petit `conn_handle` libre** : c'est ce qui rend le test significatif.
+**Où c'est utilisé :** `firmware/dengon-relay/components/dengon_transport_core/dengon_transport_core.c:146`
+(`dengon_tc_link_open`), test `cas_link_id_jamais_reutilise`.
+**Pour aller plus loin :** rustdoc de `LinkId`, `crates/dengon-ble/src/transport.rs`.
+
+---
+
+### Séparer un pilote radio en « cœur pur » + « glue » pour le tester sans matériel
+
+**C'est quoi :** toute la logique qui ne dépend pas de la radio (états,
+tables, files, validation, ordre des événements) est écrite en C pur dans un
+composant qui ne connaît que des entiers (`conn_handle`, codes HCI). La glue
+NimBLE ne fait que traduire les callbacks en appels au cœur. ESP-IDF sait
+compiler un tel composant pour la cible **`linux`** : le binaire de test Unity
+tourne alors sur le PC, en CI.
+**Pourquoi dans dengon :** « testé sur 2 cartes réelles » ne peut pas tourner
+en CI. Réduire ce qui n'est vérifiable qu'avec deux cartes au strict minimum
+(la traduction) laisse 32 tests automatiques sur la sémantique, dont le
+portage 1:1 des 12 cas de conformité Rust.
+**Piège / surprise :** (1) Unity attribue par défaut **tous** les cas au
+fichier de `UNITY_BEGIN` — faux numéros de ligne dans les échecs ; remède :
+`UnitySetTestFile(__FILE__)` au début de chaque lanceur. (2) Sur la cible
+linux, `app_main` doit appeler `exit()` avec le résultat, sinon la CI ne voit
+jamais un échec. (3) Deux cibles dans le même projet s'écrasent : `-B
+build-esp32 -D SDKCONFIG=build-esp32/sdkconfig` pour la seconde. (4) Un test
+de mutation (injecter volontairement le bogue « purge de la file à la
+fermeture ») a confirmé que la suite le voit : 2 échecs, code de sortie 1.
+**Où c'est utilisé :** `firmware/dengon-relay/components/dengon_transport_core/test_apps/`,
+étape « Tests Unity du transport » de `.github/workflows/firmware.yml`.
+**Pour aller plus loin :** <https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32/api-guides/host-apps.html>
+
+---
+
+### BLE : ce qui s'arrête tout seul et qu'il faut relancer
+
+**C'est quoi :** trois activités radio de NimBLE s'arrêtent sans que le code
+le demande : l'**annonce** dès qu'un pair se connecte en périphérique ; le
+**scan**, qu'il faut couper soi-même avant `ble_gap_connect()` (sinon
+`BLE_HS_EBUSY`) ; et un scan avec **filtre de doublons** qui, lancé « pour
+toujours », ne reverra jamais une carte déjà vue une fois — même partie puis
+revenue.
+**Pourquoi dans dengon :** c'est exactement le critère « survit à une
+déconnexion brutale » : après une coupure, la carte doit redevenir visible et
+retrouver ses voisins. Chaque fin d'activité (`DISCONNECT`, `ADV_COMPLETE`,
+`DISC_COMPLETE`, échec de connexion) repasse par `ensure_advertising()` et
+`ensure_scanning()`, et le scan tourne par passes de 10 s pour que le filtre de
+doublons soit remis à zéro.
+**Piège / surprise :** une coupure brutale n'a **aucun** message associé : le
+lien meurt au *supervision timeout* (code HCI `0x08`), quelques secondes plus
+tard. Une déconnexion « propre » est un `LL_TERMINATE_IND` du pair (code
+`0x13`), une fermeture par nous revient avec `0x16`. Et NimBLE ne rend pas le
+code HCI brut mais `BLE_HS_ERR_HCI_BASE + code`. **Couper le Bluetooth
+d'un téléphone n'est pas une coupure brutale** : Android envoie d'abord un
+`LL_TERMINATE_IND` (`0x15`, « power off »). Pour en provoquer une vraie
+depuis un Pixel sans le déplacer : `adb shell am force-stop
+com.google.android.bluetooth` tue la pile sans prévenir → `0x08` ~5 s plus
+tard côté ESP32.
+**Où c'est utilisé :** `firmware/dengon-relay/main/transport_nimble.c`
+(`on_disconnect`, `ensure_scanning`), `dengon_tc_map_hci_reason`.
+**Pour aller plus loin :** Core Spec v5.4, Vol 1 Part F (codes d'erreur).
+### `merge=union` est un pilote LOCAL — GitHub ne l'applique pas
+
+**C'est quoi :** dans `.gitattributes`, `fichier merge=union` demande à git, en
+cas de conflit sur ce fichier, de garder **les deux côtés** au lieu d'écrire des
+marqueurs. C'est le filet posé par l'US-115 sur les six fichiers de suivi en
+append (journal, avancement, écarts, apprentissages, glossaire, index).
+
+**Pourquoi dans dengon :** six à sept PR sont ouvertes en permanence et **toutes**
+écrivent dans `00-journal.md`, au même endroit (juste sous le marqueur
+« NOUVELLES ENTRÉES ICI »). Sans le filet, chaque PR conflicterait avec toutes
+les autres.
+
+**Piège / surprise :** deux, découverts le même jour sur la PR #105.
+
+1. **Le filet ne marche que sur le poste.** Les pilotes de fusion de
+   `.gitattributes` sont exécutés par le git **local** ; le serveur GitHub
+   fusionne avec le pilote par défaut et **ignore** `merge=union`. La PR est
+   donc sortie en `mergeStateStatus: DIRTY` sur le seul `00-journal.md`, alors
+   qu'un `git rebase origin/main` en local passait sans un conflit. Le remède
+   est le rebase local puis un `push --force-with-lease` — pas un réglage de
+   dépôt. L'en-tête de `02-avancement.md` promet « fusion automatique ;
+   `merge=union` sert de filet » : à lire comme « en local ».
+2. **Union ≠ fusion juste.** Sur un fichier en *append* (le journal), garder les
+   deux côtés donne le bon résultat. Sur une **table éditée en place**
+   (`02-avancement.md`), si deux branches touchent la **même ligne**, union
+   garde les **deux versions** — la périmée et la neuve. C'est arrivé sur trois
+   lignes (`Workflow firmware`, `dashboard`, `contracts`) et il a fallu retirer
+   les doublons à la main. La consigne « on modifie uniquement la ligne du
+   composant touché » n'y suffit pas : il faut que deux PR ne touchent pas la
+   **même** ligne.
+
+**Où c'est utilisé :** `.gitattributes`, `docs/suivi/*`.
+
+**Pour aller plus loin :** `gitattributes(5)`, section « Defining a custom merge
+driver » — et `git check-attr merge -- docs/suivi/00-journal.md` pour vérifier
+que l'attribut est bien actif localement.
+
+---
+
+### Unification des features de Cargo : `--no-default-features` ne fait pas ce qu'on croit
+
+**C'est quoi :** quand plusieurs paquets d'un même graphe de build dépendent
+d'une même crate avec des features différentes, Cargo ne compile **pas** cette
+crate plusieurs fois : il fait l'**union** des features demandées et compile
+une seule version. C'est ce qui garde les temps de build raisonnables — et
+c'est très bien, sauf quand la configuration *est* ce qu'on veut tester.
+
+**Pourquoi dans dengon :** l'US-222 devait rejouer les vecteurs de trame
+contre `dengon-core` compilé **sans `std`**, la configuration que l'ESP32
+embarquera. Le réflexe — `cargo test -p dengon-core --no-default-features` —
+ne marche pas : `dengon-core` a `dengon-ble` en **dev-dependency** (pour les
+tests de `sync::routing`), `dengon-ble` dépend de `dengon-core` avec ses
+features par défaut, donc `std` revient par la porte de derrière, avec
+`rusqlite` et son sqlite3 en C. Le test aurait tourné vert en n'ayant rien
+prouvé.
+
+**Piège / surprise :** trois pièges empilés, découverts dans cet ordre.
+
+1. `cargo tree -p dengon-core --no-default-features -e features | grep rusqlite`
+   le montre en une ligne. À réflexe pour toute question « quelle feature est
+   réellement active ? » — l'intuition se trompe, l'arbre non.
+2. La crate séparée (`crates/dengon-conformance/`) ne suffit pas non plus si
+   elle écrit `dengon-core = { workspace = true, default-features = false }` :
+   avec l'héritage de workspace, **`default-features` est ignoré** tant que
+   la ligne de `[workspace.dependencies]` ne le déclare pas elle-même. Cargo
+   le dit, en avertissement facile à survoler : *« `default-features` is
+   ignored for dengon-core »*. Il a fallu écrire la dépendance **en chemin**.
+3. Une assertion « je suis bien sans `std` » compilée dans la crate
+   (`const _: () = assert!(...)`) casse `cargo clippy --workspace` : un build
+   `--workspace` unifie tout le graphe, `std` revient par `dengon-node`, et
+   l'assertion échoue **à raison**. La garantie ne vit que dans la résolution
+   **isolée** (`-p dengon-conformance`), donc le garde-fou doit être à
+   l'extérieur : une étape de CI qui inspecte `cargo tree`.
+
+**Où c'est utilisé :** `crates/dengon-conformance/Cargo.toml`,
+`crates/dengon-conformance/src/lib.rs`,
+`.github/workflows/cross-vectors.yml` (étape « 2/4 bis »).
+
+**Pour aller plus loin :** *The Cargo Book*, « Features — Feature unification »
+et « Dependencies — Inheriting a dependency from a workspace ».
+
+---
+
+### `dorny/paths-filter` n'a pas de base de comparaison sur `schedule`
+
+**C'est quoi :** l'action calcule un diff entre deux références git pour dire
+quels chemins ont changé. Sur `pull_request` elle compare à la base de la PR,
+sur `push` au commit précédent. Sur `schedule` (un cron), il n'y a **ni PR ni
+push** : rien à comparer.
+
+**Pourquoi dans dengon :** le job `audit` tourne sur PR **et** en cron
+quotidien. Sur PR, on veut le filtrage par chemin (ne pas relancer un audit
+pour une PR documentaire) ; sur cron, on veut **tout** exécuter — c'est
+justement le cas où le dépôt n'a pas bougé mais où un avis RUSTSEC vient de
+paraître. Les deux besoins sont opposés, et un seul `if` ne les couvre pas.
+
+**Piège / surprise :** il faut désactiver l'**étape de filtre elle-même**
+(`if: github.event_name != 'schedule'`), pas seulement l'ignorer ensuite —
+sinon elle échoue avant d'avoir servi. Et comme un `steps.filtre.outputs.*`
+d'une étape sautée vaut la chaîne vide, chaque étape réelle porte
+`if: github.event_name == 'schedule' || steps.filtre.outputs.deps == 'true'`.
+
+**Où c'est utilisé :** `.github/workflows/audit.yml`.
+
+---
+
+### `cargo-deny` : quatre contrôles, un seul fichier, et le piège du code privé
+
+**C'est quoi :** `cargo deny check` lit `Cargo.lock` et vérifie quatre choses
+d'un coup — `advisories` (avis RUSTSEC), `licenses` (celles qu'on autorise),
+`bans` (doublons de version, dépendances en `"*"`), `sources` (d'où viennent
+les crates). `cargo audit`, lui, ne fait que le premier, mais avec une base
+d'avis rafraîchie à chaque exécution.
+
+**Pourquoi dans dengon :** les deux sont dans le job `audit`
+(`synthese/10` §4.7). Ils se recouvrent sur les avis, et c'est voulu : ils ne
+rafraîchissent pas leur base au même moment.
+
+**Piège / surprise :** trois.
+
+1. **Notre propre code fait échouer le job** si on ne dit rien : nos sept
+   crates sont `publish = false` et sans champ `license` (la licence du
+   projet n'est pas tranchée), donc cargo-deny les compte *unlicensed*.
+   `[licenses.private].ignore = true` règle ça.
+2. **La liste `allow` dépend de `[graph].targets`.** Deux licences
+   (`Apache-2.0 WITH LLVM-exception`, `BSD-1-Clause`) n'apparaissaient que sur
+   des cibles qu'on ne construit pas ; cargo-deny les a signalées en
+   `license-not-encountered`. Une entrée inutile dans `allow` est une
+   permission qu'on ne comprend plus six mois après.
+3. **`cargo audit` ne lit pas `deny.toml`** (son fichier serait
+   `.cargo/audit.toml`). Deux listes d'exceptions dérivent au premier oubli :
+   le workflow **dérive** ses `--ignore` de `deny.toml` par un `grep` sur les
+   identifiants `RUSTSEC-AAAA-NNNN`.
+
+**Où c'est utilisé :** `deny.toml`, `.github/workflows/audit.yml`.
+
+**Pour aller plus loin :** <https://embarkstudios.github.io/cargo-deny/>
 
 ---
 
@@ -87,6 +298,50 @@ tardif.
 **Où c'est utilisé :** `crates/dengon-core/src/protocol/fragment/tests.rs`
 (`reassemblage_mtu_et_ordre_aleatoires`).
 **Pour aller plus loin :** <https://proptest-rs.github.io/proptest/proptest/tutorial/shrinking-basics.html>
+### Un QR code peut être valide et pourtant indétectable
+
+**C'est quoi :** un lecteur de QR fait deux choses : **détecter** le code dans
+l'image (les trois carrés de repérage) puis **décoder** les modules. Le
+contenu est brouillé par un **masque** (8 possibles) choisi par l'encodeur
+pour éviter les motifs gênants.
+**Pourquoi dans dengon :** l'appairage repose sur le scan caméra du QR de
+l'autre. Un QR que le détecteur ne trouve pas bloque l'appairage.
+**Piège / surprise :** le QR de l'identité de test « alice », généré par
+ZXing avec son masque par défaut, se décodait en mode « image pure » (données
+justes) mais n'était **jamais détecté** — à toute échelle, même en
+`TRY_HARDER` —, alors que ceux de « bob » ou « Élodie » passaient. Le défaut
+dépend du contenu : un test sur un seul exemple ne l'aurait pas vu.
+Correctif : vérifier la relecture par détection juste après l'encodage et
+changer de masque si besoin, plus un balayage de 300 identités en test.
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ui/appairage/QrCode.kt`
+(`matriceQr`, `seRelitParDetection`).
+**Pour aller plus loin :** ISO/IEC 18004 (masques et évaluation des pénalités).
+
+---
+
+### L'encodage hexadécimal double la taille en octets
+
+**C'est quoi :** représenter N octets en hexadécimal ASCII (`"%02x"` par
+octet) produit 2×N caractères, donc 2×N octets une fois ré-encodés en
+UTF-8 (chaque caractère hexadécimal est un octet ASCII). Ce n'est **pas**
+une transformation 1:1 octet à octet.
+**Pourquoi dans dengon :** `IdentiteLocale.pseudoPour` doit tenir dans les 8
+premiers octets du pseudo (c'est toute la fenêtre que le bouchon FFI utilise
+pour dériver le `peerId`, US-215/US-106). Vouloir y faire tenir 8 octets de
+véritable aléa en les hexadécimant en donnerait 16 — la moitié déborderait
+hors de la fenêtre utile.
+**Piège / surprise :** la revue automatisée de la PR #94 recommandait
+d'« utiliser les 8 octets disponibles pour l'aléatoire… donnerait 2^64
+valeurs possibles », en supposant implicitement un octet source par octet de
+pseudo. En pratique, avec un encodage hexadécimal, seuls **4** octets de
+source aléatoire tiennent dans 8 octets de pseudo — 2^32 valeurs, pas 2^64.
+Toujours vrai que c'est un gain énorme sur les 2^16 d'avant (le préfixe
+constant `tel-` gaspillait la moitié de la fenêtre), mais le chiffre exact
+de la revue ne tenait pas compte du doublement de taille de l'encodage.
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/identite/IdentiteLocale.kt`
+(`pseudoPour`, `OCTETS_ALEATOIRES = 4`).
+**Pour aller plus loin :** RFC 4648 (encodages base16/base32/base64 et leurs
+ratios octets source / octets encodés).
 
 ---
 
@@ -1020,6 +1275,38 @@ le blob, en-tête compris, et vérifie le refus.
 **Où c'est utilisé :** `crates/dengon-core/src/identity/vault.rs:74`.
 **Pour aller plus loin :** RFC 8439 §2.8 ; draft-irtf-cfrg-xchacha
 (nonce de 24 octets, sûr en tirage aléatoire).
+
+---
+
+### TLS sur une IP littérale : le client n'envoie pas de SNI (US-224)
+
+**C'est quoi :** SNI (*Server Name Indication*) est l'extension TLS par
+laquelle un client indique, en clair, quel nom d'hôte il cherche à joindre
+— c'est ce qui permet à un serveur de choisir le bon certificat quand
+plusieurs sites partagent la même IP/le même port. La RFC 6066 ne définit
+SNI que pour des **noms d'hôte** ; un client qui se connecte à une IP
+littérale (`https://51.255.38.214:8443`) n'a, par construction, aucun nom
+à y mettre, et n'envoie donc **aucune** extension SNI.
+**Pourquoi dans dengon :** le VPS de démo (US-224) n'a pas de nom de
+domaine, seulement une IP. Le reverse-proxy Caddy sélectionne pourtant son
+certificat par SNI (`tls_connection_policies` matchées par nom d'hôte) —
+sans nom envoyé par le client, Caddy ne trouve aucune politique
+correspondante et refuse la poignée de main (`tlsv1 alert internal error`).
+**Piège / surprise :** ça marchait en local avec `https://localhost:8443`
+(un nom, donc du SNI est envoyé) et cassait uniquement en pointant vers
+l'IP publique du VPS — le symptôme ne dépendait donc pas du réseau
+(local vs. Internet) mais du **type d'adresse** utilisé pour se connecter,
+ce qui n'était pas évident au premier abord. Le diagnostic décisif :
+`openssl s_client -connect <ip>:8443 -servername <ip>` réussissait (il
+permet de forcer une SNI arbitraire, y compris une IP, ce qu'un vrai client
+ne ferait jamais), alors que `curl https://<ip>:8443/...` échouait sur la
+même configuration serveur — la différence entre les deux commandes EST le
+diagnostic. La solution est l'option `default_sni` de Caddy : un nom de
+repli utilisé quand la connexion n'en fournit aucun.
+**Où c'est utilisé :** `dashboard/deploy/Caddyfile`.
+**Pour aller plus loin :** RFC 6066 §3 (SNI) ; documentation Caddy sur
+`default_sni` et `tls_connection_policies`.
+
 ---
 
 ### Routeur « sans I/O » (*sans-IO*) : l'heure et l'aléa en arguments
@@ -1088,3 +1375,77 @@ fixe.
 référence (graine 0 → `0xE220A8397B1DCDAF`), sinon une faute de frappe dans
 une constante passe inaperçue.
 **Où c'est utilisé :** `crates/dengon-core/src/sync/routing.rs:616`.
+
+---
+
+### `starlette.testclient.TestClient` ne streame pas vraiment (US-218)
+
+**C'est quoi :** `TestClient` (utilisé par `fixture client` dans
+`conftest.py`) exécute la coroutine ASGI de l'app **jusqu'à sa fin complète**
+avant de rendre la main à l'appelant — y compris pour une réponse en
+streaming. Dans `starlette/testclient.py`, `handle_request()` fait
+`portal.call(self.app, scope, receive, send)`, où `send()` accumule chaque
+morceau du corps dans un `io.BytesIO()` ; `portal.call` ne revient que quand
+cette coroutine se termine.
+**Pourquoi dans dengon :** `GET /api/stream` (SSE) ne se termine **jamais**
+tant que le client ne se déconnecte pas (boucle `while True` avec
+heartbeat). Un test écrit avec `client.stream("GET", "/api/stream")` reste
+donc bloqué indéfiniment dès `__enter__` — avant même d'avoir lu un octet.
+**Piège / surprise :** ça ne lève aucune erreur, ne timeout pas, ne produit
+aucun message — juste un hang silencieux. Le diagnostic a demandé un script
+autonome avec un thread « chien de garde » (`faulthandler.dump_traceback()`
+après N secondes) pour voir que le thread de la boucle asyncio interne
+était idle en `select()`, preuve qu'il attendait le prochain événement
+plutôt que d'être bloqué dans une boucle infinie côté app — le blocage
+était bien côté `TestClient`, pas côté route.
+**La solution :** un vrai serveur `uvicorn.Server` lancé dans un thread
+(port choisi par l'OS, `port=0`), avec un `httpx.Client` réel dessus — un
+vrai socket TCP lit les octets progressivement dès qu'ils arrivent, sans
+attendre la fin de la réponse. Toujours dans le même process que le test :
+l'objet `app` (et donc `app.state.broadcaster`) reste directement
+inspectable pour synchroniser le test sans `sleep` fixe (poll borné sur
+`subscriber_count()`).
+**Où c'est utilisé :** `dashboard/api/tests/test_stream.py`
+(fixture `live_server`).
+### Réconciliation et anti-inondation se marchent dessus
+
+**C'est quoi :** deux règles saines isolément — « à la rencontre, pousse
+tout ce qui manque » et « n'accepte pas plus de N nouveaux messages par
+minute d'un même voisin » — qui, combinées, font jeter par le receveur ce
+que l'émetteur vient d'envoyer.
+**Pourquoi dans dengon :** un relais ESP32 qui a stocké 120 paquets et
+rencontre un téléphone : sans cadence, 100 seraient rejetés, et la bande
+BLE dépensée pour rien.
+**Piège / surprise :** la perte est silencieuse — la rencontre « réussit »
+avec 29 paquets sur 35 ; seul le test témoin (même scène, sans cadence)
+la chiffre (6 `FloodLimited`). La cadence
+d'émission doit rester **sous** le quota du receveur, pas égale : l'`INVENTORY`
+lui-même et le trafic direct comptent aussi.
+**Où c'est utilisé :** `crates/dengon-core/src/sync/inventory.rs:456`
+(`poll_push`), `tests/inventory_mock.rs`.
+### Génération (epoch) : désambiguïser deux connexions successives à la même identité
+
+**C'est quoi :** quand une identité stable (ici une adresse BLE) peut être
+réutilisée par deux connexions physiques différentes dans le temps
+(déconnexion puis reconnexion immédiate), un code qui la résout **sous
+verrou** à un instant T puis agit dessus **hors verrou** un peu plus tard
+peut agir sur la mauvaise connexion sans qu'aucune structure de données ne
+s'en aperçoive — l'identité seule ne suffit pas à détecter le changement.
+Parade : associer à l'identité un compteur monotone assigné à la création de
+chaque connexion (« génération »/« epoch »), inclus dans l'égalité de la
+valeur transportée ; toute opération résolue avant le changement échoue
+proprement au lieu de viser la nouvelle connexion.
+**Pourquoi dans dengon :** `AndroidTransport.send()` résout le `RadioPeer`
+d'un lien sous son verrou, puis appelle `GattRadio.ecrire()` **hors
+verrou** (nécessaire : la radio peut rappeler `deconnecte()` pendant
+l'écriture). Entre les deux, une reconnexion rapide à la même adresse MAC
+peut se produire côté radio.
+**Piège / surprise :** les rappels Android (`BluetoothGattServerCallback`)
+ne donnent qu'une adresse, jamais un identifiant de connexion — il faut donc
+un point de résolution séparé (« quel est le `RadioPeer` **actuel** pour
+cette adresse ? ») pour les rappels entrants, distinct de la génération
+figée dans une closure pour le rôle central (chaque `connectGatt` a son
+propre callback lié à une connexion précise).
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ble/transport/GattRadio.kt`
+(`RadioPeer.generation`, `pairActuel()`), corrigé en revue de la PR #98
+(US-213).
