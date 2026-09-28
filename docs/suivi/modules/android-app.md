@@ -7,7 +7,7 @@ requis pour un nœud mesh (US-109).
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109.
-**Dernière mise à jour :** 2026-09-25
+**Dernière mise à jour :** 2026-09-28
 **État :** esquisse (squelette du service de fond ; pas de logique BLE réelle
 dans l'app elle-même — voir « Spike C » ci-dessous pour le code GATT jetable
 qui dérisque `AndroidTransport`)
@@ -323,10 +323,28 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
   avec `~/.gradle/caches/modules-2` vidé (dependency verification
   effectivement testée à froid, pas juste régénérée) → **BUILD SUCCESSFUL**
   (voir `00-journal.md`, entrée « corrections revue PR #56 »).
-- **Non fait** : test manuel « ≥ 5 min écran éteint sur appareil réel »
-  (critère d'acceptation US-109) — aucun appareil Android disponible dans
-  l'environnement où ce squelette a été écrit. Reste à faire avant de
-  clore l'US.
+- **Fait, sur 2 appareils** : test manuel « ≥ 5 min écran éteint sur
+  appareil réel ».
+  - **2026-09-16, Paul, Pixel 8 Pro (Android 17)** : service démarré
+    09:39:53 heure de Paris (PID 25615, `isForeground=true`), écran éteint
+    5 min 25 s, revérifié à 09:59:19 — **même PID**, notification
+    permanente toujours présente. Limite notée par Paul : appareil **en
+    charge** pendant le test, donc jamais entré en Doze réel (voir
+    commentaire de l'issue #9 du 16/09, posté à 08:03 UTC).
+  - **2026-09-26, Olivier, Samsung Galaxy A16 / SM-A165F (Android 16)** :
+    service démarré 12:14:36, écran éteint, revérifié à 12:21:06 (6 min 30) —
+    même `ServiceRecord`/PID, notification `ONGOING_EVENT` toujours
+    affichée. **Connexion `adb` en USB** (poste de travail branché toute la
+    session) : **même limite que le test de Paul**, l'appareil était en
+    charge — pas de vrai Doze non plus sur ce second test (retour de revue
+    #74, point d'OswinFreyr).
+  - Le résultat de Paul a bien été obtenu et commenté sur l'issue #9 le
+    16/09, mais **jamais reporté dans cette fiche ni dans le journal**
+    avant cette correction (voir `00-journal.md`, entrée du 26/09). Les
+    deux tests ci-dessus couvrent un début de matrice d'appareils
+    (2 modèles, 2 versions Android) mais **aucun des deux ne couvre Doze
+    réel** — voir « Limites connues » ci-dessous pour la procédure à
+    suivre plus tard.
 
 ## Limites connues / TODO
 
@@ -335,21 +353,24 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
   `Transport` de `docs/synthese/04-architecture.md` §3 et remplacera ce
   squelette de service par le vrai relais.
 - Pas de branchement `dengon-ffi` (bouchon US-106 pas encore fait).
-- Pas de CI Android (`android.yml`) — relève de US-113/US-222.
-- Test manuel des 5 minutes écran éteint non réalisé (voir ci-dessus).
+- Pas de CI Android (`android.yml`) — relève de US-113/US-222 (issue #79
+  créée pour un job `android.yml` minimal, retour de revue PR #72).
 - SDK Android installé localement pour vérifier le build de cette session,
   mais **pas dans le dépôt** (outillage machine ; chaque poste/CI devra
   installer le sien, ou la CI Android future s'en chargera).
-- **Spike C (US-103) exécuté partiellement (2026-09-25)** : l'échange BLE
-  bout-en-bout est démontré (Android Peripheral ↔ iPhone/nRF Connect
-  central), mais 3 des 4 critères d'acceptation de l'issue #3 restent
-  ouverts — MTU réel non mesurable avec un central iOS (limitation
-  CoreBluetooth, pas de notre code), timing non chronométré, matrice
-  d'appareils incomplète (un seul couple, pas 100 % Android). Voir « Spike
-  C » ci-dessus pour le détail et le protocole restant à exécuter avec un
-  **second Android**, et `docs/suivi/00-journal.md` pour le compte-rendu.
-  Tant que ce n'est pas fait, US-103 ne peut pas être clos ni le go/no-go
-  A-1 confirmé.
+- **Doze réel non testé** (les deux tests US-109 de la section « Tests »
+  ci-dessus ont été faits appareil en charge, via `adb` USB) — au-delà du
+  critère d'acceptation de US-109 (« ≥ 5 min écran éteint », rempli), mais
+  c'est la vraie contrainte visée par
+  `docs/synthese/10-benchmarks-mvp-tests.md` §2.7. Pour le couvrir sans
+  attendre 30 min débranché : `adb shell dumpsys battery unplug` puis `adb
+  shell dumpsys deviceidle force-idle`, revérifier le service, puis `adb
+  shell dumpsys deviceidle unforce` et `adb shell dumpsys battery reset`
+  (retour de revue d'OswinFreyr, PR #74).
+- ~~Spike C (US-103) exécuté partiellement~~ **exécuté intégralement le
+  2026-09-28** (2 vrais Android, 4/4 critères de l'issue #3 démontrés — voir
+  « Spike C » ci-dessus). Cette puce était encore au stade « partiel » ici
+  après le merge de la PR #67, corrigé au passage.
 
 ## Pour l'oral
 
