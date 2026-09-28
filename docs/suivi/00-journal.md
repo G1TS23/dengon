@@ -10,6 +10,95 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-301 : façade `dengon-core::api`, test de bout en bout, deux bugs trouvés
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/api.rs` (nouveau), `crates/dengon-core/src/lib.rs`, `crates/dengon-core/tests/api_mock.rs` (nouveau)
+**Lot :** US-301 (issue #39), `dengon-core::api`
+
+### Fait
+- Écrit `api.rs` : `struct Node` (façade unique sur le protocole), types
+  `Identity`/`Message`/`Conversation`/`NodeEvent`/`DengonError`/`MessageStatus`
+  miroir du `.udl` v0 gelé (US-106), plus deux extensions Rust hors `.udl`
+  (`on_bytes_received`, `take_outgoing`) nécessaires puisque `dengon-core` n'a
+  pas de dépendance non-test à `dengon-ble::Transport`.
+- Câblé : messagerie en session (`Noise XX`, handshake orchestré), messagerie
+  par enveloppe (`Noise X`, cas « déjà connecté »), dépôt en `sync::courier`
+  d'une enveloppe reçue pour un autre pair, journal chaîné (`Ledger`,
+  deuxième `SigningKey` dérivée de la même graine), persistance `store`
+  best-effort.
+- Écrit `tests/api_mock.rs` : deux `Node` (Alice, Bob), chacun avec son
+  `dengon_ble::MockTransport`, fil recopié à la main entre les deux
+  transports (même principe que `tests/routing_mock.rs`, US-209, réduit à
+  deux nœuds). 3 tests : message de bout en bout en session, envoi vers un
+  pair inconnu refusé, statut `InFlight` après envoi.
+- Ajouté 11 tests unitaires dans `src/api.rs` (conv_id symétrique, mapping de
+  statut, messages d'erreur, enveloppe hors ligne mise en file, enveloppe
+  ouverte par son vrai destinataire, enveloppe gardée en courrier pour un
+  tiers, déconnexion, persistance `store`) pour atteindre le seuil de
+  couverture de l'AC (85 %).
+
+### Pourquoi / décisions
+- `Node::new` prend `identity::Identity` (avec secrets), pas le dictionnaire
+  `Identity` du `.udl` (qui n'en a pas) : la construction est explicitement
+  hors périmètre du `.udl` v0 (son en-tête le dit), donc pas une violation.
+- `rng` toujours fourni par l'appelant à chaque méthode, jamais stocké dans
+  `Node` (cohérent avec `Identity::generate`/`Handshake::initiator` etc.
+  ailleurs dans la crate).
+- Initiateur/répondeur du handshake déterminé par `self.peer_id < peer_id`
+  (déterministe des deux côtés, sans coordination).
+
+### Écarts vs conception
+- `sync::inventory` (US-210) pas câblé : PR #96 pas encore mergée sur `main`
+  au démarrage de cette US.
+- Porteur tiers (`ENVELOPE_OFFER`/`ENVELOPE_REQUEST`) pas câblé — plus proche
+  du rôle d'un relais dédié (US-308).
+- Remise de ce que `sync::courier` porte à son vrai propriétaire pas câblée.
+- Aucun accusé de réception émis par cette façade (seulement reçu/traité) :
+  `Delivered` n'est jamais atteint ici, `InFlight` est le statut final
+  observable.
+- Module `api` entier gated `#[cfg(feature = "std")]` : le firmware ESP32
+  câblera `sync::*`/`ledger` directement, pas par cette façade.
+- `PeerId` utilisé directement comme identifiant de lien pour `Router`
+  (simplification vs `dengon-ble::LinkId`).
+- Détail et justification complète dans `03-ecarts-conception.md`.
+
+### Appris
+- **Bug réel trouvé en écrivant le test de bout en bout** :
+  `handle_handshake_message` ne revérifiait `is_finished()` qu'après une
+  *lecture* de message, jamais après une *écriture* — or dans `Noise XX`,
+  c'est l'initiateur qui **termine par une écriture** (message 3). Résultat :
+  l'initiateur restait bloqué en `PeerCrypto::Handshaking` alors que le
+  répondeur passait bien à `Established` en lisant ce même message, et tout
+  ciphertext ultérieur de l'initiateur était silencieusement rejeté côté
+  répondeur (`handle_session_ciphertext` exige `Established`). Trouvé en
+  instrumentant temporairement `on_bytes_received` avec un `eprintln!` de
+  diagnostic (retiré ensuite) pour comparer la progression des deux côtés
+  tick par tick.
+- **Deuxième bug, de conception** : `SEALED_ENVELOPE` n'étant jamais adressé
+  (`recipient_id` toujours absent, décision A-8, pour ne pas révéler le
+  destinataire), le routeur ne peut **jamais** rendre `Decision::Deliver`
+  pour ce type de paquet — y compris pour le vrai destinataire.
+  `handle_sealed_envelope` n'était donc appelée que sur `Decision::Deliver`,
+  autrement dit jamais : toute enveloppe reçue finissait en courrier même
+  quand elle nous était destinée. Corrigé en tentant l'ouverture (avec notre
+  propre clé) sur `Decision::Store`, avant le dépôt en courrier.
+- Utile pour la suite : un test d'intégration contre `MockTransport` avec
+  deux instances est un bon outil de diagnostic pour ce genre de désynchro
+  d'état — le bug n'était pas visible en relisant le code, seulement en le
+  faisant tourner tick par tick.
+
+### État après cette session
+- `cargo fmt -p dengon-core` appliqué, `cargo clippy -p dengon-core
+  --all-targets --all-features -- -D warnings` : aucun avertissement,
+  `cargo test -p dengon-core` : 328 tests passent (2 ignorés, pré-existants),
+  `cargo check -p dengon-core --no-default-features` (contrainte `no_std`) :
+  ok, `cargo build --workspace` : ok. Couverture `api.rs` (`cargo llvm-cov`) :
+  88 % des lignes (seuil AC : 85 %).
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md` (nouvelle section
+  « Sous-module `api` (US-301) »).
+- 01-etat-du-code.md mis à jour : non (pas de changement de statut global).
+
 ## 2026-09-28 — US-217 : rebase de la PR #93 sur `main` (après #91, #99)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

@@ -921,6 +921,68 @@ destinataire réussit). Couverture : 100 % des lignes.
 `X` (US-204 pas encore mergée) ; pas de `copy_budget` (v2) ; stockage en
 mémoire seulement (persistance NVS / SQLite à brancher) ; pas encore appelé.
 
+## Sous-module `api` (US-301)
+
+La **façade** : le seul point d'entrée que `dengon-ffi`/`dengon-node`
+devraient utiliser à terme. `struct Node`, `#[cfg(feature = "std")]`
+uniquement (voir « Limites » ci-dessous).
+
+| Type / fonction | Fichier | Ce que ça fait |
+|---|---|---|
+| `Node::new` | `src/api.rs` | Construit un nœud à partir d'une `identity::Identity` **réelle** (secrets inclus) — pas le dictionnaire `Identity` du `.udl`, qui n'en a pas : construction hors périmètre du `.udl` v0, voir doc de module. Dérive une deuxième `SigningKey` (même graine) pour le `Ledger`. |
+| `Node::on_peer_connected` / `on_peer_disconnected` | `src/api.rs` | Extensions Rust (pas dans le `.udl` v0) : `link_up`/`bind_peer` sur le `Router`, démarre un handshake `XX` (initiateur si `self.peer_id < peer_id`), remise immédiate des enveloppes en attente. |
+| `Node::send_message` | `src/api.rs` | Session (`Noise XX`) si établie, sinon enveloppe (`Noise X`) — remise immédiate si un lien est déjà ouvert (même en pleine négociation `XX`), sinon mise en `Outbox` (`Queued`). |
+| `Node::on_bytes_received` / `take_outgoing` | `src/api.rs` | Extensions Rust : décodage, passage par `Router::on_packet`, dispatch par type de paquet ; `take_outgoing` vide la file à remettre au `Transport` appelant. |
+| `Node::poll_events` / `list_conversations` / `list_messages` | `src/api.rs` | `.udl` v0. L'index en mémoire (`BTreeMap`) est la source de vérité de la session ; `store` (si attaché) n'est écrit qu'en best-effort, jamais relu. |
+
+**Bug corrigé pendant l'écriture du test de bout en bout :** dans
+`handle_handshake_message`, l'initiateur qui écrit le message 3 (dernier de
+l'échange `XX`) ne revérifiait jamais `is_finished()` après l'écriture — il
+restait bloqué en `Handshaking` alors que le répondeur, lui, passait à
+`Established` en lisant ce même message. Résultat : l'initiateur chiffrait
+ses messages suivants avec une session jamais transmise au chiffrement
+transport (`has_session` faux côté initiateur), et le répondeur rejetait tout
+ciphertext reçu de l'initiateur (`PeerCrypto::Handshaking`, pas
+`Established`). Trouvé en instrumentant `on_bytes_received` avec un
+`eprintln!` temporaire le temps de voir la `Decision` du routeur et l'état
+de session des deux côtés.
+
+**Bug de conception corrigé à la même occasion :** `SEALED_ENVELOPE` n'étant
+jamais adressé (`recipient_id` toujours `None`, décision A-8), le routeur ne
+peut **jamais** rendre `Decision::Deliver` pour ce type de paquet — même
+quand on en est le vrai destinataire. Le code initial ne tentait d'ouvrir
+l'enveloppe (`handle_sealed_envelope`) que sur `Decision::Deliver`, donc
+jamais en pratique : toute enveloppe reçue finissait systématiquement en
+courrier, y compris celles adressées à soi-même. Corrigé en tentant
+l'ouverture (`noise::open` avec notre propre clé) **avant** le dépôt en
+courrier, sur `Decision::Store` : succès → traité directement ; échec →
+gardé pour un autre pair.
+
+**Tests :** `tests/api_mock.rs` (3 tests, bout en bout contre deux
+`dengon_ble::MockTransport`, un par nœud) + `src/api.rs::tests` (11 tests
+unitaires : statuts, erreurs, enveloppe hors ligne, enveloppe ouverte par son
+destinataire, enveloppe gardée en courrier pour un tiers, déconnexion,
+persistance `store`). Couverture du module : 88 % des lignes (seuil AC : 85
+%). Le reste non couvert est surtout `record_ledger`/`persist_message` sur
+des chemins déjà exercés indirectement par d'autres tests, et
+`redeliver_pending_envelopes` (nécessite une déconnexion puis reconnexion
+avec message en attente, non encore testé).
+
+**Limites / écarts (détail dans `03-ecarts-conception.md`) :**
+- Module entier gated `#[cfg(feature = "std")]` : le firmware ESP32
+  (US-307/308) câblera `sync::*`/`ledger` directement dans ses tâches
+  FreeRTOS plutôt que par cette façade.
+- `sync::inventory` (US-210) pas câblé : pas mergé sur `main` au démarrage de
+  cette US.
+- `ENVELOPE_OFFER`/`ENVELOPE_REQUEST` (porteur tiers) pas câblé : seul le
+  cas « on est déjà connecté à qui on écrit » l'est.
+- Remise de ce que `sync::courier` porte pour un autre pair : pas câblée.
+- Aucun accusé de réception n'est **émis** par cette façade (seulement
+  reçu/traité) : le statut `Delivered` d'un message sortant n'est jamais
+  atteint ici, `InFlight` est le statut final observable.
+- `PeerId` utilisé directement comme identifiant de lien pour `Router`
+  (simplification vs `dengon-ble::LinkId`, un nœud = une connexion active).
+
 ## Pour l'oral
 
 Quatre livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
