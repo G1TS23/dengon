@@ -15,6 +15,15 @@
     return window.DENGON_API_BASE || "";
   }
 
+  // `msg_log_id` est un hash tronqué à 8 octets / 16 hex (contrat gelé,
+  // voir `docs/suivi/03-ecarts-conception.md`) — jamais autre chose. Rejeter
+  // ici tout ce qui ne correspond pas évite de construire une URL d'API à
+  // partir d'une valeur non validée issue du hash de navigation
+  // (`window.location.hash`, donc modifiable par quiconque tape/partage un
+  // lien), avant même d'atteindre `encodeURIComponent` — pas seulement une
+  // histoire d'encodage, mais de forme attendue.
+  var MSG_LOG_ID_VALIDE = /^[0-9a-f]{16}$/;
+
   async function fetchMessages() {
     const reponse = await fetch(baseUrl() + "/api/messages");
     if (!reponse.ok) {
@@ -23,10 +32,11 @@
     return reponse.json();
   }
 
-  // `null` pour un message inconnu (404) — distingué d'une panne réseau
-  // (qui lève), pour que l'appelant affiche « introuvable » plutôt que
-  // « erreur de connexion » dans ce cas précis.
+  // `null` pour un message inconnu (id mal formé ou 404) — distingué d'une
+  // panne réseau (qui lève), pour que l'appelant affiche « introuvable »
+  // plutôt que « erreur de connexion » dans ce cas précis.
   async function fetchMessage(msgLogId) {
+    if (!MSG_LOG_ID_VALIDE.test(msgLogId)) return null;
     const reponse = await fetch(baseUrl() + "/api/messages/" + encodeURIComponent(msgLogId));
     if (reponse.status === 404) return null;
     if (!reponse.ok) {
@@ -49,11 +59,11 @@
     source.onmessage = function (msg) {
       try {
         onEvenement(JSON.parse(msg.data));
-      } catch (erreur) {
+      } catch (error_) {
         // Un message SSE mal formé ne doit pas casser l'abonnement pour les
         // suivants — le flux garantit des événements valides côté serveur
         // (voir app/stream.py), donc ce cas n'est là qu'en dernier recours.
-        console.error("dengon: événement SSE illisible", erreur);
+        console.error("dengon: événement SSE illisible", error_);
       }
     };
     return source;

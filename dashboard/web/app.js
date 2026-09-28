@@ -237,8 +237,8 @@
     var ecran;
     try {
       ecran = correspondance ? await renderDetail(decodeURIComponent(correspondance[1])) : await renderListe();
-    } catch (erreur) {
-      ecran = ecranErreur(erreur);
+    } catch (error_) {
+      ecran = ecranErreur(error_);
     }
 
     if (generation !== generationCourante) return; // une navigation plus récente a déjà pris la main

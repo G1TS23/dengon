@@ -64,6 +64,11 @@ dashboard/web/
 `data.js` (US-111, données bidon) est **retiré** — plus utilisé une fois
 branché sur l'API réelle.
 
+Si `dashboard/web` n'est pas servi derrière le même reverse-proxy que
+`dashboard/api` (US-224), définir `window.DENGON_API_BASE` (l'URL de l'API,
+ex. `https://mon-vps:8443`) dans un `<script>` placé AVANT `api.js`/`app.js`
+dans `index.html` — vide par défaut (même origine que la page).
+
 ## Concepts / types importants
 
 | Type / fonction | Fichier:ligne | Ce que ça fait |

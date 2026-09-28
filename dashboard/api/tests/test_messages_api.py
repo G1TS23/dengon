@@ -117,7 +117,10 @@ def test_get_message_detail_tolerates_missing_radio_fields(client):
     hops = response.json()["hops"]
     assert len(hops) >= 1
     for hop in hops:
-        assert "ttl_in" in hop and "ttl_out" in hop and "fanout" in hop and "rssi" in hop
+        assert "ttl_in" in hop
+        assert "ttl_out" in hop
+        assert "fanout" in hop
+        assert "rssi" in hop
 
 
 def test_get_message_detail_never_exposes_a_raw_identifier(client):
