@@ -10,6 +10,101 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — Corrections factuelles sur `repartition-sprint2.md` (revue d'OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/repartition-sprint2.md`
+**Lot :** Sprint 2, PR #73
+
+### Fait
+- **§6 (approbateurs requis) corrigé** : vérifié sur les chemins réels
+  touchés (`gh pr diff --name-only`) contre `.github/CODEOWNERS` — 4 des
+  5 PR exigent **Paul spécifiquement** (owner unique hors auteur sur
+  `docs/`/`.github/`), pas « Paul ou Oswin » ; #59 exige **les deux**
+  (chemins disjoints `.github/`+`docs/` vs `dashboard/`).
+- **§5 (compte des issues d'Oswin non bloquées) corrigé** : 7 issues/21 pts,
+  pas 5/15 — US-211 et US-212 avaient été omises.
+- **§5 (règle citée) corrigée** : ce n'est pas la règle anti-dépendance
+  intra-sprint qui s'applique à US-103 → US-213 (US-103 est en S1), mais
+  la DoR (dépendance non close).
+- **§4 (dépendance US-109 manquante)** : listée dans la colonne
+  « Dépend de » de #27/#28/#29 mais absente de la colonne « État
+  dépendance » — ajoutée (🟡, PR #74 en attente).
+- **§2 (jalons)** : précisé que J2/J3/J4 sont aussi dépassés au 25/09, pas
+  seulement J1, et que J5 (28/09) tombe 3 jours après la rédaction — risque
+  pour US-223 signalé.
+- **Convention de noms** ajoutée en tête de document (Oswin = OswinFreyr =
+  Tanguy, choix explicite plutôt qu'un mélange avec `CODEOWNERS`).
+- **US-205 : dépendance sur crypto (203) rendue explicite** (« génère un
+  keypair » dans les critères d'acceptation de #19) plutôt que
+  « probablement ».
+- **Mise à jour de contenu (pas une simple correction de revue)** : le
+  Spike C (US-103) a été exécuté intégralement le 28/09 depuis la
+  rédaction de ce document — §5 mis à jour en conséquence, US-213 n'est
+  plus bloquée que par US-109.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #73 : « rien de bloquant sur la
+  répartition elle-même », mais plusieurs erreurs factuelles à corriger
+  avant merge, toutes vérifiées indépendamment (recoupement GitHub) avant
+  correction.
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Toutes les corrections du round de revue sont faites. Le document reste
+  ouvert à validation par Paul et Oswin (§3, point de friction `sync::`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh pr diff 59 --repo G1TS23/dengon --name-only   # + 60, 63, 66
+(vérifié : chemins touchés recoupés avec .github/CODEOWNERS)
+
+$ gh issue view 27/28/29 --repo G1TS23/dengon --json body -q '.body' | grep Dépend
+(confirmé : US-109 listée comme dépendance sur les 3 issues)
+```
+
+---
+
+## 2026-09-25 — Répartition Sprint 2 entre Paul, Oswin et Olivier
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/repartition-sprint2.md` (nouveau), assignation
+GitHub des 24 issues `sprint:s2`
+**Lot :** planification, pas de code
+
+### Fait
+- Extrait et croisé les 24 issues Sprint 2 (points, dépendances, jalons) :
+  80 points au total, dont **42 concentrés sur `core-rust` seul**, tous
+  `Must`/jalon J1 (déjà 7 jours de retard).
+- Décidé de répartir `core-rust` entre les 3 personnes plutôt que de le
+  laisser au seul CODEOWNER de `/crates/` (Paul) — injouable sinon.
+- Répartition posée : Paul (crypto/identity/sync routing+inventory/firmware,
+  26 pts), Oswin (Android/protocole L2-L3/sync status+courier/sim, 26 pts),
+  Olivier (dashboard/stockage+observabilité/docs, 28 pts).
+- Détail complet, y compris le raisonnement et les dépendances issue par
+  issue, dans `docs/suivi/repartition-sprint2.md`.
+
+### Pourquoi / décisions
+- `sync::routing`/`inventory` (Paul) et `sync::status`/`courier` (Oswin)
+  sont coupés entre deux personnes alors que les 4 modules s'articulent
+  étroitement — friction identifiée et documentée, **à trancher en réunion**
+  avant que chacun parte de son côté (voir le document, §3).
+- US-213 (Android, Oswin) dépend formellement de US-103, qui n'est
+  toujours pas close (voir entrée précédente du 25/09) — bloqueur transverse
+  documenté, pas caché.
+
+### Écarts vs conception
+- Aucun — décision de process, pas de conception technique.
+
+### État après cette session
+- Issues assignées sur GitHub. **À valider par Paul et Oswin**, notamment le
+  point de friction `sync::` — ce n'est pas une décision unilatérale
+  définitive.
+
+---
+
 ## 2026-09-28 — US-112 : revue round 6 d'OswinFreyr sur la PR #66 + journal reconstruit après conflit avec `main`
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
