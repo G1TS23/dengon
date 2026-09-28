@@ -289,6 +289,25 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
   `~/.gradle/caches/modules-2` avant de relancer `./gradlew
   --write-verification-metadata sha256 clean assembleDebug
   testDebugUnitTest assembleRelease` — voir `04-apprentissages.md`.
+- **`aapt2` (et tout artefact avec classifier `os`/`arch`) : le checksum
+  manque toujours pour les plateformes autres que celle qui a régénéré le
+  fichier.** `--write-verification-metadata` ne consigne que ce qui est
+  **résolu sur la machine qui le lance** — `aapt2-<version>-osx.jar`,
+  `-linux.jar`, `-windows.jar` sont trois artefacts Maven distincts, pas des
+  variantes d'un seul. La procédure « vider `~/.gradle/caches/modules-2` +
+  régénérer » ci-dessus (issue de la PR #56, faite sur macOS) n'a donc
+  produit que le checksum `osx` : le fichier restait sans checksum Linux
+  (seul `windows` existait déjà avant #56, origine inconnue) — cassé au premier clone frais sur
+  Linux/CI (retour de revue #72, round 1, point d'OswinFreyr : **ce piège
+  reviendra à chaque montée de version d'AGP** tant que personne ne le
+  documente). Pas de parade générique côté Gradle : pour chaque classifier
+  qu'on n'a pas la machine pour régénérer soi-même, télécharger le jar
+  officiel depuis `dl.google.com/android/maven2/...` et calculer
+  `sha256sum` à la main (c'est ce qui a été fait pour Linux, voir
+  `00-journal.md`, entrée du 2026-09-28 « US-109 : retours de revue
+  d'OswinFreyr sur la PR #72 ») — ou demander à quelqu'un qui a la
+  bonne plateforme de régénérer et fournir juste sa nouvelle entrée
+  `verification-metadata.xml`.
 - **Version catalog** (`gradle/libs.versions.toml`) : corrige `kotlin:S6624`
   (« Do not hardcode version numbers ») en centralisant toutes les versions
   (AGP, Kotlin, Compose, dépendances) à un seul endroit, référencées via
