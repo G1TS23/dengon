@@ -1,13 +1,19 @@
-//! Synchronisation entre nœuds — `docs/synthese/04-architecture.md` §2.
+//! Synchronisation du maillage : ce qui circule entre voisins, et quand.
 //!
-//! Quatre sous-modules prévus au sprint 2 (répartition dans
-//! `docs/suivi/repartition-sprint2.md` §3) :
+//! Référence : `docs/synthese/04-architecture.md` §2 (« `sync` : routage
+//! (flood + TTL + jitter + clamp densité + quotas), réconciliation par échange
+//! d'inventaire, rejeu d'outbox, machine à états des statuts, collecte
+//! d'enveloppes »). Répartition dans `docs/suivi/repartition-sprint2.md` §3.
 //!
-//! - `routing` — **si** un paquet est relayé (TTL, dedup, anti-inondation) — US-209 ;
-//! - `inventory` — **quoi** échanger entre deux pairs qui se rencontrent — US-210 ;
-//! - [`status`] — cycle de vie d'un message émis + outbox persistante — US-211 ;
-//! - `courier` — dépôt / collecte d'enveloppes scellées — US-212.
+//! | Sous-module | US | Rôle |
+//! |---|---|---|
+//! | [`routing`] | US-209 | **si**, **quand** et **vers qui** un paquet reçu est relayé |
+//! | `inventory` | US-210 | **quoi** échanger avec un pair qui arrive |
+//! | [`status`] | US-211 | cycle de vie d'un message émis + outbox persistante |
+//! | `courier` | US-212 | dépôt / collecte des enveloppes scellées |
 //!
-//! Tout le module reste compilable en `no_std` + `alloc` (cible ESP32).
+//! Tout `sync` reste compilable en `no_std` + `alloc` (cible ESP32) : aucune
+//! I/O, ni horloge, ni aléa système. L'appelant fournit l'heure et la graine.
 
+pub mod routing;
 pub mod status;

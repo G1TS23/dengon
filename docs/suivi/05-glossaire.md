@@ -15,6 +15,10 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Déduplication / seen-set** | Mémoire des messages déjà vus (par leur `msgID`) pour ne pas les relayer en boucle. |
 | **Jitter de relais** | Petit délai aléatoire avant de relayer, pour que les doublons s'annulent. |
 | **Flood contrôlé** | Diffusion à tous les voisins, mais bornée par TTL + dedup + budget. |
+| **Sans-IO** (*sans-IO*) | Code qui décide sans faire lui-même d'entrée/sortie : l'appelant lui passe l'heure, les paquets, la graine, et exécute ses décisions. Cas de `sync::routing`. |
+| **Anti-inondation** | Plafond de nouveaux `msgID` acceptés par voisin et par minute (`FLOOD_MAX_PER_MIN_PEER = 20`) : un voisin qui inonde est ignoré jusqu'à ce que son débit retombe. |
+| **Clamp de densité** | Avec 6 voisins ou plus, le TTL relayé est plafonné à 5 : en zone dense, pas besoin d'aller loin. |
+| **Tempête de diffusion** (*broadcast storm*) | Saturation d'un réseau quand chaque nœud rediffuse tout ; combattue par le jitter + l'abandon sur doublons. |
 | **peerID** | Identifiant court (8 octets) d'un nœud = début du hash de sa clé publique. Stable, pseudonyme. |
 | **msgID** | Identifiant d'un paquet = hash de son contenu. Sert à dédupliquer et à suivre. |
 | **msg_uuid** | Identifiant d'un **message applicatif**, stable de bout en bout (le `msgID` peut changer si le paquet est re-scellé). |

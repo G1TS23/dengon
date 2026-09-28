@@ -977,3 +977,71 @@ le blob, en-tête compris, et vérifie le refus.
 **Où c'est utilisé :** `crates/dengon-core/src/identity/vault.rs:74`.
 **Pour aller plus loin :** RFC 8439 §2.8 ; draft-irtf-cfrg-xchacha
 (nonce de 24 octets, sûr en tirage aléatoire).
+---
+
+### Routeur « sans I/O » (*sans-IO*) : l'heure et l'aléa en arguments
+
+**C'est quoi :** écrire une logique réseau comme une machine à états pure :
+elle reçoit des événements (« paquet reçu à t »), rend des décisions
+(« relayer à t + 57 ms »), et n'appelle jamais elle-même la radio, l'horloge
+ou un générateur aléatoire système.
+**Pourquoi dans dengon :** le même routeur doit tourner sur Android, sur PC
+et sur l'ESP32 (`no_std`), et être testé sans radio. Passer `now_ms` en
+argument et la graine au constructeur rend chaque test **rejouable** à
+l'identique — c'est un critère d'acceptation de l'US-209.
+**Piège / surprise :** le « délai aléatoire avant relais » ne peut pas être
+un `sleep`. Il faut le couper en deux : `on_packet` *programme* le relais,
+`poll_due(now)` le rend quand il est échu. C'est aussi ce qui permet
+d'annuler un relais si des doublons arrivent entre-temps.
+**Où c'est utilisé :** `crates/dengon-core/src/sync/routing.rs:337` et `:364`.
+**Pour aller plus loin :** <https://sans-io.readthedocs.io/>
+
+---
+
+### Tempête de diffusion : pourquoi « abandonner au premier doublon » peut empêcher la livraison
+
+**C'est quoi :** en flood, chaque nœud rediffuse tout ce qu'il reçoit ; en
+zone dense, ça sature (*broadcast storm*). Parade classique : attendre un
+délai aléatoire et renoncer si on entend assez de voisins rediffuser le même
+paquet (schéma « à compteur »).
+**Pourquoi dans dengon :** c'est le « écouter avant de rediffuser » de
+`synthese/05` §6.1.
+**Piège / surprise :** avec un seuil de **1** doublon, un nœud qui entend le
+paquet par deux chemins renonce — même si c'est le seul à pouvoir servir un
+voisin plus loin. Mesuré sur un losange A→{B,C}→D→E : E ne reçoit rien.
+Seuil passé à 2 (écart consigné).
+**Où c'est utilisé :** `crates/dengon-core/src/sync/routing.rs:87`,
+`crates/dengon-core/tests/routing_mock.rs` (`seuil_litteral_affame_le_losange`).
+**Pour aller plus loin :** Ni, Tseng, Chen, Sheu, *The broadcast storm
+problem in a mobile ad hoc network*, MobiCom 1999.
+
+---
+
+### Cargo accepte un cycle de dépendances s'il ne passe que par les dev-dependencies
+
+**C'est quoi :** `dengon-ble` dépend de `dengon-core` ; `dengon-core` peut
+malgré tout déclarer `dengon-ble` en `[dev-dependencies]`. Les tests
+d'intégration (`tests/*.rs`) sont des crates à part qui lient la même
+bibliothèque `dengon-core` que `dengon-ble` : les types sont compatibles.
+**Pourquoi dans dengon :** tester `sync::routing` contre le vrai
+`MockTransport` sans le recopier.
+**Piège / surprise :** ça ne marche **pas** depuis les tests unitaires
+(`#[cfg(test)]` dans `src/`) : là, `dengon-core` est recompilé en mode test
+et ses types diffèrent de ceux que voit `dengon-ble`. D'où le fichier séparé
+`tests/routing_mock.rs`.
+**Où c'est utilisé :** `crates/dengon-core/Cargo.toml` (`[dev-dependencies]`).
+
+---
+
+### SplitMix64 : un PRNG de 10 lignes pour du `no_std` déterministe
+
+**C'est quoi :** générateur pseudo-aléatoire à 64 bits d'état (Steele, Lea,
+Flood 2014) : une addition d'une constante puis trois mélanges xor-shift /
+multiplication. Rapide, bonne qualité statistique, **pas** cryptographique.
+**Pourquoi dans dengon :** tirer le jitter de relais sans ajouter la crate
+`rand` à `dengon-core` (cible ESP32) et en restant reproductible à graine
+fixe.
+**Piège / surprise :** vérifier l'implémentation contre les sorties de
+référence (graine 0 → `0xE220A8397B1DCDAF`), sinon une faute de frappe dans
+une constante passe inaperçue.
+**Où c'est utilisé :** `crates/dengon-core/src/sync/routing.rs:616`.
