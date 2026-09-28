@@ -10,6 +10,45 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — Retour de revue #84 : dédoublonnage de l'index des modules
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/modules/_index.md`, `docs/suivi/00-journal.md`
+**Lot :** US-211 (#25), sprint 2 — suite de la revue de la PR #84
+
+### Fait
+- Suppression des lignes `dengon-core` (« esquisse », 2026-09-09) et
+  `dengon-ble` (« esquisse », 2026-09-09) de l'index : doublons issus d'un
+  merge antérieur, qui contredisaient les lignes à jour (« partiel
+  (`protocol` + `sync::status`) » et « contrat gelé (US-105) »).
+- Même artefact de merge nettoyé ailleurs dans le fichier : phrase
+  d'introduction dupliquée (et devenue fausse : « les six crates sont à
+  l'état esquisse »), ligne `dashboard-web` sortie du tableau, paragraphes
+  « Pas encore de fiche » obsolètes (chaque composant a désormais sa fiche).
+
+### Pourquoi / décisions
+- Le reviewer (G1TS23) a signalé le doublon `dengon-core` ; le doublon
+  `dengon-ble` et le reste du fichier avaient la même cause, corrigés dans le
+  même passage pour que l'index soit fiable pour la présentation orale.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rien de nouveau
+
+### État après cette session
+- Index des modules : une ligne par module, sans statut contradictoire.
+- 01-etat-du-code.md mis à jour : non (aucun changement de code)
+
+### Vérification (commandes réellement exécutées)
+```
+$ grep -n "dengon-core\|dengon-ble" docs/suivi/modules/_index.md
+une seule ligne par module
+```
+
+---
+
 ## 2026-09-28 — US-211 : `sync::status` — machine à états MVP (sans `READ`), outbox persistante, rejeu
 
 **Auteur :** Oswin + Claude (Opus 5.5)
