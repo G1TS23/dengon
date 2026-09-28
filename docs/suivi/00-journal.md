@@ -10,6 +10,62 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-224 : rebase de la PR #97 + 4 findings SonarCloud corrigés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/Dockerfile`, `docs/suivi/modules/deploiement-vps.md`.
+**Lot :** suite de l'US-224 (issue #38), PR #97.
+
+### Fait
+- Rebase de `feat/US-224-deploy-vps` sur `main` (après le merge de #84,
+  US-211) — sans conflit, `merge=union` a même dédupliqué au passage les
+  lignes de `docs/suivi/modules/_index.md`.
+- SonarCloud a fait échouer le Quality Gate de la PR (« C Security Rating
+  on New Code »), 4 findings sur `dashboard/api/Dockerfile` — tous corrigés :
+  - `docker:S6471` (ligne 8) : image `python` tournant root par défaut →
+    utilisateur `app` dédié, `USER app` juste avant `CMD`.
+  - `docker:S8541` ×2 (lignes 13, 21) : `pip install`/`uv sync` sans forcer
+    les wheels → `--only-binary :all:` et `--no-build` respectivement,
+    empêchant l'exécution d'un `setup.py` arbitraire depuis une sdist.
+  - `docker:S6597` (ligne 21) : `cd` préféré à `WORKDIR`.
+- **Piège rencontré en redéployant sur le VPS réel** : le volume
+  `dengon_api_db` existant appartenait à `root` (créé par l'ancien conteneur
+  root) — le nouveau conteneur non-root ne pouvait plus y écrire
+  (`attempt to write a readonly database`). Résolu en relançant
+  `purge-demo.sh` : le volume recréé hérite des permissions posées dans
+  l'image (`app`). Confirme que le script de purge sert aussi de procédure
+  de récupération pour ce genre de migration de permissions.
+- Re-vérifié en HTTPS externe après correctif : `/healthz` (200),
+  `POST /ingest/batch` (202).
+
+### Écarts vs conception
+- Aucun nouveau — les 2 écarts déjà consignés pour l'US-224 tiennent
+  toujours.
+
+### État après cette session
+- Les 4 findings SonarCloud sont corrigés, image reconstruite et
+  redéployée avec succès sur le VPS réel.
+- Reste à vérifier : le nouveau run SonarCloud sur la PR #97 (Quality Gate
+  devrait repasser au vert).
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker build -f dashboard/api/Dockerfile -t dengon-dashboard-api:sonar-fix .
+[...] réussi
+
+$ docker run ... dengon-dashboard-api:sonar-fix && docker exec ... whoami
+app
+
+$ ssh dengon-vps "cd ~/dengon/dashboard/deploy && docker compose up -d --build"
+[...]
+$ curl -sk https://51.255.38.214:8443/healthz
+HTTP 502   # volume root, attendu (voir Piège ci-dessus)
+
+$ ssh dengon-vps "cd ~/dengon/dashboard/deploy && ./purge-demo.sh"
+$ curl -sk https://51.255.38.214:8443/healthz
+{"status":"ok"}   # HTTP 200, corrigé
+```
+
 ## 2026-09-28 — US-211 : rebase de la PR #84 sur `main` (après #76, #78, #80, #81, #82, #83)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

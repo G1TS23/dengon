@@ -127,6 +127,18 @@ En session de démo, avant de commencer : `ssh vps "cd ~/dengon/dashboard/deploy
   régénérerait le certificat auto-signé à chaque purge, ce qui obligerait à
   re-valider le certificat dans le navigateur à chaque session de démo —
   coût sans bénéfice, seule la base applicative doit repartir de zéro.
+- **Utilisateur non-root dans l'image `api`** (`USER app`, retour de revue
+  SonarCloud — 4 findings sur `dashboard/api/Dockerfile` : image `python`
+  tournant root par défaut, deux `uv`/`pip install` sans forcer les wheels
+  seules, un `cd` préféré à `WORKDIR`). Tous corrigés : `--only-binary
+  :all:`/`--no-build` sur les deux installs, `WORKDIR` partout, utilisateur
+  `app` dédié activé juste avant `CMD`. **Piège rencontré en le redéployant** :
+  le volume `dengon_api_db` existant (créé par l'ancien conteneur, root)
+  restait la propriété de `root` — `sqlite3.OperationalError: attempt to
+  write a readonly database` au démarrage du conteneur non-root. Corrigé en
+  relançant `purge-demo.sh` (le volume est recréé, donc hérite des
+  permissions `app` posées dans l'image) — la bonne réaction est déjà le
+  script existant, pas un nouveau outil.
 
 ## Tests
 
@@ -140,6 +152,13 @@ En session de démo, avant de commencer : `ssh vps "cd ~/dengon/dashboard/deploy
   - Testé avec `openssl s_client` en plus de `curl`, ce qui a permis
     d'isoler le bug `default_sni` (voir Décisions) — `curl`/LibreSSL seul
     aurait laissé penser à un problème de certificat.
+  - Re-déployé après les correctifs SonarCloud (utilisateur non-root) :
+    `/healthz` (200) et `POST /ingest/batch` (202) re-vérifiés en HTTPS
+    externe après `purge-demo.sh` (nécessaire pour le volume, voir
+    Décisions).
+- **SonarCloud** : Quality Gate passait au rouge sur la PR (« C Security
+  Rating on New Code », 4 findings sur `dashboard/api/Dockerfile`) — les 4
+  corrigés (voir Décisions), ré-analyse à vérifier sur la PR.
 - **`deploy-vps.yml` pas encore exécuté depuis GitHub Actions** au moment de
   cette entrée (secrets de l'environment `vps-prod` à configurer — voir
   Limites) ; la procédure manuelle ci-dessus est celle que le workflow
