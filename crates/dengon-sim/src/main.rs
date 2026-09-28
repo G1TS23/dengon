@@ -1,12 +1,17 @@
 //! Point d'entrée du simulateur.
 //!
-//! Invocation visée : `dengon-sim crates/dengon-sim/scenarios/direct.ron`.
-//! La lecture des scénarios (`ron`) arrive avec P1.12.
+//! `dengon-sim [--graine N] crates/dengon-sim/scenarios/*.ron`
+//! — toute la logique est dans [`dengon_sim::cli`], testée.
 
-fn main() {
-    println!(
-        "dengon-sim {} — squelette (graine {:#x})",
-        env!("CARGO_PKG_VERSION"),
-        dengon_sim::SEED_PAR_DEFAUT
-    );
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let sortie = dengon_sim::cli::executer(&args);
+    print!("{}", sortie.texte);
+    if sortie.succes {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }

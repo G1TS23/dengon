@@ -634,6 +634,39 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-28 — `dengon-sim` : les nœuds simulés exécutent un relais de démonstration, pas `dengon-core` (US-221)
+
+- **Prévu :** `docs/synthese/10` §4.3 — « N instances de `dengon-core` reliées
+  par un `Transport` en mémoire ».
+- **Réel :** le harness fait tourner des nœuds dont le comportement est
+  **injecté** (`trait Comportement`) ; les scénarios utilisent `Inondation`,
+  un relais naïf (dédup par contenu, re-diffusion, poussée de tout le connu à
+  chaque connexion). Ni TTL, ni signature, ni inventaire.
+- **Raison :** `dengon-core` n'a pas encore de nœud exécutable : `sync::routing`
+  (US-209) et la façade `api` (US-301) n'existent pas. Le réseau simulé, lui,
+  est complet et conforme au contrat `Transport`.
+- **Conséquences :** les scénarios livrés valident le **réseau simulé** et le
+  harness, pas le protocole. Brancher le vrai nœud = implémenter
+  `Comportement` pour lui, sans toucher au harness.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `dengon-sim` : sous-ensemble du modèle réseau et des scénarios de §4.3 (US-221)
+
+- **Prévu :** `docs/synthese/10` §4.3 — modèle avec latence, perte, **bande
+  passante**, partition, **churn**, **horloges désynchronisées** ; 9 scénarios
+  dans `sim/scenarios/*.ron`.
+- **Réel :** latence, gigue, perte, partition, retrait/ajout d'arête ; 4
+  scénarios (`direct`, `multihop`, `partition_merge`, `lossy_mesh`) dans
+  `crates/dengon-sim/scenarios/`.
+- **Raison :** US-221 demande latence, perte et partition. Les autres
+  scénarios (`recipient_offline`, `flood`, `tamper`…) testent le protocole et
+  attendent le vrai nœud (entrée précédente). Le dossier `scenarios/` du crate
+  existait depuis US-104.
+- **Conséquences :** bande passante, churn et dérive d'horloge à ajouter avec
+  les scénarios qui en ont besoin.
+- **Doc de conception mise à jour ?** non.
 ### `store` : clé de chiffrement différée derrière un trait `KeySource` (US-207)
 
 - **Conception :** `04-architecture.md` §2 dit `store : persistance ...
