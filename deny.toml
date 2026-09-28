@@ -1,0 +1,104 @@
+# ---------------------------------------------------------------------------
+# cargo-deny — configuration du job CI `audit` (US-222).
+#
+# Deux outils, deux rôles, tous deux **bloquants** :
+#   cargo audit  — avis RUSTSEC sur les versions du Cargo.lock ;
+#   cargo deny   — licences, provenance des sources, doublons de version, et
+#                  les mêmes avis relus depuis le lock.
+#
+# Le job tourne sur PR **et** en cron quotidien : une vulnérabilité paraît
+# sans que le dépôt bouge, donc un contrôle uniquement déclenché par les PR
+# laisserait passer des semaines sur une branche stable.
+#
+# Choix assumé : bloquant dès le premier jour. Un check requis qui ne bloque
+# jamais n'est pas un check, c'est un rapport que personne ne lit. La soupape
+# est `[advisories].ignore`, qui exige un identifiant RUSTSEC nommé, daté et
+# justifié — jamais un `continue-on-error` global.
+# ---------------------------------------------------------------------------
+
+[graph]
+# Les cibles réellement visées : hôte Linux (CI, dashboard, dengon-node),
+# Android (dengon-ffi). Restreindre évite de faire échouer l'audit sur des
+# dépendances Windows/macOS que ce projet ne construit jamais.
+targets = [
+    { triple = "x86_64-unknown-linux-gnu" },
+    { triple = "aarch64-linux-android" },
+]
+all-features = true
+
+[advisories]
+# Une version *yanked* veut dire que l'auteur l'a retirée — souvent pour une
+# raison qui nous concerne. On refuse plutôt que d'avertir.
+yanked = "deny"
+# Exceptions : une ligne = un RUSTSEC, avec la date et la raison. Toute
+# entrée ici est une dette, pas un classement sans suite.
+ignore = [
+    # RUSTSEC-2024-0436 — `paste` n'est plus maintenu (dépôt archivé).
+    # Constaté le 28/09/2026 par le premier `cargo deny` du projet.
+    #
+    # Ce n'est PAS une vulnérabilité : c'est une macro procédurale de
+    # concaténation d'identifiants, qui ne tourne qu'à la compilation et ne
+    # touche ni le réseau ni les données. L'avis ne propose d'ailleurs aucune
+    # mise à jour sûre.
+    #
+    # Elle arrive en transitif par `uniffi 0.28.3` (uniffi_core et
+    # uniffi_bindgen), version épinglée à l'exact `=0.28.3` parce que les
+    # bindings Kotlin générés doivent correspondre au runtime embarqué dans
+    # l'APK. La lever demande une montée de version d'uniffi, donc une
+    # régénération des bindings Android : hors périmètre de l'US-222, et
+    # inopportun au milieu du sprint Android (US-213/214/215).
+    #
+    # À rouvrir au moment de la prochaine montée d'uniffi.
+    "RUSTSEC-2024-0436",
+
+    # RUSTSEC-2025-0141 — `bincode` 1.3.3 n'est plus maintenu.
+    # Constaté le 28/09/2026, même famille que l'entrée ci-dessus : arrive par
+    # `uniffi_macros 0.28.3`, donc par le même épinglage `=0.28.3`, et se
+    # lèvera par la même montée de version. Pas de vulnérabilité annoncée ;
+    # sérialisation interne aux macros de génération de bindings, jamais
+    # exposée à une entrée réseau de dengon.
+    "RUSTSEC-2025-0141",
+]
+
+[licenses]
+# Liste tenue au plus juste : une licence non listée fait échouer le job,
+# c'est voulu. Ajouter une entrée = une décision, pas un réflexe. Elle est
+# calée sur `[graph].targets` : les licences qui n'apparaissent que sur des
+# cibles qu'on ne construit pas (wasi…) n'y figurent PAS, et cargo-deny
+# signalerait une entrée inutile (`license-not-encountered`).
+allow = [
+    "Apache-2.0",
+    "BSD-2-Clause",              # zerocopy
+    "BSD-3-Clause",              # curve25519-dalek, ed25519-dalek, subtle
+    "MIT",
+    # MPL-2.0 : copyleft de FICHIER, pas de projet. uniffi (0.28.3) est la
+    # seule dépendance concernée ; on l'utilise sans modifier ses sources,
+    # donc rien à publier en retour. À revoir si on la forkait un jour.
+    "MPL-2.0",
+    "Unicode-3.0",               # unicode-ident
+    "Unlicense",                 # memchr (aussi MIT)
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# Nos sept crates sont `publish = false` et n'ont pas de champ `license` : la
+# licence du projet n'est pas tranchée (docs/synthese/01-sujets-a-trancher.md).
+# Sans cette ligne, cargo-deny les compterait comme « unlicensed ».
+ignore = true
+
+[bans]
+# Deux versions de la même crate, c'est du poids binaire — sur ESP32 ça
+# compte. Mais c'est très courant en transitif et ça ne se corrige pas
+# toujours : on avertit, on ne bloque pas.
+multiple-versions = "warn"
+# Une dépendance en `"*"` rendrait le build non reproductible, ce que les
+# jobs `audit` et `cross-vectors` supposent tous les deux.
+wildcards = "deny"
+
+[sources]
+# Tout doit venir de crates.io. Un dépôt git non déclaré dans l'arbre de
+# dépendances est exactement la forme que prend une compromission de chaîne
+# d'approvisionnement.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
