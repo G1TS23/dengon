@@ -5241,6 +5241,59 @@ $ cargo doc -p dengon-core --no-deps
 ```
 
 ---
+## 2026-09-28 — US-223 : brouillon du rapport écrit (plan + problème/état de l'art/conception), en anticipation du Sprint 2
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/rapport/` (nouveau dossier)
+**Lot :** US-223 (issue #37), area `docs`
+
+### Fait
+- Créé `docs/rapport/` : `README.md` (contexte, statut de chaque fichier),
+  `00-plan.md` (plan détaillé du rapport complet, y compris les sections qui
+  ne pourront être écrites qu'en fin de projet), `01-probleme.md`,
+  `02-etat-de-lart.md`, `03-conception.md`.
+- Les trois sections rédigées synthétisent, sans les recopier telles quelles,
+  `docs/synthese/02-probleme-et-besoins.md`, `03-etat-de-lart.md` et
+  `04-architecture.md` à `09-dashboard-et-donnees.md` — uniquement des
+  décisions déjà **tranchées** dans `docs/synthese/00-contexte-global.md`,
+  conformément au contexte de l'US (« rédiger tôt ce qui ne dépend pas des
+  résultats »).
+- Vérifié à la main que tous les liens internes (vers les autres fichiers de
+  `docs/rapport/`, vers `docs/synthese/`, et les ancres de section) résolvent
+  bien — critère d'acceptation explicite de l'US.
+
+### Pourquoi / décisions
+- Demande explicite de l'utilisateur : prendre de l'avance sur cette US avant
+  la fin effective du Sprint 2, sans attendre que toutes les issues du sprint
+  soient closes.
+- Dossier `docs/rapport/` distinct de `docs/synthese/` (conception interne) et
+  de `docs/suivi/` (état réel du code) : c'est le texte destiné au lecteur
+  externe (jury/enseignant), pas une note de travail d'équipe.
+- Sections 5 à 8 du plan (réalisation, recette, difficultés, conclusion)
+  explicitement laissées **non rédigées** : elles dépendent de faits qui
+  n'existent pas encore (code réellement livré, recette US-314) — les écrire
+  maintenant serait de la spéculation, contraire à la règle « rester factuel »
+  de ce dépôt.
+
+### Écarts vs conception
+- Aucun — ce travail ne touche pas au code applicatif, uniquement à la
+  documentation destinée au rapport.
+
+### Appris
+- Rien de nouveau côté technique ; confirmation que `docs/synthese/` est
+  suffisamment mûr (toutes les décisions citées y sont déjà marquées
+  « tranché ») pour rédiger ces trois sections sans attendre la fin du
+  développement.
+
+### État après cette session
+- **Deux critères d'acceptation de l'US-223 restent ouverts et ne peuvent pas
+  être satisfaits par une seule personne** : « plan détaillé validé en
+  équipe » et « relu par une autre personne ». Ce brouillon n'est donc **pas**
+  suffisant pour clore l'issue #37 — il l'anticipe, il ne la termine pas.
+- Fiche(s) module mise(s) à jour : pas de fiche `modules/` créée (le dossier
+  `docs/rapport/` n'est pas un composant logiciel) ; ligne ajoutée dans
+  `02-avancement.md` (« Rapport écrit (US-223) », ~60 %).
+- `01-etat-du-code.md` mis à jour : non (pas de changement d'état du code).
 
 ## 2026-09-28 — Nettoyage post-merge : retours de revue arrivés après le merge de #60 et #63
 

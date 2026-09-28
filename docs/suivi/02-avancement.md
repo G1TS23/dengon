@@ -49,6 +49,8 @@
 | Dashboard `web` | page légère + SSE (A-5) | **branché sur l'API réelle** (US-219) : liste + détail (timeline des sauts) alimentés par `GET /api/messages*`, rafraîchissement automatique via `GET /api/stream` (SSE) + **écran d'intégrité** (`#/integrite`, US-310, PR #106) sur `GET /api/integrity`, verdicts colorés. Rendu à 360 px vérifié à l'US-111 (2026-09-25), pas revérifié dans un navigateur pour US-219 ni après le rebase US-310 (écart consigné). **US-311** (PR #112) : écrans Réseau (carte SVG) et Flotte de relais + alerte `relay_silent`, vérifiés à 360 px avant rebase | 65 % | [dashboard-web](modules/dashboard-web.md) |
 | Contrats (`contracts/`) | schémas d'événements + fixtures golden | — | 0 % | — |
 | Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | **fait (US-224)** : `dashboard/api` déployé et vérifié sur le VPS réel du groupe derrière Caddy (`tls internal`, ports 8080/8443 — VPS partagé, 80/443 déjà occupés hors de notre contrôle), `/healthz` joignable en HTTPS depuis l'extérieur, script de purge, workflow manuel `deploy-vps.yml` (secrets GitHub pas encore configurés) | 90 % | [deploiement-vps](modules/deploiement-vps.md) |
+| Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | — | 0 % | — |
+| Rapport écrit (US-223) | plan détaillé + sections problème / état de l'art / conception | brouillon en anticipation du Sprint 2 : plan détaillé (`docs/rapport/00-plan.md`) et les trois sections rédigées à partir des décisions déjà tranchées de `docs/synthese/`. **Pas encore validé en équipe, pas encore relu par une autre personne** (deux critères d'acceptation de l'US-223 restent ouverts) | ~60 % (rédaction faite, validation/relecture restantes) | [`docs/rapport/`](../rapport/README.md) |
 
 ## Outillage et processus
 
