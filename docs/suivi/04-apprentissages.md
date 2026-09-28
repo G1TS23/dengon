@@ -139,6 +139,24 @@ tardif.
 **Où c'est utilisé :** `crates/dengon-core/src/protocol/fragment/tests.rs`
 (`reassemblage_mtu_et_ordre_aleatoires`).
 **Pour aller plus loin :** <https://proptest-rs.github.io/proptest/proptest/tutorial/shrinking-basics.html>
+### Un QR code peut être valide et pourtant indétectable
+
+**C'est quoi :** un lecteur de QR fait deux choses : **détecter** le code dans
+l'image (les trois carrés de repérage) puis **décoder** les modules. Le
+contenu est brouillé par un **masque** (8 possibles) choisi par l'encodeur
+pour éviter les motifs gênants.
+**Pourquoi dans dengon :** l'appairage repose sur le scan caméra du QR de
+l'autre. Un QR que le détecteur ne trouve pas bloque l'appairage.
+**Piège / surprise :** le QR de l'identité de test « alice », généré par
+ZXing avec son masque par défaut, se décodait en mode « image pure » (données
+justes) mais n'était **jamais détecté** — à toute échelle, même en
+`TRY_HARDER` —, alors que ceux de « bob » ou « Élodie » passaient. Le défaut
+dépend du contenu : un test sur un seul exemple ne l'aurait pas vu.
+Correctif : vérifier la relecture par détection juste après l'encodage et
+changer de masque si besoin, plus un balayage de 300 identités en test.
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ui/appairage/QrCode.kt`
+(`matriceQr`, `seRelitParDetection`).
+**Pour aller plus loin :** ISO/IEC 18004 (masques et évaluation des pénalités).
 
 ---
 

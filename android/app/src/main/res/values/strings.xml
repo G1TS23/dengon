@@ -10,4 +10,27 @@
     <string name="permissions_denied">Permissions refusées : le maillage BLE ne peut pas démarrer.</string>
     <string name="mesh_status_running">Service de fond : actif</string>
     <string name="mesh_status_stopped">Service de fond : arrêté</string>
+
+    <!-- US-215 : appairage par QR + code de vérification 60 chiffres. -->
+    <string name="appairage_ouvrir">Ajouter un contact (QR)</string>
+    <string name="appairage_titre">Ajouter un contact</string>
+    <string name="appairage_retour">Retour</string>
+    <string name="appairage_mon_qr">Mon QR : %1$s</string>
+    <string name="appairage_mon_qr_description">QR code de mon identité dengon</string>
+    <string name="appairage_consigne">Faites scanner ce QR par votre correspondant, puis scannez le sien.</string>
+    <string name="appairage_scanner">Scanner le QR de mon correspondant</string>
+    <string name="appairage_scan_invite">Visez le QR affiché sur l\'autre téléphone</string>
+    <string name="appairage_comparer">Comparez ce code avec celui affiché sur le téléphone de %1$s :</string>
+    <string name="appairage_lecture_croisee">Lisez-le à voix haute, groupe par groupe, en regardant l\'autre écran. Les 60 chiffres doivent être identiques.</string>
+    <string name="appairage_codes_identiques">Les codes sont identiques</string>
+    <string name="appairage_codes_differents">Les codes sont différents</string>
+    <string name="appairage_rappel_mon_qr">%1$s ne voit pas encore ce code ? Faites-lui scanner votre QR :</string>
+    <string name="appairage_verifie">✔ %1$s est vérifié.</string>
+    <string name="appairage_refuse">Les codes de %1$s ne correspondent pas : quelqu\'un s\'est peut-être interposé. Contact non enregistré — recommencez l\'échange en personne.</string>
+    <string name="appairage_terminer">Terminé</string>
+    <string name="appairage_autre_contact">Appairer un autre contact</string>
+    <string name="appairage_contacts_verifies">Contacts vérifiés</string>
+    <string name="appairage_contact_verifie">✔ %1$s</string>
+    <string name="appairage_erreur_qr_invalide">Ce QR n\'est pas un QR dengon.</string>
+    <string name="appairage_erreur_propre_qr">C\'est votre propre QR : scannez celui de votre correspondant.</string>
 </resources>

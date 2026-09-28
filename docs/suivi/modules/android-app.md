@@ -77,12 +77,19 @@ android/
     src/main/AndroidManifest.xml
     src/main/java/com/dengon/app/
       DengonApplication.kt   — Application vide (point d'extension futur)
-      MainActivity.kt        — Compose : demande permissions, démarre/arrête le service, affiche l'état
+      MainActivity.kt        — Compose : demande permissions, démarre/arrête le service, affiche l'état,
+                               ouvre la messagerie (US-214) et l'écran d'appairage (US-215)
       ffi/                   — bouchon FFI (US-106) : DengonTypes.kt, DengonNodeStub.kt
       ui/conversations/      — messagerie (US-214)
         ConversationsViewModel.kt — état (StateFlow) + actions, alimenté par DengonNodeInterface
         ConversationsScreen.kt    — Compose : MessagerieRoute, ListeConversations, FilConversation
         LibelleStatut.kt          — statut → libellé UI (synthese/07 §1)
+      identite/
+        IdentiteLocale.kt    — identité provisoire par installation (pseudo `tel-xxxx`), US-215
+      ui/appairage/          — US-215
+        AppairageViewModel.kt — étapes de l'appairage, StateFlow, JVM pur
+        AppairageScreen.kt   — mon QR, scan caméra, code 60 chiffres, confirmation explicite
+        QrCode.kt            — matrice QR (zxing-core) garantie détectable, format du code
       ble/
         BlePermissions.kt        — liste des permissions requises selon Build.VERSION.SDK_INT
         MeshForegroundService.kt — service de fond, notification permanente, foregroundServiceType=connectedDevice
@@ -96,6 +103,9 @@ android/
       ble/BlePermissionsTest.kt  — test unitaire minimal (JVM, sans Robolectric)
       ffi/DengonNodeStubTest.kt  — bouchon FFI (11 tests)
       ui/conversations/ConversationsViewModelTest.kt — ViewModel de messagerie (9 tests)
+      ui/appairage/AppairageViewModelTest.kt — parcours, erreurs de scan, lecture croisée (US-215)
+      ui/appairage/QrCodeTest.kt          — QR rastérisé puis relu par ZXing, régression « alice »
+      identite/IdentiteLocaleTest.kt  — pas de collision de `peerId` entre pseudos `tel-xxxx`
 ```
 
 ## Concepts / types importants
@@ -419,6 +429,40 @@ directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
   2026-09-28** (2 vrais Android, 4/4 critères de l'issue #3 démontrés — voir
   « Spike C » ci-dessus). Cette puce était encore au stade « partiel » ici
   après le merge de la PR #67, corrigé au passage.
+
+## Appairage par QR + code 60 chiffres (US-215)
+
+Le scénario 1 du DoD commence ici : deux personnes vérifient qu'elles
+parlent bien l'une à l'autre, **sans serveur** (`powl/04` §2.2-2.3).
+
+1. Chacun affiche son QR (`dengon:v1:<base64url(pseudo ‖ pub_static ‖ pub_sign)>`).
+2. Chacun scanne celui de l'autre (caméra, `zxing-android-embedded`).
+3. Les deux écrans affichent le **même** code de 60 chiffres (3 lignes de 4
+   groupes) ; on le lit à voix haute et on **confirme explicitement** —
+   ou on signale une différence (possible interception).
+
+Sous le code, l'écran rappelle mon QR : l'autre téléphone doit encore le
+scanner (défaut trouvé sur appareil, voir ci-dessous).
+
+| Élément | Fichier | Rôle |
+|---|---|---|
+| `AppairageViewModel` | `ui/appairage/AppairageViewModel.kt` | État `StateFlow` ; `onQrScanne`, `confirmer`, `refuser`, `recommencer`. JVM pur. |
+| `AppairageScreen` | `ui/appairage/AppairageScreen.kt` | Affichage, lancement du scanner (`ScanContract`), boutons. |
+| `matriceQr` | `ui/appairage/QrCode.kt` | QR garanti détectable : essaie les 8 masques si besoin. |
+| `IdentiteLocale` | `identite/IdentiteLocale.kt` | Identité provisoire, pseudo aléatoire `tel-xxxx` (8 octets). |
+
+**Testé sur Pixel 8 Pro (Android 17) + Galaxy A16 (Android 16)** : lecture
+croisée caméra, codes identiques (`99083 88326 31081 93212 49943 35746 33429 06232 54259 64334 82577 91716`), contacts marqués vérifiés.
+Captures : [`../assets/us-215/`](../assets/us-215/).
+
+**Défauts trouvés en route :** QR indétectable pour certains contenus
+(corrigé par le choix du masque) ; même `peerId` pour tous les téléphones
+(pseudo `appareil-xxxx`, corrigé en `tel-xxxx`) ; mon QR masqué après mon
+scan (corrigé). Détail : `00-journal.md`, entrée US-215.
+
+**Limites :** contacts vérifiés en mémoire seulement (pas d'appel FFI
+« marquer vérifié ») ; identité et code = bouchon (vraie crypto à l'US-306) ;
+navigation minimale, à fusionner avec celle de US-214 (PR #87).
 
 ## Pour l'oral
 
