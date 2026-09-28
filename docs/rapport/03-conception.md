@@ -184,7 +184,7 @@ Pour garantir la traçabilité de ce qui se passe sur le réseau sans faire
 confiance au tableau de bord qui l'observe, chaque appareil tient son propre
 **journal chaîné signé**, directement inspiré des structures de données d'une
 blockchain sans en reprendre le mécanisme de consensus (voir la discussion
-détaillée dans la section [État de l'art](02-etat-de-lart.md#blockchain-une-analyse-critique)).
+détaillée dans la section [État de l'art](02-etat-de-lart.md#blockchain--une-analyse-critique)).
 Chaque entrée de ce journal contient l'empreinte cryptographique de l'entrée
 précédente, ce qui rend toute altération, suppression ou réordonnancement
 détectable par quiconque possède la suite du journal. Chaque appareil diffuse

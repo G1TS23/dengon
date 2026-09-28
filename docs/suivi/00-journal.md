@@ -2623,6 +2623,35 @@ $ cargo llvm-cov -p dengon-core --summary-only
   `on_mtu`. Le MTU est donc déjà sur le lien quand la découverte démarre.
 - Le second commentaire de la revue (rôle central jamais exercé contre un vrai
   pair) n'appelle pas de correctif de code : c'est l'essai 2 cartes.
+## 2026-09-28 — US-223 : correction d'une ancre cassée dans le rapport (PR #103)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/rapport/03-conception.md`
+**Lot :** US-223 (issue #37), suite de l'entrée précédente
+
+### Fait
+- Corrigé le lien `docs/rapport/03-conception.md` → `02-etat-de-lart.md`
+  vers la section « Blockchain : une analyse critique » : l'ancre écrite
+  (`#blockchain-une-analyse-critique`, un seul tiret) ne correspondait pas
+  au vrai *slug* que GitHub génère pour ce titre.
+
+### Pourquoi / décisions
+- L'entrée précédente affirmait avoir « vérifié à la main que tous les
+  liens internes … résolvent bien » — affirmation **fausse**, trouvée par
+  une revue automatisée lancée sur ce dossier (par erreur de ma part, en
+  visant la PR #105 : le dépôt local était resté sur la branche
+  `docs/US-223-rapport-ecrit`, la revue a donc porté sur son diff plutôt
+  que sur la PR #105). Cause racine : le titre « Blockchain **:** une
+  analyse critique » porte une espace **avant** le `:` (typographie
+  française) — en enlevant seulement le caractère `:`, il reste deux
+  espaces consécutives, que le *slugger* de GitHub traduit en **deux**
+  tirets (`blockchain--une-analyse-critique`), pas un.
+- **Vérifié cette fois avec l'outil réel** plutôt qu'à l'œil :
+  `npx github-slugger` (le paquet que GitHub utilise pour générer ces
+  ancres) appliqué au titre exact confirme `blockchain--une-analyse-critique`.
+  Commande :
+  `node -e "const s=require('github-slugger');console.log(new s.default().slug('Blockchain : une analyse critique'))"`
+  → `blockchain--une-analyse-critique`.
 
 ### Écarts vs conception
 - Aucun.
@@ -5241,6 +5270,18 @@ $ cargo doc -p dengon-core --no-deps
 ```
 
 ---
+- Nouvelle entrée dans `04-apprentissages.md` : les ancres GitHub ne
+  collapsent pas les espaces consécutives, donc un titre avec une espace
+  avant un `:` (convention française) produit un double tiret dans son
+  ancre — à vérifier avec l'outil, pas à l'œil.
+
+### État après cette session
+- Le critère d'acceptation « aucun renvoi vers un fichier ou une section
+  inexistante » de l'US-223 est de nouveau satisfait, cette fois vérifié
+  par un outil plutôt qu'à l'œil.
+- Fiche(s) module mise(s) à jour : aucune (pas de composant logiciel).
+- `01-etat-du-code.md` mis à jour : non.
+
 ## 2026-09-28 — US-223 : brouillon du rapport écrit (plan + problème/état de l'art/conception), en anticipation du Sprint 2
 
 **Auteur :** Claude (Sonnet 5)
