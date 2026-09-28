@@ -18,7 +18,7 @@
 | `dengon-sim` | simulateur multi-nœuds | harness N nœuds, `SimTransport` conforme au contrat `Transport`, réseau scriptable (latence, gigue, perte, partition), 4 scénarios RON déterministes, job CI `sim` (US-221). Nœuds = relais de démo, pas encore `dengon-core` | 35 % | [dengon-sim](modules/dengon-sim.md) |
 | `dengon-verify` | binaire de vérif de journal chaîné (A-5 / B-5) | squelette : enum `Verdict` (Ok/Broken/Fork/Gap) | 3 % | [dengon-verify](modules/dengon-verify.md) |
 | `dengon-ffi` | bindings UniFFI | **contrat v0 gelé** (US-106) : `dengon.udl` + scaffolding UniFFI 0.28.3, implémentation bouchon en mémoire (Rust) + bouchon Kotlin miroir. Pas branché sur `dengon-core` (US-301/US-302) | 25 % | [dengon-ffi](modules/dengon-ffi.md) |
-| App Android | Kotlin + Compose | squelette : Compose + `MeshForegroundService` (`foregroundServiceType="connectedDevice"`) + permissions BLE à l'exécution + notification permanente. Pas de vraie logique BLE (GATT). | 15 % (US-109 fait ; US-213/214/215 restent) | [android-app](modules/android-app.md) |
+| App Android | Kotlin + Compose | squelette : Compose + `MeshForegroundService` (`foregroundServiceType="connectedDevice"`) + permissions BLE à l'exécution + notification permanente. Messagerie Compose sur bouchon FFI : liste, fil, saisie, statuts, ViewModel testé (US-214). Pas de vraie logique BLE (GATT). | 25 % (US-109, US-214 faits ; US-213/215 restent) | [android-app](modules/android-app.md) |
 | Firmware `dengon-relay` | ESP-IDF + NimBLE | — | 0 % | — |
 | Dashboard `api` | FastAPI + SQLite + SSE (A-5) | squelette : `/healthz` + `/ingest/batch` permissif, migrations, 19 tests (US-110, PR #59) | ~10 % | [dashboard-api](modules/dashboard-api.md) |
 | Dashboard `web` | page légère + SSE (A-5) | — | 0 % | — |

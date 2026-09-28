@@ -63,6 +63,19 @@ class DengonNodeStubTest {
     }
 
     @Test
+    fun `repondre dans la conversation canned reste dans le meme fil`() {
+        // Régression (US-214) : la conversation canned s'appelle `conv-canned`,
+        // pas `conv-peer-canned`. Répondre à son pair créait une deuxième
+        // conversation.
+        val node: DengonNodeInterface = DengonNodeStub(generateIdentity("alice"))
+
+        node.sendMessage("peer-canned", "réponse")
+
+        assertEquals(1, node.listConversations().size)
+        assertEquals(2, node.listMessages("conv-canned").size)
+    }
+
+    @Test
     fun `pollEvents ne renvoie chaque evenement qu une seule fois`() {
         val node: DengonNodeInterface = DengonNodeStub(generateIdentity("alice"))
         node.onPeerConnected("bob")

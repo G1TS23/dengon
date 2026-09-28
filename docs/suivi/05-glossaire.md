@@ -126,3 +126,4 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Vecteur de conformité** | Entrée/sortie figée (octets exacts) qu'une implémentation doit reproduire ; sert de test de non-régression et d'interopérabilité entre plateformes. |
 | **Fenêtre anti-rejeu** | Mémoire des N derniers numéros de message reçus (ici 64) : un message déjà vu ou trop ancien est refusé, un message en retard mais récent est accepté. |
 | **Nonce** | Numéro à usage unique qui accompagne chaque chiffrement ; ne doit jamais se répéter avec la même clé. Dans une session dengon, c'est un compteur envoyé en clair devant le chiffré. |
+| **ViewModel / StateFlow** | Android : le `ViewModel` garde l'état d'un écran et survit aux rotations ; l'écran observe un `StateFlow` (valeur courante + notifications de changement) et appelle les actions du ViewModel. La messagerie (US-214) en a un seul : `ConversationsViewModel`. |
