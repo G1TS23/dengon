@@ -7,7 +7,7 @@
 //! `Transport` (voir la crate `dengon-ble`).
 //!
 //! Modules, d'après `docs/synthese/04-architecture.md` §2 : [`protocol`]
-//! (livré — types & constantes), puis `crypto`, `identity`, `store`, `sync`,
+//! (livré — types & constantes US-108, codec US-201), puis `crypto`, `identity`, `store`, `sync`,
 //! `ledger`, `observability` et la façade `api` (sprint 2).
 //!
 //! # Contrainte `no_std`
@@ -25,7 +25,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 // `alloc` est nécessaire en no_std pour `Vec`/`String` (utilisés par
-// `ledger`) ; en mode `std`, `alloc` est déjà réexporté par la libstd, donc
+// `ledger` et par le codec de `protocol`) ; en mode `std`, `alloc` est déjà réexporté par la libstd, donc
 // cette déclaration ne coûte rien et le code de `ledger` reste identique
 // dans les deux configurations.
 extern crate alloc;

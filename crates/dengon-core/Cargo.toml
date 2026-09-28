@@ -30,6 +30,8 @@ chacha20poly1305 = { workspace = true, optional = true }
 ed25519-dalek = { workspace = true }
 
 [dev-dependencies]
+# Property tests (ledger, store, et le codec US-201 : decode(encode(p)) == p,
+# aucun panic sur des octets arbitraires).
 proptest = "1"
 # Lecture des vecteurs de conformité (tests/vectors_v0.json) — via `Value`,
 # pas de derive, donc `serde` n'est pas tiré comme dépendance de proc-macro.

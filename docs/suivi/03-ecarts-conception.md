@@ -822,3 +822,38 @@ _(aucun écart pour l'instant)_
   Aujourd'hui les formats sont assez distincts pour que ce soit peu probable, mais
   ce n'est pas garanti par construction.
 - **Doc de conception mise à jour ?** Non — question ouverte à poser en réunion.
+### 2026-09-28 — Codec : `FRAGMENT` ⇔ type `0x09` imposé dans les deux sens (US-201)
+
+- **Prévu :** `docs/synthese/05` §3.1 définit le bit `FRAGMENT` (« le payload
+  est un fragment ») et §4 le type `0x09 FRAGMENT`, sans dire explicitement
+  qu'ils vont ensemble.
+- **Réel :** `protocol::codec` (`FrameRule::FragmentFlag`) refuse un paquet de
+  type `0x09` sans `FRAGMENT`, et un `FRAGMENT` posé sur un autre type.
+- **Raison :** deux façons de dire « ceci est un fragment » qui divergent
+  laisseraient le réassemblage (US-202) et le routage choisir chacun la
+  sienne. Tous les vecteurs v0 respectent déjà la règle.
+- **Conséquences :** aucune sur les vecteurs. Si une v2 veut fragmenter
+  autrement (fragment « dans » un autre type), il faudra lever la règle.
+- **Doc de conception mise à jour ?** non — précision d'implémentation.
+
+---
+
+### 2026-09-28 — Constat (non tranché) : la signature couvre `ttl`, qu'un relais décrémente
+
+- **Prévu :** `docs/powl/03` §3 / `synthese/05` §3 : signature Ed25519 « sur
+  octets `[0 .. début_signature]` », donc **y compris l'octet `ttl`**
+  (offset 2). `docs/oswin/02-securite-messages.md:80` le justifie (« pour
+  qu'un relais ne puisse pas trafiquer le TTL »). Mais `synthese/05` §6
+  fait **décrémenter** le TTL à chaque relais.
+- **Réel :** le codec (US-201) implémente la spec à la lettre :
+  `signed_len(&header)` = en-tête complet + payload. Un paquet signé relayé
+  une fois (TTL - 1) **ne se vérifie plus** avec cette définition.
+- **Raison :** ce n'est pas au codec de trancher ; relevé en l'implémentant.
+- **Conséquences :** bloquant pour US-203 (vérification) + US-209 (relais) sur
+  les types signés (`ANNOUNCE`, `SEALED_ENVELOPE`, `LOG_ATTEST`,
+  `INVENTORY`…). Options vues : (a) signer avec l'octet `ttl` mis à 0 (seule
+  modification locale, `signed_len` inchangé) ; (b) exclure `ttl` de la zone
+  signée ; (c) signature d'origine + TTL non protégé (un relais malveillant
+  peut alors le remonter — borné par la dédup). **À trancher en équipe avant
+  US-203/US-209.**
+- **Doc de conception mise à jour ?** non — décision d'équipe requise.
