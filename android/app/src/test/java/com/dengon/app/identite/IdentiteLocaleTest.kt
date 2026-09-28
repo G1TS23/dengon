@@ -9,21 +9,30 @@ import org.junit.Test
  * Régression constatée sur deux vrais téléphones (US-215) : avec des pseudos
  * `appareil-xxxx`, tous les appareils avaient le même `peerId` et l'appairage
  * répondait « C'est votre propre QR ».
+ *
+ * Revue PR #94 : le correctif `tel-xxxx` ne faisait encore varier que 2 des 8
+ * octets du `peerId` (`tel-` restait constant) — 2^16 valeurs possibles.
+ * Le pseudo est maintenant purement hexadécimal, sans préfixe.
  */
 class IdentiteLocaleTest {
 
     @Test
-    fun `le pseudo tient en 8 octets`() {
-        assertEquals("tel-49a0", IdentiteLocale.pseudoPour(byteArrayOf(0x49, 0xA0.toByte())))
-        assertEquals(8, IdentiteLocale.pseudoPour(byteArrayOf(0, 0)).toByteArray().size)
+    fun `le pseudo tient en 8 octets, sans prefixe constant`() {
+        assertEquals(
+            "49a00102",
+            IdentiteLocale.pseudoPour(byteArrayOf(0x49, 0xA0.toByte(), 0x01, 0x02)),
+        )
+        assertEquals(8, IdentiteLocale.pseudoPour(ByteArray(4)).toByteArray().size)
     }
 
     @Test
-    fun `deux tirages differents donnent deux peerId differents`() {
-        // Les 65 536 tirages possibles : autant de peerId distincts.
+    fun `les octets de l ancien prefixe 'tel-' varient desormais le peerId`() {
+        // Avant, ces deux octets valaient toujours 't','e' : aucune variation
+        // possible. Ce sont maintenant les deux premiers octets aléatoires,
+        // au même titre que les deux autres.
         val peerIds = (0 until 65_536).map { n ->
-            val pseudo = IdentiteLocale.pseudoPour(byteArrayOf((n shr 8).toByte(), n.toByte()))
-            generateIdentity(pseudo).peerId
+            val aleatoire = byteArrayOf((n shr 8).toByte(), n.toByte(), 0, 0)
+            generateIdentity(IdentiteLocale.pseudoPour(aleatoire)).peerId
         }
         assertEquals(65_536, peerIds.toSet().size)
     }

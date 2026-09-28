@@ -74,8 +74,8 @@ class QrCodeTest {
 
     @Test
     fun `tout QR d identite affiche se relit par detection`() {
-        // Pseudos variés, dont le format réel `tel-xxxx` d'IdentiteLocale.
-        val pseudos = (0 until 256).map { "tel-%04x".format(it * 257) } +
+        // Pseudos variés, dont le format réel (hexadécimal) d'IdentiteLocale.
+        val pseudos = (0 until 256).map { "%08x".format(it * 16843009) } +
             (0 until 44).map { "contact $it" }
         val illisibles = pseudos.filterNot { pseudo ->
             val contenu = identityQrCode(generateIdentity(pseudo))

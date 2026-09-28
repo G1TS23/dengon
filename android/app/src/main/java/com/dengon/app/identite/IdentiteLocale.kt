@@ -18,25 +18,36 @@ import java.security.SecureRandom
  *   `appareil-xxxx`, donnait le même `peerId` (« appareil ») à tous les
  *   téléphones, et l'appairage les prenait pour un seul appareil — constaté
  *   sur un Pixel 8 Pro et un Galaxy A16 (« C'est votre propre QR »).
+ *
+ * Deuxième défaut trouvé en revue (PR #94) : le correctif `tel-xxxx` ne
+ * faisait encore varier que 2 des 8 octets du `peerId` — le préfixe `tel-`
+ * occupait sans le vouloir les 4 premiers, constants, des 8 octets où seule
+ * la partie aléatoire compte. Sur 8 octets utiles, seuls 2 étaient
+ * réellement aléatoires (2^16 valeurs). Le préfixe est abandonné : le pseudo
+ * est maintenant purement hexadécimal, ses 8 octets UTF-8 tombant tous dans
+ * la fenêtre du `peerId`. Encodés en hexadécimal (2 caractères par octet
+ * aléatoire), ces 8 octets ne représentent que 4 octets de source aléatoire
+ * — 2^32 valeurs possibles, contre 2^16 avant.
  */
 object IdentiteLocale {
 
     private const val FICHIER = "dengon_identite"
     private const val CLE_PSEUDO = "pseudo"
 
-    /** Octets aléatoires du pseudo (4 caractères hexadécimaux). */
-    const val OCTETS_ALEATOIRES = 2
+    /** Octets de source aléatoire (8 caractères hexadécimaux en sortie). */
+    const val OCTETS_ALEATOIRES = 4
 
     /** Identité de cet appareil ; stable d'un lancement à l'autre. */
     fun identite(context: Context): Identity = generateIdentity(pseudo(context))
 
     /**
-     * Pseudo provisoire `tel-xxxx` : exactement 8 octets, donc la partie
-     * aléatoire tombe entière dans le `peerId` du bouchon.
+     * Pseudo provisoire, purement hexadécimal, exactement 8 octets : la
+     * totalité tombe dans le `peerId` du bouchon, sans octet gaspillé sur un
+     * préfixe constant.
      */
     fun pseudoPour(aleatoire: ByteArray): String {
         require(aleatoire.size == OCTETS_ALEATOIRES) { "attendu $OCTETS_ALEATOIRES octets" }
-        return "tel-" + aleatoire.joinToString("") { "%02x".format(it) }
+        return aleatoire.joinToString("") { "%02x".format(it) }
     }
 
     private fun pseudo(context: Context): String {

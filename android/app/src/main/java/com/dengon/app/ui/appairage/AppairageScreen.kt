@@ -22,7 +22,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -37,8 +37,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.dengon.app.R
+import com.google.zxing.common.BitMatrix
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Écran d'appairage (US-215) : mon QR + scan du QR de l'autre, puis
@@ -208,20 +211,28 @@ private fun Resultat(
     OutlinedButton(onClick = onRecommencer) { Text(stringResource(R.string.appairage_autre_contact)) }
 }
 
-/** Dessine le QR de `contenu` : modules noirs sur fond blanc, quel que soit le thème. */
+/**
+ * Dessine le QR de `contenu` : modules noirs sur fond blanc, quel que soit le
+ * thème. `matriceQr` encode+rastérise+décode jusqu'à 9 fois (revue PR #94) :
+ * calculée sur `Dispatchers.Default`, pas sur le thread UI qui compose cet
+ * écran.
+ */
 @Composable
 private fun ImageQr(contenu: String, description: String) {
-    val matrice = remember(contenu) { matriceQr(contenu) }
+    val matrice by produceState<BitMatrix?>(initialValue = null, contenu) {
+        value = withContext(Dispatchers.Default) { matriceQr(contenu) }
+    }
     Canvas(
         modifier = Modifier
             .size(260.dp)
             .background(Color.White)
             .semantics { contentDescription = description },
     ) {
-        val module = size.minDimension / matrice.width
-        for (y in 0 until matrice.height) {
-            for (x in 0 until matrice.width) {
-                if (matrice[x, y]) {
+        val matriceActuelle = matrice ?: return@Canvas
+        val module = size.minDimension / matriceActuelle.width
+        for (y in 0 until matriceActuelle.height) {
+            for (x in 0 until matriceActuelle.width) {
+                if (matriceActuelle[x, y]) {
                     drawRect(
                         color = Color.Black,
                         topLeft = Offset(x * module, y * module),

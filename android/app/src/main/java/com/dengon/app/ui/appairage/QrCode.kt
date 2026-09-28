@@ -1,5 +1,6 @@
 package com.dengon.app.ui.appairage
 
+import android.util.Log
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.BinaryBitmap
 import com.google.zxing.EncodeHintType
@@ -25,18 +26,26 @@ private const val MASQUES_QR = 8
  * correctes, mais aucune détection, quelle que soit l'échelle). Le scanner
  * caméra utilise ce même détecteur : un tel QR serait illisible pour de bon.
  * On vérifie donc que la matrice se relit **par détection**, et sinon on
- * essaie les 8 masques jusqu'à en trouver un lisible.
+ * essaie les 8 masques jusqu'à en trouver un lisible. Si aucun des 8 ne l'est
+ * (jamais constaté sur les ~300 identités testées), on revient à la matrice
+ * par défaut en le signalant (`Log.w`) : elle s'affiche quand même — mieux
+ * vaut un QR qui a une petite chance d'être lisible qu'aucun — mais le
+ * scanner caméra, qui utilise ce même détecteur, ne la lira pas.
  *
  * Java pur (`zxing-core`) : testable en JVM, sans appareil.
  */
 fun matriceQr(contenu: String): BitMatrix {
     val parDefaut = encoder(contenu, masque = null)
     if (seRelitParDetection(parDefaut, contenu)) return parDefaut
-    return (0 until MASQUES_QR).asSequence()
+    val lisible = (0 until MASQUES_QR).asSequence()
         .map { encoder(contenu, masque = it) }
         .firstOrNull { seRelitParDetection(it, contenu) }
-        ?: parDefaut
+    if (lisible != null) return lisible
+    Log.w(TAG, "QR probablement illisible par le scanner caméra : aucun des 8 masques ne se relit par détection")
+    return parDefaut
 }
+
+private const val TAG = "QrCode"
 
 private fun encoder(contenu: String, masque: Int?): BitMatrix {
     val options = buildMap<EncodeHintType, Any> {

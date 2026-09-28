@@ -7,7 +7,7 @@ messagerie (conversations, fil, saisie, statuts) sur le bouchon FFI (US-214).
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109.
-**Dernière mise à jour :** 2026-09-28
+**Dernière mise à jour :** 2026-09-28 (corrections de revue PR #94)
 **État :** partiel (service de fond + messagerie sur bouchon FFI ; pas de
 logique BLE réelle dans l'app elle-même — voir « Spike C » ci-dessous pour le code GATT jetable
 qui dérisque `AndroidTransport`)
@@ -85,7 +85,7 @@ android/
         ConversationsScreen.kt    — Compose : MessagerieRoute, ListeConversations, FilConversation
         LibelleStatut.kt          — statut → libellé UI (synthese/07 §1)
       identite/
-        IdentiteLocale.kt    — identité provisoire par installation (pseudo `tel-xxxx`), US-215
+        IdentiteLocale.kt    — identité provisoire par installation (pseudo hexadécimal 8 octets), US-215
       ui/appairage/          — US-215
         AppairageViewModel.kt — étapes de l'appairage, StateFlow, JVM pur
         AppairageScreen.kt   — mon QR, scan caméra, code 60 chiffres, confirmation explicite
@@ -105,7 +105,7 @@ android/
       ui/conversations/ConversationsViewModelTest.kt — ViewModel de messagerie (9 tests)
       ui/appairage/AppairageViewModelTest.kt — parcours, erreurs de scan, lecture croisée (US-215)
       ui/appairage/QrCodeTest.kt          — QR rastérisé puis relu par ZXing, régression « alice »
-      identite/IdentiteLocaleTest.kt  — pas de collision de `peerId` entre pseudos `tel-xxxx`
+      identite/IdentiteLocaleTest.kt  — pas de collision de `peerId` entre pseudos hexadécimaux
 ```
 
 ## Concepts / types importants
@@ -449,7 +449,7 @@ scanner (défaut trouvé sur appareil, voir ci-dessous).
 | `AppairageViewModel` | `ui/appairage/AppairageViewModel.kt` | État `StateFlow` ; `onQrScanne`, `confirmer`, `refuser`, `recommencer`. JVM pur. |
 | `AppairageScreen` | `ui/appairage/AppairageScreen.kt` | Affichage, lancement du scanner (`ScanContract`), boutons. |
 | `matriceQr` | `ui/appairage/QrCode.kt` | QR garanti détectable : essaie les 8 masques si besoin. |
-| `IdentiteLocale` | `identite/IdentiteLocale.kt` | Identité provisoire, pseudo aléatoire `tel-xxxx` (8 octets). |
+| `IdentiteLocale` | `identite/IdentiteLocale.kt` | Identité provisoire, pseudo hexadécimal (8 octets, tous aléatoires). |
 
 **Testé sur Pixel 8 Pro (Android 17) + Galaxy A16 (Android 16)** : lecture
 croisée caméra, codes identiques (`99083 88326 31081 93212 49943 35746 33429 06232 54259 64334 82577 91716`), contacts marqués vérifiés.
@@ -460,9 +460,21 @@ Captures : [`../assets/us-215/`](../assets/us-215/).
 (pseudo `appareil-xxxx`, corrigé en `tel-xxxx`) ; mon QR masqué après mon
 scan (corrigé). Détail : `00-journal.md`, entrée US-215.
 
+**Corrections de la revue de la PR #94 (2026-09-28) :**
+1. `tel-xxxx` ne faisait encore varier que 2 des 8 octets du `peerId` (le
+   préfixe `tel-` étant constant, 2^16 valeurs) — pseudo maintenant purement
+   hexadécimal, sans préfixe, les 4 octets de source aléatoire couvrant
+   toute la fenêtre du `peerId` (2^32 valeurs).
+2. Repli silencieux de `matriceQr` sur un QR connu indétectable → `Log.w`
+   ajouté.
+3. Encodage du QR (`matriceQr`) exécuté sur le thread UI dans `remember` →
+   déplacé sur `Dispatchers.Default` via `produceState`.
+
 **Limites :** contacts vérifiés en mémoire seulement (pas d'appel FFI
 « marquer vérifié ») ; identité et code = bouchon (vraie crypto à l'US-306) ;
-navigation minimale, à fusionner avec celle de US-214 (PR #87).
+navigation minimale, à fusionner avec celle de US-214 (PR #87) ; corrections
+ci-dessus non revérifiées sur appareil réel (couvertes par les tests JVM
+existants/adaptés).
 
 ## Pour l'oral
 

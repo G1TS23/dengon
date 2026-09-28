@@ -524,6 +524,83 @@ Finished (observability compile en no_std + alloc)
 - Pas encore appelé : le branchement (émission par `Transport`, réception
   avant `sync::routing`) viendra avec le codec et le pipeline.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+## 2026-09-28 — US-215 : corrections de la revue de la PR #94
+
+**Auteur :** Oswin + Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/identite/IdentiteLocale.kt`, `android/app/src/main/java/com/dengon/app/ui/appairage/{QrCode.kt,AppairageScreen.kt}`, tests `identite/IdentiteLocaleTest.kt`, `ui/appairage/QrCodeTest.kt`
+**Lot :** US-215 (#29), suite de la revue automatisée (Claude Code) sur PR #94
+
+### Fait
+- **Entropie du `peerId` corrigée** (`IdentiteLocale.kt`) : le pseudo
+  provisoire `tel-xxxx` ne faisait varier que 2 des 8 octets pris par le
+  `peerId` du bouchon FFI (`tel-` occupant, constant, les 4 premiers) —
+  2^16 valeurs possibles au lieu de 2^8 octets = jusqu'à 2^64 en théorie.
+  Le préfixe est abandonné : pseudo purement hexadécimal (8 octets UTF-8,
+  4 octets de source aléatoire, `OCTETS_ALEATOIRES` 2 → 4). Les 8 octets du
+  `peerId` tombent désormais tous dans la fenêtre aléatoire — 2^32 valeurs
+  possibles (le hexadécimal double la taille en octets, donc pas 2^64
+  malgré ce que suggérait la revue automatisée — voir « Écarts vs revue »).
+- **Repli silencieux sur QR indétectable signalé** (`QrCode.kt`) :
+  `matriceQr` retombait sur la matrice par défaut sans un mot si aucun des
+  8 masques n'est détectable. Ajout d'un `Log.w` (tag `QrCode`) dans ce cas ;
+  la matrice reste affichée (mieux qu'un QR vide) mais le défaut est
+  désormais traçable en `logcat` plutôt qu'invisible jusqu'au scan réel sur
+  le terrain.
+- **Encodage QR déplacé hors du thread UI** (`AppairageScreen.kt`) :
+  `ImageQr` appelait `matriceQr` directement dans `remember { }`, donc sur le
+  thread de composition — jusqu'à 9 cycles encode+rastérisation+decode dans
+  le pire cas (repli ci-dessus). Remplacé par `produceState` +
+  `withContext(Dispatchers.Default)` ; le canvas ne dessine rien tant que la
+  matrice n'est pas prête (état initial `null`).
+
+### Pourquoi / décisions
+- Pas touché à `generateIdentity` (bouchon partagé, même algorithme que le
+  bouchon Rust `crates/dengon-ffi`) : le corriger aurait fait diverger les
+  deux bouchons. Le point de correction reste côté appelant Android
+  (`IdentiteLocale`), conforme à l'ancre de la revue.
+- Hexadécimal conservé (plutôt qu'un alphabet plus dense type base64url) :
+  reste lisible/imprimable à l'affichage, cohérent avec l'ancien format, et
+  le gain (2^16 → 2^32) est déjà large pour une identité **provisoire**
+  vouée à disparaître à l'US-306.
+
+### Écarts vs conception
+- Aucun nouveau (l'écart « identité provisoire / bouchon » était déjà
+  consigné dans `03-ecarts-conception.md`, entrée US-215 du 2026-09-28 ;
+  seul le format exact du pseudo change, détail non repris là-bas).
+
+### Écarts vs revue
+- La revue automatisée annonçait « 2^64 valeurs possibles » en utilisant
+  les 8 octets pour l'aléatoire. En pratique, encoder N octets aléatoires en
+  hexadécimal produit 2×N caractères ASCII, donc 2×N octets UTF-8 : pour
+  tenir dans la fenêtre de 8 octets du `peerId` sans prefixe gaspillé, seuls
+  4 octets de source aléatoire (donnant 2^32) y tiennent, pas 8. Repéré en
+  implémentant le correctif — voir `04-apprentissages.md`.
+
+### Appris
+- Entrée ajoutée à `04-apprentissages.md` (encodage hexadécimal double la
+  taille en octets — piège pour tout calcul d'entropie « en octets
+  disponibles » qui suppose une correspondance 1:1 octet source ↔ octet
+  transporté).
+
+### État après cette session
+- Les 3 constats de la revue de la PR #94 sont traités. `AppairageViewModelTest`
+  non touché (n'appelle pas `IdentiteLocale` directement). Fiche module mise
+  à jour : `modules/android-app.md`.
+- 01-etat-du-code.md : non touché (règle projet : ne plus le mettre à jour,
+  voir README de `docs/suivi/`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew --no-daemon -q assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 34/34 tests JVM verts (IdentiteLocaleTest 4/4, QrCodeTest 7/7)
+```
+- Pas revérifié sur appareil réel (scan caméra, comparaison des deux
+  téléphones) : les 3 changements sont couverts par les tests JVM existants
+  et adaptés ; un nouveau passage sur 2 téléphones physiques n'a pas été
+  refait pour cette correction de revue.
+
+---
+
 ## 2026-09-28 — US-215 : écran QR (affichage + scan) + comparaison du code 60 chiffres
 
 **Auteur :** Oswin + Claude (Opus 5.5)
