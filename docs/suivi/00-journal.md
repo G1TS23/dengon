@@ -10,6 +10,100 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-206 : `ledger`, round de revue d'OswinFreyr — débordement `u64::MAX` corrigé
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/modules/dengon-core.md`
+**Lot :** US-206, PR #75
+
+### Fait
+- **Bug réel corrigé : débordement `u64::MAX` dans `append()` et
+  `verify_chain()`.** `append()` calculait `self.entries.last().seq + 1` et
+  `verify_chain()` calculait `max + 1`, tous deux en arithmétique `u64` non
+  vérifiée. Une entrée à `seq = u64::MAX` (export corrompu ou hostile) fait
+  paniquer ce calcul en debug/test (`attempt to add with overflow`,
+  confirmé en reproduisant volontairement le bug) et reboucle
+  silencieusement à 0 en release — un vérificateur qui panique ou ment sur
+  une entrée hostile est exactement ce que `verify_chain()` doit éviter.
+  `append()` corrigé avec `saturating_add` (infaillible par signature) ;
+  `verify_chain()` corrigé en comparant en `u128` (ne peut pas déborder
+  pour des opérandes `u64`). Nouveau test
+  `seq_u64_max_ne_panique_pas_et_est_detecte`.
+- **Limite documentée (pas corrigée) : `verify_chain()` ne peut pas
+  re-vérifier un export partiel.** `export(range)` renvoie n'importe quelle
+  tranche de `seq`, mais `verify_chain()` suppose toujours une chaîne
+  démarrant à `seq = 0`. Reconstruire un `Ledger` depuis un export qui ne
+  part pas de 0 (ex. `export(3..6)`) rapporte donc `Gap`/`Broken` à tort.
+  Pas corrigé cette session (aucun appelant réel d'`export()` n'existe
+  encore hors tests — `dengon-verify::main` n'est pas implémenté) : écart
+  consigné dans `03-ecarts-conception.md` avec la vraie question de design
+  à trancher (point d'ancrage en paramètre de `verify_chain`) quand un
+  appelant réel existera.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #75 (2026-09-28, passe unique) :
+  2 constats dans `ledger.rs`, l'un confirmé (débordement), l'autre
+  qualifié « plausible » par Oswin lui-même — vérifié réel (le docstring
+  de `dengon-verify` affiche déjà l'intention de vérifier un export), mais
+  proportionné en documentation plutôt qu'en redesign d'API vu l'absence
+  d'appelant réel actuel.
+
+### Écarts vs conception
+- Nouvelle entrée dans `03-ecarts-conception.md` pour la limite export
+  partiel.
+
+### État après cette session
+- `cargo test -p dengon-core` → 33 passés (29 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features` tous
+  verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core seq_u64_max
+test ledger::tests::seq_u64_max_ne_panique_pas_et_est_detecte ... ok
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+```
+- Régression confirmée : `u128::from(...)` temporairement retiré (retour à
+  `max + 1` en `u64`) → le nouveau test panique avec `attempt to add with
+  overflow`, restauré ensuite.
+
+---
+
+## 2026-09-28 — US-206 : rebase sur `main`, casts `ledger.rs` corrigés pour les lints activés par US-108
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`,
+`docs/suivi/modules/dengon-core.md`
+**Lot :** US-206, PR #75
+
+### Fait
+- Rebase de la branche sur `main` (qui a entre-temps intégré US-108,
+  `protocol::{consts, types}`, PR #63). Conflits réels sur `lib.rs`
+  (`pub mod ledger;` vs `pub mod protocol;` — fusion triviale, les deux
+  coexistent), `Cargo.toml` de la crate (`dev-dependencies` : `proptest` et
+  `serde_json` coexistent), `Cargo.lock` (régénéré via `cargo check`), et la
+  fiche `dengon-core.md` (fusion éditoriale des deux sections).
+- **Bug d'intégration trouvé en vérifiant après le merge** :
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  échouait sur 2 casts `usize as u32` dans `ledger.rs`
+  (`Entry::signing_bytes`/`to_bytes`) — PR #63 (US-108) a activé
+  `cast_possible_truncation`/`cast_sign_loss`/`cast_possible_wrap`
+  workspace-wide, un lint qui n'existait pas encore quand `ledger.rs` a été
+  écrit. Chaque PR était individuellement verte, seule la combinaison des
+  deux cassait clippy.
+- Corrigé avec `u32::try_from(...).unwrap_or(u32::MAX)` (saturant, pas de
+  panic) plutôt qu'un cast brut — même esprit que les corrections
+  équivalentes déjà faites dans `protocol` au round de revue #63.
+
+### Pourquoi / décisions
+- Saturation à `u32::MAX` plutôt qu'un `Result`/panic : un `event_name`/
+  `payload_json` de plus de 4 Go n'a aucun sens pratique dans ce contexte
+  (nom d'événement du catalogue, payload JSON d'un log) — gérer le cas
+  proprement ajouterait de la complexité pour un scénario qui ne se
+  produira jamais en pratique.
 ## 2026-09-28 — Corrections factuelles sur `repartition-sprint2.md` (revue d'OswinFreyr)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -53,6 +147,24 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 - Aucun.
 
 ### État après cette session
+- `cargo test -p dengon-core` → 32 passés (28 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features` tous
+  verts. Fiche module fusionnée pour refléter `ledger` + `protocol`
+  ensemble.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+
+$ cargo test -p dengon-core
+32 passed (28 lib + 4 intégration)
+
+$ cargo fmt --all -- --check
+(rien — propre)
+
+$ cargo check -p dengon-core --no-default-features
+Finished
 - Toutes les corrections du round de revue sont faites. Le document reste
   ouvert à validation par Paul et Oswin (§3, point de friction `sync::`).
 
@@ -67,6 +179,102 @@ $ gh issue view 27/28/29 --repo G1TS23/dengon --json body -q '.body' | grep Dép
 
 ---
 
+## 2026-09-26 — US-206 : correctif `verify_chain` (doublon de seq non adjacent)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`
+**Lot :** US-206, Sprint 2 (auto-revue de la PR #75 avant merge, demandée
+explicitement par Olivier — « refaire un tour sur ces dernières PR un peu
+en mode review »)
+
+### Fait
+- Bug trouvé en relisant `verify_chain` de manière adversariale : la
+  détection ne comparait chaque `seq` qu'à celui de l'entrée
+  **immédiatement précédente** dans le stockage. Une séquence
+  `[0, 1, 2, 1]` — un rejeu d'une entrée déjà vue, mais pas juste après
+  l'original (un scénario de fork réaliste : une vieille entrée
+  retransmise plus tard) — était donc classée à tort `Gap` au lieu de
+  `Fork` (le seq max vu était 2, sans jamais détecter le doublon adjacent).
+  Reproduit concrètement avant correction via un test temporaire
+  (`cargo test -p dengon-core scratch_review -- --nocapture` →
+  `verdict pour [0,1,2,1] = Gap`), puis supprimé une fois le correctif
+  vérifié.
+- **Rien n'était accepté à tort** (aucune entrée invalide ne passait comme
+  `Ok`) — mais le verdict précis était faux, ce qui aurait pu induire en
+  erreur un futur diagnostic (« pourquoi un trou alors qu'aucune entrée ne
+  manque vraiment ? »).
+- Réécrit `verify_chain` en deux passes : passe 1 sur un
+  `alloc::collections::BTreeSet<u64>` des `seq` (détecte `Fork`/`Gap`
+  indépendamment de l'ordre de stockage) ; passe 2 = la marche de chaîne de
+  hash originale, dans l'ordre de stockage (`Broken`).
+- Nouveau test permanent `un_doublon_non_adjacent_est_bien_un_fork` couvrant
+  exactement ce cas.
+
+### Vérification
+- `cargo test -p dengon-core` : 15 tests, tous verts (incluait déjà le
+  correctif + le nouveau test).
+- `cargo fmt --all -- --check` : propre.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` :
+  propre.
+- `cargo check -p dengon-core --no-default-features --locked` : compile
+  toujours en `no_std`.
+
+## 2026-09-26 — US-206 : `ledger` — journal chaîné append-only
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/ledger.rs}`
+(nouveau), `crates/dengon-verify/src/main.rs`, `Cargo.toml` (racine),
+`docs/suivi/modules/{dengon-core,dengon-verify}.md`,
+`docs/suivi/02-avancement.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-206, Sprint 2
+
+### Fait
+- Implémenté `ledger::{Entry, Ledger, Signer, NullSigner, Verdict}` :
+  `append`/`verify_chain`/`export`, hash chaîné SHA-256 avec longueurs
+  préfixées (pas d'ambiguïté de découpage entre champs), détection de trou
+  (`Gap`), de position dupliquée (`Fork`) et de hash incohérent (`Broken`).
+- Signature différée derrière le trait `Signer` (voir
+  `03-ecarts-conception.md`, entrée dédiée) — `crypto` (US-203) est dans le
+  même sprint, la règle du projet interdit la dépendance intra-sprint.
+- `no_std` + `alloc` : `extern crate alloc;` ajouté à `lib.rs` (jusque-là
+  absent faute d'usage), `sha2` en `default-features = false`.
+- 12 tests unitaires + 2 property tests (`proptest`) : toute séquence
+  d'appends reste vérifiable ; corrompre n'importe quelle entrée d'une
+  séquence quelconque est toujours détecté comme `Broken`, jamais accepté
+  silencieusement.
+- « Reprise après redémarrage » démontrée par un aller-retour
+  `Entry::to_bytes`/`from_bytes` (sérialiser, détruire le `Ledger` en
+  mémoire, désérialiser, revérifier la chaîne) — pas de vrai backend de
+  stockage câblé, voir l'écart consigné.
+- `dengon-verify::main` branché sur `dengon_core::ledger::Verdict` (réel)
+  au lieu de sa copie locale, comme l'annonçait déjà `04-architecture.md` §2.
+
+### Pourquoi / décisions
+- Voir `03-ecarts-conception.md`, entrée « `ledger` : signature différée
+  derrière un trait `Signer` (US-206) » pour le détail de la dépendance
+  intra-sprint évitée.
+
+### Écarts vs conception
+- Un écart, documenté : signature non vérifiée par `verify_chain()` pour
+  l'instant (voir ci-dessus).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+14 passed; 0 failed
+
+$ cargo test -p dengon-verify
+1 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(vert, 0 warning)
+
+$ cargo check -p dengon-core --no-default-features --locked
+(vert — frontière no_std)
+```
 ## 2026-09-25 — Répartition Sprint 2 entre Paul, Oswin et Olivier
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

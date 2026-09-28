@@ -631,3 +631,70 @@ _(aucun écart pour l'instant)_
 - **Doc de conception mise à jour ?** Non — ce n'est pas une divergence mais un
   **comblement**. À verser dans `04-architecture.md` §3 si l'équipe veut que la
   conception reste la référence complète du contrat.
+
+---
+
+### `ledger` : signature différée derrière un trait `Signer` (US-206)
+
+- **Conception :** `04-architecture.md` §2 dit `ledger : append(event) ->
+  Entry, verify_chain(), export(range)` — dépend de `crypto`. Chaque entrée
+  du journal (`docs/powl/09-data-model.md` §1) porte un champ `sig` (Ed25519,
+  64 o).
+- **Code :** `crates/dengon-core/src/ledger.rs` — `Ledger<S: Signer>` est
+  paramétré par un trait `Signer` (une méthode `sign(&mut self, message:
+  &[u8]) -> Signature`), pas câblé sur `ed25519-dalek` ou toute autre
+  implémentation concrète. `NullSigner` (signature à zéro) sert de bouchon
+  pour les tests. `verify_chain()` ne vérifie **pas** la signature — il ne
+  vérifie que la chaîne de hash et l'absence de trou/fork.
+- **Pourquoi :** `crypto` (US-203, Ed25519) est dans le **même sprint**
+  (S2) que `ledger` (US-206), et la règle du projet interdit qu'une US
+  dépende d'une autre US du même sprint (`docs/olivier/proposition-organisation-github.md`
+  §5.2). Attendre `crypto` aurait bloqué `ledger` sans raison de fond — les
+  deux US sont attribuées à des personnes différentes ce sprint (voir
+  `docs/suivi/repartition-sprint2.md`) et n'ont aucune raison de se
+  séquencer.
+- **Conséquences :** la **forme** du contrat (un champ `sig` de 64 octets
+  par entrée, une méthode qui vérifie la chaîne) est déjà correcte et
+  stable. Le **contenu** cryptographique ne l'est pas : une entrée signée
+  par `NullSigner` ne prouve rien, et `verify_chain() == Verdict::Ok`
+  aujourd'hui ne garantit **que** l'intégrité du hash-chaînage, pas
+  l'authenticité de l'auteur. Quand `crypto` livrera une vraie
+  implémentation `Signer` (Ed25519), elle se branchera sur `Ledger<S>` sans
+  changer sa forme — et `verify_chain()` devra alors être étendue pour
+  vérifier la signature de chaque entrée, ce qui n'est pas fait ici.
+- **Doc de conception mise à jour ?** Non — la conception reste la cible
+  réelle (signature Ed25519 vérifiée). Le point est documenté ici et dans
+  `modules/dengon-core.md` (« Décisions d'implémentation » et « Limites
+  connues »).
+
+---
+
+### `ledger::verify_chain()` ne peut pas re-vérifier un export partiel (US-206, retour de revue #75)
+
+- **Conception :** `04-architecture.md` §2 dit `ledger : ... export(range)`
+  et `dengon-verify` (`crates/dengon-verify/src/main.rs`, doc de module)
+  affiche l'intention de « lire un export de journal ... et rendre l'un des
+  quatre verdicts ».
+- **Code :** `Ledger::export(range)` renvoie n'importe quelle tranche
+  `seq ∈ range` des entrées en mémoire. `Ledger::verify_chain()`, lui,
+  suppose toujours que la chaîne fournie démarre à `seq = 0` avec
+  `prev_hash == GENESIS_HASH` : reconstruire un `Ledger` via
+  `from_entries()` à partir d'un export dont `range` ne commence pas à 0
+  (ex. `export(3..6)`) fait donc rapporter `Gap` ou `Broken` par
+  `verify_chain()`, même si la tranche exportée est parfaitement intègre.
+- **Pourquoi :** au moment d'écrire `ledger`, il n'existait aucun appelant
+  réel de `export()` en dehors des tests (`dengon-verify::main` n'est pas
+  encore implémenté) — la question « comment vérifier une tranche qui ne
+  part pas de la genèse » n'avait donc pas de cas d'usage concret pour
+  trancher la bonne API (un point d'ancrage en paramètre de
+  `verify_chain` ? un `export` qui redémarre sa propre chaîne de hash
+  depuis l'ancre ?).
+- **Conséquences :** tant que `dengon-verify` (ou tout autre appelant) n'a
+  besoin que de vérifier un export **complet** depuis `seq = 0` (le cas
+  couvert par les tests actuels), rien n'est cassé. Le jour où un besoin
+  réel de vérifier un export partiel apparaît (ex. le dashboard ne
+  redemande que les entrées manquantes plutôt que tout le journal),
+  `verify_chain()` devra être étendu avant de pouvoir servir tel quel.
+- **Doc de conception mise à jour ?** Non — documenté ici et dans le
+  docstring d'`export()` (`src/ledger.rs`), à trancher quand
+  `dengon-verify` aura un vrai appelant.
