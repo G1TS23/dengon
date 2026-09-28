@@ -9,6 +9,52 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-28 — US-112 : round de revue d'OswinFreyr sur la PR #66, gap `CryptoResolver` reporté dans les issues
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** description de la PR #66 (GitHub), issues #18 et #46
+(GitHub, critères d'acceptation)
+**Lot :** US-112, PR #66
+
+### Fait
+- **Gap `CryptoResolver` reporté directement dans les critères d'acceptation
+  de #46 (US-308)** : `06-securite.md` notait depuis le Spike A qu'aucune US
+  ne portait explicitement l'implémentation d'un `CryptoResolver` custom
+  branché sur `esp_fill_random()`, en laissant le choix entre #45/#46 en
+  TODO de doc. Ajouté à #46 (pas #45, qui ne couvre que le linkage C) : une
+  personne qui démarre US-308 avant S3 le verra maintenant sans avoir à
+  relire `06-securite.md`.
+- **Épinglage `snow ≥ 0.10.0` reporté dans les critères d'acceptation de #18
+  (US-204)** : même raison, US-204 est celle qui introduit réellement la
+  dépendance `snow`.
+- **Description de la PR #66 corrigée** : la puce sur l'« État du Spike A »
+  décrivait encore l'état d'avant #64 (un simple renvoi à l'issue #1) alors
+  que le résultat est intégré au §3 depuis le début de cette PR ; la case
+  « Relu par une autre personne » était cochée sans review `APPROVED` ;
+  clarifié que le « 7/7 liens » de la vérification ne compte que
+  `06-securite.md` seul, alors que le « 9/9 » de l'entrée de journal du
+  25/09 (ci-dessous) comptait aussi les liens de `00-contexte-global.md` —
+  deux périmètres différents, pas une contradiction.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #66 (commentaire GitHub daté du
+  2026-09-28) : « le plus sûr est de le reporter tout de suite dans une
+  issue, en ajoutant le critère à #45 ou #46 » — personne ne relira une doc
+  de synthèse au moment de démarrer une US deux sprints plus tard.
+
+### Écarts vs conception
+- Aucun.
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh issue view 46 --repo G1TS23/dengon --json body -q '.body' | grep CryptoResolver
+- [ ] `CryptoResolver` custom branché sur `esp_fill_random()` de l'ESP-IDF (...)
+
+$ gh issue view 18 --repo G1TS23/dengon --json body -q '.body' | grep snow
+- [ ] `snow` épinglé à **≥ 0.10.0**, jamais 0.9.x (...)
+```
+
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
