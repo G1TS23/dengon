@@ -15,14 +15,19 @@
       Wi-Fi remontent leurs événements. Ne montre jamais le contenu d'un
       message, son destinataire, ni l'identité réelle d'un appareil — voir
       <code>docs/olivier/dashboard.md</code> §4.
-      Squelette US-111 : données bidon ci-dessous, aucun appel réseau.
+      Branché sur l'API réelle (US-219) : mise à jour automatique via
+      <code>/api/stream</code>.
     </p>
   </header>
 
   <main id="app"><!-- rempli par app.js selon #/message/&lt;id&gt; --></main>
 </div>
 
-<script src="data.js"></script>
+<!-- Si dashboard/web n'est pas servi derrière le même reverse-proxy que
+     dashboard/api (US-224), définir l'URL de l'API avant de charger
+     api.js/app.js, ex. :
+     <script>window.DENGON_API_BASE = "https://mon-vps:8443";</script> -->
+<script src="api.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

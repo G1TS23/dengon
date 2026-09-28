@@ -14,9 +14,15 @@ Routes :
 * ``GET  /api/stream``    — diffusion en **SSE** des événements ingérés
   (US-218) : rattrapage depuis `Last-Event-ID` (ou depuis le début), puis
   diffusion live via `app/stream.py::Broadcaster`.
+* ``GET  /api/messages``  — liste des messages suivis (US-219).
+* ``GET  /api/messages/{msg_log_id}`` — détail + parcours (`hops`, dérivés
+  de `events` à la lecture, voir `app/messages_api.py`) d'un message
+  (US-219), consommés par `dashboard/web`.
 
-Les projections (`messages`) sont l'objet de l'US-217 ; `links`/
-`message_hops` restent hors périmètre — voir `03-ecarts-conception.md`.
+Les projections (`messages`) sont l'objet de l'US-217 ; `links` reste hors
+périmètre — voir `03-ecarts-conception.md`. `message_hops` (§11.2) n'est pas
+une table à part : dérivée à la lecture depuis `events`, voir
+`app/messages_api.py`.
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -36,6 +43,7 @@ from . import ingest
 from .auth import InvalidToken, create_token, node_id_from_authorization_header
 from .config import jwt_secret, max_batch_bytes
 from .db import LockedConnection, connect, run_migrations
+from .messages_api import get_message, get_message_hops, list_messages
 from .stream import Broadcaster, StreamEvent
 
 
@@ -86,6 +94,21 @@ app = FastAPI(
     version="0.1.0",
     summary="Ingestion validée des batchs d'événements (schéma + JWT + signature Ed25519).",
     lifespan=lifespan,
+)
+
+# CORS **en lecture seule** (`GET`), toute origine : `dashboard/web` (US-219)
+# est une page statique, potentiellement servie depuis un autre
+# domaine/port que l'API (voire ouverte en `file://`, origine `null`) — sans
+# ça, le navigateur bloque `fetch`/`EventSource` avant même que la requête ne
+# parte. Sans risque ici : ces routes ne renvoient que des données déjà
+# redigées (voir `app/messages_api.py`), sans cookie ni session, et
+# `allow_methods` exclut `POST` — un site tiers ne peut pas s'en servir pour
+# faire écrire un visiteur dans `/ingest/batch`/`/api/nodes` (qui exigent de
+# toute façon un jeton JWT qu'aucune origine ne peut deviner).
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
 )
 
 
@@ -414,3 +437,29 @@ async def stream_events(request: Request) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.get("/api/messages")
+def list_messages_route(request: Request) -> JSONResponse:
+    """Liste des messages suivis (projection `messages`, US-217), pour
+    l'écran liste du dashboard web (US-219). Route **sync** (comme
+    `/healthz`) : une lecture SQLite seule, pas de traitement CPU notable —
+    pas besoin de `run_in_threadpool`.
+    """
+    return JSONResponse(content=list_messages(request.app.state.db))
+
+
+@app.get("/api/messages/{msg_log_id}")
+def get_message_route(msg_log_id: str, request: Request) -> JSONResponse:
+    """Détail d'un message + son parcours (`hops`, dérivé de `events` à la
+    lecture — voir `app/messages_api.py`), pour l'écran détail (US-219).
+    """
+    db = request.app.state.db
+    message = get_message(db, msg_log_id)
+    if message is None:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": f"message inconnu : {msg_log_id}"},
+        )
+    message["hops"] = get_message_hops(db, msg_log_id)
+    return JSONResponse(content=message)

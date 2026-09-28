@@ -97,6 +97,63 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ### Écarts vs conception
 - Aucun nouveau — écarts déjà consignés pour US-224 inchangés (ports
   8080/8443, TLS auto-signé).
+## 2026-09-28 — US-219 : écran « parcours d'un message » branché sur l'API réelle
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{messages_api,main}.py`,
+`dashboard/api/tests/test_messages_api.py`, `dashboard/web/{api.js,app.js,
+index.html}` (suppression de `data.js`), `docs/suivi/`.
+**Lot :** US-219 (issue #33). Branche `feat/US-219-web-timeline`, basée sur
+`feat/US-218-sse-stream` (PR #95, pas encore mergée — dépendance formelle de
+l'issue = US-110/US-111 seulement, tous deux mergés).
+
+### Fait
+- `app/messages_api.py` — `list_messages()`/`get_message()`/
+  `get_message_hops()` : lecture de la projection `messages` (US-217) +
+  reconstruction du « parcours » (`message_hops`, §11.2) **à la lecture**
+  depuis `events`, plutôt qu'une table alimentée à l'écriture (pas encore
+  créée par US-217 — écart déjà consigné, refermé autrement ici).
+- `app/main.py` — deux nouvelles routes `GET /api/messages` et
+  `GET /api/messages/{msg_log_id}` (404 si inconnu) ; ajout de
+  `CORSMiddleware` (GET uniquement, toute origine) pour que `dashboard/web`
+  fonctionne servi depuis un port/domaine différent de l'API.
+- `dashboard/web/api.js` (nouveau) — `fetchMessages()`/`fetchMessage()`
+  (fetch vers les deux routes ci-dessus) et `abonnerFlux()` (`EventSource`
+  sur `/api/stream`, US-218).
+- `dashboard/web/app.js` — mêmes gabarits que l'US-111
+  (`carteMessage`/`ligneHop`), mais `route()`/`renderListe()`/
+  `renderDetail()` deviennent asynchrones et chargent leurs données via
+  `api.js` ; jeton de génération pour qu'une réponse `fetch` périmée
+  n'écrase pas un écran plus récent ; rafraîchissement automatique sur
+  chaque événement SSE reçu (débit borné à 1/500 ms) ; écrans
+  « Chargement… »/« Erreur de connexion » ajoutés.
+- `data.js` (données bidon US-111) **supprimé** — plus utilisé.
+- Tests : 7 nouveaux (`test_messages_api.py`), sur les 20 fixtures golden
+  réelles via le vrai pipeline HTTP (`POST /ingest/batch`) : liste vide
+  avant ingestion, 404 sur id inconnu, liste triée après ingestion, détail
+  + `hops` chronologiques et corrects pour 3 scénarios nommés, `pkt.relayed`
+  mappé en `kind: "relay"` avec ttl/fanout, champs radio absents restent
+  `null` (jamais un champ manquant), aucune réponse n'expose `event_id` ou
+  un champ hors schéma (cohérence avec la redaction).
+
+### Pourquoi / décisions
+- Détail dans `docs/suivi/modules/dashboard-api.md` (US-219) et
+  `modules/dashboard-web.md` : `message_hops` dérivée à la lecture plutôt
+  que stockée (même discipline que le recalcul complet de `messages`,
+  US-217) ; `kind` d'un saut retombe sur le nom d'événement brut si hors des
+  4 valeurs §11.2, pour ne rien masquer ; CORS `GET` ouvert (données déjà
+  redigées, pas de cookie/session) ; `file://` abandonné pour `dashboard/web`
+  (anticipé par le texte de l'US-111 elle-même).
+
+### Écarts vs conception
+- `GET /api/messages`/`GET /api/messages/{id}` sans authentification
+  opérateur — consigné (même famille que `GET /api/stream`, US-218).
+- `message_hops` dérivée à la lecture, jamais stockée — consigné.
+- Vérification visuelle US-219 **non refaite dans un navigateur** : aucun
+  outil de navigation disponible dans cette session — consigné, à refaire
+  dès que possible. Compensé par `node --check` (syntaxe) + vérification
+  bout en bout par `curl` contre une vraie instance de l'API (fixtures
+  golden, CORS testé entre deux ports).
 
 ### Appris
 - Rien de nouveau pour `04-apprentissages.md`.
@@ -119,6 +176,23 @@ $ git merge origin/main --no-edit   # sur feat/US-224-deploy-vps
 (fusion sans conflit — 46 fichiers, voir détail dans le diff)
 
 $ uv run --extra dev pytest -q      # dashboard/api, après fusion + fix Dockerfile
+- Les 4 critères d'acceptation de l'US-219 sont couverts côté données :
+  timeline alimentée par l'API réelle, tolérance aux données partielles
+  (champs `null` plutôt que masqués), aucun identifiant en clair (vérifié
+  par test). Le critère « rendu correct sur mobile » n'a **pas** pu être
+  revérifié visuellement cette session (voir Écarts) — les gabarits
+  HTML/CSS sont inchangés depuis la vérification US-111 (2026-09-25), mais
+  ce n'est pas une preuve pour le nouveau chemin de données asynchrone.
+- Manque encore avant de fermer l'issue : vérification visuelle réelle
+  (navigateur), ouvrir la PR (vers `feat/US-218-sse-stream`, tant que #95
+  n'est pas mergée), revue par une personne d'une autre `area:`.
+- Fiches module mises à jour : `modules/dashboard-api.md`,
+  `modules/dashboard-web.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q   # dashboard/api
 72 passed
 
 $ uv run --extra dev ruff check app tests
@@ -596,6 +670,17 @@ All checks passed!
 - Fiche(s) module mise(s) à jour : `dashboard-api.md` (résolution du conflit)
 
 ---
+$ node --check dashboard/web/app.js dashboard/web/api.js
+(rien — syntaxe valide)
+
+$ curl -s http://127.0.0.1:18010/api/messages   # API locale, 20 fixtures ingérées
+[... 20 messages, triés par last_event_ms ...]
+
+$ curl -s -D - -o /dev/null -H "Origin: http://127.0.0.1:18011" http://127.0.0.1:18010/api/messages
+access-control-allow-origin: *
+```
+- Pas de vérification dans un vrai navigateur cette session (voir Écarts).
+
 ## 2026-09-28 — US-218 : `GET /api/stream` en SSE, rattrapage + diffusion live
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
