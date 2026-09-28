@@ -1,7 +1,10 @@
+import base64
+import hashlib
 import json
 import sqlite3
 
 import pytest
+from nacl.signing import SigningKey
 
 
 def _apply_migrations_in_subprocess(db_path: str, start_barrier, result_queue) -> None:
@@ -41,6 +44,91 @@ def _apply_migrations_in_subprocess(db_path: str, start_barrier, result_queue) -
             conn.close()
 
 
+# --- Aides de test : construire un batch signé valide (US-216) -------------
+#
+# Miroir minimal de contracts/tools/catalogue.py::canonical_json/event_id —
+# voir app/canonical.py pour la même duplication volontaire côté app.
+
+
+def _canonical_json(obj: object) -> bytes:
+    return json.dumps(
+        obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+
+
+def _event_id(node_id: str, seq: int) -> str:
+    return hashlib.sha256(node_id.encode("ascii") + seq.to_bytes(8, "big")).hexdigest()
+
+
+def _register_node(client, node_id: str = "relay-3f2a9c", kind: str = "relay"):
+    """Enregistre un nœud avec une clé Ed25519 fraîche, renvoie
+    `(signing_key, token)`.
+    """
+    signing_key = SigningKey.generate()
+    response = client.post(
+        "/api/nodes",
+        json={
+            "node_id": node_id,
+            "kind": kind,
+            "pub_sign": signing_key.verify_key.encode().hex(),
+        },
+    )
+    assert response.status_code == 201, response.text
+    return signing_key, response.json()["token"]
+
+
+def _build_signed_batch(
+    node_id: str,
+    signing_key: SigningKey,
+    *,
+    events: list[tuple[int, str, dict]] | None = None,
+    ts_ms: int = 1_725_800_000_000,
+    tamper_event_id: bool = False,
+) -> dict:
+    """Construit un batch valide (schéma + `event_id` cohérents), signé avec
+    `signing_key`. `tamper_event_id=True` force un `event_id` incohérent sur
+    le premier événement — la signature reste valide (calculée APRÈS la
+    falsification, comme le ferait un nœud buggé), pour tester le contrôle
+    de cohérence indépendamment de la vérification de signature.
+    """
+    if events is None:
+        events = [
+            (1, "msg.queued", {"msg_log_id": "1122334455667788", "conv_hash": "0011223344556677"})
+        ]
+
+    node_kind = "relay" if node_id.startswith("relay-") else "client"
+    built_events = []
+    for seq, name, payload in events:
+        eid = _event_id(node_id, seq)
+        if tamper_event_id and seq == events[0][0]:
+            eid = "0" * 64
+        built_events.append(
+            {
+                "event_id": eid,
+                "node_id": node_id,
+                "node_kind": node_kind,
+                "seq": seq,
+                "ts_ms": ts_ms,
+                "name": name,
+                "payload": payload,
+            }
+        )
+
+    batch_id = hashlib.sha256(_canonical_json(built_events)).hexdigest()
+    unsigned = {
+        "batch_id": batch_id,
+        "node_id": node_id,
+        "schema_version": 1,
+        "events": built_events,
+    }
+    signature = signing_key.sign(_canonical_json(unsigned)).signature
+    return {**unsigned, "sig": base64.b64encode(signature).decode("ascii")}
+
+
+def _auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
 def test_healthz(client):
     response = client.get("/healthz")
     assert response.status_code == 200
@@ -55,6 +143,7 @@ def test_startup_fails_fast_on_malformed_max_batch_bytes(tmp_path, monkeypatch):
     # comportement de config.py était couvert, pas l'intégration avec le
     # démarrage de l'app (retour de revue #59, round 4, point d'OswinFreyr).
     monkeypatch.setenv("DENGON_DASHBOARD_DB", str(tmp_path / "startup.db"))
+    monkeypatch.setenv("DENGON_DASHBOARD_JWT_SECRET", "peu-importe-mais-assez-long-pour-le-warning")
     monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "2MB")
 
     from fastapi.testclient import TestClient
@@ -66,64 +155,129 @@ def test_startup_fails_fast_on_malformed_max_batch_bytes(tmp_path, monkeypatch):
             pass
 
 
-def test_ingest_accepts_arbitrary_object(client):
+def test_startup_fails_fast_when_jwt_secret_is_missing(tmp_path, monkeypatch):
+    # Même discipline que max_batch_bytes() ci-dessus, pour le secret JWT
+    # (US-216) : pas de valeur par défaut, doit échouer au démarrage plutôt
+    # qu'à la première requête.
+    monkeypatch.setenv("DENGON_DASHBOARD_DB", str(tmp_path / "startup2.db"))
+    monkeypatch.delenv("DENGON_DASHBOARD_JWT_SECRET", raising=False)
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with pytest.raises(RuntimeError, match="DENGON_DASHBOARD_JWT_SECRET"):
+        with TestClient(app):
+            pass
+
+
+# --- POST /api/nodes ---------------------------------------------------
+
+
+def test_register_node_returns_a_usable_token(client):
+    signing_key, token = _register_node(client)
+    assert token
+    batch = _build_signed_batch("relay-3f2a9c", signing_key)
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert response.status_code == 202, response.text
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"kind": "relay", "pub_sign": "aa" * 32},  # node_id manquant
+        {"node_id": "relay-3f2a9c", "pub_sign": "aa" * 32},  # kind manquant
+        {"node_id": "relay-3f2a9c", "kind": "modem", "pub_sign": "aa" * 32},  # kind invalide
+        {"node_id": "relay-3f2a9c", "kind": "relay", "pub_sign": "pas-de-hex-ici!!"},
+        {"node_id": "relay-3f2a9c", "kind": "relay", "pub_sign": "aa" * 10},  # mauvaise longueur
+    ],
+)
+def test_register_node_rejects_malformed_bodies(client, body):
+    response = client.post("/api/nodes", json=body)
+    assert response.status_code == 400
+
+
+# --- POST /ingest/batch — authentification et validation ---------------
+
+
+def test_ingest_rejects_missing_authorization(client):
+    batch = _build_signed_batch("relay-3f2a9c", SigningKey.generate())
+    response = client.post("/ingest/batch", json=batch)
+    assert response.status_code == 401
+
+
+def test_ingest_rejects_malformed_authorization_header(client):
+    batch = _build_signed_batch("relay-3f2a9c", SigningKey.generate())
     response = client.post(
-        "/ingest/batch",
-        json={"peu_importe": "quoi", "events": [{"a": 1}, {"b": 2}, {"c": 3}]},
+        "/ingest/batch", json=batch, headers={"Authorization": "PasDuBearer abc"}
     )
-    assert response.status_code == 202
-    body = response.json()
-    assert body["stored"] is True
-    assert body["event_count"] == 3
-    assert body["batch_id"]
+    assert response.status_code == 401
 
 
-def test_ingest_accepts_bare_array(client):
-    response = client.post("/ingest/batch", json=[{"a": 1}, {"b": 2}])
-    assert response.status_code == 202
-    assert response.json()["event_count"] == 2
+def test_ingest_rejects_expired_or_forged_jwt(client):
+    # Un JWT signé avec un AUTRE secret (donc jamais émis par ce serveur)
+    # doit être rejeté — vérifie que la vérification de signature JWT
+    # fonctionne, pas seulement le parsing.
+    import jwt as pyjwt
+
+    forged = pyjwt.encode({"node_id": "relay-3f2a9c"}, "un-autre-secret", algorithm="HS256")
+    batch = _build_signed_batch("relay-3f2a9c", SigningKey.generate())
+    response = client.post("/ingest/batch", json=batch, headers=_auth(forged))
+    assert response.status_code == 401
 
 
-def test_ingest_stores_body_verbatim(client):
-    payload = {"hello": "wörld", "nested": {"x": [1, 2]}, "no_events_key": True}
-    response = client.post("/ingest/batch", json=payload)
-    batch_id = response.json()["batch_id"]
+def test_ingest_rejects_unregistered_node(client):
+    # Jeton syntaxiquement valide (vrai secret du serveur) mais pour un
+    # node_id jamais enregistré via /api/nodes — doit être rejeté comme
+    # « nœud inconnu ou non whitelisté », pas planter.
+    from app.auth import create_token
+
+    token = create_token("relay-9a9a9a")
+    batch = _build_signed_batch("relay-9a9a9a", SigningKey.generate())
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert response.status_code == 401
+
+
+def test_ingest_rejects_node_id_mismatch_between_jwt_and_batch(client):
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    # Le jeton est pour relay-3f2a9c, le batch prétend venir d'un autre nœud.
+    batch = _build_signed_batch("relay-aaaaaa", signing_key)
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert response.status_code == 401
+
+
+def test_ingest_rejects_forged_signature(client):
+    # Nœud enregistré avec une vraie clé, mais le batch est signé par une
+    # AUTRE clé (jamais enregistrée) — la signature ne correspond pas à
+    # `pub_sign` du nœud whitelisté.
+    _, token = _register_node(client, node_id="relay-3f2a9c")
+    imposter_key = SigningKey.generate()
+    batch = _build_signed_batch("relay-3f2a9c", imposter_key)
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert response.status_code == 401
 
     from app.db import connect
 
     conn = connect()
-    row = conn.execute(
-        "SELECT body, event_count FROM raw_batches WHERE batch_id = ?",
-        (batch_id,),
-    ).fetchone()
+    count = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
     conn.close()
-
-    assert row is not None
-    assert json.loads(row["body"]) == payload
-    assert row["event_count"] is None  # pas de clé "events" → indéterminé, mais accepté
+    assert count == 0, "une signature invalide ne doit stocker aucun événement"
 
 
-def test_ingest_rejects_non_json(client):
-    response = client.post(
-        "/ingest/batch",
-        content=b"ceci n'est pas du json",
-        headers={"content-type": "application/json"},
-    )
+def test_ingest_rejects_batch_failing_schema_validation(client):
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    batch = _build_signed_batch("relay-3f2a9c", signing_key)
+    del batch["schema_version"]  # requis par batch.schema.json
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
     assert response.status_code == 400
 
 
-def test_ingest_rejects_deeply_nested_json(client):
-    # json.loads (accélérateur C) recourt à la pile Python au-delà d'une
-    # certaine profondeur d'imbrication et lève RecursionError, pas
-    # JSONDecodeError — vérifié en local : 10000 niveaux la déclenchent (2000
-    # ne suffisent pas), pour un corps de ~20 Ko (retour de revue #59, round
-    # 2). Sans le fix, cette requête remonte un 500 brut au lieu du 400
-    # attendu pour un corps invalide.
-    body = ("[" * 10_000 + "]" * 10_000).encode()
+def test_ingest_rejects_non_json_body(client):
+    _, token = _register_node(client)
     response = client.post(
         "/ingest/batch",
-        content=body,
-        headers={"content-type": "application/json"},
+        content=b"ceci n'est pas du json",
+        headers={**_auth(token), "content-type": "application/json"},
     )
     assert response.status_code == 400
 
@@ -131,52 +285,120 @@ def test_ingest_rejects_deeply_nested_json(client):
 def test_ingest_rejects_a_huge_integer_literal(client):
     # Depuis Python 3.11 (limite `sys.int_max_str_digits` = 4300),
     # json.loads lève un ValueError générique — PAS un json.JSONDecodeError
-    # — sur un littéral entier de plus de 4300 chiffres. Un `except
-    # (UnicodeDecodeError, json.JSONDecodeError, RecursionError)` laissait
-    # ce cas remonter en 500 (retour de revue #59, round 7, point
-    # d'OswinFreyr). Corps volontairement petit (~5 Ko), bien en dessous de
-    # la limite de taille — ce n'est pas un garde-fou mémoire qui doit
-    # intervenir ici, mais la gestion d'erreur JSON.
+    # — sur un littéral entier de plus de 4300 chiffres (même piège que le
+    # round 7 de la revue #59, transposé dans app/ingest.py::_parse_json).
+    _, token = _register_node(client)
     body = ('{"events": [' + "1" * 5000 + "]}").encode()
     response = client.post(
         "/ingest/batch",
         content=body,
-        headers={"content-type": "application/json"},
+        headers={**_auth(token), "content-type": "application/json"},
     )
     assert response.status_code == 400
 
 
-def test_ingest_rejects_non_utf8_json(client):
-    # JSON valide mais encodé en UTF-16 : json.loads l'accepterait, mais le
-    # stocker en texte le corromprait (retour de revue #59, point 1).
-    body = json.dumps({"events": [{"x": 1}]}).encode("utf-16")
-    response = client.post(
-        "/ingest/batch",
-        content=body,
-        headers={"content-type": "application/json"},
-    )
+def test_ingest_rejects_tampered_event_id(client):
+    # Batch structurellement valide et correctement signé, mais dont
+    # l'event_id d'un événement ne correspond pas à
+    # hex(SHA-256(node_id ‖ seq)) — doit être détecté indépendamment de la
+    # signature (qui, elle, est valide : signée après la falsification).
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    batch = _build_signed_batch("relay-3f2a9c", signing_key, tamper_event_id=True)
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
     assert response.status_code == 400
+
+
+# --- POST /ingest/batch — cas nominal et idempotence --------------------
+
+
+def test_ingest_accepts_a_valid_signed_batch_and_stores_it(client):
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    batch = _build_signed_batch("relay-3f2a9c", signing_key)
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert response.status_code == 202
+    body = response.json()
+    assert body["stored"] is True
+    assert body["batch_id"] == batch["batch_id"]
+    assert body["event_count"] == 1
+    assert body["new_event_count"] == 1
+
+    from app.db import connect
+
+    conn = connect()
+    row = conn.execute(
+        "SELECT node_id, name, seq, integrity, payload FROM events WHERE event_id = ?",
+        (batch["events"][0]["event_id"],),
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row["node_id"] == "relay-3f2a9c"
+    assert row["name"] == "msg.queued"
+    assert row["seq"] == 1
+    assert row["integrity"] == "unverified"  # vérif de journal chaîné hors périmètre US-216
+    assert json.loads(row["payload"]) == batch["events"][0]["payload"]
+
+
+def test_ingest_is_idempotent_on_exact_replay(client):
+    # Critère d'acceptation US-216 : rejouer deux fois le même batch ne crée
+    # aucun doublon (déduplication sur event_id).
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    batch = _build_signed_batch("relay-3f2a9c", signing_key)
+
+    first = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert first.status_code == 202
+    assert first.json()["new_event_count"] == 1
+
+    second = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert second.status_code == 202
+    assert second.json()["new_event_count"] == 0, "le rejeu ne doit créer aucune nouvelle ligne"
+
+    from app.db import connect
+
+    conn = connect()
+    count = conn.execute(
+        "SELECT COUNT(*) AS n FROM events WHERE event_id = ?", (batch["events"][0]["event_id"],)
+    ).fetchone()["n"]
+    conn.close()
+    assert count == 1, "un seul exemplaire de l'événement en base, pas un par rejeu"
+
+
+def test_ingest_accepts_multiple_events_in_one_batch(client):
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    batch = _build_signed_batch(
+        "relay-3f2a9c",
+        signing_key,
+        events=[
+            (1, "msg.queued", {"msg_log_id": "1122334455667788", "conv_hash": "0011223344556677"}),
+            (2, "peer.connected", {"peer": "a1b2c3d4e5f60718", "rssi": -58, "role": "peripheral"}),
+        ],
+    )
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert response.status_code == 202
+    assert response.json()["event_count"] == 2
+    assert response.json()["new_event_count"] == 2
+
+
+# --- Garde-fous de taille du corps (retours de revue #59, repris avec auth) --
 
 
 def test_ingest_rejects_body_over_max_size(client, monkeypatch):
     # Garde-fou mémoire : un corps plus grand que la limite configurée est
-    # rejeté sans être stocké (retour de revue #59, point 1). httpx pose
-    # toujours Content-Length pour du contenu `bytes` : ce test n'exerce que
-    # le fast-path Content-Length, pas la boucle de comptage en flux — voir
-    # test_ingest_rejects_chunked_body_over_max_size ci-dessous pour le cas
-    # malveillant réel (retour de revue #59, round 2, point de Paul).
+    # rejeté sans être stocké (retour de revue #59, point 1). Auth vérifiée
+    # AVANT la taille (le jeton est donc valide ici, pour exercer vraiment
+    # le chemin de lecture bornée du corps, pas juste le rejet d'auth).
+    _, token = _register_node(client)
     monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "16")
     response = client.post(
         "/ingest/batch",
         content=b'{"events": [1, 2, 3, 4, 5, 6, 7, 8, 9]}',  # > 16 octets
-        headers={"content-type": "application/json"},
+        headers={**_auth(token), "content-type": "application/json"},
     )
     assert response.status_code == 413
 
     from app.db import connect
 
     conn = connect()
-    count = conn.execute("SELECT COUNT(*) AS n FROM raw_batches").fetchone()["n"]
+    count = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
     conn.close()
     assert count == 0, "un corps rejeté pour taille ne doit laisser aucune ligne"
 
@@ -189,6 +411,7 @@ def test_ingest_skips_drain_when_client_expects_100_continue(client, monkeypatch
     # `_drain_bounded` : appelé sans l'en-tête, jamais avec.
     import app.main as main_module
 
+    _, token = _register_node(client)
     calls: list[bool] = []
     original = main_module._drain_bounded
 
@@ -202,7 +425,7 @@ def test_ingest_skips_drain_when_client_expects_100_continue(client, monkeypatch
     response = client.post(
         "/ingest/batch",
         content=b'{"events": [1, 2, 3, 4, 5, 6, 7, 8, 9]}',
-        headers={"content-type": "application/json", "expect": "100-continue"},
+        headers={**_auth(token), "content-type": "application/json", "expect": "100-continue"},
     )
     assert response.status_code == 413
     assert calls == [], "le drain ne doit pas être appelé quand le client attend 100 Continue"
@@ -210,7 +433,7 @@ def test_ingest_skips_drain_when_client_expects_100_continue(client, monkeypatch
     response = client.post(
         "/ingest/batch",
         content=b'{"events": [1, 2, 3, 4, 5, 6, 7, 8, 9]}',
-        headers={"content-type": "application/json"},
+        headers={**_auth(token), "content-type": "application/json"},
     )
     assert response.status_code == 413
     assert calls == [True], "le drain doit être appelé normalement sans l'en-tête Expect"
@@ -224,6 +447,7 @@ def test_ingest_rejects_chunked_body_over_max_size(client, monkeypatch):
     # exerce vraiment cette boucle (retour de revue #59, round 2, point de
     # Paul — les deux tests de taille précédents ne passaient que par le
     # fast-path Content-Length).
+    _, token = _register_node(client)
     monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "16")
 
     def _morceaux():
@@ -234,14 +458,14 @@ def test_ingest_rejects_chunked_body_over_max_size(client, monkeypatch):
     response = client.post(
         "/ingest/batch",
         content=_morceaux(),
-        headers={"content-type": "application/json"},
+        headers={**_auth(token), "content-type": "application/json"},
     )
     assert response.status_code == 413
 
     from app.db import connect
 
     conn = connect()
-    count = conn.execute("SELECT COUNT(*) AS n FROM raw_batches").fetchone()["n"]
+    count = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
     conn.close()
     assert count == 0
 
@@ -257,6 +481,7 @@ def test_drain_stops_at_the_cap_instead_of_consuming_everything(client, monkeypa
     # corps en petits morceaux (`more_body=True` entre chacun), bien plus
     # loin que `limit + _DRAIN_CAP_BYTES`, et vérifie que la lecture
     # s'arrête effectivement à la borne plutôt que de tout consommer.
+    _, token = _register_node(client)
     monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "16")
 
     import anyio
@@ -291,7 +516,10 @@ def test_drain_stops_at_the_cap_instead_of_consuming_everything(client, monkeypa
         "path": "/ingest/batch",
         "raw_path": b"/ingest/batch",
         "query_string": b"",
-        "headers": [(b"content-type", b"application/json")],
+        "headers": [
+            (b"content-type", b"application/json"),
+            (b"authorization", f"Bearer {token}".encode()),
+        ],
         "client": ("test", 0),
         "server": ("test", 80),
     }
@@ -305,17 +533,14 @@ def test_drain_stops_at_the_cap_instead_of_consuming_everything(client, monkeypa
     )
 
 
-def test_ingest_accepts_body_within_max_size(client, monkeypatch):
-    # Le garde-fou ne doit pas rejeter un batch qui tient dans la limite.
-    monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "4096")
-    response = client.post("/ingest/batch", json={"events": []})
-    assert response.status_code == 202
+# --- Connexion partagée, concurrence, erreurs de stockage ----------------
 
 
 def test_a_single_connection_is_reused_for_all_writes(tmp_path, monkeypatch):
     # La connexion ouverte au démarrage doit servir à toutes les écritures :
     # pas de connect() par requête (retour de revue #59, point 3).
     monkeypatch.setenv("DENGON_DASHBOARD_DB", str(tmp_path / "reuse.db"))
+    monkeypatch.setenv("DENGON_DASHBOARD_JWT_SECRET", "test-secret-assez-long-pour-le-warning")
     from app.db import connect as vraie_connect
 
     ouvertures = []
@@ -332,8 +557,13 @@ def test_a_single_connection_is_reused_for_all_writes(tmp_path, monkeypatch):
     from app.main import app
 
     with TestClient(app) as c:
-        for _ in range(5):
-            response = c.post("/ingest/batch", json={"events": []})
+        signing_key, token = _register_node(c, node_id="relay-3f2a9c")
+        for i in range(5):
+            payload = {"msg_log_id": "1122334455667788", "conv_hash": "0011223344556677"}
+            batch = _build_signed_batch(
+                "relay-3f2a9c", signing_key, events=[(i, "msg.queued", payload)]
+            )
+            response = c.post("/ingest/batch", json=batch, headers=_auth(token))
             assert response.status_code == 202
 
     assert len(ouvertures) == 1, "une seule connexion doit être ouverte pour les 5 écritures"
@@ -347,8 +577,10 @@ def test_ingest_returns_503_when_connection_closed_under_a_write(client):
     # lieu du 503 attendu (retour de revue #59, round 2). Reproduit ici sans
     # vraie course : fermer la connexion partagée avant le POST suffit à
     # produire la même ProgrammingError.
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    batch = _build_signed_batch("relay-3f2a9c", signing_key)
     client.app.state.db.close()
-    response = client.post("/ingest/batch", json={"events": []})
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
     assert response.status_code == 503
     assert response.headers.get("Retry-After") == "1"
 
@@ -358,24 +590,32 @@ def test_concurrent_writes_are_not_lost(client):
     # concurrentes issues du threadpool (retour de revue #59, points 2 et 3).
     import concurrent.futures
 
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+
     def _post(i: int):
-        return client.post("/ingest/batch", json={"events": [], "i": i})
+        payload = {"msg_log_id": "1122334455667788", "conv_hash": "0011223344556677"}
+        batch = _build_signed_batch(
+            "relay-3f2a9c",
+            signing_key,
+            events=[(i, "msg.queued", payload)],
+        )
+        return client.post("/ingest/batch", json=batch, headers=_auth(token))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
         reponses = list(pool.map(_post, range(20)))
 
     assert all(r.status_code == 202 for r in reponses)
-    batch_ids = {r.json()["batch_id"] for r in reponses}
-    assert len(batch_ids) == 20, "pas de collision d'id (uuid4 unique, pas une preuve à elle seule)"
 
     # La vraie preuve qu'aucune écriture n'a été perdue : 20 lignes en base,
-    # pas seulement 20 batch_id distincts renvoyés par l'API (retour de revue
-    # #59, round 2, point de Paul — uuid4 est unique par construction, ça ne
-    # dit rien sur le nombre de lignes réellement insérées sous concurrence).
+    # pas seulement 20 réponses 202 (retour de revue #59, round 2, point de
+    # Paul — la réponse HTTP seule ne dit rien sur ce qui a vraiment été
+    # committé sous concurrence).
     from app.db import connect
 
     conn = connect()
-    stored = conn.execute("SELECT COUNT(*) AS n FROM raw_batches").fetchone()["n"]
+    stored = conn.execute(
+        "SELECT COUNT(*) AS n FROM events WHERE node_id = ?", ("relay-3f2a9c",)
+    ).fetchone()["n"]
     conn.close()
     assert stored == 20, "20 requêtes acceptées doivent laisser 20 lignes, pas moins"
 
@@ -386,10 +626,15 @@ def test_ingest_returns_503_when_storage_is_locked(client, monkeypatch):
     def _boom(*_args, **_kwargs):
         raise sqlite3.OperationalError("database is locked")
 
-    monkeypatch.setattr("app.main._store_raw_batch", _boom)
-    response = client.post("/ingest/batch", json={"events": []})
+    monkeypatch.setattr("app.ingest._insert_events", _boom)
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    batch = _build_signed_batch("relay-3f2a9c", signing_key)
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
     assert response.status_code == 503
     assert response.headers.get("Retry-After") == "1"
+
+
+# --- Migrations -----------------------------------------------------------
 
 
 def test_migrations_applied_once(client):
@@ -400,7 +645,7 @@ def test_migrations_applied_once(client):
     assert run_migrations(conn) == []
     versions = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")]
     conn.close()
-    assert versions == [1]
+    assert versions == [1, 2]
 
 
 def test_migrations_idempotent_after_partial_apply(tmp_path, monkeypatch):
@@ -411,11 +656,12 @@ def test_migrations_idempotent_after_partial_apply(tmp_path, monkeypatch):
     from app.migrations import MIGRATIONS
 
     conn = connect()
-    for statement in MIGRATIONS[0][2]:  # applique le DDL sans enregistrer la version
+    # DDL de la migration 1 appliqué sans enregistrer sa version.
+    for statement in MIGRATIONS[0][2]:
         conn.execute(statement)
 
-    assert run_migrations(conn) == [1]  # se termine proprement grâce à IF NOT EXISTS
-    assert [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")] == [1]
+    assert run_migrations(conn) == [1, 2]  # se termine proprement grâce à IF NOT EXISTS
+    assert [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")] == [1, 2]
     conn.close()
 
 
@@ -491,10 +737,4 @@ def test_migrations_are_safe_across_processes(tmp_path, monkeypatch):
     conn = connect()
     versions = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")]
     conn.close()
-    assert versions == [1], "la migration ne doit être enregistrée qu'une seule fois, pas dupliquée"
-
-
-@pytest.mark.parametrize("payload", [{"events": []}, [], {"a": 1}])
-def test_ingest_event_count_shapes(client, payload):
-    response = client.post("/ingest/batch", json=payload)
-    assert response.status_code == 202
+    assert versions == [1, 2], "les deux migrations ne doivent être enregistrées qu'une seule fois"

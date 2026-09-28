@@ -18,6 +18,8 @@ MAX_BATCH_BYTES_ENV_VAR = "DENGON_DASHBOARD_MAX_BATCH_BYTES"
 # vrai volume de démo le justifie.
 DEFAULT_MAX_BATCH_BYTES = 2 * 1024 * 1024  # 2 MiB
 
+JWT_SECRET_ENV_VAR = "DENGON_DASHBOARD_JWT_SECRET"
+
 
 def db_path() -> Path:
     """Chemin du fichier SQLite du dashboard."""
@@ -40,3 +42,23 @@ def max_batch_bytes() -> int:
         raise RuntimeError(
             f"{MAX_BATCH_BYTES_ENV_VAR}={raw!r} n'est pas un entier valide"
         ) from exc
+
+
+def jwt_secret() -> str:
+    """Secret HMAC pour signer/vérifier les JWT courts des nœuds (B-2/C-5,
+    `docs/synthese/06-securite.md`).
+
+    Pas de valeur par défaut, volontairement — contrairement à
+    `max_batch_bytes()` : un secret par défaut connu de tous les
+    déploiements serait une clé maîtresse publique, exactement ce qu'un
+    « jeton court » est censé empêcher. Doit être positionné avant le
+    démarrage (validé tôt par `lifespan`, même logique que
+    `max_batch_bytes()` — échouer au démarrage plutôt qu'à la première
+    requête).
+    """
+    raw = os.environ.get(JWT_SECRET_ENV_VAR)
+    if not raw:
+        raise RuntimeError(
+            f"{JWT_SECRET_ENV_VAR} doit être défini (secret JWT, aucune valeur par défaut)"
+        )
+    return raw
