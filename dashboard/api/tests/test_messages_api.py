@@ -2,43 +2,13 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
+from conftest import _ingest_fixture_batches, _load_fixture_batches
 
 from app.projections import group_by_msg_log_id
 
-FIXTURES_DIR = Path(__file__).resolve().parents[3] / "contracts" / "events" / "fixtures"
-
-
-def _load_fixture_batches() -> list[dict]:
-    return [json.loads(path.read_text()) for path in sorted(FIXTURES_DIR.glob("*.json"))]
-
-
-_TEST_SIGNING_PUB_HEX = "c561fa9f643fe5c60113cce9db282fde2b9e5ca5fc6b6fc0d1679bb339c9f72f"
-
-
-def _register_and_authorize(client, node_id: str, kind: str) -> dict[str, str]:
-    response = client.post(
-        "/api/nodes",
-        json={"node_id": node_id, "kind": kind, "pub_sign": _TEST_SIGNING_PUB_HEX},
-    )
-    assert response.status_code == 201, response.text
-    return {"Authorization": f"Bearer {response.json()['token']}"}
-
 
 def _ingest_all_fixtures(client) -> None:
-    batches = _load_fixture_batches()
-    node_ids = {
-        (b["node_id"], "relay" if b["node_id"].startswith("relay-") else "client") for b in batches
-    }
-    headers_by_node = {
-        node_id: _register_and_authorize(client, node_id, kind) for node_id, kind in node_ids
-    }
-    for batch in batches:
-        response = client.post(
-            "/ingest/batch", json=batch, headers=headers_by_node[batch["node_id"]]
-        )
-        assert response.status_code == 202, response.text
+    _ingest_fixture_batches(client, _load_fixture_batches())
 
 
 def _all_fixture_msg_log_ids() -> set[str]:

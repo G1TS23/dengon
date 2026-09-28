@@ -79,11 +79,17 @@ def get_message_hops(db: LockedConnection, msg_log_id: str) -> list[dict]:
     (`msg.queued`, `envelope.*`, `ack.observed`, …), pour que « tient avec
     des données partielles » reste visible comme un trou dans le fil plutôt
     que comme un silence total.
+
+    Tri sur `(ts_ms, rowid)` : `ts_ms` seul ne départage pas deux événements
+    arrivés à la même milliseconde (plusieurs relais rapprochés, horloges de
+    démo synchronisées) — `rowid` (ordre d'insertion) donne au moins un ordre
+    stable et reproductible dans ce cas, même si l'ordre chronologique exact
+    reste indécidable en cas d'égalité stricte.
     """
     with db.locked() as conn:
         rows = conn.execute(
             "SELECT node_id, ts_ms, name, payload FROM events "
-            "WHERE json_extract(payload, '$.msg_log_id') = ? ORDER BY ts_ms",
+            "WHERE json_extract(payload, '$.msg_log_id') = ? ORDER BY ts_ms, rowid",
             (msg_log_id,),
         ).fetchall()
     hops = []

@@ -538,14 +538,27 @@ dans `03-ecarts-conception.md`.
     réseau — plus proche de « tient avec des données partielles » (les
     événements applicatifs du cycle de vie du message comptent aussi comme
     du parcours, pas seulement les relais physiques).
-  - **CORS `GET` ouvert (`allow_origins=["*"]`, `allow_methods=["GET"]`)** :
-    `dashboard/web` est une page statique potentiellement servie depuis un
-    port/domaine différent (voire `file://`, origine `null`) — sans CORS, le
-    navigateur bloque `fetch`/`EventSource` avant le départ de la requête.
-    Limité aux méthodes `GET` : ces routes ne renvoient que des données déjà
-    redigées, sans cookie/session, et `POST /ingest/batch`/`POST /api/nodes`
-    restent hors de la portée CORS ouverte (ils exigent un JWT qu'aucune
-    origine tierce ne peut deviner).
+  - **CORS `GET` ouvert (`allow_origins=["*"]`, `allow_methods=["GET"]`,
+    `allow_headers=["Last-Event-ID"]`)** : `dashboard/web` est une page
+    statique potentiellement servie depuis un port/domaine différent (voire
+    `file://`, origine `null`) — sans CORS, le navigateur bloque
+    `fetch`/`EventSource` avant le départ de la requête. Limité aux méthodes
+    `GET` : ces routes ne renvoient que des données déjà redigées, sans
+    cookie/session, et `POST /ingest/batch`/`POST /api/nodes` restent hors de
+    la portée CORS ouverte (ils exigent un JWT qu'aucune origine tierce ne
+    peut deviner). `allow_headers` **corrigé après revue de la PR #100** :
+    sans `Last-Event-ID` explicitement autorisé, le preflight cross-origine
+    de la reconnexion `EventSource` (rattrapage SSE, US-218) était rejeté par
+    Starlette dès que `dashboard/web` et l'API n'étaient pas sur la même
+    origine — silencieusement, sans `onerror` géré côté `api.js`.
+  - **`get_message_hops()` trié sur `(ts_ms, rowid)`**, pas seulement
+    `ts_ms` — **corrigé après revue de la PR #100** : deux événements du même
+    message peuvent partager le même `ts_ms` (résolution milliseconde,
+    plusieurs relais rapprochés) ; sans clé secondaire, leur ordre dans
+    `hops` dépendait de l'ordre d'arrivée des batches côté serveur plutôt que
+    d'un ordre stable. `rowid` (ordre d'insertion) ne garantit pas la
+    chronologie exacte en cas d'égalité stricte, mais donne un résultat
+    reproductible.
 
 ## Tests
 

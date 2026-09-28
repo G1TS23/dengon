@@ -97,6 +97,65 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ### Écarts vs conception
 - Aucun nouveau — écarts déjà consignés pour US-224 inchangés (ports
   8080/8443, TLS auto-signé).
+## 2026-09-28 — US-219 : corrections suite à la revue de la PR #100
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,messages_api}.py`,
+`dashboard/api/tests/{conftest,test_projections,test_messages_api}.py`,
+`docs/suivi/`.
+**Lot :** US-219 (issue #33). Branche `feat/US-219-web-timeline` (PR #100).
+
+### Fait
+- Revue de la PR #100 par un autre collaborateur (Oswin Freyr, commentaire
+  automatisé sur la PR) : 3 constats vérifiés contre le code réel, tous
+  confirmés, puis corrigés.
+- `app/main.py` — `CORSMiddleware` : ajout de
+  `allow_headers=["Last-Event-ID"]`. Sans lui, le preflight cross-origine
+  déclenché par la reconnexion automatique d'un `EventSource` (`GET
+  /api/stream`, US-218 — le navigateur renvoie `Last-Event-ID` pour le
+  rattrapage) était rejeté par Starlette dès que `dashboard/web` et l'API ne
+  partagent pas la même origine — exactement le cas d'usage documenté pour
+  ce CORS. Le flux ne rattrapait plus après coupure, silencieusement.
+- `app/messages_api.py::get_message_hops()` — tri `ORDER BY ts_ms` →
+  `ORDER BY ts_ms, rowid`. Deux événements du même message peuvent partager
+  le même `ts_ms` (résolution ms, plusieurs relais rapprochés) ; sans clé
+  secondaire, leur ordre dans `hops` dépendait de l'ordre d'arrivée des
+  batches côté serveur, pas de la chronologie réelle.
+- `dashboard/api/tests/test_messages_api.py` dupliquait mot pour mot
+  `FIXTURES_DIR`/`_load_fixture_batches()`/`_register_and_authorize()`/
+  l'équivalent de `_ingest_fixture_batches()`, déjà présents dans
+  `test_projections.py`. Helpers déplacés dans `conftest.py` (jusque-là
+  limité à la fixture `client`), les deux fichiers de test les important
+  désormais.
+
+### Pourquoi / décisions
+- Correctifs appliqués directement sur `feat/US-219-web-timeline` (branche
+  de la PR #100 elle-même), pas sur une branche séparée : ce sont des
+  correctifs de revue sur une PR déjà ouverte, pas un nouveau lot de travail.
+
+### Écarts vs conception
+- Aucun nouveau — écarts déjà consignés pour US-219 inchangés.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les 3 constats de la revue de la PR #100 sont corrigés. Toujours en
+  attente avant de fermer l'issue : vérification visuelle réelle en
+  navigateur (voir entrée précédente), revue humaine.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` : pas de changement de périmètre/pourcentage, pas
+  édité.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q        # dashboard/api
+72 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+```
+
 ## 2026-09-28 — US-219 : écran « parcours d'un message » branché sur l'API réelle
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

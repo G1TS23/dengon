@@ -105,10 +105,16 @@ app = FastAPI(
 # `allow_methods` exclut `POST` — un site tiers ne peut pas s'en servir pour
 # faire écrire un visiteur dans `/ingest/batch`/`/api/nodes` (qui exigent de
 # toute façon un jeton JWT qu'aucune origine ne peut deviner).
+# `allow_headers` inclut `Last-Event-ID` : c'est l'en-tête que le navigateur
+# renvoie automatiquement à la reconnexion d'un `EventSource` (`GET
+# /api/stream`, US-218) pour le rattrapage sans perte — sans lui dans la
+# liste, le preflight cross-origine de la reconnexion est rejeté par
+# Starlette et le flux ne rattrape plus après une coupure.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["GET"],
+    allow_headers=["Last-Event-ID"],
 )
 
 
