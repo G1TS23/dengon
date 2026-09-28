@@ -91,6 +91,114 @@ $ cargo doc -p dengon-core --no-deps
 
 ---
 
+## 2026-09-28 — Nettoyage post-merge : retours de revue arrivés après le merge de #60 et #63
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/00-journal.md`, `docs/suivi/modules/dengon-core.md`,
+`docs/suivi/03-ecarts-conception.md`, `contracts/events/envelope.schema.json`
+**Lot :** suivi (US-107/US-108 déjà livrées), pas de nouvelle US
+
+### Fait
+- Les PR #60 et #63 ont été mergées (2026-09-28, 08:00 et 08:05) avant
+  qu'Oswin ne poste ses derniers rounds de revue (08:51 et 08:52) — les
+  retours portaient donc sur du code déjà intégré dans `main`. Aucun bug
+  de code signalé dans ces deux rounds (Oswin : « aucun problème côté
+  code » / « bon pour moi »), seulement des inexactitudes de suivi,
+  reprises ici en petit commit direct plutôt qu'en PR de plus.
+- **`00-journal.md`** : séparateur `---` manquant entre l'entrée US-103
+  (Spike C) et l'entrée US-111 — même dégât de merge union que celui déjà
+  corrigé plus haut dans le fichier.
+- **`modules/dengon-core.md`** : « un paquet broadcast relayable porte
+  `RELAY_OK` » précisé — le test couvre aussi des paquets **adressés**.
+- **`03-ecarts-conception.md`** : deux valeurs de collision corrigées
+  (~0,03 % pour 100 nœuds, pas ~0,003 % ; ~66 % pour 6 000 nœuds, pas
+  ~63 % — la valeur à 1 000 nœuds, ~2,9 %, était déjà correcte). Entrée
+  « Piège JSON Schema… partiellement corrigé (dette assumée) » : nouvelle
+  mise à jour datée expliquant que le round 4 avait *aussi* fermé le trou
+  côté `node_id` (pas seulement `name`), rendant le titre et le corps de
+  l'entrée obsolètes pour les deux champs — corps d'origine conservé par
+  discipline append-only, la mise à jour dit où est l'état réel.
+- **`contracts/events/envelope.schema.json`** : description de `name`
+  corrigée — « même trou que node_id ci-dessous » n'est plus vrai
+  (`node_id` n'a plus ce trou depuis le round 4).
+
+### Pourquoi / décisions
+- Corrections en petit commit direct sur une branche dédiée plutôt qu'en
+  rouvrant une discussion de PR déjà fermée — le contenu est de la
+  documentation de suivi, pas du code sensible, et les deux PR sources
+  sont closes.
+## 2026-09-28 — US-221 : `dengon-sim`, harness N nœuds + réseau simulé déterministe
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-sim/` (`src/{alea,reseau,harness,scenario,cli}.rs`,
+`lib.rs`, `main.rs`, `scenarios/*.ron`, `tests/`), `Cargo.lock`,
+`.github/workflows/sim.yml`
+**Lot :** US-221 (#35), branche `feat/US-221-dengon-sim`
+
+### Fait
+- **`SimTransport`** (`src/reseau.rs`) : implémentation du contrat gelé
+  `dengon_ble::Transport` sur un réseau en mémoire partagé (horloge
+  virtuelle, arêtes radio avec latence / gigue / perte, partitions, files
+  d'événements datées, trace). Passe **la suite de conformité US-105**
+  (`tests/conformite_sim.rs`), comme `MockTransport`.
+- **Harness** (`src/harness.rs`) : `Simulation` avec N nœuds, chacun avec un
+  `Comportement` injecté ; `Inondation` comme relais de démonstration.
+- **Scénarios RON** (`src/scenario.rs`, `scenarios/`) : `direct`, `multihop`,
+  `partition_merge`, `lossy_mesh` ; validation (indices, pertes, pas),
+  actions datées (`Emettre`, `Partitionner`, `Reunir`, `Relier`, `Delier`),
+  attendus (`Livre`, `NonLivre`), empreinte de trace.
+- **CLI** `dengon-sim [--graine N] <scenario.ron>...` (`src/cli.rs`).
+- **Job CI `sim`** (`.github/workflows/sim.yml`) : tests du crate, puis
+  scénarios exécutés **deux fois** en release et sorties comparées (`diff`).
+
+### Pourquoi / décisions
+- **Déterminisme par construction** : horloge virtuelle, SplitMix64 maison à
+  graine fixe (pas `rand`, dont l'algorithme par défaut peut changer),
+  `BTreeMap` partout, nœuds servis par indice croissant.
+- **Conformité au contrat plutôt que simulateur « à part »** : un comportement
+  validé en simulation vaut pour tout transport conforme.
+- **Comportement injecté** : le vrai nœud `dengon-core` a besoin de
+  `sync::routing` (US-209) et de la façade `api` (US-301). Le harness n'aura
+  pas à changer pour l'accueillir.
+- Scénarios dans `crates/dengon-sim/scenarios/` (dossier créé par US-104), pas
+  `sim/scenarios/` comme l'écrit `synthese/10` §4.3.
+
+### Écarts vs conception
+- 2 entrées dans `03-ecarts-conception.md` : nœuds simulés = relais
+  `Inondation` et non `dengon-core` ; périmètre du modèle réseau et des
+  scénarios (sous-ensemble de §4.3, chemin des scénarios).
+
+### Appris
+- Ordre d'itération de `HashMap` aléatoire par processus → `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-221 : N nœuds ✅, transport scriptable (latence, perte,
+  partition) ✅, déterminisme ✅, `sim.yml` ✅ ; couverture à lire dans le job
+  CI `core`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-sim.md` (réécrite).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+Finished (0 warning)
+$ cargo fmt -p dengon-sim -- --check
+OK
+$ cargo test --workspace --all-features --locked
+dengon-sim : 24 unitaires + 1 conformité + 3 scénarios, tous verts ; workspace vert
+$ cargo run -p dengon-sim -- crates/dengon-sim/scenarios/*.ron
+✓ direct          empreinte=0xc010034361161933
+✓ lossy_mesh      empreinte=0x235037add4fc1c92
+✓ multihop        empreinte=0xeda8f6a6800aca8c
+✓ partition_merge empreinte=0xa0db2d31cbd882cb
+$ (binaire release, deux exécutions) diff run1 run2 → identiques
+```
+- `cargo fmt --all -- --check` échoue en local sur des fichiers **non
+  touchés** (`Incorrect newline style`) : copie de travail Windows en CRLF ;
+  sans objet sur la CI Linux.
+- Couverture non mesurée localement (`cargo-llvm-cov` absent).
+
+---
+
 ## 2026-09-28 — US-207 : `store`, round de revue d'OswinFreyr — 2 vrais problèmes de sécurité corrigés
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -265,6 +373,16 @@ Finished (0 erreurs)
 - Aucun.
 
 ### État après cette session
+- `python3 tools/validate.py` → 20 fixtures toujours valides.
+  `cargo test -p dengon-core` inchangé (aucun code touché).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 -c "import json; json.load(open('contracts/events/envelope.schema.json'))"
+JSON OK
+
+$ cd contracts && uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
 - `cargo test -p dengon-core` → 32 passés (28 lib + 4 intégration).
   `clippy -D warnings`, `fmt --check` verts.
 
@@ -3152,6 +3270,9 @@ BUILD SUCCESSFUL (R8/minify actifs, aucune règle proguard custom nécessaire)
 - **Non vérifié, ne peut pas l'être ici** : les 4 critères d'acceptation
   matériels (échange réel 20 octets, MTU négocié réel, timing réel, matrice
   d'appareils). Nécessite 2 téléphones Android physiques.
+
+---
+
 ## 2026-09-25 — US-111 : vérification visuelle à 360 px (clôture)
 
 **Auteur :** Claude (Opus 5.5)

@@ -106,3 +106,5 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Ed25519 déterministe** | Ed25519 ne tire aucun nombre aléatoire à la signature : le même message et la même clé donnent toujours la même signature. Rend les tests reproductibles et supprime toute une classe de failles liées à un mauvais RNG. |
 | **Clé de faible ordre** | Point de la courbe qui engendre un tout petit sous-groupe (ex. le point neutre). Sert à forger des signatures « qui passent » sans secret. Refusée par `verify_strict`. |
 | **Signature malléable** | Signature valide qu'on peut transformer en une autre signature valide du même message. Refusée par `verify_strict`. |
+| **Graine (seed) / déterminisme** | Valeur de départ du générateur pseudo-aléatoire. Même graine → mêmes tirages → même exécution. C'est ce qui rend un scénario de `dengon-sim` rejouable à l'identique (US-221). |
+| **Empreinte de trace** | Hachage (FNV-1a 64 bits) de toute la trace d'une simulation. Deux exécutions à même graine doivent avoir la même empreinte : c'est ce que compare le job CI `sim`. |

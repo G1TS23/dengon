@@ -11,6 +11,11 @@ publish.workspace      = true
 
 [dependencies]
 dengon-core = { workspace = true }
+# Le contrat `Transport` (US-105) que `SimTransport` implémente.
+dengon-ble  = { workspace = true }
+# Lecture des scénarios `scenarios/*.ron` (docs/synthese/10 §4.3).
+serde = { version = "1", features = ["derive"] }
+ron   = "0.12"
 
 [lints]
 workspace = true

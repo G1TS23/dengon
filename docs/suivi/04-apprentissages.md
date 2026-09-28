@@ -654,6 +654,29 @@ nulle part ailleurs, CI comprise.
 
 **Où c'est utilisé :** `firmware/dengon-relay/sdkconfig.defaults` (l'avertissement
 est en tête du fichier), rappelé dans `docs/suivi/modules/firmware-relay.md`.
+
+---
+
+### L'ordre d'itération d'un `HashMap` Rust change à chaque exécution
+
+**C'est quoi :** `std::collections::HashMap` utilise par défaut un hachage
+(SipHash) initialisé avec une clé **aléatoire tirée au démarrage du
+processus**, pour résister aux attaques par collisions. Conséquence : deux
+exécutions du même programme parcourent le même `HashMap` dans un ordre
+différent.
+
+**Pourquoi dans dengon :** le simulateur (`dengon-sim`, US-221) doit être
+**rejouable** : même graine → même trace. Un seul `for (k, v) in &hashmap`
+qui envoie des trames suffirait à rendre l'ordre des émissions, donc les
+tirages de perte et de gigue, différent d'une exécution à l'autre.
+
+**Piège / surprise :** le bug ne se voit pas dans un test unitaire qui
+compare deux exécutions **dans le même processus** (même clé des deux côtés).
+D'où le job CI `sim`, qui lance le **binaire** deux fois. Dans le simulateur :
+`BTreeMap`/`BTreeSet` partout.
+
+**Où c'est utilisé :** `crates/dengon-sim/src/reseau.rs`, `harness.rs` ;
+`.github/workflows/sim.yml`.
 ### `isReturnDefaultValues = true` fait taire les API Android en test, pas les exécuter
 
 **C'est quoi :** sans Robolectric, un test JVM pur ne peut pas exécuter le

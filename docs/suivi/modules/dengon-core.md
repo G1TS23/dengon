@@ -350,11 +350,12 @@ chemin des messages.
   `Inventory` a bien le type `0x0D` ; **les 8 vecteurs `accept` ont tous
   `ttl > 1` et portent tous `RELAY_OK`**
   (`accept_vectors_with_ttl_above_1_have_relay_ok`, nouveau — retour de revue
-  #63, round 3 : garantit que l'invariant « `ttl > 1` ⇒ `RELAY_OK` »
-  (`synthese/05:203`) reste vrai vecteur par vecteur — y compris pour des
-  paquets **adressés** comme `ack-addressed`, pas seulement broadcast,
-  contrairement à une formulation précédente de cette fiche — pas
-  seulement pour les deux corrigés au round 2).
+  #63, round 3, précisé au round 4 : le test couvre les 8 vecteurs
+  `accept`, adressés (`ack-addressed`, `noise-msg-addressed`) compris — la
+  règle réelle est « `ttl > 1` ⇒ `RELAY_OK` », quel que soit le type de
+  paquet, pas seulement broadcast) garantit que cet invariant
+  (`synthese/05:203`) reste vrai vecteur par vecteur, pas seulement pour
+  les deux corrigés au round 2).
 - Commande : `cargo test -p dengon-core` → **62 passés** (58 lib + 4
   intégration + 0 doc — 16 pour `crypto`, 16 pour `ledger`, 13 pour `store`,
   13 pour `protocol::{consts,types}` et `lib.rs`), rejoué le 2026-09-28 après

@@ -1,0 +1,117 @@
+# ---------------------------------------------------------------------------
+# Workflow `sim` — scénarios du simulateur multi-nœuds, à graine fixe.
+# Référence : docs/synthese/10-benchmarks-mvp-tests.md §4.3 (US-221).
+#
+# Ce que ce job prouve, en plus des tests de `core` :
+#   1. tous les scénarios livrés (crates/dengon-sim/scenarios/*.ron) passent ;
+#   2. ils sont DÉTERMINISTES de bout en bout : deux exécutions du binaire
+#      donnent la même sortie, empreintes de trace comprises. Un écart veut
+#      dire qu'une source de hasard non maîtrisée (horloge système, HashMap,
+#      ordre des fils…) s'est glissée dans le simulateur.
+#
+# Mêmes règles que core.yml (voir son en-tête) : actions épinglées sur un SHA,
+# pas de matrix (le check exigé est le nom du job), filtre de chemins DANS le
+# job pour que le check soit toujours rapporté.
+# ---------------------------------------------------------------------------
+name: sim
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sim-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  sim:
+    name: sim
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Détecter les changements Rust
+        id: filtre
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/sim.yml'
+
+      - name: Aucun changement Rust
+        if: steps.filtre.outputs.rust != 'true'
+        run: |
+          {
+            echo '### sim — ignoré'
+            echo
+            echo "Aucun fichier Rust modifié : les scénarios ne sont pas rejoués."
+            echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Lire la toolchain figée
+        if: steps.filtre.outputs.rust == 'true'
+        id: toolchain
+        run: |
+          canal=$(grep -oP '(?<=^channel\s=\s")[^"]+' rust-toolchain.toml)
+          if [ -z "$canal" ]; then
+            echo "Impossible de lire 'channel' dans rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "canal=$canal" >> "$GITHUB_OUTPUT"
+
+      - name: Installer Rust
+        if: steps.filtre.outputs.rust == 'true'
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master au 2026-09-03
+        with:
+          toolchain: ${{ steps.toolchain.outputs.canal }}
+
+      - name: Cache cargo
+        if: steps.filtre.outputs.rust == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: sim
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # --- 1. Tests du harness (conformité Transport, déterminisme) ---------
+      - name: Tests dengon-sim
+        if: steps.filtre.outputs.rust == 'true'
+        run: cargo test -p dengon-sim --locked
+
+      # --- 2. Scénarios, deux fois, même graine ------------------------------
+      - name: Scénarios à graine fixe (deux exécutions)
+        if: steps.filtre.outputs.rust == 'true'
+        run: |
+          cargo build -p dengon-sim --release --locked
+          bin=target/release/dengon-sim
+          "$bin" crates/dengon-sim/scenarios/*.ron | tee run1.txt
+          "$bin" crates/dengon-sim/scenarios/*.ron > run2.txt
+          if ! diff -u run1.txt run2.txt; then
+            echo "::error::dengon-sim n'est pas déterministe : deux exécutions à même graine diffèrent"
+            exit 1
+          fi
+          {
+            echo '### sim — scénarios à graine fixe'
+            echo
+            echo '```'
+            cat run1.txt
+            echo '```'
+            echo
+            echo 'Deux exécutions : sorties identiques (empreintes de trace comprises).'
+          } >> "$GITHUB_STEP_SUMMARY"

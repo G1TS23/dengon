@@ -1,0 +1,28 @@
+// Réseau coupé en deux, un message de chaque côté, puis fusion :
+// chaque moitié finit par recevoir le message de l'autre.
+// synthese/10 §4.3 `partition_merge.ron`.
+Scenario(
+    nom: "partition_merge",
+    description: "{0,1} | {2,3} pendant 500 ms, puis réunion",
+    noeuds: 4,
+    duree_ms: 1500,
+    liens: [
+        (a: 0, b: 1, latence_ms: 10),
+        (a: 1, b: 2, latence_ms: 10),
+        (a: 2, b: 3, latence_ms: 10),
+    ],
+    actions: [
+        (a_ms: 20, action: Partitionner(groupes: [[0, 1], [2, 3]])),
+        (a_ms: 50, action: Emettre(noeud: 0, charge: "gauche")),
+        (a_ms: 50, action: Emettre(noeud: 3, charge: "droite")),
+        (a_ms: 600, action: Reunir),
+    ],
+    attendus: [
+        Livre(noeud: 1, charge: "gauche"),
+        Livre(noeud: 2, charge: "gauche"),
+        Livre(noeud: 3, charge: "gauche"),
+        Livre(noeud: 0, charge: "droite"),
+        Livre(noeud: 1, charge: "droite"),
+        Livre(noeud: 2, charge: "droite"),
+    ],
+)
