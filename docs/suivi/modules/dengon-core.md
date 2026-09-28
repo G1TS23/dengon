@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame).
 **Dernière mise à jour :** 2026-09-28
-**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` Ed25519 (US-203).
+**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` Ed25519 (US-203) + `protocol::codec` (US-201).
 
 ## À quoi ça sert
 
@@ -30,12 +30,16 @@ dengon-core/
       consts.rs        — TOUTES les constantes du protocole (synthese/05 §2)
       types.rs         — PacketType, Flags, Header, AppFrameKind, AckStatus,
                          alias PeerId / MsgId / Signature
+      codec/
+        mod.rs         — Packet, encode / decode L3, FrameRule, entrée de signature
+        app.rs         — AppFrame (Message, Ack), encode / decode L4
   tests/
     vectors_v0.json    — vecteurs de conformité v0 (bytes -> champs / rejet)
-    protocol_vectors.rs — contrôle structurel de ces vecteurs
+    protocol_vectors.rs — contrôle structurel + décodage réel de ces vecteurs
+    codec_proptest.rs  — property tests du codec (round-trip, aucun panic)
 ```
 
-Modules encore absents : `codec` (US-201), `identity`, `sync`,
+Modules encore absents : `identity`, `sync`,
 `observability`, `api` (sprint 2).
 
 ## Concepts / types importants
@@ -60,14 +64,23 @@ Modules encore absents : `codec` (US-201), `identity`, `sync`,
 | `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
 | `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
 | `crypto::CryptoError` | `src/crypto.rs` | `InvalidPublicKey` / `InvalidSignature` — on ne distingue pas les causes d'un échec de `verify`. Implémente `core::error::Error` (aussi en `no_std`). |
+| `protocol::Packet` | `src/protocol/codec/mod.rs` | Paquet L3 complet : `Header` + payload opaque + `Option<Signature>`. |
+| `protocol::decode` / `encode` / `encode_into` | `src/protocol/codec/mod.rs` | Octets ⇄ paquet. `decode` vérifie la forme **et** les règles type ⇄ drapeaux (`FrameRule` : colonnes `ADDRESSED`/`SIGNED` de `synthese/05` §4, `FRAGMENT` ⇔ `0x09`). Ne panique jamais. Pas de TTL, d'anti-rejeu ni de filtre MVP (→ `sync::routing`). |
+| `protocol::signing_input` / `received_signing_input` | `src/protocol/codec/mod.rs` | Octets à signer / à vérifier : en-tête + payload **avec l'octet `ttl` à 0**, car un relais le décrémente (revue #80). La réception travaille sur les octets **reçus**. À passer à `crypto::SigningKey::sign` / `VerifyingKey::verify`. |
+| `protocol::AppFrame` (`Message`, `Ack`) | `src/protocol/codec/app.rs` | Frames L4 (le clair dans Noise), `encode_app_frame` / `decode_app_frame`. Kinds hors MVP refusés. |
 | `impl ledger::Signer for crypto::SigningKey` | `src/crypto.rs` | Branche une vraie clé Ed25519 sur `Ledger<S>` à la place de `NullSigner`. `crypto::Signature`/`SIGNATURE_LEN` sont des réexports de `protocol`. |
 
 ## Flux principal (exemple)
 
-Pas encore de flux protocole complet : US-108 livre les **types**, pas la
-logique. `sync::routing` (US-209) s'écrira contre `PacketType` / `Flags` /
-`Header` sans attendre le codec (US-201). Le flux visé :
-`04-architecture.md` §4.
+Réception d'un paquet (partie codée aujourd'hui, US-201) :
+
+1. le transport livre des octets (après réassemblage L2, US-202) ;
+2. `protocol::decode(raw)` → `Packet` ou `DecodeError` (→ futur `pkt.rejected`) ;
+3. si `SIGNED` : `VerifyingKey::verify(&received_signing_input(raw)?, sig)` ;
+4. `sync::routing` (US-209) : dédup, TTL, anti-rejeu, anti-inondation ;
+5. `NOISE_MSG` déchiffré → `decode_app_frame(clair)` → `Message` ou `Ack`.
+
+Le flux complet visé : `04-architecture.md` §4.
 
 `ledger`, lui, a déjà un flux exécutable :
 
@@ -117,7 +130,7 @@ chemin des messages.
   (`features = ["bundled"]` — sqlite3 vendorisé en C, pas de dépendance
   système) et `chacha20poly1305` (`features = ["getrandom"]`, pour
   `aead::OsRng`). Viendront encore `snow`, `x25519-dalek`, `serde`.
-- **Externes (dev) :** `proptest` (property tests de `ledger`) ; `serde_json`
+- **Externes (dev) :** `proptest` (property tests de `ledger` et du codec) ; `serde_json`
   — lecture de `tests/vectors_v0.json` via `Value` (pas de derive, donc
   `serde` n'est pas tiré comme dépendance de proc-macro). N'affecte pas la
   compilation `no_std` (`cargo check` ne compile pas les dev-deps).
@@ -303,6 +316,15 @@ chemin des messages.
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
   `PROTOCOL_VERSION`).
+- **Codec (US-201)** : `src/protocol/codec/mod.rs` (14 tests : aller-retours,
+  chaque `DecodeError` / `EncodeError`, bits réservés masqués, `ANNOUNCE` sans
+  `SIGNED` refusé, règle `FRAGMENT`, entrée de signature identique après
+  décrémentation du TTL), `codec/app.rs` (5 tests), `tests/codec_proptest.rs`
+  (7 properties × 512 cas : `decode(encode(p)) == p`, préfixe refusé, octets
+  arbitraires sans panic, même entrée de signature quel que soit le TTL reçu),
+  `tests/protocol_vectors.rs` (+3 : vecteurs v0 passés au vrai décodeur).
+  Couverture mesurée par le job CI `core` avant le rebase : `codec/mod.rs`
+  95,7 %, `codec/app.rs` 100 %.
 - `src/crypto.rs`, module `tests` : 16 tests — 3 KAT RFC 8032 §7.1 sur 4 vecteurs
   (clé publique, signature octet à octet, `verify`), aller-retour, déterminisme,
   négatifs (forgée, bit-flip exhaustif message + signature, tronqué, mauvaise
@@ -395,10 +417,12 @@ chemin des messages.
 - CRUD incomplet : `outbox`, `held_envelopes`, `seen_set`, `recon_cache`,
   `ledger`, `ship_cursor` ont leur table créée mais aucune méthode
   d'accès — pas d'appelant avant `sync`.
-- **Pas de codec** : aucun `encode`/`decode` — c'est US-201. Le test des
-  vecteurs est donc *structurel* (pas « `decode(bytes) == expect` »).
-- Pas de property test sur `protocol` (la DoD §7.2 en exigera dès qu'il y
-  aura de la logique de sérialisation — `ledger`, lui, en a déjà).
+- Codec : les payloads **par type** (`ANNOUNCE`, `INVENTORY`, `FRAGMENT`…)
+  restent opaques ; chaque module consommateur les décodera (US-202 pour
+  `FRAGMENT`, `sync::*`).
+- **Le TTL n'est pas protégé par la signature** (mis à 0 dans l'entrée de
+  signature, revue #80) : un relais malveillant peut le remonter, borné par
+  la dédup. Écart vs `powl/03`, voir `03-ecarts-conception.md`.
 - Couverture ≥ 85 % non mesurée ni imposée (`cargo llvm-cov` pas encore
   posé) — mais chaque chemin d'erreur de `store` (`Encryption`,
   `Decryption`, `InvalidUtf8`, `Sqlite`) a un test dédié qui l'exerce.
@@ -408,7 +432,9 @@ chemin des messages.
   `store` n'a jamais vocation à y compiler (voir « Décisions »).
 - **`timestamp_ms` des vecteurs `accept` figé à une date fixe (2024-07-29),
   hors tolérance anti-rejeu `TIMESTAMP_TOLERANCE_MS` (±2 h)** — signalé
-  hors-diff par Paul (revue PR #63) : un décodeur qui appliquerait l'anti-rejeu
+  hors-diff par Paul (revue PR #63) — **sans objet pour le codec** (US-201 :
+  `decode` n'applique pas l'anti-rejeu, c'est `sync::routing`). Constat
+  d'origine : un décodeur qui appliquerait l'anti-rejeu
   (US-201) rejetterait les 8 vecteurs `accept` tels quels. Pas corrigé dans
   cette session : la bonne solution (un `reference_now_ms` racine dans
   `vectors_v0.json`, lu par le futur décodeur au lieu de l'horloge système)

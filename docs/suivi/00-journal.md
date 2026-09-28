@@ -1677,6 +1677,9 @@ partagé, pas les brouillons d'une même PR non encore mergée.
   appareils. Doze réel non testé sur aucun des deux (limite assumée,
   au-delà du critère d'acceptation qui demande « ≥ 5 min écran éteint »,
   pas Doze). Issue #9 refermée.
+
+---
+
 ## 2026-09-28 — US-201 : revue #80 (Paul), le TTL sort de la signature
 
 **Auteur :** OswinFreyr + Claude (Opus 5.5)
