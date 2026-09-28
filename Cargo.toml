@@ -58,6 +58,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # aléatoire à chaque chiffrement (jamais le même nonce deux fois avec la
 # même clé, sous peine de casser l'AEAD).
 chacha20poly1305 = { version = "0.10", features = ["getrandom"] }
+# no_std (`default-features = false` retire l'implémentation std du digest,
+# indispensable pour compiler `ledger` (US-206) sur cible ESP32).
+sha2 = { version = "0.10", default-features = false }
+
 # Version EXACTE (pas de caret) : même logique que rust-toolchain.toml — une
 # montée de version d'UniFFI est une PR volontaire, pas un `cargo update`
 # silencieux. default-features = false retire "cargo-metadata" (inutile ici,

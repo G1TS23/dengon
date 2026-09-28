@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame).
 **Dernière mise à jour :** 2026-09-28
-**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `store` (US-207).
+**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207).
 
 ## À quoi ça sert
 
@@ -21,7 +21,8 @@ charge de transporter (le trait `Transport` de `dengon-ble`).
 ```
 dengon-core/
   src/
-    lib.rs              — bascule no_std, PROTOCOL_VERSION, VERSION, pub mod store (feature std)
+    lib.rs              — bascule no_std, extern crate alloc, PROTOCOL_VERSION, VERSION, pub mod store (feature std)
+    ledger.rs           — journal chaîné append-only (US-206)
     store.rs            — persistance SQLite, chiffrement champ par champ (US-207)
     protocol/
       mod.rs           — re-exports du module protocol
@@ -34,7 +35,7 @@ dengon-core/
 ```
 
 Modules encore absents : `codec` (US-201), `crypto`, `identity`, `sync`,
-`ledger`, `observability`, `api` (sprint 2).
+`observability`, `api` (sprint 2).
 
 ## Concepts / types importants
 
@@ -47,6 +48,11 @@ Modules encore absents : `codec` (US-201), `crypto`, `identity`, `sync`,
 | `Flags` (newtype `u8`) | `src/protocol/types.rs` | Bitfield `ADDRESSED / SIGNED / FRAGMENT / RELAY_OK / PADDED` + `RESERVED_MASK`. `from_bits_truncate` (masque), `from_bits_raw` (préserve, diagnostic), `contains`, `has_reserved` (diagnostic — les bits réservés sont **ignorés**, pas rejetés, à la réception). Pas de crate `bitflags` (surface figée, minuscule). |
 | `Header` | `src/protocol/types.rs` | En-tête L3 **décodé** (champs, pas d'octets). `header_len()` (22 broadcast / 30 adressé), `wire_len()`, `flags_are_consistent()`. La conversion octets ⇄ `Header` est US-201. |
 | `AppFrameKind`, `AckStatus` | `src/protocol/types.rs` | Frames L4 dans Noise (`Message`, `Ack`, `ReadReceipt` v2, `Profile` post-MVP) ; statut d'accusé (`Delivered=2`, `Read=3` v2). |
+| `ledger::Entry` | `src/ledger.rs` | Une entrée du journal : `seq`, `ts_ms`, `event_name`, `payload_json`, `prev_hash`, `entry_hash`, `sig`. `entry_hash = SHA-256(seq‖ts_ms‖len‖event_name‖len‖payload_json‖prev_hash)`, longueurs préfixées pour lever toute ambiguïté de découpage. |
+| `ledger::Ledger<S: Signer>` | `src/ledger.rs` | Le journal lui-même : `append()`, `verify_chain()`, `export(range)`, `entries()`. Paramétré par un `Signer` injecté, pas câblé sur une implémentation Ed25519 concrète. |
+| `ledger::Signer` / `ledger::NullSigner` | `src/ledger.rs` | Trait de signature + bouchon nul, tant que `crypto` (US-203, même sprint) n'existe pas — voir « Décisions ». |
+| `ledger::Verdict` | `src/ledger.rs` | `Ok`/`Broken`/`Fork`/`Gap`, renvoyé par `verify_chain()`. Réutilisé tel quel par `dengon-verify::main`, qui n'en a plus de copie locale. |
+| `Entry::to_bytes`/`Entry::from_bytes` | `src/ledger.rs` | Sérialisation binaire simple d'une entrée — sert le test de reprise après redémarrage, pas un vrai backend de stockage (voir « Décisions »). |
 | `store::Store<K: KeySource>` | `src/store.rs` | Connexion SQLite + migrations. `open()`/`open_in_memory()`, puis `set_identity`/`get_identity_private_keys`, `upsert_contact`, `insert_conversation`, `insert_message`/`get_message_body`, `set_noise_session`/`get_noise_session_state`. |
 | `store::KeySource` / `store::FixedKeySource` | `src/store.rs` | Trait qui fournit la clé de chiffrement des champs sensibles + bouchon à clé fixe (tests uniquement) — voir « Décisions », même schéma que `ledger::Signer` (US-206). |
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
@@ -58,6 +64,24 @@ logique. `sync::routing` (US-209) s'écrira contre `PacketType` / `Flags` /
 `Header` sans attendre le codec (US-201). Le flux visé :
 `04-architecture.md` §4.
 
+`ledger`, lui, a déjà un flux exécutable :
+
+```
+Ledger::new(signer)
+  .append("msg.queued", r#"{"msg_uuid":"..."}"#, ts_ms)   → seq=0, prev_hash=GENESIS
+  .append("msg.handed_off", r#"{...}"#, ts_ms)             → seq=1, prev_hash=hash(entrée 0)
+  ...
+  .verify_chain()                                          → Verdict::Ok
+
+# Reprise après redémarrage (simulée, voir tests) :
+entries.iter().flat_map(Entry::to_bytes) → écrit quelque part (hors périmètre de ce module)
+                                          → relu, Entry::from_bytes en boucle
+Ledger::from_entries(entries_relues, signer).verify_chain() → Verdict::Ok
+```
+
+`store`, lui aussi, a un flux exécutable :
+
+```
 `store`, lui, a déjà un flux exécutable :
 
 ```
@@ -71,8 +95,9 @@ Store::open("dengon.db", key_source)
 
 Le flux applicatif complet (Alice écrit → chiffrement → trame → diffusion BLE
 → relais → Bob → accusé) reste décrit dans
-[`04-architecture.md`](../../synthese/04-architecture.md) §4 — `store` n'en
-est que la persistance locale, pas le protocole lui-même.
+[`04-architecture.md`](../../synthese/04-architecture.md) §4 — `ledger` n'en
+est qu'un maillon (la traçabilité) et `store` la persistance locale, pas le
+chemin des messages.
 
 ## Dépendances
 
@@ -80,16 +105,17 @@ est que la persistance locale, pas le protocole lui-même.
   dépendent d'elle, elle ne dépend de personne. C'est volontaire : une
   dépendance sortante de `dengon-core` serait une dépendance imposée au
   firmware ESP32.
-- **Externes (runtime), `protocol`** : aucune, `protocol` n'utilise que `core`.
+- **Externes (runtime) :** `sha2` (`default-features = false`, no_std) pour
+  `ledger`. `protocol` n'utilise que `core`.
 - **Externes (crates), `store` seulement (feature `std`) :** `rusqlite`
   (`features = ["bundled"]` — sqlite3 vendorisé en C, pas de dépendance
   système) et `chacha20poly1305` (`features = ["getrandom"]`, pour
   `aead::OsRng`). Viendront encore `ed25519-dalek`, `snow`, `x25519-dalek`,
   `serde`.
-- **Externes (dev) :** `serde_json` — lecture de `tests/vectors_v0.json` via
-  `Value` (pas de derive, donc `serde` n'est pas tiré comme proc-macro).
-  N'affecte pas la compilation `no_std` (`cargo check` ne compile pas les
-  dev-deps).
+- **Externes (dev) :** `proptest` (property tests de `ledger`) ; `serde_json`
+  — lecture de `tests/vectors_v0.json` via `Value` (pas de derive, donc
+  `serde` n'est pas tiré comme dépendance de proc-macro). N'affecte pas la
+  compilation `no_std` (`cargo check` ne compile pas les dev-deps).
 
 ## Décisions d'implémentation
 
@@ -98,6 +124,53 @@ est que la persistance locale, pas le protocole lui-même.
   active `#![no_std]` **sur la cible hôte**, ce qui suffit à détecter tout usage
   involontaire de `std` sans avoir à installer une cible bare metal. La CI le
   vérifie à chaque PR (`cargo check -p dengon-core --no-default-features`).
+- **`extern crate alloc;` ajouté avec `ledger` (US-206)** : la note
+  précédente de cette fiche disait « pas de `extern crate alloc;` tant qu'il
+  n'est pas utilisé » (`unused_extern_crates` de `rust_2018_idioms` l'aurait
+  fait échouer sous `-D warnings`) — `ledger` a maintenant besoin de
+  `Vec`/`String` en `no_std`, donc la déclaration est ajoutée. Elle ne coûte
+  rien en mode `std` (`alloc` y est déjà réexporté par la libstd), donc le
+  code de `ledger` est identique dans les deux configurations.
+- **Signature différée via le trait `Signer`** (US-206) : `crypto` (US-203)
+  n'existe pas encore — même sprint, et la règle du projet interdit qu'une US
+  dépende d'une autre US du même sprint. `Ledger<S: Signer>` est donc
+  paramétré par un trait plutôt que câblé sur Ed25519 en dur ; `NullSigner`
+  sert de bouchon pour les tests. Quand `crypto` arrivera, un vrai `Signer`
+  se branche sans changer la forme de `Ledger`. `verify_chain()` ne vérifie
+  donc **pas** la signature pour l'instant (vérifier une signature nulle ne
+  prouverait rien) — écart consigné dans `03-ecarts-conception.md`.
+- **Persistance hors périmètre de `ledger`** : le module ne fait aucune E/S.
+  Le critère d'acceptation « reprise après redémarrage » est démontré par un
+  aller-retour `Entry::to_bytes`/`from_bytes` en mémoire (sérialiser, tout
+  détruire, désérialiser, revérifier) — la vraie écriture sur SQLite
+  (`store`, US-207) ou littlefs (firmware, US-308) reste à câbler par la
+  couche appelante.
+- **`dengon-verify` réutilise `ledger::Verdict`** au lieu d'en garder une
+  copie locale, comme annoncé par `04-architecture.md` §2 (« le binaire
+  `dengon-verify` réutilise `ledger::verify_chain` ») — la duplication
+  aurait fini par diverger silencieusement.
+- **`verify_chain()` corrigé après auto-revue (2026-09-26)** : la version
+  d'origine détectait `Fork`/`Gap` en ne comparant chaque `seq` qu'à celui
+  de l'entrée immédiatement précédente dans le stockage. Une séquence
+  `[0, 1, 2, 1]` (rejeu d'une entrée déjà vue, mais pas juste après
+  l'original) était donc classée à tort `Gap` au lieu de `Fork`. Rien
+  n'était accepté à tort (aucune entrée invalide ne passait comme `Ok`),
+  mais le verdict précis était faux. Réécrit en deux passes : passe 1 sur
+  un `BTreeSet<u64>` des `seq` (détecte `Fork`/`Gap` indépendamment de
+  l'ordre de stockage), passe 2 = la marche de chaîne de hash d'origine
+  (`Broken`). Voir `00-journal.md`, entrée du 2026-09-26 dédiée.
+- **Arithmétique `seq` sécurisée contre le débordement `u64::MAX`** (retour
+  de revue #75, OswinFreyr) : `append()` calculait `e.seq + 1` et
+  `verify_chain()` calculait `max + 1`, tous deux en `u64` non vérifié — un
+  export corrompu ou hostile portant `seq = u64::MAX` faisait paniquer le
+  calcul en debug/test et reboucler silencieusement à 0 en release, un
+  vérificateur qui panique ou ment sur une entrée hostile étant exactement
+  ce qu'il ne faut pas. `append()` utilise maintenant `saturating_add`
+  (infaillible par signature — au pire deux entrées consécutives
+  partageraient `seq = u64::MAX`, détecté comme `Fork`) ; `verify_chain()`
+  compare en arithmétique `u128`, qui ne peut pas déborder pour des
+  opérandes `u64`. Test dédié :
+  `seq_u64_max_ne_panique_pas_et_est_detecte`.
 - **`store` reste `std`-only, volontairement** (US-207) : contrairement à
   `protocol`/`sync`/`ledger`, `store` n'a pas vocation à compiler en
   `no_std` — `rusqlite` vendorise sqlite3 en C, absent d'ESP32.
@@ -225,6 +298,17 @@ est que la persistance locale, pas le protocole lui-même.
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
   `PROTOCOL_VERSION`).
+- `src/ledger.rs`, module `tests` : 14 tests unitaires (chaîne vide valide,
+  append→verify_chain toujours Ok, seq consécutives, trou détecté, doublon
+  de seq détecté comme fork (adjacent **et** non adjacent — voir
+  « Décisions »), **`seq = u64::MAX` détecté comme `Gap` sans paniquer**
+  (nouveau, retour de revue #75 : `max + 1` en `u64` débordait — voir
+  « Décisions »), entrée modifiée détectée comme broken, `prev_hash`
+  incohérent détecté, export par plage, reprise après redémarrage par
+  sérialisation, désérialisation d'un buffer tronqué sans panique) +
+  **2 property tests** (`proptest`) : toute séquence d'appends reste
+  vérifiable ; corrompre n'importe quelle entrée d'une séquence quelconque
+  est toujours détecté comme `Broken`.
 - `src/store.rs`, module `tests` : 13 tests — migrations rejouables sans
   erreur, round-trip identité/message/session Noise (chiffré puis
   déchiffré, on retrouve le texte d'origine), deux chiffrements du même
@@ -258,38 +342,54 @@ est que la persistance locale, pas le protocole lui-même.
   (`accept_vectors_with_ttl_above_1_have_relay_ok`, nouveau — retour de revue
   #63, round 3 : garantit que l'invariant « `ttl > 1` ⇒ `RELAY_OK` »
   (`synthese/05:203`) reste vrai vecteur par vecteur — y compris pour des
-  paquets adressés, pas seulement broadcast — pas seulement pour les deux
-  corrigés au round 2).
-- Commande : `cargo test -p dengon-core` → **32 passés** (28 lib + 4
-  intégration + 0 doc — 15 pour `store`/`lib.rs`, 13 pour
-  `protocol::{consts,types}`), rejoué le 2026-09-28 après le round de revue
-  branches. `cargo clippy --workspace --all-targets --all-features -- -D
-  warnings` et `cargo fmt --all -- --check` verts.
+  paquets **adressés** comme `ack-addressed`, pas seulement broadcast,
+  contrairement à une formulation précédente de cette fiche — pas
+  seulement pour les deux corrigés au round 2).
+- Commande : `cargo test -p dengon-core` → **46 passés** (42 lib + 4
+  intégration + 0 doc — 16 pour `ledger`, 13 pour `store`, 13 pour
+  `protocol::{consts,types}` et `lib.rs`), rejoué le
+  2026-09-28 après intégration de `ledger` (#75) et `store` (#76). `cargo
+  clippy --workspace --all-targets --all-features -- -D warnings` et `cargo
+  fmt --all -- --check` verts. `cargo check -p dengon-core
+  --no-default-features` (frontière `no_std`) vert.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
   temporairement fait échouer `accept_vectors_are_structurally_consistent`
   sur le nouveau vecteur `noise-msg-addressed-reserved-bit-ignored` (30
   octets, exactement `hdr`) — confirme le « mirror bug » signalé par Paul
   (un paquet valide à `payload_len` faible rejeté à tort).
+- Couverture non mesurée par un outil (`cargo llvm-cov` pas encore posé dans
+  ce sprint) — objectif ≥ 85 % de la DoD §7.2 non vérifié formellement,
+  mais chaque branche de `verify_chain` (Ok/Broken/Fork/Gap) a un test
+  dédié qui l'exerce explicitement.
 
 ## Limites connues / TODO
 
+- `verify_chain()` ne vérifie pas la signature (voir « Décisions » —
+  dépend de `crypto`, US-203).
+- **`verify_chain()` ne peut pas re-vérifier un export partiel** (`seq` ne
+  commençant pas à 0) — voir le docstring d'`export()` et l'écart consigné
+  dans `03-ecarts-conception.md` (retour de revue #75). Pas encore
+  bloquant : aucun appelant réel d'`export()` n'existe en dehors des tests.
+- `ledger` n'est pas encore câblé sur `store` : la table `ledger` existe
+  (migration initiale) mais aucune méthode d'accès — `to_bytes`/`from_bytes`
+  prouvent le format, pas l'écriture disque réelle.
 - Clé de chiffrement fixe (`FixedKeySource`) — pas de vraie dérivation
   depuis un Keystore/Keychain (voir « Décisions » — dépend d'`identity`,
   US-205).
 - CRUD incomplet : `outbox`, `held_envelopes`, `seen_set`, `recon_cache`,
   `ledger`, `ship_cursor` ont leur table créée mais aucune méthode
-  d'accès — pas d'appelant avant `sync`/`ledger`.
+  d'accès — pas d'appelant avant `sync`.
 - **Pas de codec** : aucun `encode`/`decode` — c'est US-201. Le test des
   vecteurs est donc *structurel* (pas « `decode(bytes) == expect` »).
 - Pas de property test sur `protocol` (la DoD §7.2 en exigera dès qu'il y
-  aura de la logique de sérialisation).
-- Couverture ≥ 85 % non mesurée ni imposée, ni par un outil dédié
-  (`cargo llvm-cov` pas encore posé ce sprint) — mais chaque chemin
-  d'erreur de `store` (`Encryption`, `Decryption`, `InvalidUtf8`, `Sqlite`)
-  a un test dédié qui l'exerce.
-- `no_std` vérifié sur cible hôte seulement pour le reste de la crate ;
-  `store` lui-même n'a jamais vocation à y compiler (voir « Décisions ») ;
-  la vraie cross-compilation xtensa = Spike A (US-101).
+  aura de la logique de sérialisation — `ledger`, lui, en a déjà).
+- Couverture ≥ 85 % non mesurée ni imposée (`cargo llvm-cov` pas encore
+  posé) — mais chaque chemin d'erreur de `store` (`Encryption`,
+  `Decryption`, `InvalidUtf8`, `Sqlite`) a un test dédié qui l'exerce.
+- `no_std` vérifié sur cible hôte seulement ; la vraie cross-compilation
+  `xtensa-esp32-none-elf` est l'objet du Spike A (US-101), déjà validé pour
+  `protocol`/`crypto` mais pas encore rejoué pour `ledger` spécifiquement.
+  `store` n'a jamais vocation à y compiler (voir « Décisions »).
 - **`timestamp_ms` des vecteurs `accept` figé à une date fixe (2024-07-29),
   hors tolérance anti-rejeu `TIMESTAMP_TOLERANCE_MS` (±2 h)** — signalé
   hors-diff par Paul (revue PR #63) : un décodeur qui appliquerait l'anti-rejeu
@@ -303,13 +403,17 @@ est que la persistance locale, pas le protocole lui-même.
 
 ## Pour l'oral
 
-Deux livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
+Trois livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
 protocole** : les 13 types de paquets, les 5 drapeaux, la forme de l'en-tête,
 et une trentaine de constantes (durée de vie d'un message, seuils
 d'anti-inondation, TTL de départ…) — rien ne « fonctionne » encore, mais
 c'est le contrat sur lequel les trois implémentations (téléphone, nœud,
-firmware) vont s'accorder, d'où les **vecteurs de conformité**. US-207
-(`store`) est la première **persistance réelle** de la crate : SQLite avec
+firmware) vont s'accorder, d'où les **vecteurs de conformité**. US-206
+(`ledger`) est la première **logique exécutable** de la crate : un journal
+chaîné append-only, vérifiable hors ligne, qui prouve qu'un appareil n'a pas
+triché sur son historique — la pièce qui rend crédible « sécurité type
+blockchain » sans blockchain.
+US-207 (`store`) est la première **persistance réelle** : SQLite avec
 chiffrement champ par champ des données sensibles (clés privées, corps des
 messages, sessions Noise) — la preuve qu'un téléphone volé ne livre rien
 en clair, critère central de `docs/synthese/06-securite.md`.

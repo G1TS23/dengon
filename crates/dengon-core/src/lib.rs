@@ -19,11 +19,18 @@
 //!
 //! # État
 //!
-//! Squelette livré par l'US-104. `protocol` livré par l'US-108. `store`
-//! livré par l'US-207.
+//! Squelette livré par l'US-104. `protocol` livré par l'US-108. `ledger`
+//! livré par l'US-206. `store` livré par l'US-207.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
+// `alloc` est nécessaire en no_std pour `Vec`/`String` (utilisés par
+// `ledger`) ; en mode `std`, `alloc` est déjà réexporté par la libstd, donc
+// cette déclaration ne coûte rien et le code de `ledger` reste identique
+// dans les deux configurations.
+extern crate alloc;
+
+pub mod ledger;
 pub mod protocol;
 #[cfg(feature = "std")]
 pub mod store;
