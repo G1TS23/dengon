@@ -10,6 +10,90 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-211 : `sync::status` — machine à états MVP (sans `READ`), outbox persistante, rejeu
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/{mod.rs, status.rs, status/outbox.rs, status/outbox/tests.rs}`, `crates/dengon-core/src/lib.rs`, `crates/dengon-core/Cargo.toml`, `Cargo.lock`
+**Lot :** US-211 (#25), sprint 2, jalon J1
+
+### Fait
+- **Nouveau module `sync`** (`src/sync/mod.rs`) : seul `status` est livré ;
+  `routing`/`inventory` (Paul, US-209/210) et `courier` (US-212) viendront
+  dans des fichiers distincts.
+- **Machine à états** (`src/sync/status.rs`) : `Status` (`Queued`,
+  `InFlight`, `Delivered`, `Expired`, `Cancelled` — **pas de `Read`**, A-10),
+  `StatusEvent`, et **une seule fonction de transition** `next_status`, pure
+  et sans horloge. Chaque statut a un rang (0/1/2) ; aucune transition ne
+  fait baisser le rang, un statut terminal n'évolue plus. Un Ack en double,
+  un Ack `READ` ou un `cancel()` tardif renvoient `None` (ignorés).
+- **Outbox persistante** (`src/sync/status/outbox.rs`) : `Outbox<S>` sur un
+  trait `OutboxStore` (magasin clé `msg_uuid` → octets). `enqueue` →
+  `QUEUED` ; `mark_handed_off` compte les remises par pair et passe
+  `IN_FLIGHT` ; `apply_ack` → `DELIVERED` ; `cancel` ; `expire_due`. Chaque
+  opération renvoie le `StatusChange` à journaliser (`event_name()` =
+  `msg.queued`, `msg.handed_off`, …). Un message terminé sort de l'outbox.
+- **Rejeu après redémarrage** : `Outbox::open` relit le stockage ;
+  `replay_candidates(peer, now)` rend les messages non terminaux, non
+  expirés, avec moins de `RESEND_MAX = 8` remises à ce pair.
+- **Format d'enregistrement binaire v1** (`OutboxRecord::encode/decode`),
+  décrit sur `encode`, décodage sans panic sur entrée arbitraire.
+- `MemoryStore` : stockage en mémoire, pour les tests / `dengon-sim` et comme
+  bouchon tant que `store` (US-207) n'est pas branché.
+- `extern crate alloc;` ajouté à `lib.rs` (`Vec`/`BTreeMap` en `no_std`).
+- `proptest = "1"` ajouté en dev-dependency (le `Cargo.lock` gagne proptest
+  et ses dépendances transitives, rien d'autre).
+
+### Pourquoi / décisions
+- **Écrire dans le stockage avant la mémoire** : si le stockage échoue,
+  l'outbox reste dans son état précédent (testé avec un stockage défaillant).
+  L'inverse aurait pu laisser en mémoire un `IN_FLIGHT` jamais persisté.
+- **Stockage clé → octets** plutôt que les colonnes SQL de `synthese/09` : le
+  même trait sert SQLite (Android/PC) et NVS (ESP32). Voir écart.
+- **Table des remises bornée** (`ATTEMPT_PEERS_MAX = 32` pairs) : mémoire
+  bornée sur ESP32. Au-delà, le message n'est plus proposé à un pair nouveau.
+- **Le filtre « destinataire ou bon relais »** du rejeu reste à `sync::routing`
+  (US-209) : `replay_candidates` ne filtre que sur l'outbox.
+
+### Écarts vs conception
+- 5 points consignés dans `03-ecarts-conception.md` (entrée 2026-09-28,
+  US-211) : transitions `QUEUED → EXPIRED` et `QUEUED → DELIVERED` ;
+  `msg.cancelled` hors catalogue VPS ; `RESEND_MAX` hors `protocol::consts` ;
+  outbox en clé → octets.
+
+### Appris
+- Note « Machine à états : une fonction pure + un property test de
+  monotonie » ajoutée à `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-211 : machine MVP sans `READ` ✅, outbox persistante ✅ (derrière
+  un trait ; branchement SQLite = après US-207), rejeu après redémarrage ✅,
+  property test de monotonie ✅, `no_std` ✅, couverture ≥ 85 % ✅.
+- Pas encore appelé par personne : l'intégration (`api`, `dengon-ffi`,
+  `dengon-sim`) viendra avec les US suivantes.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+test result: ok. 48 passed (lib, dont 33 sync::status) ; 4 passed (intégration) ; 0 doc
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+aucun avertissement
+$ cargo check -p dengon-core --no-default-features
+Finished (no_std OK)
+$ cargo llvm-cov -p dengon-core --summary-only
+sync/status.rs         lignes 100,00 %  régions 100,00 %
+sync/status/outbox.rs  lignes 100,00 %  régions  95,85 %
+TOTAL dengon-core      lignes  98,96 %
+```
+- `cargo fmt --all -- --check` : propre sur les fichiers de cette US. En
+  local sous Windows, il signale « Incorrect newline style » sur des fichiers
+  **non touchés** (checkout en CRLF par `core.autocrlf`) ; un `cargo fmt --all`
+  les réécrit en LF — modifications annulées (`git checkout --`), hors
+  périmètre. La CI (Linux) n'est pas concernée.
+
+---
+
 ## 2026-09-28 — US-205 : rebase sur `main` après le merge de #81 (US-204), relecture
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

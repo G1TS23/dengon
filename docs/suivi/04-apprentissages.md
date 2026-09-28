@@ -23,6 +23,30 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### Machine à états : une fonction pure + un property test de monotonie
+
+**C'est quoi :** au lieu de disperser des `if statut == …` dans le code, toutes
+les transitions passent par **une seule fonction pure** `next_status(statut,
+événement) -> Option<statut>`. Un *property test* (crate `proptest`) génère
+ensuite des centaines de suites d'événements aléatoires et vérifie une
+**propriété** plutôt qu'un exemple : « le rang du statut ne baisse jamais, un
+statut terminal ne bouge plus ».
+**Pourquoi dans dengon :** les événements arrivent dans le désordre et en
+double (Ack rejoué par plusieurs relais, `cancel` après l'envoi, redémarrage
+en plein milieu). Un statut qui redescend (« Distribué » → « Parti ») serait
+un bug visible pour l'utilisateur.
+**Piège / surprise :** la propriété doit aussi tenir **à travers un
+redémarrage** : le second property test mélange des opérations d'outbox et
+des « redémarrages » (l'outbox est détruite, seul le stockage survit). Autre
+piège : persister **avant** de modifier la mémoire, sinon un échec d'écriture
+laisse en mémoire un état qui disparaîtra au redémarrage.
+**Où c'est utilisé :** `crates/dengon-core/src/sync/status.rs:186`
+(`next_status`), property tests dans le même fichier et dans
+`crates/dengon-core/src/sync/status/outbox/tests.rs`.
+**Pour aller plus loin :** <https://proptest-rs.github.io/proptest/>
+
+---
+
 ## Notes
 
 ### `merge=union` — fusionner des fichiers « append » sans conflit

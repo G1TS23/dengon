@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
 **Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `identity` : clés, QR, code de vérification, coffre (US-205).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211).
 
 ## À quoi ça sert
 
@@ -46,6 +46,11 @@ dengon-core/
       codec/
         mod.rs         — Packet, encode / decode L3, FrameRule, entrée de signature
         app.rs         — AppFrame (Message, Ack), encode / decode L4
+    sync/
+      mod.rs           — sous-modules sync (seul `status` livré)
+      status.rs        — Status, StatusEvent, next_status, StatusChange (US-211)
+      status/outbox.rs — Outbox, OutboxStore, MemoryStore, OutboxRecord
+      status/outbox/tests.rs — tests de l'outbox
   tests/
     vectors_v0.json        — vecteurs de conformité v0 du format de trame (US-108)
     protocol_vectors.rs    — contrôle structurel + décodage réel de ces vecteurs
@@ -60,7 +65,7 @@ dengon-core/
 fichier Ed25519 de US-203 n'a pas été déplacé (pas de déplacement
 de fichier pendant que les PR #78/#81/#82 sont empilées).
 
-Modules encore absents : `sync`,
+Modules encore absents : `sync::{routing, inventory, courier}`,
 `observability`, `api` (sprint 2).
 
 ## Concepts / types importants
@@ -623,6 +628,53 @@ encore le codec (US-201).
 - `crypto` : pas de génération de clé (c'est `identity::Identity::generate`
   qui la fait), pas de séparation de domaine ; vecteur
   RFC 8032 « TEST 1024 » non repris.
+
+## Sous-module `sync::status` (US-211)
+
+Suit le **cycle de vie d'un message émis** — « En attente → Parti →
+Distribué » (+ « Échec », « Annulé ») — et garde les messages non confirmés
+dans une **outbox** qui survit au redémarrage. Conception :
+[`synthese/07`](../../synthese/07-cycle-de-vie-et-statuts.md) §1-3, §7.
+`READ` (« Lu ») est **absent** : reporté en v2 (A-10).
+
+| Type / fonction | Fichier:ligne | Ce que ça fait |
+|---|---|---|
+| `Status` (enum) | `src/sync/status.rs:69` | 5 statuts MVP. `rank()` (0 / 1 / 2 = terminal), `as_str()` (= `CHECK` SQL de `synthese/09`), `event_name()` (`msg.queued`…), `to_u8`/`from_u8`. |
+| `StatusEvent` (enum) | `src/sync/status.rs:170` | `HandedOff`, `AckReceived(AckStatus)`, `TtlElapsed`, `Cancel`. |
+| `fn next_status` | `src/sync/status.rs:186` | **La** fonction de transition, pure. `None` = l'événement ne change rien. |
+| `StatusChange` | `src/sync/status.rs:203` | Changement appliqué (`from`, `to`, `at_ms`) à journaliser par l'appelant. |
+| `RESEND_MAX = 8` | `src/sync/status.rs:65` | Remises max d'un message à un même pair. |
+| `Outbox<S>` | `src/sync/status/outbox.rs:423` | `open` (relit le stockage), `enqueue`, `mark_handed_off`, `apply_ack`, `cancel`, `expire_due`, `replay_candidates`. |
+| `trait OutboxStore` | `src/sync/status/outbox.rs:321` | Stockage clé `msg_uuid` → octets : `save`, `remove`, `load_all`. |
+| `MemoryStore` | `src/sync/status/outbox.rs:352` | Implémentation en mémoire (tests, sim, bouchon avant US-207). |
+| `OutboxRecord::encode` / `decode` | `src/sync/status/outbox.rs:148` / `:190` | Format binaire v1 versionné ; décodage sans panic. |
+
+**Flux (Alice → Bob) :** `enqueue` → `QUEUED` (`msg.queued`). Un relais se
+connecte : `replay_candidates(relais)` → envoi radio → `mark_handed_off` →
+`IN_FLIGHT` (`msg.handed_off`). Crash puis redémarrage : `Outbox::open`
+relit le stockage, le message est toujours `IN_FLIGHT` avec son compteur de
+remises. L'Ack signé de Bob arrive → `apply_ack` → `DELIVERED`
+(`msg.delivered`), le message sort de l'outbox. Sans Ack en 24 h :
+`expire_due` → `EXPIRED`.
+
+**Décisions :** stockage écrit **avant** la mémoire (un échec laisse l'état
+intact) ; table des remises bornée à `ATTEMPT_PEERS_MAX = 32` pairs ;
+paquet borné à `PACKET_MAX_BYTES` ; le filtre « destinataire ou bon relais »
+reste à `sync::routing` (US-209). Écarts : `03-ecarts-conception.md`
+(2026-09-28, US-211). Dépendance de dev ajoutée : `proptest`.
+
+**Tests :** `src/sync/status.rs` (9 tests dont le property test
+`aucune_regression_d_etat`) et `src/sync/status/outbox/tests.rs` (24 tests :
+transitions, rejeu plafonné, expiration à l'échéance stricte, **rejeu après
+redémarrage**, stockage défaillant, format d'enregistrement, et 2 property
+tests : aller-retour de l'encodage + monotonie de l'outbox sur des suites
+d'opérations aléatoires, redémarrages compris). Couverture : 100 % des
+lignes (`cargo llvm-cov -p dengon-core`).
+
+**Limites :** pas encore appelé (branchement `api`/FFI/sim à venir) ; pas
+d'implémentation SQLite d'`OutboxStore` (après US-207) ; un `msg_uuid` déjà
+terminé puis ré-enqueué repartirait en `QUEUED` (précondition documentée :
+`msg_uuid` aléatoire sur 128 bits, jamais réutilisé).
 
 ## Pour l'oral
 

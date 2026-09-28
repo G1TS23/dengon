@@ -28,6 +28,40 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-28 — `sync::status` (US-211) : deux transitions en plus, `msg.cancelled` hors catalogue, `RESEND_MAX` local, outbox en clé → octets
+
+- **Prévu :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §2 : `DELIVERED`
+  et `EXPIRED` ne s'atteignent que depuis `IN_FLIGHT` ; §1 : événement
+  `msg.cancelled` ; §3 : `RESEND_MAX = 8` ; `synthese/09` : table `outbox` en
+  colonnes SQL.
+- **Réel :**
+  1. `QUEUED → EXPIRED` accepté : un message jamais remis pendant 24 h
+     expire aussi (la règle du §7 ne distingue pas le statut).
+  2. `QUEUED → DELIVERED` accepté : si l'appareil s'arrête entre l'envoi
+     radio et l'écriture de `IN_FLIGHT`, l'Ack peut arriver sur un message
+     resté `QUEUED` ; l'ignorer perdrait une remise réelle. La monotonie
+     reste garantie (le rang ne fait que monter).
+  3. `Status::Cancelled.event_name()` = `msg.cancelled`, mais cet événement
+     **n'est pas** dans le catalogue VPS (`contracts/events/payloads.schema.json`) :
+     journal local uniquement.
+  4. `RESEND_MAX` est défini dans `sync::status`, pas dans `protocol::consts`
+     (règle locale d'outbox, jamais échangée sur le fil).
+  5. L'outbox est persistée via un trait `OutboxStore` clé `msg_uuid` →
+     enregistrement binaire versionné (`OutboxRecord::encode`), pas en
+     colonnes. Mêmes champs que `synthese/09`, plus `status`/`status_ms` et
+     un compteur de remises **par pair** (au lieu d'un `attempts` unique).
+- **Raison :** (1)(2) robustesse aux arrêts brutaux ; (3) l'annulation est
+  une action locale sans intérêt pour le dashboard ; (4) pas un changement de
+  contrat ; (5) un seul trait pour SQLite (Android/PC) et NVS (ESP32), et le
+  plafond `RESEND_MAX` est défini par pair dans `synthese/07` §3.
+- **Conséquences :** US-207 (`store`) devra fournir une implémentation
+  d'`OutboxStore` (une table `outbox(msg_uuid BLOB PRIMARY KEY, record
+  BLOB)` suffit). Si le dashboard veut `msg.cancelled`, l'ajouter au
+  catalogue (US-107 / `contracts/events`).
+- **Doc de conception mise à jour ?** non.
+
+---
+
 ### 2026-09-09 — Dashboard : migrations en littéral Python, pas en fichiers `.sql`
 
 - **Prévu :** l'issue #10 (US-110) demande une « migration SQLite initiale

@@ -9,8 +9,8 @@
 //! Modules, d'après `docs/synthese/04-architecture.md` §2 : [`protocol`]
 //! (livré — types & constantes US-108, codec US-201), [`crypto`] (livré),
 //! [`identity`] (livré — clés, QR, code de vérification, coffre), [`ledger`]
-//! (livré), `store` (livré, feature `std`), puis `sync`, `observability` et la
-//! façade `api` (sprint 2).
+//! (livré), `store` (livré, feature `std`), [`sync`] (livré : `sync::status`,
+//! US-211), puis `observability` et la façade `api` (sprint 2).
 //!
 //! # Contrainte `no_std`
 //!
@@ -24,12 +24,13 @@
 //! Squelette livré par l'US-104. `protocol` livré par l'US-108. `ledger`
 //! livré par l'US-206. `store` livré par l'US-207. `crypto` livré par
 //! l'US-203 (Ed25519) et l'US-204 (Noise, `recipient_tag`, padding).
+//! `sync::status` livré par l'US-211.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-// `alloc` est nécessaire en no_std pour `Vec`/`String` (utilisés par
-// `ledger`, par le codec de `protocol` et par `crypto::noise`, car snow
-// alloue) ; en mode `std`, `alloc` est déjà réexporté par la libstd, donc
+// `alloc` est nécessaire en no_std pour `Vec`/`String`/`BTreeMap` (utilisés
+// par `ledger`, `sync`, par le codec de `protocol` et par `crypto::noise`, car
+// snow alloue) ; en mode `std`, `alloc` est déjà réexporté par la libstd, donc
 // cette déclaration ne coûte rien et le code reste identique dans les deux
 // configurations.
 extern crate alloc;
@@ -40,6 +41,7 @@ pub mod ledger;
 pub mod protocol;
 #[cfg(feature = "std")]
 pub mod store;
+pub mod sync;
 
 /// Version du protocole dengon implémentée par cette crate.
 ///
