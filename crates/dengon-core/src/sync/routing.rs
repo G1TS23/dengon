@@ -663,12 +663,14 @@ struct LinkState {
 ///
 /// Ne retient que les événements **acceptés**, donc sa taille est bornée par
 /// `max` : pas de croissance mémoire sous flood.
+///
+/// Partagée avec `sync::inventory` (cadence du push, US-210).
 #[derive(Debug, Default)]
-struct RateWindow(VecDeque<u64>);
+pub(super) struct RateWindow(VecDeque<u64>);
 
 impl RateWindow {
     /// Oublie les événements sortis de la fenêtre `[now − window, now]`.
-    fn prune(&mut self, now: u64, window: u64) {
+    pub(super) fn prune(&mut self, now: u64, window: u64) {
         while self
             .0
             .front()
@@ -684,13 +686,30 @@ impl RateWindow {
 
     /// Accepte un événement à `now` s'il en reste moins de `max` dans la
     /// fenêtre `[now − window, now]`.
-    fn try_take(&mut self, now: u64, window: u64, max: u16) -> bool {
+    pub(super) fn try_take(&mut self, now: u64, window: u64, max: u16) -> bool {
         self.prune(now, window);
         if self.0.len() >= usize::from(max) {
             return false;
         }
         self.0.push_back(now);
         true
+    }
+
+    /// Premier instant où [`Self::try_take`] acceptera de nouveau : `0` s'il
+    /// reste de la place, sinon la sortie de fenêtre de l'événement qui
+    /// libère la première place. Sans élaguer (lecture seule) : un résultat
+    /// dans le passé veut dire « tout de suite ».
+    pub(super) fn next_free(&self, window: u64, max: u16) -> u64 {
+        let max = usize::from(max);
+        if max == 0 {
+            return u64::MAX;
+        }
+        if self.0.len() < max {
+            return 0;
+        }
+        self.0
+            .get(self.0.len() - max)
+            .map_or(0, |&t| t.saturating_add(window))
     }
 
     /// Fusionne les événements d'une autre fenêtre (report du quota d'un lien

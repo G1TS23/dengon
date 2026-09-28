@@ -5,104 +5,21 @@
 //! voisin : c'est le « fil » entre deux mocks, que `dengon-sim` (US-221)
 //! remplacera par un vrai modèle réseau (latence, perte, partition).
 //!
-//! **Décodage provisoire.** `protocol::codec` (US-201) n'existe pas encore :
-//! [`encoder`] / [`decoder`] lisent et écrivent l'en-tête L3 **réel**
-//! (`synthese/05` §3, big-endian) à la main, sans signature. Le TTL est à
-//! l'octet 2 : le relais le réécrit en place, sans réencoder. À remplacer par
-//! `codec::{encode, decode}` quand US-201 sera sur `main`.
+//! **Décodage provisoire** : codec de test partagé dans `common/mod.rs`.
 
 use std::collections::BTreeMap;
 
 use dengon_ble::{LinkId, MockTransport, Transport, TransportConfig, TransportEvent};
 use dengon_core::protocol::{
-    Flags, Header, MsgId, PacketType, PeerId, DENSE_LINKS, FLOOD_MAX_PER_MIN_PEER, PROTO_VERSION,
-    SEEN_SET_CAP, TTL_CLAMP_DENSE, TTL_DEFAULT,
+    MsgId, PeerId, DENSE_LINKS, FLOOD_MAX_PER_MIN_PEER, SEEN_SET_CAP, TTL_CLAMP_DENSE, TTL_DEFAULT,
 };
 use dengon_core::sync::routing::{Decision, Now, Router, RoutingConfig, DUP_CANCEL_THRESHOLD};
-use sha2::{Digest, Sha256};
 
-const T0: u64 = 1_800_000_000_000;
+mod common;
+use common::{decoder, paquet, peer, OCTET_TTL, T0};
+
 /// Pas d'horloge de la simulation, en ms.
 const PAS_MS: u64 = 5;
-/// Octet du TTL dans l'en-tête L3 (`version, type, ttl, flags, …`).
-const OCTET_TTL: usize = 2;
-
-// --- Codec de test (provisoire, voir la doc du module) ------------------
-
-fn encoder(h: &Header, payload: &[u8]) -> Vec<u8> {
-    let mut b = vec![h.version, h.packet_type.to_u8(), h.ttl, h.flags.bits()];
-    b.extend_from_slice(&h.timestamp_ms.to_be_bytes());
-    b.extend_from_slice(&h.sender_id);
-    if let Some(r) = h.recipient_id {
-        b.extend_from_slice(&r);
-    }
-    b.extend_from_slice(
-        &u16::try_from(payload.len())
-            .unwrap_or(u16::MAX)
-            .to_be_bytes(),
-    );
-    b.extend_from_slice(payload);
-    b
-}
-
-fn decoder(b: &[u8]) -> Option<(Header, MsgId)> {
-    let flags = Flags::from_bits_truncate(*b.get(3)?);
-    let mut pos = 12;
-    let lire8 = |pos: usize| -> Option<[u8; 8]> { b.get(pos..pos + 8)?.try_into().ok() };
-    let timestamp_ms = u64::from_be_bytes(lire8(4)?);
-    let sender_id = lire8(pos)?;
-    pos += 8;
-    let recipient_id = if flags.contains(Flags::ADDRESSED) {
-        let r = lire8(pos)?;
-        pos += 8;
-        Some(r)
-    } else {
-        None
-    };
-    let payload_len = u16::from_be_bytes(b.get(pos..pos + 2)?.try_into().ok()?);
-    pos += 2;
-    let payload = b.get(pos..pos + usize::from(payload_len))?;
-    let h = Header {
-        version: b[0],
-        packet_type: PacketType::from_u8(b[1])?,
-        ttl: b[2],
-        flags,
-        timestamp_ms,
-        sender_id,
-        recipient_id,
-        payload_len,
-    };
-    // msgID = SHA-256(sender_id ‖ timestamp_ms ‖ type ‖ payload) (A-9) :
-    // le TTL n'y entre pas, donc un relais garde le même msgID.
-    let mut hasher = Sha256::new();
-    hasher.update(sender_id);
-    hasher.update(timestamp_ms.to_be_bytes());
-    hasher.update([h.packet_type.to_u8()]);
-    hasher.update(payload);
-    Some((h, hasher.finalize().into()))
-}
-
-fn paquet(sender: PeerId, dest: Option<PeerId>, ttl: u8, ts: u64, payload: &[u8]) -> Vec<u8> {
-    let mut flags = Flags::RELAY_OK;
-    if dest.is_some() {
-        flags = flags | Flags::ADDRESSED;
-    }
-    let h = Header {
-        version: PROTO_VERSION,
-        packet_type: PacketType::NoiseMsg,
-        ttl,
-        flags,
-        timestamp_ms: ts,
-        sender_id: sender,
-        recipient_id: dest,
-        payload_len: 0,
-    };
-    encoder(&h, payload)
-}
-
-fn peer(n: u8) -> PeerId {
-    [n; 8]
-}
 
 // --- Un nœud : transport mock + routeur ------------------------------------
 

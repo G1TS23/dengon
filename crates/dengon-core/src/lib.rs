@@ -10,8 +10,8 @@
 //! (livré — types & constantes US-108, codec US-201), [`crypto`] (livré),
 //! [`identity`] (livré — clés, QR, code de vérification, coffre), [`ledger`]
 //! (livré), `store` (livré, feature `std`), [`sync`] (livré : `sync::status`
-//! US-211, `sync::routing` US-209, `sync::courier` US-212), puis
-//! `observability` et la façade `api` (sprint 2).
+//! US-211, `sync::routing` US-209, `sync::inventory` US-210, `sync::courier`
+//! US-212), puis `observability` et la façade `api` (sprint 2).
 //!
 //! # Contrainte `no_std`
 //!
@@ -28,7 +28,8 @@
 //! livré par l'US-206. `store` livré par l'US-207. `crypto` livré par
 //! l'US-203 (Ed25519) et l'US-204 (Noise, `recipient_tag`, padding).
 //! `sync::status` livré par l'US-211, `sync::routing` par l'US-209,
-//! `sync::courier` par l'US-212. `observability` livré par l'US-208.
+//! `sync::inventory` par l'US-210, `sync::courier` par l'US-212.
+//! `observability` livré par l'US-208.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
