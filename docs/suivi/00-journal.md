@@ -192,6 +192,156 @@ $ ssh dengon-vps "cd ~/dengon/dashboard/deploy && ./purge-demo.sh"
 $ curl -sk https://51.255.38.214:8443/healthz
 {"status":"ok"}   # HTTP 200, corrigé
 ```
+## 2026-09-28 — US-210 : rebase de la PR #96 sur `main` + retours de revue
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/inventory.rs`,
+`sync/inventory/tests.rs`, `tests/inventory_mock.rs`, `lib.rs`,
+`sync/mod.rs`, `docs/suivi/`
+**Lot :** US-210, PR #96 (revue de G1TS23)
+
+### Fait
+- Rebase : seul le commit US-210 est rejoué sur `main` (`git rebase --onto
+  origin/main 7df55d9`) ; les deux commits US-209 empilés étaient déjà sur
+  `main` via #85 (contenu identique, vérifié par `git diff`). Conflits
+  résolus dans `lib.rs`, `sync/mod.rs` (liste des modules : **`courier`,
+  `inventory`, `routing`, `status`** — point 1 de la revue, rien de perdu) et
+  `modules/dengon-core.md`. Les auto-merges avaient dupliqué la ligne
+  `dengon-core` de `02-avancement.md` et de `modules/_index.md`, et placé
+  l'entrée US-210 du journal au milieu du fichier : corrigé à la main.
+- Revue point 2 : `next_deadline(now)` prend l'heure et ignore une file
+  dont aucun paquet n'est encore valide — plus de réveil promis sur une
+  file de paquets expirés. Reste un cas assumé (documenté) : un paquet qui
+  expire entre `now` et l'échéance donne un `poll_push` vide.
+- Revue point 3 : `purge` amortie, sans allocation — index `order`
+  (réception) et nouvel index `by_ts` (horodatage), parcourus depuis le plus
+  ancien avec arrêt au premier valide, comme `SeenSet`. `remove_entry`
+  maintient les trois structures.
+- Revue point 4 : octets stockés en `Arc<[u8]>` avec le TTL de push **déjà
+  écrit** (`codec::TTL_OFFSET`) ; `PushOrder::bytes` est partagé et
+  s'envoie tel quel (`Transport::send` prend `&[u8]`) → zéro copie par push.
+- 4 tests ajoutés (32 unitaires dans `inventory/tests.rs`).
+
+### Pourquoi / décisions
+- `Arc` plutôt que `Rc` (suggéré par la revue) : `Rc` rendrait `Inventory`
+  non `Send`, gênant pour le runtime async de `dengon-node` ; `Arc` existe
+  sur la cible ESP32 (Xtensa, atomiques).
+- Écrire le TTL à la mise en cache plutôt qu'au push : il est fixe pour
+  une entrée, et c'est ce qui rend le partage sans copie possible (sinon
+  l'appelant devait copier pour réécrire l'octet 2).
+- Codec de test provisoire (`tests/common/mod.rs`) **pas** remplacé par
+  `protocol::codec` : le vrai codec impose `ADDRESSED` sur `NOISE_MSG` et
+  `SIGNED` sur `SEALED_ENVELOPE`, que les scénarios n'utilisent pas ;
+  migration laissée à une PR dédiée (noté dans la fiche module).
+
+### Écarts vs conception
+- aucun nouveau.
+
+### Appris
+- rien de nouveau.
+
+### État après cette session
+- PR #96 à jour sur `main`, retours de revue traités.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                → OK
+$ cargo clippy --workspace --all-targets -- -D warnings     → OK
+$ cargo check -p dengon-core --no-default-features          → OK (no_std)
+$ cargo test -p dengon-core
+  lib : 322 passés · inventory_mock : 6 · routing_mock : 8 · autres OK — 0 échec
+$ cargo llvm-cov -p dengon-core --summary-only
+  sync/inventory.rs  98,20 % lignes · TOTAL crate 97,32 %
+```
+
+---
+
+## 2026-09-28 — US-210 : `sync::inventory` — échange d'inventaire, push du manquant
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/inventory.rs` +
+`sync/inventory/tests.rs` (nouveaux), `sync/{mod,routing}.rs`, `lib.rs`,
+`crates/dengon-core/tests/{common/mod.rs,inventory_mock.rs}` (nouveaux),
+`tests/routing_mock.rs`, `docs/suivi/`
+**Lot :** US-210, issue #24 — J1 « Cœur en simulation » ; branche empilée
+sur `feat/US-209-routing` (PR #85 pas encore mergée)
+
+### Fait
+- **`Inventory<L>`** (`src/sync/inventory.rs:284`) : cache de
+  réconciliation **sans I/O**, générique sur le lien comme `Router`.
+  `remember` (`:356`) garde les octets bruts d'un paquet (cap 120, fenêtre
+  6 h en horloge monotone, `MSG_TTL_S` en horloge murale, éviction du plus
+  ancien) ; `forget` (`:393`) pour l'ACK ; `link_up` (`:412`) rend notre
+  inventaire (les `max_ids` plus récents) ; `on_inventory` (`:433`) met en
+  file ce que le voisin n'a pas annoncé ; `poll_push` (`:456`) rend les
+  `PushOrder` **cadencés** à `PUSH_MAX_PER_MIN = 15` par lien et par
+  minute ; `next_deadline` (`:488`).
+- **Payload `INVENTORY`** : `encode_payload` / `decode_payload`
+  (`count(2) ‖ msgID[count]`, big-endian, `PayloadError`), borne
+  `INVENTORY_MAX_IDS = 2047` (tient dans `payload_len`).
+- **`cacheable(&Header, &Decision) -> Option<u8>`** (`:183`) : quoi mettre
+  en cache (types `SEALED_ENVELOPE` / `NOISE_MSG` / `ACK`, accepté et non
+  livré ici, `RELAY_OK` et `ttl > 1`) et avec quel TTL le pousser.
+- `routing::RateWindow` passé en `pub(super)` + `next_free` : la cadence
+  de push réutilise la fenêtre glissante du routeur.
+- Codec de test extrait de `tests/routing_mock.rs` vers
+  `tests/common/mod.rs` (partagé avec `inventory_mock.rs`).
+- **Tests** : 28 unitaires dont 4 property (convergence A/B vers l'union,
+  jamais de push d'un `msgID` annoncé, aller-retour du payload, décodage
+  sans panique) ; 6 de bout en bout dans `tests/inventory_mock.rs`
+  (`MockTransport` + `Router` + `Inventory` par nœud).
+
+### Pourquoi / décisions
+- **Push cadencé** : le routeur du receveur refuse au-delà de 20 nouveaux
+  `msgID`/min par voisin. Mesuré par le test témoin : sans cadence, A
+  pousse 25 paquets d'un bloc → **6 rejetés** `FloodLimited` chez B (1
+  `INVENTORY` + 19 acceptés) ; avec la cadence à 15/min → **0 rejet**,
+  convergence en 2 fenêtres.
+- Pas de TTL « gratuit » au push : un push est un saut, le TTL poussé est
+  `ttl − 1` (ou celui du relais programmé) ; un paquet sans `RELAY_OK` ou
+  à `ttl ≤ 1` n'entre pas au cache.
+- Payload `INVENTORY` codé ici et non dans `protocol::codec` : le codec
+  (US-201, sur `main` depuis) laisse le payload opaque ; à déplacer si
+  Oswin préfère l'y mettre.
+- Branche **empilée** sur US-209 plutôt que rebasée sur `main` : garde un
+  diff limité à US-210 ; le codec de test provisoire est donc conservé
+  (`codec::{encode, decode}` au rebase).
+
+### Écarts vs conception
+- 3 entrées dans `03-ecarts-conception.md` : push cadencé, réglages du
+  cache sans constante de conception, types mis en cache.
+
+### Appris
+- Réconciliation ↔ anti-inondation (`04-apprentissages.md`).
+
+### État après cette session
+- `sync::inventory` utilisable ; **pas encore branché** dans `dengon-node`
+  ni `dengon-sim` ; `status`/`courier` (US-211/212) devront appeler
+  `Inventory::forget` sur ACK, en plus de `Router::cancel`.
+- La fenêtre de cadence est **par lien** (pas par `peerID` comme
+  l'anti-inondation du routeur) : une reconnexion immédiate peut faire
+  rejeter quelques pushs, rattrapés à la rencontre suivante.
+- Fiche module mise à jour : `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all
+$ cargo clippy --workspace --all-targets -- -D warnings      → OK
+$ cargo check -p dengon-core --no-default-features           → OK (no_std)
+$ cargo test -p dengon-core
+  → 116 lib + 6 inventory_mock + 4 protocol_vectors + 8 routing_mock, 0 échec
+$ cargo llvm-cov -p dengon-core --summary-only
+  → sync/inventory.rs 96,88 % des lignes, 97,68 % des régions ;
+    total crate 97,61 % des lignes
+```
+- Texte de l'issue #24 : seul le commentaire d'attribution était lisible ;
+  critères pris dans `synthese/10` §4.2.
+
+---
+
 ## 2026-09-28 — US-220 : retour de revue de la PR #101 — MTU enregistré par un seul chemin
 
 **Auteur :** Paul + Claude (Opus 5.5)
@@ -1460,6 +1610,9 @@ une seule ligne par module
   `dengon-sim`) viendra avec les US suivantes.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+---
+
 ## 2026-09-28 — US-209 : retours de revue #85 (OswinFreyr) sur `sync::routing`
 
 **Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)

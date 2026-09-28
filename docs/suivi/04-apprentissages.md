@@ -1385,3 +1385,19 @@ inspectable pour synchroniser le test sans `sleep` fixe (poll borné sur
 `subscriber_count()`).
 **Où c'est utilisé :** `dashboard/api/tests/test_stream.py`
 (fixture `live_server`).
+### Réconciliation et anti-inondation se marchent dessus
+
+**C'est quoi :** deux règles saines isolément — « à la rencontre, pousse
+tout ce qui manque » et « n'accepte pas plus de N nouveaux messages par
+minute d'un même voisin » — qui, combinées, font jeter par le receveur ce
+que l'émetteur vient d'envoyer.
+**Pourquoi dans dengon :** un relais ESP32 qui a stocké 120 paquets et
+rencontre un téléphone : sans cadence, 100 seraient rejetés, et la bande
+BLE dépensée pour rien.
+**Piège / surprise :** la perte est silencieuse — la rencontre « réussit »
+avec 29 paquets sur 35 ; seul le test témoin (même scène, sans cadence)
+la chiffre (6 `FloodLimited`). La cadence
+d'émission doit rester **sous** le quota du receveur, pas égale : l'`INVENTORY`
+lui-même et le trafic direct comptent aussi.
+**Où c'est utilisé :** `crates/dengon-core/src/sync/inventory.rs:456`
+(`poll_push`), `tests/inventory_mock.rs`.

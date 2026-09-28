@@ -1730,3 +1730,57 @@ _(aucun écart pour l'instant)_
   réseau ne l'est pas.
 - **Doc de conception mise à jour ?** non — à couvrir par une future US
   d'auth opérateur, si elle est priorisée.
+### 2026-09-28 — `sync::inventory` : le push du manquant est cadencé (US-210)
+
+- **Prévu :** `synthese/05` §6.2 — après l'échange d'`INVENTORY`, « chacun
+  pousse à l'autre ce qui lui manque » ; repli « pousser toute la file ».
+  Rien sur le débit.
+- **Réel :** file de push par lien, vidée à au plus `PUSH_MAX_PER_MIN = 15`
+  paquets par minute (`src/sync/inventory.rs:70`).
+- **Raison :** le même document impose `FLOOD_MAX_PER_MIN_PEER = 20`
+  nouveaux `msgID`/min par voisin (§6.1). Les deux règles se contredisent
+  dès que le manquant dépasse 20 paquets : mesuré par
+  `temoin_sans_cadence_l_anti_inondation_rejette`, 6 paquets sur 25 rejetés
+  en une rencontre. 15 laisse de la place à l'`INVENTORY` lui-même et au
+  trafic direct.
+- **Conséquences :** un cache plein (120 paquets) met ~8 min à passer à un
+  voisin ; ce qui n'est pas passé avant la séparation l'est à la rencontre
+  suivante. Réglable (`InventoryConfig::push_max_per_min`).
+- **Doc de conception mise à jour ?** non — à valider à trois.
+
+---
+
+### 2026-09-28 — `sync::inventory` : réglages du cache sans constante de conception (US-210)
+
+- **Prévu :** `synthese/08` §5 — « cache de réconciliation ~120 paquets,
+  éviction LRU + 6 h », sans constante dans `protocol::consts`.
+- **Réel :** `INVENTORY_CACHE_CAP = 120`, `INVENTORY_WINDOW_MS = 6 h`,
+  `PUSH_MAX_PER_MIN = 15`, `INVENTORY_MAX_IDS = 2047` : constantes du
+  module, portées par `InventoryConfig`, pas dans `protocol::consts`
+  (contrat « revue à trois »). Éviction du **plus ancien reçu** (FIFO), pas
+  LRU : un paquet n'est jamais « utilisé » autrement que poussé.
+- **Raison :** même choix que les trois réglages de `sync::routing`.
+- **Conséquences :** un téléphone peut monter le cap ; l'inventaire annoncé
+  est tronqué à `max_ids` (les plus récents) — le receveur pousse alors
+  aussi les plus anciens, rejetés en `Duplicate` s'il les a encore.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `sync::inventory` : ce qui entre au cache (US-210)
+
+- **Prévu :** `powl/03` §7.2 — le cache contient « messages publics
+  récents, ACK non encore confirmés livrés, enveloppes » ; `synthese/05`
+  §6.2 ne précise pas.
+- **Réel :** `cacheable` (`src/sync/inventory.rs:183`) retient les
+  `SEALED_ENVELOPE`, `NOISE_MSG` et `ACK` acceptés par le routeur **et non
+  livrés ici**, avec `RELAY_OK` et `ttl > 1` ; TTL poussé = `ttl − 1` (ou
+  celui du relais programmé). Exclus : `ANNOUNCE`, `LOG_ATTEST`
+  (périodiques), `NOISE_HS` (propre à une session), `ENVELOPE_*` et
+  `INVENTORY` (autres mécanismes), `FRAGMENT` (réassemblé avant).
+- **Raison :** pousser un paquet sans `RELAY_OK` ou à TTL épuisé
+  contournerait la portée voulue par l'émetteur.
+- **Conséquences :** le payload `INVENTORY` est codé dans `sync::inventory`
+  (`encode_payload` / `decode_payload`) et non dans `protocol::codec`, qui
+  laisse les payloads opaques.
+- **Doc de conception mise à jour ?** non.

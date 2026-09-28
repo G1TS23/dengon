@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
 **Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::courier` (US-212) + `observability` (US-208).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::inventory` (US-210) + `sync::courier` (US-212) + `observability` (US-208).
 
 ## À quoi ça sert
 
@@ -49,12 +49,15 @@ dengon-core/
       fragment.rs      — fragmentation / réassemblage L2 (US-202)
       fragment/tests.rs — tests unitaires + property de la fragmentation
     sync/
-      mod.rs           — table des sous-modules sync (routing, status, courier
-                         livrés ; inventory = US-210)
+      mod.rs           — table des sous-modules sync (routing, inventory,
+                         status, courier)
       courier.rs       — enveloppes scellées détenues pour autrui (US-212)
       courier/tests.rs — tests du courrier, dont le test négatif de lecture
       routing.rs       — routeur sans-IO : TTL, dédup, jitter, clamp densité,
                          quotas, anti-inondation (US-209)
+      inventory.rs     — réconciliation par inventaire : cache, payload
+                         INVENTORY, push cadencé (US-210)
+      inventory/tests.rs — tests unitaires + property de inventory
       status.rs        — Status, StatusEvent, next_status, StatusChange (US-211)
       status/outbox.rs — Outbox, OutboxStore, MemoryStore, OutboxRecord
       status/outbox/tests.rs — tests de l'outbox
@@ -70,15 +73,16 @@ dengon-core/
     vectors/crypto_v0.json — vecteurs crypto (padding, tags, transcript XX, enveloppe X)
     identity_vectors.rs    — vecteurs identity + scénario d'appairage A↔B (US-205)
     vectors/identity_v0.json — 2 identités : clés publiques, peerID, empreinte, QR, code
+    common/mod.rs          — codec de test provisoire partagé (en-tête L3 à la main)
     routing_mock.rs        — sync::routing de bout en bout contre MockTransport
-                             (+ codec de test provisoire)
+    inventory_mock.rs      — sync::inventory de bout en bout (routeur + inventaire)
 ```
 
 `crypto.rs` et le dossier `crypto/` coexistent (disposition Rust 2018) : le
 fichier Ed25519 de US-203 n'a pas été déplacé (pas de déplacement
 de fichier pendant que les PR #78/#81/#82 sont empilées).
 
-Modules encore absents : `sync::inventory`, `api` (sprint 2).
+Modules encore absents : `api` (sprint 2).
 
 ## Concepts / types importants
 
@@ -105,6 +109,10 @@ Modules encore absents : `sync::inventory`, `api` (sprint 2).
 | `sync::routing::RelayOrder<L>` | `src/sync/routing.rs:205` | `msg_id`, `ttl` à écrire, `targets` = tous les voisins **sauf la source**, calculés à l'échéance. |
 | `sync::routing::RoutingConfig` | `src/sync/routing.rs:98` | Réglages, `new(local_id)` = valeurs de `protocol::consts` + 3 valeurs propres au routeur : `LINK_MAX_PKT_PER_S = 50` (`:70`), `BROADCAST_TTL_MAX = 3` (`:76`), `DUP_CANCEL_THRESHOLD = 2` (`:87`). |
 | `SeenSet`, `RateWindow`, `SplitMix64` (privés) | `src/sync/routing.rs:563`, `:536`, `:616` | Seen-set borné (cap + expiration), fenêtre glissante bornée par son quota, PRNG 64 bits seedé pour le jitter. |
+| `sync::inventory::Inventory<L>` | `src/sync/inventory.rs:296` | Cache de réconciliation d'un nœud, **sans I/O**, générique sur le lien. `remember(id, ts, ttl, bytes, Now)` (`:373`, écrit le TTL de push dans les octets), `forget(&MsgId)` (`:414`, ACK), `link_up(link, Now) -> Vec<MsgId>` (`:432`, notre inventaire, plus récents d'abord), `on_inventory(from, &[MsgId], Now)` (`:453`, met en file le manquant), `poll_push(Now) -> Vec<PushOrder>` (`:476`, cadencé ; `PushOrder::bytes` = `Arc<[u8]>` partagé avec le cache, à envoyer tel quel), `next_deadline(Now)` (`:511`, ignore les files dont les paquets ont expiré), `stats()`. Expiration amortie : deux index ordonnés (réception, horodatage), comme le `SeenSet` du routeur (revue #96). |
+| `sync::inventory::cacheable` | `src/sync/inventory.rs:194` | `(&Header, &Decision) -> Option<u8>` : le paquet reçu entre-t-il au cache, et avec quel TTL sera-t-il poussé. `SEALED_ENVELOPE`/`NOISE_MSG`/`ACK` acceptés non livrés, `RELAY_OK` et `ttl > 1`. |
+| `sync::inventory::{encode_payload, decode_payload}` | `src/sync/inventory.rs:132`, `:152` | Payload `INVENTORY` = `count(2) ‖ msgID[count]` ; `PayloadError` (`Truncated`, `TooMany`, `LengthMismatch`) ; borne `INVENTORY_MAX_IDS = 2047`. |
+| `sync::inventory::InventoryConfig` | `src/sync/inventory.rs:217` | `cap` (`INVENTORY_CACHE_CAP = 120`), `window_ms` (`INVENTORY_WINDOW_MS` = 6 h), `msg_ttl_ms`, `push_max_per_min` (`PUSH_MAX_PER_MIN = 15`), `max_ids`. |
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
 | `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
 | `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
@@ -516,6 +524,20 @@ encore le codec (US-201).
   représentatifs du domaine `pkt`/`msg`/`peer`, mais pas exhaustifs. Chaque
   événement restant suit le même patron mécanique (un `BTreeMap` de champs
   redactés) — écart consigné, pas un blocage technique.
+- **`sync::inventory` (US-210) : push cadencé sous l'anti-inondation.**
+  Le routeur du voisin refuse plus de 20 nouveaux `msgID`/min venant de
+  nous ; pousser le manquant d'un bloc en ferait rejeter l'excédent. Chaque
+  lien a donc une file de push vidée à 15 paquets/min (marge pour
+  l'`INVENTORY` et le trafic direct), avec la même fenêtre glissante que le
+  routeur (`RateWindow`, partagée en `pub(super)`). Le cache garde les
+  **octets bruts** (signature comprise) : pas besoin de réencoder, le TTL de
+  push (octet 2) est écrit **une fois** à la mise en cache, et les octets
+  sont partagés (`Arc<[u8]>`) entre le cache et chaque `PushOrder` (revue
+  #96 : pas de copie par voisin). `Arc` plutôt que `Rc` pour que
+  `Inventory` reste `Send` (runtime async de `dengon-node`). Un push compte comme un saut (TTL − 1),
+  donc la réconciliation de proche en proche reste bornée par le TTL
+  d'origine ; un paquet « tardif » (`NoRelay(Late)`) entre quand même au
+  cache — c'est justement l'inventaire qui transporte le tardif.
 
 ## Tests
 
@@ -718,6 +740,33 @@ encore le codec (US-201).
   posé) — depuis mesurée avec l'US-209 (voir ci-dessus), mais chaque branche de `verify_chain` (Ok/Broken/Fork/Gap) a un test
   dédié qui l'exerce explicitement.
 
+- `src/sync/inventory/tests.rs` (US-210) : **32 tests unitaires** (28 +
+  4 ajoutés par les retours de revue #96 : `next_deadline` sur file
+  expirée, octets partagés entre voisins, paquet trop court pour le TTL,
+  cohérence des index d'expiration) —
+  payload (aller-retour, `count` big-endian, tronqué, longueur incohérente,
+  trop d'ids), `cacheable` (par décision, portée voulue par l'émetteur,
+  types), cache (doublon, éviction, capacité nulle, ordre d'arrivée,
+  expiration 6 h et `MSG_TTL_S`, recul de l'horloge murale), session
+  (inventaire tronqué aux plus récents, push du seul manquant, lien
+  inconnu, pas de double file, cadence 15/min puis reprise, cadence par
+  lien, `link_down`, paquet expiré sauté) + **4 property tests** :
+  **convergence A/B vers l'union** avec au plus 15 pushs/min/lien, jamais
+  de push d'un `msgID` annoncé, aller-retour du payload, décodage sans
+  panique.
+- `tests/inventory_mock.rs` (US-210) : **6 tests de bout en bout** —
+  convergence A/B (30 / 10 messages dont 5 communs → 35 de chaque côté,
+  25 + 5 pushs, 0 `FloodLimited`), **témoin sans cadence** (6 pushs
+  rejetés par l'anti-inondation), push déjà vu rejeté en `Duplicate`
+  (re-dédup), push frais **re-relayé** plus loin (A–B–C), message acquitté
+  ni annoncé ni poussé, reprise après déconnexion.
+- Commande (2026-09-28, US-210) : `cargo test -p dengon-core` → 116 lib +
+  6 `inventory_mock` + 4 `protocol_vectors` + 8 `routing_mock`. Couverture :
+  `sync/inventory.rs` **96,88 % des lignes**, total crate 97,61 %.
+  Après rebase sur `main` et retours de revue #96 : 322 lib + 6
+  `inventory_mock` + 8 `routing_mock` ; `sync/inventory.rs` **98,20 % des
+  lignes**, total crate 97,32 %.
+
 ## Limites connues / TODO
 
 - Deux rangements de l'identité au repos coexistent (`identity::Vault` et
@@ -859,6 +908,15 @@ terminé puis ré-enqueué repartirait en `QUEUED` (précondition documentée :
   appelleront `Router::cancel`. Pas de RSSI-gating (optionnel MVP).
   Pas encore branché dans `dengon-node` ni `dengon-sim`.
 
+- **`sync::inventory`** : pas encore branché dans `dengon-node` /
+  `dengon-sim` ; `status`/`courier` doivent appeler `Inventory::forget` sur
+  ACK. Cadence de push **par lien**, pas par `peerID` : une reconnexion
+  immédiate peut faire rejeter quelques pushs (rattrapés à la rencontre
+  suivante). Le codec des tests reste le codec provisoire
+  (`tests/common/mod.rs`) : le vrai `protocol::codec` impose `ADDRESSED` sur
+  `NOISE_MSG` et `SIGNED` sur `SEALED_ENVELOPE`, que les scénarios de test
+  n'utilisent pas — migration laissée à une PR dédiée.
+
 ## Sous-module `protocol::fragment` (US-202)
 
 Découpe un paquet L3 trop grand pour une écriture BLE, et le recolle à
@@ -963,3 +1021,9 @@ redaction du projet (« rien d'identifiant ne doit sortir du téléphone ») de
 façon **structurelle** : le typage empêche de construire un événement avec
 un identifiant de message non redacté, ce n'est pas une discipline
 qu'un développeur pourrait oublier.
+
+US-210 (`sync::inventory`) est ce qui rend le **store-and-forward** réel :
+quand deux appareils se croisent, chacun dit ce qu'il porte et l'autre lui
+envoie ce qui manque. Message clé : on pousse **au rythme que le voisin
+accepte** — sans cette cadence, notre propre anti-inondation jetait 6 des
+25 messages d'une simple rencontre ; avec, zéro perte.

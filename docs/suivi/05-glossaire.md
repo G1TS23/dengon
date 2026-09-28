@@ -145,3 +145,6 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **SBOM** | *Software Bill of Materials* — inventaire machine des composants d'un logiciel et de leurs versions, pour retrouver vite qui est touché par une faille. Prévu par `synthese/10` §4.7, **pas encore livré**. |
 | **Unification de features (Cargo)** | Cargo compile une dépendance **une seule fois** par graphe, avec l'**union** des features demandées par tous ceux qui en dépendent. Conséquence : `--no-default-features` sur un paquet ne garantit pas que la dépendance soit compilée sans ses features par défaut. |
 | **Proxy `no_std`** | Ici : `crates/dengon-conformance/`, crate sans code qui lie `dengon-core` sans `std` pour rejouer les vecteurs dans la configuration que le firmware ESP32 embarquera — en attendant que l'US-307 branche le vrai pont `dengon_core_ffi`. |
+| **Inventaire (`INVENTORY`)** | Paquet `0x0D` : la liste des `msgID` qu'un nœud détient, envoyée à un voisin qui arrive. Le voisin répond en poussant ce qui manque. Remplace le gossip GCS au MVP. |
+| **Cache de réconciliation** | Paquets récents qu'un nœud porte pour d'autres (octets bruts, 120 max, 6 h), annoncés dans son inventaire et poussés aux voisins qui ne les ont pas. |
+| **Push cadencé** | Envoi du manquant limité à 15 paquets/min par voisin, pour rester sous son anti-inondation (20/min). |
