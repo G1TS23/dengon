@@ -1,0 +1,34 @@
+{
+  "batch_id": "09571d5b41f26d39019ecfd9a0c20e695c4704e32ae7c979746d75da2e503eab",
+  "node_id": "relay-3f2a9c",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "ce470fe9aba1e205e473e011cd1fe2116626421d8fdde934f3b70eb4db21a25e",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1012,
+      "ts_ms": 1725800001100,
+      "name": "peer.connected",
+      "payload": {
+        "peer": "a1b2c3d4e5f60718",
+        "rssi": -58,
+        "role": "peripheral"
+      }
+    },
+    {
+      "event_id": "272fa04ee9a6689b017766bc02ad31d5feb88868f79dfd4b614706f271fec7e9",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1013,
+      "ts_ms": 1725800005100,
+      "name": "peer.disconnected",
+      "payload": {
+        "peer": "a1b2c3d4e5f60718",
+        "duration_s": 4,
+        "pkt_exchanged": 11
+      }
+    }
+  ],
+  "sig": "GZGsjpQEhXS6/a5kiA+YhZJ5OH6J35pYRalOSn8IhJFRvpbWldJl0fHZH4OkqKB2//1mG4W4j5DZIUE4HuF3AQ=="
+}

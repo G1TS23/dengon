@@ -79,10 +79,40 @@ résolution.
   depuis ~4 ans, `olivier/etude-stack §1.2`). L'ouverture iOS est préservée par
   le **cœur Rust + le `trait Transport`**, pas par le framework d'UI. Le
   **Spike C** reste le go/no-go.
-- **Statut** : `à confirmer`. `powl` a tranché **Kotlin natif** ; l'orientation
-  proposée ci-dessus le confirme et écarte Flutter/RN, sous réserve du Spike C et
-  d'une validation en réunion. Note : `oswin/07 §1` indique que l'app Android
+- **Statut** : `tranché techniquement` (2026-09-28) — le Spike C, dernière
+  réserve explicite, est maintenant réussi (voir ci-dessus, 4/4 critères
+  démontrés sur 2 vrais Android). `powl` avait tranché **Kotlin natif** ;
+  l'orientation proposée ci-dessus le confirme et écarte Flutter/RN. Reste
+  une confirmation orale en réunion d'équipe, par cohérence avec le reste du
+  process (pas un blocage technique). Note : `oswin/07 §1` indique que l'app Android
   (.apk) et Flutter sont « décidés par l'équipe » — à reconfirmer au vu de `powl`.
+  **Spike C (2026-09-11)** : le code du harnais de mesure (`android/app/.../ble/spike/`)
+  est écrit et compile, mais **non exécuté** — aucun appareil Android
+  disponible dans l'environnement de dev. Les chiffres (MTU réel, timing,
+  matrice d'appareils) restent à produire manuellement avant de considérer
+  le Spike C réussi ; protocole de mesure dans
+  `docs/suivi/modules/android-app.md` §« Spike C ».
+  **Spike C, mise à jour (2026-09-25)** : exécuté **partiellement**, faute
+  d'un second Android — rôle Peripheral testé sur un Samsung Galaxy A16 avec
+  un iPhone 13 Pro Max (nRF Connect) en central de repli. Échange BLE
+  bout-en-bout confirmé (annonce, connexion, écriture + écho), mais le MTU
+  réel **n'a pas pu être mesuré** : iOS/CoreBluetooth n'expose aucune API de
+  négociation MTU côté central, à la différence d'Android — limitation de
+  plateforme, pas de manipulation. Timing et matrice d'appareils toujours pas
+  produits. **Le Spike C n'est donc toujours pas considéré réussi** : il
+  manque un vrai second appareil Android pour les 3 critères restants (MTU,
+  timing, matrice). Détail dans `docs/suivi/00-journal.md`, entrée du
+  2026-09-25.
+  **Spike C, exécuté intégralement (2026-09-28)** : 2 vrais appareils
+  Android (Samsung Galaxy A16 en Peripheral, Pixel 8 Pro en Central, tous
+  deux exécutant réellement `HelloMeshPeripheral`/`HelloMeshCentral`).
+  **Les 4 critères d'acceptation de l'issue #3 sont démontrés** : 20 octets
+  échangés avec écho reçu, **MTU négocié = 517**, **scan→connexion =
+  354 ms**, **connexion→échange = 1308 ms**, matrice d'un couple
+  d'appareils réels (deux fabricants, deux versions Android). **Spike C
+  réussi — GO pour Kotlin natif (A-1) confirmé.** Détail et tableau complet
+  dans `docs/suivi/modules/android-app.md` §« Spike C », entrée de journal
+  du 2026-09-28.
 
 ### A-2. Un seul moteur `dengon-core` ou deux implémentations ?
 
@@ -760,6 +790,43 @@ résolution.
   complet**. Backend Python/FastAPI ou Node/Fastify (au choix de qui prend le
   dashboard) ; la seule brique Rust est le binaire `dengon-verify` appelé en
   sous-processus pour la vérif de journal. Détail du langage = C-8.
+
+### B-6. Backend BLE desktop/CLI (`dengon-node`) : `btleplug` peut-il tenir le rôle peripheral ?
+
+- **Sources** : `docs/synthese/04-architecture.md §3` (table des impl `Transport`,
+  ligne Desktop/CLI), `docs/synthese/10-benchmarks-mvp-tests.md §2.2` (tableau
+  peripheral+central, ligne Desktop/CLI) ; ces deux tableaux reprennent une case
+  cochée dans `docs/powl/01-benchmarks.md:96`.
+- **Options** : (a) `btleplug` seul, en admettant que `dengon-node` reste
+  **central seul** (ne peut qu'initier des connexions, jamais être découvert) ;
+  (b) remplacer `btleplug` par **`bluer`** (bindings officiels BlueZ/D-Bus),
+  qui couvre nativement central **et** peripheral, mais **Linux uniquement**.
+- **Piste de résolution** : **Spike B** au Lot 0 (US-102, issue #2). Livrable :
+  rapport de décision.
+- **Statut** : **`tranché` par recherche documentaire (pas d'exécution — voir
+  limite ci-dessous), 2026-09-25, US-102, issue #2.** Réponse : **NON**,
+  `btleplug` ne tient le rôle peripheral **sur aucune plateforme** (pas
+  seulement Linux) — c'est un choix de conception assumé par la bibliothèque
+  elle-même (« *host/central mode only* »), sans roadmap pour l'étendre.
+  Rapport complet :
+  [`suivi/spikes/US-102-btleplug-peripheral.md`](../suivi/spikes/US-102-btleplug-peripheral.md).
+  - **Conséquence plus large que prévu par l'issue** : les cases cochées ✅
+    pour `btleplug` sur macOS/Windows dans `10-benchmarks-mvp-tests.md:49`
+    étaient **déjà fausses avant ce spike**, pas seulement l'inconnue Linux —
+    `btleplug` ne fournit le rôle peripheral nulle part.
+  - **Recommandation (option b), à ratifier en réunion** — même statut que
+    B-2/B-3 : remplacer `btleplug` par `bluer` pour `dengon-ble` desktop, et
+    assumer `dengon-node` **Linux uniquement**. Ça n'abandonne rien de réel :
+    `docs/synthese/02-probleme-et-besoins.md:66` et `docs/powl/00-overview.md:45`
+    désignaient déjà `dengon-node` comme « PC**/Linux** », jamais macOS/Windows.
+  - **Ne remet pas en cause le contrat `Transport`** (US-105) :
+    `TransportError::Backend(String)` absorbe un changement de backend sans
+    toucher au trait — anticipé dans `docs/suivi/modules/dengon-ble.md`.
+  - **Limite du spike** : recherche documentaire (README + docs.rs de
+    `btleplug`), pas d'exécution réelle — aucune machine Linux/BlueZ disponible
+    dans l'environnement où le spike a été mené. `bluer` lui-même n'a pas été
+    compilé ni exécuté ; **l'US-303 devra reprendre le spike sur une vraie
+    machine Linux** avant de considérer le choix définitivement validé.
 
 ---
 

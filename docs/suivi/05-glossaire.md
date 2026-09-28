@@ -35,6 +35,10 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Outbox** | File locale des messages envoyés mais pas encore confirmés distribués ; rejouée à chaque reconnexion. |
 | **ACK / read-receipt** | Accusés signés : « reçu par l'appareil » / « ouvert par l'utilisateur ». |
 | **Relais / `dengon-relay`** | Nœud fixe (ESP32) branché au secteur : densifie le maillage, met en cache, dépose des enveloppes, remonte des logs. Ne déchiffre rien. |
+| **`btleplug::api::Peripheral`** (piège de nommage) | Dans `btleplug`, ce trait désigne l'appareil **distant** trouvé en scannant (le serveur GATT d'en face), **pas** « notre rôle peripheral » : `btleplug` ne sait tenir que le rôle central (voir *Rôle central / peripheral* plus bas et B-6) — [`suivi/spikes/US-102-btleplug-peripheral.md`](spikes/US-102-btleplug-peripheral.md). |
+| **BlueZ** | Pile Bluetooth officielle de Linux (démon `bluetoothd`), pilotable via D-Bus. |
+| **D-Bus** | Bus de communication inter-processus standard sous Linux ; BlueZ y expose toute son API (scan, connexion, GATT, annonce). |
+| **`bluer`** | Bindings Rust officiels du projet BlueZ, au-dessus de D-Bus. Contrairement à `btleplug`, couvre le rôle peripheral (GATT server + annonce) — mais Linux uniquement. |
 | **`dengon-core`** | Bibliothèque Rust qui contient toute la logique (protocole, crypto, stockage, synchro, journal). Partagée par l'app, le nœud CLI et le firmware. |
 | **`dengon-node`** | Nœud sans interface, en ligne de commande : sert aux tests et de nœud fixe. |
 | **Transport (trait)** | Interface qui cache la radio : `dengon-core` envoie/reçoit des octets sans savoir si c'est Android, un PC ou un ESP32 derrière. |
@@ -92,3 +96,7 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Spike** | Tâche de recherche **timeboxée** dont le livrable est une **décision écrite** (oui/non), pas du code. Le code d'essai est explicitement jeté. Voir [`spikes/`](spikes/). |
 | **Foreground service (Android)** | Service Android « premier plan » : doit afficher une notification permanente et déclarer un `foregroundServiceType` (ex. `connectedDevice`) pour survivre écran éteint sans être tué par le système. |
 | **`START_STICKY`** | Valeur de retour d'`onStartCommand` qui demande à Android de relancer le service (sans son intent d'origine) s'il a dû être tué. |
+| **GATT** (*Generic Attribute Profile*) | Couche BLE qui structure les données échangées en **services** (regroupements) et **characteristics** (valeurs lisibles/écrivables/notifiables à l'intérieur d'un service). |
+| **Rôle central / peripheral (BLE)** | *Peripheral* : annonce sa présence et publie un service GATT (le « serveur »). *Central* : scanne, trouve, se connecte (le « client »). Un nœud `dengon` tient les **deux** rôles en permanence. |
+| **ATT_MTU** | Taille max d'un paquet BLE au niveau attribut (23 o par défaut, jusqu'à 517 si négocié à la connexion). Dimensionne la fragmentation protocole (`FRAG_SIZE`) — mesuré réellement par le Spike C (US-103). |
+| **Spike** | Tâche courte et bornée dans le temps (*timebox*) pour répondre à une question technique par l'expérimentation plutôt que par la lecture. Livrable = une décision écrite + des chiffres, pas une fonctionnalité ; le code produit est jetable. |

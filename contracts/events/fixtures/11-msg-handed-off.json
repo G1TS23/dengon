@@ -1,0 +1,34 @@
+{
+  "batch_id": "a3967e8c98be009c8676b5b01837d3c10ac04060c4bfccd1e58cc8afbec73c97",
+  "node_id": "client-9c1d84",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "372b741058e8b5240fd748d0b93e0ab6f6fe122848b0f0f3c171ca22dc56aae1",
+      "node_id": "client-9c1d84",
+      "node_kind": "client",
+      "seq": 5003,
+      "ts_ms": 1725800000120,
+      "name": "msg.handed_off",
+      "payload": {
+        "msg_log_id": "1122334455667788",
+        "to_peer": "a1b2c3d4e5f60718",
+        "via": "session"
+      }
+    },
+    {
+      "event_id": "3b0da2b71e4c7adfa23059c01a2f2d266d9ed26e61d8dc1de9958a7f350085ca",
+      "node_id": "client-9c1d84",
+      "node_kind": "client",
+      "seq": 5004,
+      "ts_ms": 1725800000900,
+      "name": "msg.handed_off",
+      "payload": {
+        "msg_log_id": "1122334455667788",
+        "to_peer": "0f1e2d3c4b5a6978",
+        "via": "envelope"
+      }
+    }
+  ],
+  "sig": "33Ixab2xFzlvRZkAroNl8krcMt0UU3jQoV0KgQbancE09Sma2F++VgtbelmsjpDndlEdrvkenfJGWLSTQLWPBg=="
+}
