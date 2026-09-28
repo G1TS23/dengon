@@ -1,0 +1,60 @@
+# Déploiement VPS (US-224). Lancé depuis `dashboard/deploy/` :
+#   docker compose up -d --build
+#
+# Écart de conception documenté dans docs/suivi/03-ecarts-conception.md et
+# docs/suivi/modules/deploiement-vps.md : le VPS est PARTAGÉ entre plusieurs
+# groupes, les ports 80/443 sont déjà occupés par un processus root que nous
+# ne contrôlons pas (pas d'accès sudo) — ce compose publie donc Caddy sur
+# 8080/8443, pas 80/443, et sans nom de domaine, Caddy émet un certificat
+# auto-signé (CA interne) plutôt qu'un vrai certificat Let's Encrypt.
+#
+# Noms de volumes FIXÉS (`name:`) plutôt que laissés au préfixe du projet
+# Compose (qui dépend du nom du dossier / de `-p`) : `scripts/purge-demo.sh`
+# doit pouvoir cibler `dengon_api_db` sans deviner ce préfixe.
+
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: dashboard/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      DENGON_DASHBOARD_DB: /data/dengon.db
+      # Pas de valeur par défaut ici : `config.py::db_path`/`max_batch_bytes`
+      # n'en ont pas non plus pour le secret JWT — voir
+      # `docs/suivi/modules/dashboard-api.md` (US-216). `:?message` fait
+      # échouer `docker compose up` tout de suite si `.env` est incomplet,
+      # plutôt que de démarrer un conteneur qui plantera à la première
+      # requête (`.env` n'existe pas dans le dépôt, voir `.env.example`).
+      DENGON_DASHBOARD_JWT_SECRET: ${DENGON_DASHBOARD_JWT_SECRET:?DENGON_DASHBOARD_JWT_SECRET manquant — copier .env.example vers .env et le renseigner}
+      DENGON_DASHBOARD_MAX_BATCH_BYTES: "2097152"
+    volumes:
+      - dengon_api_db:/data
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # IP publique du VPS en prod (voir .env.example) — nom/SAN du
+      # certificat auto-signé, voir Caddyfile pour pourquoi un bloc de site
+      # sans étiquette d'hôte ne suffit pas.
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-localhost}
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  dengon_api_db:
+    name: dengon_api_db
+  caddy_data:
+    name: dengon_caddy_data
+  caddy_config:
+    name: dengon_caddy_config

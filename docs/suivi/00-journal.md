@@ -180,6 +180,102 @@ TOTAL dengon-core      lignes  98,96 %
   périmètre. La CI (Linux) n'est pas concernée.
 
 ---
+## 2026-09-28 — US-224 : déploiement VPS — reverse-proxy TLS, purge, workflow manuel
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/Dockerfile`, `.dockerignore` (racine),
+`dashboard/deploy/{docker-compose.yml,Caddyfile,.env.example,purge-demo.sh}`,
+`.github/workflows/deploy-vps.yml`, `docs/suivi/`.
+**Lot :** US-224 (issue #38). Branche `feat/US-224-deploy-vps`, basée sur `main`
+(seule dépendance formelle : US-110, déjà mergée).
+
+### Fait
+- Accès SSH mis en place : paire de clés dédiée (`~/.ssh/dengon_vps`), alias
+  `dengon-vps` dans `~/.ssh/config`, testé.
+- **Investigation du VPS avant tout code** : `docker ps -a` montre des
+  conteneurs d'autres groupes du cours (`jdr`, `onsort`, `tavern`,
+  `partybox`, `substrata-web`) — le VPS est **partagé**, pas dédié à dengon.
+  `/proc/net/tcp` confirme que les ports 80/443 sont déjà occupés par un
+  processus **root**, sans qu'aucun conteneur visible ne les publie ; `sudo`
+  demande un mot de passe que nous n'avons pas. Décision (validée avec
+  Olivier) : improviser avec des ports non privilégiés plutôt que risquer de
+  casser le service d'un autre groupe.
+- `dashboard/api/Dockerfile` — contexte de build = racine du dépôt (anticipe
+  la dépendance de l'US-216 à `contracts/events/*.schema.json`, pas encore
+  mergée). Construit et testé en local avant tout déploiement réel.
+- `dashboard/deploy/` — `docker-compose.yml` (services `api` + `caddy`,
+  volumes nommés fixes), `Caddyfile` (`tls internal`, `default_sni`),
+  `purge-demo.sh`, `.env.example`.
+- **Déployé pour de vrai sur le VPS du groupe** (51.255.38.214) : transfert
+  par `tar`+`ssh` (pas de `rsync` sur le VPS), `.env` créé une fois à la
+  main, `docker compose up -d --build`.
+- **Bug rencontré et corrigé en testant en conditions réelles** : `curl
+  https://<IP publique>:8443/healthz` échouait (`tlsv1 alert internal
+  error`) alors que la même configuration fonctionnait en local avec
+  `localhost`. Diagnostic : `openssl s_client -servername <IP>` réussissait
+  (SNI forcé manuellement) mais `curl` échouait toujours — la preuve qu'un
+  client réel se connectant à une IP littérale n'envoie pas de SNI, et que
+  Caddy n'avait donc aucun certificat à proposer. Corrigé avec `default_sni`
+  dans le Caddyfile.
+- `.github/workflows/deploy-vps.yml` — `workflow_dispatch` seul
+  déclencheur, `environment: vps-prod`, transfert `tar`+`ssh`, deux smoke
+  tests (`/healthz` HTTPS, un batch ingéré) exécutés depuis le runner
+  (donc depuis l'extérieur, comme un vrai client).
+- `docs/suivi/modules/deploiement-vps.md` (nouvelle fiche) — inclut la
+  procédure d'accès SSH pour les 3 personnes.
+
+### Pourquoi / décisions
+- Détail complet dans `docs/suivi/modules/deploiement-vps.md` §Décisions :
+  ports non standard et TLS auto-signé (contrainte du VPS partagé),
+  `default_sni` (bug SNI/IP), pas de `rsync` (absent, pas de `sudo`), `.env`
+  jamais recréé par le workflow (préserverait les jetons JWT déjà émis).
+
+### Écarts vs conception
+- Déploiement sur 8080/8443 plutôt que 80/443 — consigné dans
+  `03-ecarts-conception.md`.
+- TLS auto-signé (CA interne Caddy) plutôt que Let's Encrypt, faute de nom
+  de domaine — consigné.
+
+### Appris
+- `docs/suivi/04-apprentissages.md` : à enrichir sur le piège SNI/IP-littérale
+  avec Caddy (voir ci-dessus) — utile pour toute future US qui déploierait
+  un service TLS sans nom de domaine.
+
+### État après cette session
+- Les 5 critères d'acceptation de l'US-224 sont couverts : reverse-proxy TLS
+  devant `uvicorn`, `/healthz` joignable en HTTPS depuis l'extérieur
+  (vérifié depuis un poste hors du VPS), script de purge testé, workflow
+  `deploy-vps.yml` créé (`vps-prod`, déclenchement manuel), procédure
+  d'accès documentée pour les 3 personnes.
+- Manque encore avant de fermer l'issue : configurer les secrets GitHub
+  (`VPS_HOST`/`VPS_PORT`/`VPS_USER`/`VPS_SSH_KEY`) dans l'environment
+  `vps-prod` — décision à prendre avec Olivier avant de les pousser (accès
+  qui touche un secret d'infrastructure partagée) ; premier run réel du
+  workflow depuis GitHub Actions (la procédure manuelle a été vérifiée,
+  pas encore le workflow lui-même) ; ouvrir la PR, revue par une personne
+  d'une autre `area:`.
+- Fiche module créée : `modules/deploiement-vps.md` + ligne dans
+  `modules/_index.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ curl -sk https://51.255.38.214:8443/healthz
+{"status":"ok"}   # HTTP 200
+
+$ curl -sI http://51.255.38.214:8080/healthz
+HTTP/1.1 301 Moved Permanently
+Location: https://51.255.38.214:8443/healthz
+
+$ curl -sk -X POST https://51.255.38.214:8443/ingest/batch -d '[]'
+{"stored":true,...}   # HTTP 202
+
+$ ssh dengon-vps "cd ~/dengon/dashboard/deploy && ./purge-demo.sh"
+→ Base repartie de zéro. (vérifié : /healthz répond de nouveau 200 après)
+```
+- Workflow `deploy-vps.yml` : adapté à la syntaxe GitHub Actions par
+  relecture, PAS ENCORE exécuté (secrets manquants) — à vérifier au premier
+  run réel.
 
 ## 2026-09-28 — US-205 : rebase sur `main` après le merge de #81 (US-204), relecture
 

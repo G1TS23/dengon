@@ -28,7 +28,7 @@
 | Contrats (`contracts/`) | schémas d'événements + fixtures golden | événements : envelope/batch/payloads schema + CANONICAL.md + 20 fixtures signées + validate.py (US-107, PR #60) | ~15 % | [contracts-events](modules/contracts-events.md) |
 | Dashboard `web` | page légère + SSE (A-5) | **squelette livré** (US-111) : page statique liste + détail (timeline des sauts), données bidon, aucun appel réseau, rendu vérifié à 360 px. Pas d'API ni de SSE (US-217/US-219) | 15 % | [dashboard-web](modules/dashboard-web.md) |
 | Contrats (`contracts/`) | schémas d'événements + fixtures golden | — | 0 % | — |
-| Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | — | 0 % | — |
+| Déploiement VPS | reverse-proxy TLS + `uvicorn` (A-5 / A-6) | **fait (US-224)** : `dashboard/api` déployé et vérifié sur le VPS réel du groupe derrière Caddy (`tls internal`, ports 8080/8443 — VPS partagé, 80/443 déjà occupés hors de notre contrôle), `/healthz` joignable en HTTPS depuis l'extérieur, script de purge, workflow manuel `deploy-vps.yml` (secrets GitHub pas encore configurés) | 90 % | [deploiement-vps](modules/deploiement-vps.md) |
 
 ## Outillage et processus
 

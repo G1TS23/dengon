@@ -1,0 +1,50 @@
+# Reverse-proxy TLS devant uvicorn (US-224).
+#
+# `tls internal` explicite : sans nom de domaine (le VPS n'est identifié que
+# par IP — écart consigné, docs/suivi/03-ecarts-conception.md), Caddy ne peut
+# pas obtenir de certificat public (Let's Encrypt HTTP-01/TLS-ALPN-01
+# exigent un nom d'hôte, pas seulement une IP). La CA interne de Caddy émet
+# un certificat auto-signé à la place — un vrai navigateur affichera un
+# avertissement, mais le trafic est chiffré et `/healthz` est bien joignable
+# en HTTPS.
+#
+# `{$CADDY_SITE_ADDRESS:localhost}` : un bloc de site SANS étiquette d'hôte
+# (juste `:443`) laisse Caddy sans nom à mettre dans le certificat.
+# **Piège rencontré en le testant en local** : `auto_https off` en option
+# globale (mis d'abord par réflexe — « pas besoin d'HTTPS automatique
+# puisque `tls internal` est déjà explicite ») coupe aussi l'émission du
+# certificat statique pour ce bloc, pas seulement la gestion Let's Encrypt.
+# Sans certificat à présenter, la poignée de main TLS échoue avec
+# `tlsv1 alert internal error` (constaté avec `openssl s_client`, aucune
+# trace dans les journaux Caddy — le certificat manquant confirmé par
+# `ls /data/caddy/certificates/` : dossier absent). Retirer `auto_https off`
+# (`admin off` seul reste nécessaire) a suffi : `tls internal` gère alors
+# lui-même l'émission, à charge pour l'IP/le nom donné par
+# `CADDY_SITE_ADDRESS` (l'IP du VPS en prod, `localhost` par défaut en test
+# local) de finir en CN/SAN du certificat.
+{
+	admin off
+	# Un client qui se connecte à une IP littérale (curl, un navigateur)
+	# N'ENVOIE PAS d'indication SNI — c'est le comportement TLS normal pour
+	# une IP, pas seulement pour un nom d'hôte. Sans `default_sni`, Caddy n'a
+	# alors aucun moyen de choisir un certificat (le site ci-dessous n'est
+	# route que par SNI) et renvoie `tlsv1 alert internal error` — constaté
+	# en déployant sur le VPS réel : `openssl s_client -servername <IP>`
+	# fonctionnait (SNI forcé manuellement), mais `curl https://<IP>:8443/…`
+	# échouait toujours, preuve que ce n'était PAS le certificat lui-même
+	# mais l'absence de SNI côté client réel.
+	default_sni {$CADDY_SITE_ADDRESS:localhost}
+}
+
+{$CADDY_SITE_ADDRESS:localhost}:443 {
+	tls internal
+	encode gzip
+	reverse_proxy api:8000
+}
+
+# HTTP (port hôte 8080, voir docker-compose.yml) redirigé vers HTTPS plutôt
+# que fermé : plus utile pour un client qui tape l'URL sans schéma, et {host}
+# préserve le nom/IP effectivement utilisé sans le coder en dur ici.
+{$CADDY_SITE_ADDRESS:localhost}:80 {
+	redir https://{host}:8443{uri} permanent
+}
