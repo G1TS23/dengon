@@ -1,16 +1,16 @@
 # Module : `dashboard-web` (`dashboard/web/`)
 
 **Rôle en une phrase :** la page web du dashboard d'observabilité — liste des
-messages suivis + écran de détail (parcours), pour l'instant sur données
-bidon.
+messages suivis + écran de détail (parcours), branchée sur l'API réelle.
 **Correspond à la conception :** [`docs/olivier/dashboard.md`](../../olivier/dashboard.md)
 §3, §4, §8, §9 ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §5 (« Parcours d'un message »), §11.2 (schéma SQLite `messages`/`message_hops`).
-**Dernière mise à jour :** 2026-09-25 (vérification visuelle)
-**État :** fait (US-111) — page statique, données en dur, aucun appel
-réseau. Pas encore branchée sur l'API (US-217, US-219).
+**Dernière mise à jour :** 2026-09-28 (US-219)
+**État :** fait (US-219) — les deux écrans de l'US-111 consomment
+`GET /api/messages`/`GET /api/messages/{id}` et se rafraîchissent seuls via
+`GET /api/stream` (SSE, US-218). Plus de données bidon.
 
-## Vérification visuelle à 360 px — faite le 2026-09-25
+## Vérification visuelle à 360 px — faite le 2026-09-25 (US-111)
 
 Le critère d'acceptation de l'US-111 demande un « rendu correct sur mobile
 (largeur 360 px) », vérifié manuellement avec capture d'écran (DoR n°7). À
@@ -30,15 +30,26 @@ Limite : le mode sombre n'a été vu qu'avec le Chromium headless complet, qui
 impose une largeur de fenêtre minimale d'environ 500 px (captures rognées, non
 conservées) ; les couleurs sombres s'appliquent bien, mais pas à 360 px.
 
+**US-219 (2026-09-28) n'a PAS pu refaire cette vérification visuelle dans un
+vrai navigateur** — aucun outil de navigation disponible dans cet
+environnement pour cette session (écart consigné dans
+`03-ecarts-conception.md`). Le rendu HTML/CSS n'a pas changé (mêmes
+gabarits `carteMessage`/`ligneHop`/classes CSS qu'à l'US-111, seule la
+source des données change) ; ce qui a été vérifié à la place :
+`node --check` sur `app.js`/`api.js` (syntaxe), et bout en bout via `curl`
+contre une vraie instance de l'API (les 20 fixtures golden ingérées,
+`GET /api/messages`/`GET /api/messages/{id}` renvoient la forme attendue,
+CORS vérifié avec un serveur web sur un port différent de l'API). À
+revérifier visuellement dès qu'un navigateur est disponible.
+
 ## À quoi ça sert
 
 Le dashboard observe le réseau sans jamais transporter de messages ni voir de
-contenu (`docs/olivier/dashboard.md` §2). Cette US livre les deux premiers
-écrans côté web, **débranchés de toute API** (S1) pour ne pas attendre
-`dashboard/api` (US-110/US-216/US-217, sprint 2) : une liste des messages
-suivis, et le détail du parcours d'un message (suite de sauts par nœuds
-anonymisés). Sert aussi de base visuelle que l'US-219 (« écran parcours d'un
-message », S2) viendra brancher sur l'API réelle et le flux SSE.
+contenu (`docs/olivier/dashboard.md` §2). L'US-111 avait livré les deux
+écrans **débranchés de toute API** (S1), pour ne pas attendre
+`dashboard/api`. L'US-219 les branche sur l'API réelle : une liste des
+messages suivis et le détail du parcours d'un message, tous deux à jour en
+direct via SSE.
 
 ## Structure
 
@@ -46,49 +57,73 @@ message », S2) viendra brancher sur l'API réelle et le flux SSE.
 dashboard/web/
   index.html   — squelette de page : bandeau de portée + <main id="app">
   style.css    — mobile-first (360 px), variables CSS clair/sombre
-  data.js      — données bidon (window.DENGON_DASHBOARD_DATA), forme alignée
-                 sur le schéma SQLite (messages / message_hops)
+  api.js       — accès réseau : fetchMessages()/fetchMessage()/abonnerFlux()
   app.js       — routage par hash (#/message/<id>), rendu liste + détail
 ```
+
+`data.js` (US-111, données bidon) est **retiré** — plus utilisé une fois
+branché sur l'API réelle.
+
+Si `dashboard/web` n'est pas servi derrière le même reverse-proxy que
+`dashboard/api` (US-224), définir `window.DENGON_API_BASE` (l'URL de l'API,
+ex. `https://mon-vps:8443`) dans un `<script>` placé AVANT `api.js`/`app.js`
+dans `index.html` — vide par défaut (même origine que la page).
 
 ## Concepts / types importants
 
 | Type / fonction | Fichier:ligne | Ce que ça fait |
 |---|---|---|
-| `window.DENGON_DASHBOARD_DATA` | `data.js:16` | `{ messages: [...], hops: { [msg_log_id]: [...] } }` — même forme que les tables `messages`/`message_hops` de `docs/synthese/09` §11.2. Inclut volontairement un message sans aucun saut (`unknown`) et un saut aux champs radio incomplets (`rssi`/`fanout` absents). |
-| `route()` | `app.js:~180` | Lit `window.location.hash` : `#/message/<id>` → écran détail, sinon → liste. Réécrit `#app` à chaque changement (`hashchange`) et à l'ouverture. |
-| `renderListe()` | `app.js:~110` | Construit une carte par message, triée par activité la plus récente. |
-| `renderDetail(msgLogId)` | `app.js:~150` | En-tête (id, statut, dates, latence) + timeline verticale des sauts. Si l'id est inconnu de la démo, affiche un état « introuvable » plutôt que de planter. |
-| `texteOuTiret(valeur)` | `app.js:~35` | `null`/`undefined`/`""` → `"—"` ; **`0` est préservé** (ex. `fanout: 0`) — piège classique du JS (`valeur \|\| "—"` aurait aussi effacé les zéros légitimes), évité par une comparaison stricte à `null`/`undefined`. |
+| `DengonApi.fetchMessages()` | `api.js` | `GET /api/messages` — liste des messages, déjà triée par l'API (`ORDER BY last_event_ms DESC`). |
+| `DengonApi.fetchMessage(id)` | `api.js` | `GET /api/messages/{id}` — détail + `hops`. Renvoie `null` sur 404 (distingué d'une erreur réseau, qui lève) pour que l'écran affiche « introuvable » plutôt que « API injoignable ». |
+| `DengonApi.abonnerFlux(cb)` | `api.js` | Ouvre `new EventSource("/api/stream")` (US-218), rappelle `cb` pour chaque événement reçu. Reconnexion gérée nativement par `EventSource` — rien à coder côté client pour ce critère de l'US-218. |
+| `route()` | `app.js` | Lit `window.location.hash` : `#/message/<id>` → écran détail, sinon → liste. **Async** (attend `fetch`) ; un jeton de génération (`generationCourante`) empêche une réponse `fetch` périmée d'écraser un écran plus récent (navigation rapide ou rafraîchissement SSE pendant un chargement en cours). |
+| `renderListe()`/`renderDetail(id)` | `app.js` | Mêmes gabarits que l'US-111 (`carteMessage`/`ligneHop`), mais chargent leurs données via `DengonApi` au lieu de `window.DENGON_DASHBOARD_DATA`. |
+| `planifierRafraichissement()` | `app.js` | Rappelée à chaque événement SSE ; redemande l'écran courant à l'API, débit borné à 1 rafraîchissement / 500 ms (`setTimeout`) pour qu'un batch de plusieurs événements ne déclenche pas autant de `fetch`. |
+| `texteOuTiret(valeur)` | `app.js` | `null`/`undefined`/`""` → `"—"` ; **`0` est préservé** (ex. `fanout: 0`) — piège classique du JS (`valeur \|\| "—"` aurait aussi effacé les zéros légitimes), évité par une comparaison stricte à `null`/`undefined`. |
 
 ## Flux principal (exemple)
 
-1. Ouverture de `index.html` (`file://` ou servi statiquement) → `app.js`
-   s'exécute, hash vide → `renderListe()` affiche les 5 messages bidon,
-   triés par dernière activité.
+1. Ouverture de `index.html` (servie par un vrai serveur — voir Décisions) →
+   `app.js` s'exécute, hash vide → `route()` affiche « Chargement… » puis
+   `renderListe()` une fois `GET /api/messages` répondu.
 2. Clic sur une carte → navigue vers `#/message/<msg_log_id>` →
    `hashchange` → `renderDetail(id)` affiche l'en-tête et la timeline des
-   sauts connus (ou l'état « aucun saut remonté » si `hops[id]` est absent).
+   sauts connus (`GET /api/messages/{id}`, champ `hops`) — ou l'état « aucun
+   saut remonté » si `hops` est vide, ou « introuvable » si 404.
 3. Lien « Retour à la liste » → `#/` → `renderListe()`.
-
-Aucune étape ne fait de requête réseau : `data.js` est un `<script>` classique
-(pas un `fetch`/`XHR` d'un fichier JSON, qui échouerait en `file://` à cause de
-CORS).
+4. En parallèle, `DengonApi.abonnerFlux()` reçoit chaque événement ingéré
+   côté serveur et redemande l'écran courant — la page se met à jour sans
+   rechargement quand un nouveau batch arrive.
 
 ## Dépendances
 
-- **Internes :** aucune (page volontairement débranchée de `dashboard/api`,
-  qui n'existe pas encore sur `main`).
-- **Externes :** aucune. Pas de framework, pas de CDN, pas de build — un
-  navigateur suffit à ouvrir `index.html`.
+- **Internes :** `dashboard/api` — `GET /api/messages`, `GET /api/messages/{id}`
+  (`app/messages_api.py`), `GET /api/stream` (US-218). CORS `GET` ouvert à
+  toute origine côté API (voir `docs/suivi/modules/dashboard-api.md`), pour
+  que cette page fonctionne même servie depuis un port/domaine différent.
+- **Externes :** aucune. Pas de framework, pas de CDN, pas de build.
 
 ## Décisions d'implémentation
 
-- **`data.js` en `<script src>`, pas un `.json` chargé en `fetch`** : un
-  `fetch()`/`XMLHttpRequest` vers un fichier local est bloqué par CORS dans la
-  plupart des navigateurs quand la page est ouverte en `file://` (critère
-  d'acceptation explicite de l'US-111). Un `<script>` classique n'a pas cette
-  restriction.
+- **`file://` abandonné (US-219)** : l'US-111 choisissait `data.js` en
+  `<script src>` précisément pour rester utilisable en `file://`. Une fois
+  branché sur une vraie API HTTP, `fetch`/`EventSource` depuis `file://`
+  sont bloqués par le navigateur (origine `null`) — la page suppose
+  désormais un vrai serveur HTTP (même un simple `python3 -m http.server`
+  suffit). Régression assumée, anticipée par le texte même de l'US-111
+  (« US-219 branchera ces écrans sur l'API réelle »).
+- **`message_hops` (§11.2) dérivée à la lecture, pas une table à part** :
+  voir `docs/suivi/modules/dashboard-api.md` (`app/messages_api.py`) — la
+  timeline vient de `events`, reconstruite à chaque `GET`, pas d'une table
+  alimentée à l'écriture.
+- **Un événement SSE quelconque redemande l'écran entier**, pas de fusion
+  incrémentale côté client : le serveur (`app/projections.py`) reste la
+  seule source de vérité pour `status`/`hop_count` — maintenir une seconde
+  copie de cette logique en JavaScript aurait un coût de synchronisation
+  pour un gain minime au volume visé (démo 5-8 appareils, B-4).
+- **CORS `GET` ouvert à `*` côté API**, pas restreint à l'origine de
+  `dashboard/web` : ces routes ne renvoient que des données déjà redigées,
+  sans cookie ni session — voir `dashboard-api.md`.
 - **Routage par hash (`#/message/<id>`)**, pas un routeur/framework : un lien
   `#...` fonctionne aussi bien en `file://` que servi par un vrai serveur —
   contrairement à l'API History (`pushState`), qui exige un serveur capable de
@@ -114,31 +149,36 @@ CORS).
 
 ## Tests
 
-- **Aucun test automatisé commité** — la stratégie de test de l'US-111 est une
-  vérification manuelle (DoR n°7). `app.js`/`data.js` exécutés une fois sous
-  Node.js contre un DOM reconstitué à la main (script jetable, non commité) :
-  0 exception sur 5 écrans (liste, détail à sauts, détail sans saut, id
-  inconnu, retour liste), sortie texte conforme à l'attendu.
-- **Rendu réel à 360 px (2026-09-25)** : vérifié dans Chromium
-  (`chrome-headless-shell`, `--window-size=360,…`, `file://`), 4 captures
-  dans [`../assets/us-111/`](../assets/us-111/) — voir la section
-  « Vérification visuelle » en tête de fiche.
-- **SonarCloud (PR #70, 2026-09-25)** : 3 *code smells* `MINOR` signalés sur
-  `app.js` (`javascript:S7781`, `S7750`, `S6594`) et corrigés — voir le
-  journal du 2026-09-25. Comportement inchangé, pas de nouveau test ajouté
-  (déjà couvert par l'exécution Node.js manuelle décrite ci-dessus).
+- **US-111 (2026-09-25)** : vérification manuelle Node.js + Chromium
+  headless à 360 px — voir la section « Vérification visuelle » en tête de
+  fiche.
+- **US-219 (2026-09-28)** : `node --check app.js api.js` (syntaxe) ; bout en
+  bout via `curl` contre une vraie instance de `dashboard-api` — les 20
+  fixtures golden de US-107 ingérées, `GET /api/messages` renvoie les 20
+  `msg_log_id` attendus triés par activité, `GET /api/messages/{id}` renvoie
+  le détail + les `hops` dans l'ordre chronologique (mêmes scénarios de
+  statut que `test_messages_api.py` côté API : `1122…` → `delivered`,
+  latence 880 ms ; `aabbccdd…` → `expired`) ; CORS vérifié avec l'API et un
+  serveur web sur deux ports différents (`access-control-allow-origin: *`
+  présent sur `GET` et sur le préflight `OPTIONS` de `/api/stream`).
+  **Pas de vérification dans un vrai navigateur** cette fois (aucun outil de
+  navigation disponible dans cette session) — écart consigné, à refaire dès
+  que possible.
 
 ## Limites connues / TODO
 
-- Mode sombre non vérifié à 360 px (seulement à ~500 px, voir en tête de
-  fiche).
-- Pas de branchement sur l'API réelle (US-217/US-219) : tout est en dur dans
-  `data.js`.
-- Pas de rafraîchissement automatique (SSE) — hors périmètre de l'US-111,
-  prévu par la conception pour un sprint ultérieur.
+- Mode sombre non vérifié à 360 px depuis l'US-111 (seulement à ~500 px,
+  voir en tête de fiche).
+- **Rendu US-219 pas revérifié dans un vrai navigateur** (voir Tests) — les
+  gabarits HTML/CSS n'ont pas changé depuis la vérification US-111, mais le
+  chemin de données si (fetch async + états chargement/erreur, absents de
+  la vérification de 2026-09-25).
 - Pas de carte réseau, flotte de relais, intégrité des journaux ni recherche
-  de logs (`docs/synthese/09` §5) : ces écrans sont des USs séparées, pas
-  couvertes ici.
+  de logs (`docs/synthese/09` §5) : ces écrans sont des USs séparées
+  (US-310/US-311, sprint 3), pas couvertes ici.
+- Pas de test automatisé du JS (pas de framework de test en place) — même
+  discipline que l'US-111, DoR n°7 de l'US-219 demande une vérification
+  manuelle, pas une suite automatisée.
 
 ## Pour l'oral
 

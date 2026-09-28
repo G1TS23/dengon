@@ -1856,6 +1856,19 @@ _(aucun écart pour l'instant)_
 - **Conséquences :** un téléphone peut monter le cap ; l'inventaire annoncé
   est tronqué à `max_ids` (les plus récents) — le receveur pousse alors
   aussi les plus anciens, rejetés en `Duplicate` s'il les a encore.
+
+---
+
+### 2026-09-28 — `GET /api/messages`/`GET /api/messages/{id}` sans authentification opérateur (US-219)
+
+- **Prévu :** même situation que `GET /api/stream` (écart ci-dessus) —
+  `docs/synthese/09` ne précise pas d'exigence d'auth pour la lecture des
+  projections.
+- **Réel :** aucune vérification d'identité sur ces deux routes non plus.
+- **Raison :** identique à `GET /api/stream` — l'auth opérateur n'est
+  couverte par aucune US actuelle.
+- **Conséquences :** identiques — acceptable pour une démo locale, à
+  couvrir avant tout déploiement exposé.
 - **Doc de conception mise à jour ?** non.
 
 ---
@@ -1877,3 +1890,49 @@ _(aucun écart pour l'instant)_
   (`encode_payload` / `decode_payload`) et non dans `protocol::codec`, qui
   laisse les payloads opaques.
 - **Doc de conception mise à jour ?** non.
+### 2026-09-28 — `message_hops` (§11.2) dérivée à la lecture, jamais stockée (US-219)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §11.2 décrit
+  `message_hops` comme une table à part, avec une ligne par saut,
+  alimentée à l'ingestion (même logique que `messages`).
+- **Réel :** `app/messages_api.py::get_message_hops()` reconstruit le
+  parcours d'un message **à la lecture**, en relisant `events` et en
+  mappant chaque événement pertinent (`pkt.relayed`, `envelope.stored`,
+  `envelope.handoff`, `msg.delivered`/`ack.observed`, et tout autre
+  événement portant ce `msg_log_id`) vers la forme `message_hops`. Aucune
+  table `message_hops` n'existe, aucune migration ne l'a créée.
+- **Raison :** au volume visé (démo 5-8 appareils, B-4), reconstruire à la
+  lecture coûte moins cher que de maintenir une table à l'écriture (pas de
+  nouvelle migration, pas de nouvel `INSERT` à greffer dans le chemin
+  d'ingestion déjà chargé de `_refresh_message_projection`) — même
+  discipline que le choix déjà fait pour `messages` (US-217, recalcul
+  complet plutôt qu'incrémental).
+- **Conséquences :** un `GET /api/messages/{id}` coûte un `SELECT` de plus
+  sur `events` filtré par `json_extract` — négligeable au volume visé, à
+  revoir en priorité si le nombre d'événements par message grossissait
+  significativement.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` §11.2 reste
+  la description du modèle cible ; ce fichier documente que
+  l'implémentation obtient le même résultat par un autre chemin.
+
+---
+
+### 2026-09-28 — Vérification visuelle US-219 non refaite dans un navigateur
+
+- **Prévu :** l'US-219 demande un « rendu correct sur mobile », comme
+  l'US-111 (vérifiée le 2026-09-25 avec Chromium headless, voir
+  `docs/suivi/modules/dashboard-web.md`).
+- **Réel :** aucun outil de navigation n'était disponible dans cette
+  session — la vérification s'est limitée à `node --check` (syntaxe JS) et
+  à des appels `curl` bout en bout contre une vraie instance de l'API
+  (fixtures golden ingérées, réponses JSON conformes, CORS vérifié entre
+  deux ports différents).
+- **Raison :** contrainte d'environnement, pas un choix de conception — les
+  gabarits HTML/CSS n'ont pas changé depuis la vérification visuelle de
+  l'US-111 (seule la source des données change, via `fetch`), donc le
+  risque de régression purement visuelle est faible, mais pas nul (états
+  « Chargement… »/« Erreur » sont nouveaux, jamais vus dans un vrai
+  navigateur).
+- **Conséquences :** à revérifier visuellement dès qu'un navigateur est
+  disponible, en particulier les nouveaux états de chargement/erreur.
+- **Doc de conception mise à jour ?** sans objet.

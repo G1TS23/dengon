@@ -1,14 +1,15 @@
-// Squelette du dashboard (US-111) : page statique, données bidon (data.js),
-// aucun appel réseau. Routage par hash (#/message/<id>) — fonctionne aussi
-// bien en `file://` que servi par un vrai serveur plus tard (US-217/US-219
-// brancheront ces mêmes écrans sur l'API réelle, cf. `docs/synthese/09-
-// dashboard-et-donnees.md` §5/§6 — pas de fetch/XHR ici, seulement les
-// scripts <script src> classiques, qui eux fonctionnent en `file://`).
+// Dashboard (US-219) : mêmes écrans que le squelette US-111, branchés sur
+// l'API réelle (`api.js`) au lieu des données bidon de `data.js` (retirées).
+// Routage par hash (#/message/<id>), inchangé depuis l'US-111.
+//
+// Régression assumée par rapport à l'US-111 : la page ne fonctionne plus en
+// `file://` (un navigateur bloque `fetch`/`EventSource` depuis cette
+// origine vers une API HTTP) — attendu, l'US-111 disait déjà que US-219
+// « branchera ces mêmes écrans sur l'API réelle », ce qui suppose de facto
+// un vrai serveur. Voir `docs/suivi/modules/dashboard-web.md`.
 
 (function () {
   "use strict";
-
-  var DATA = window.DENGON_DASHBOARD_DATA;
 
   var MOIS = ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."];
 
@@ -86,14 +87,17 @@
     return node;
   }
 
-  function messagesTriesParActivite() {
-    // Les plus récemment actifs en premier ; un message "unknown" sans
-    // `last_event_ms` retombe sur sa création (toujours défini).
-    return DATA.messages.slice().sort(function (a, b) {
-      var ta = a.last_event_ms !== null ? a.last_event_ms : a.first_seen_ms;
-      var tb = b.last_event_ms !== null ? b.last_event_ms : b.first_seen_ms;
-      return tb - ta;
-    });
+  function ecranChargement() {
+    return el("section", { class: "ecran" }, [el("p", { class: "vide", text: "Chargement…" })]);
+  }
+
+  function ecranErreur(erreur) {
+    return el("section", { class: "ecran" }, [
+      el("p", {
+        class: "vide",
+        text: "Impossible de joindre l'API du dashboard (" + erreur.message + "). Nouvelle tentative automatique à la prochaine mise à jour.",
+      }),
+    ]);
   }
 
   function carteMessage(message) {
@@ -120,14 +124,18 @@
     return lien;
   }
 
-  function renderListe() {
+  async function renderListe() {
     document.title = "dengon · suivi — messages";
-    var messages = messagesTriesParActivite();
-    var liste = el(
-      "div",
-      { class: "liste-messages" },
-      messages.map(carteMessage),
-    );
+    var messages = await window.DengonApi.fetchMessages();
+    // Tri par activité la plus récente déjà fait côté API (ORDER BY
+    // last_event_ms DESC, voir app/messages_api.py) — pas refait ici.
+    var liste = el("div", { class: "liste-messages" }, messages.map(carteMessage));
+
+    if (messages.length === 0) {
+      return el("section", { class: "ecran" }, [
+        el("p", { class: "vide", text: "Aucun message suivi pour l'instant." }),
+      ]);
+    }
 
     return el("section", { class: "ecran" }, [
       el("p", { class: "compteur", text: messages.length + " message(s) suivi(s)" }),
@@ -159,18 +167,15 @@
     ]);
   }
 
-  function renderDetail(msgLogId) {
-    var message = DATA.messages.find(function (m) {
-      return m.msg_log_id === msgLogId;
-    });
-
+  async function renderDetail(msgLogId) {
     var retour = el("a", { class: "retour", href: "#/", text: "← Retour à la liste" });
+    var message = await window.DengonApi.fetchMessage(msgLogId);
 
     if (!message) {
       document.title = "dengon · suivi — message introuvable";
       return el("section", { class: "ecran" }, [
         retour,
-        el("p", { class: "vide", text: "Message introuvable (id inconnu de cette démo) : " + msgLogId }),
+        el("p", { class: "vide", text: "Message introuvable : " + msgLogId }),
       ]);
     }
 
@@ -192,7 +197,7 @@
       el("dd", { text: formatDuree(message.delivery_latency_ms) }),
     ]);
 
-    var hops = DATA.hops[msgLogId] || [];
+    var hops = message.hops || [];
     var corpsSauts;
     if (hops.length === 0) {
       corpsSauts = el("p", {
@@ -212,14 +217,51 @@
     return el("section", { class: "ecran" }, [retour, entete, meta, el("h2", { class: "titre-section", text: "Parcours" }), corpsSauts]);
   }
 
-  function route() {
+  // Jeton de génération : une requête `fetch` en vol dont la réponse arrive
+  // APRÈS qu'une navigation ou un rafraîchissement SSE plus récent a déjà
+  // affiché autre chose ne doit pas écraser cet affichage plus récent avec
+  // un résultat périmé (ex. l'utilisateur clique vite sur deux messages
+  // différents, ou un événement SSE arrive pendant le chargement de la
+  // liste).
+  var generationCourante = 0;
+
+  async function route() {
+    var generation = ++generationCourante;
     var hash = window.location.hash;
     var correspondance = /^#\/message\/(.+)$/.exec(hash);
     var racine = document.getElementById("app");
+
     racine.innerHTML = "";
-    racine.appendChild(correspondance ? renderDetail(decodeURIComponent(correspondance[1])) : renderListe());
+    racine.appendChild(ecranChargement());
+
+    var ecran;
+    try {
+      ecran = correspondance ? await renderDetail(decodeURIComponent(correspondance[1])) : await renderListe();
+    } catch (error_) {
+      ecran = ecranErreur(error_);
+    }
+
+    if (generation !== generationCourante) return; // une navigation plus récente a déjà pris la main
+    racine.innerHTML = "";
+    racine.appendChild(ecran);
+  }
+
+  // Rafraîchissement live (US-218/US-219) : tout événement reçu sur le flux
+  // SSE redemande l'écran courant à l'API plutôt que de maintenir une
+  // projection côté client — le serveur reste la seule source de vérité
+  // pour `status`/`hop_count`/etc. (voir app/projections.py). Débit borné à
+  // un rafraîchissement toutes les 500 ms au plus : un batch de plusieurs
+  // événements ne doit pas déclencher autant de requêtes `fetch`.
+  var rafraichissementProgramme = null;
+  function planifierRafraichissement() {
+    if (rafraichissementProgramme) return;
+    rafraichissementProgramme = window.setTimeout(function () {
+      rafraichissementProgramme = null;
+      route();
+    }, 500);
   }
 
   window.addEventListener("hashchange", route);
   route();
+  window.DengonApi.abonnerFlux(planifierRafraichissement);
 })();
