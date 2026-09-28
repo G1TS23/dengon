@@ -536,6 +536,9 @@ EOF
 - Relecture manuelle de `verification-metadata.xml` : les 3 classifiers
   `aapt2-8.5.2-11315950-{osx,linux,windows}.jar` ont chacun un checksum,
   `origin` cohérent avec la façon dont chacun a été obtenu.
+
+---
+
 ## 2026-09-28 — US-106 : revue PR #69 de Paul, bouchon Kotlin aligné sur les bindings générés
 
 **Auteur :** OswinFreyr + Claude (Opus 5.5)
