@@ -30,6 +30,7 @@ jobs:
             api:
               - 'dashboard/**'
               - '.github/workflows/dashboard.yml'
+              - '.uv-version'
 
       - name: Aucun changement dashboard/api
         if: steps.filtre.outputs.api != 'true'
@@ -41,10 +42,16 @@ jobs:
             echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Lire la version de uv (source unique, voir dashboard/api/Dockerfile)
+        if: steps.filtre.outputs.api == 'true'
+        id: uv-version
+        working-directory: .
+        run: echo "version=$(cat .uv-version)" >> "$GITHUB_OUTPUT"
+
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         if: steps.filtre.outputs.api == 'true'
         with:
-          version: "0.9.25"
+          version: ${{ steps.uv-version.outputs.version }}
           enable-cache: true
       - name: Installer depuis le lock (échoue si uv.lock est périmé)
         if: steps.filtre.outputs.api == 'true'

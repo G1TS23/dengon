@@ -1,0 +1,29 @@
+# Contexte de build = racine du dépôt (voir dashboard/api/Dockerfile) : sans
+# ce fichier, un `.venv` local (27 Mo pour `contracts/`, observé lors de
+# l'US-224) ou `target/` (Rust) seraient envoyés au démon Docker à chaque
+# build, pour rien — aucun n'entre dans l'image (COPY explicite par dossier).
+.git/
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+node_modules/
+target/
+crates/target/
+firmware/*/build/
+android/**/build/
+.idea/
+.vscode/
+
+# Répertoires entiers absents de l'image (seuls `contracts/` et
+# `dashboard/api/` sont `COPY`-és, voir dashboard/api/Dockerfile) — ajoutés
+# après revue de la PR #97 (constat OswinFreyr) : sans eux, tout le monorepo
+# (android/, firmware/, crates/, docs/, dashboard/web/) était hashé et
+# envoyé au démon Docker à chaque `docker compose up -d --build` lancé
+# depuis un checkout complet, pour rien.
+android/
+crates/
+docs/
+firmware/
+dashboard/web/

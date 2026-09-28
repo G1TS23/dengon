@@ -1334,6 +1334,59 @@ _(aucun écart pour l'instant)_
 - **Conséquences :** l'app Android doit encoder sans padding
   (`Base64.URL_SAFE or NO_PADDING or NO_WRAP`).
 - **Doc de conception mise à jour ?** Non (précision, pas contradiction).
+
+---
+
+### 2026-09-28 — Déploiement sur ports 8080/8443, pas 80/443 (US-224)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §7 décrit un
+  reverse-proxy classique devant `uvicorn`, sans préciser de port — l'usage
+  implicite pour un reverse-proxy TLS est 80/443.
+- **Réel :** Caddy publie 8080 (HTTP) et 8443 (HTTPS) sur l'hôte
+  (`dashboard/deploy/docker-compose.yml`).
+- **Raison :** en investiguant le VPS attribué au groupe (US-224), les ports
+  80/443 se sont révélés déjà occupés par un processus **root** — confirmé
+  via `/proc/net/tcp` (uid du socket = 0) — alors qu'aucun conteneur Docker
+  visible (`docker ps -a`, qui montre pourtant des conteneurs d'autres
+  groupes du cours) ne les publie. Le VPS est **partagé**, sans accès
+  `sudo` pour nous ; prendre 80/443 nous-mêmes est impossible sans risquer
+  de casser ou d'entrer en conflit avec ce processus système, dont nous ne
+  connaissons ni le rôle ni le propriétaire.
+- **Conséquences :** `GET /healthz` reste joignable en HTTPS depuis
+  l'extérieur (critère d'acceptation de l'issue #38), juste pas sur le port
+  443 standard — une URL de démo doit préciser `:8443`. Si l'équipe obtient
+  un jour un accès `sudo` ou une convention documentée pour ce VPS partagé,
+  reprendre 80/443 est un changement de deux lignes dans
+  `docker-compose.yml`.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` ne
+  spécifiait pas de port ; documenté ici et dans
+  `docs/suivi/modules/deploiement-vps.md`.
+
+---
+
+### 2026-09-28 — TLS auto-signé (CA interne Caddy), pas Let's Encrypt (US-224)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §7 : « le
+  reverse-proxy obtient le certificat TLS pour `dashboard.<domaine>` » —
+  implicitement un certificat public (Let's Encrypt étant l'option standard
+  et gratuite pour ce cas).
+- **Réel :** `dashboard/deploy/Caddyfile` utilise `tls internal` : Caddy
+  émet un certificat depuis sa propre CA locale, jamais soumis à une
+  autorité publique.
+- **Raison :** aucun nom de domaine n'est disponible pour ce VPS — identifié
+  uniquement par son IP (`51.255.38.214`). Let's Encrypt (HTTP-01 et
+  TLS-ALPN-01, les deux défis que Caddy sait automatiser) exige un nom
+  d'hôte résolvable, pas seulement une IP.
+- **Conséquences :** `/healthz` est bien joignable en HTTPS (chiffré), mais
+  un vrai navigateur affiche un avertissement de sécurité (certificat non
+  reconnu) — à anticiper pour la démo (importer la CA interne à l'avance,
+  ou simplement cliquer « continuer »). Si l'équipe obtient un nom de
+  domaine pointant vers ce VPS, remplacer `tls internal` par l'adresse du
+  domaine (Caddy gère alors Let's Encrypt automatiquement) est un
+  changement d'une ligne.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` visait un
+  déploiement avec domaine, non disponible ici ; documenté dans
+  `docs/suivi/modules/deploiement-vps.md`.
 ### 2026-09-28 — `sync::routing` : un doublon pendant le jitter n'annule plus le relais, il en faut deux (US-209)
 
 - **Prévu :** `docs/synthese/05-protocole-et-trame.md` §6.1 et `docs/powl/03`
