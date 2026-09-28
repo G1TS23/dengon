@@ -166,6 +166,90 @@ OK après un point de format corrigé (eprintln! multi-lignes)
   `pip install -e ".[dev]"` (système Python 3.13) pour pouvoir exécuter la
   suite après résolution des conflits — pas la méthode habituelle du projet
   (`uv run pytest`), mais résultat équivalent (mêmes fichiers, mêmes tests).
+## 2026-09-28 — Workflow CI `android.yml` (issue #79)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `.github/workflows/android.yml`, `docs/suivi/`
+**Lot :** issue #79 (retour de revue d'OswinFreyr sur la PR #72, `area:process`/`area:android`)
+
+### Fait
+- Nouveau workflow `.github/workflows/android.yml`, même patron que
+  `core.yml`/`firmware.yml` (filtrage par chemin **dans le job**, pas au
+  niveau du déclencheur ; actions tierces épinglées par SHA de commit ;
+  `concurrency` + `permissions: contents: read` ; job nommé `android`, pas
+  de matrice).
+- Étapes : checkout → `dorny/paths-filter` (`android/**`) → JDK 17
+  (`actions/setup-java`, temurin) → SDK Android
+  (`android-actions/setup-android`, licences acceptées, AGP télécharge la
+  plateforme 34 + build-tools à la demande) → cache
+  (`gradle/actions/setup-gradle`) → `./gradlew assembleDebug
+  testDebugUnitTest --no-daemon`.
+- Versions épinglées vérifiées via `git ls-remote --tags` (pas de web
+  générique) : `actions/setup-java@cf277c6` (v4.9.1),
+  `android-actions/setup-android@be39fa8` (v4.0.4),
+  `gradle/actions/setup-gradle@da187c8` (v4.4.4).
+
+### Pourquoi / décisions
+- Pas d'étape de vérification séparée pour les lockfiles Gradle
+  (`gradle.lockfile`/`settings-gradle.lockfile`/`verification-metadata.xml`) :
+  `resolutionStrategy.activateDependencyLocking()` (root `build.gradle.kts`)
+  et la vérification par sha256 font déjà échouer le build si l'un des deux
+  est périmé — contrairement à `uv sync --frozen` côté `dashboard.yml`, qui
+  lui n'a pas cette garantie native.
+- SDK non préinstallé sur le runner : `android-actions/setup-android`
+  installe seulement `platform-tools` et accepte les licences ; AGP résout
+  et télécharge lui-même `platforms;android-34` et les build-tools
+  correspondants au premier `./gradlew`, comme documenté par l'action.
+
+### Écarts vs conception
+- Aucun vs l'issue #79. Écart de **vérification**, consigné dans la fiche
+  `processus-github.md` : voir « Vérification » ci-dessous.
+
+### Appris
+- Le bac à sable de cette session bloque `dl.google.com` au niveau du
+  proxy sortant (403 sur le tunnel HTTPS), alors que `services.gradle.org`
+  (redirige vers `release-assets.githubusercontent.com`) et
+  `repo.maven.apache.org` sont joignables. Un `./gradlew tasks` échoue donc
+  ici dès la résolution du plugin `com.android.application` (hébergé sur le
+  Maven de Google) — confirmé volontairement en le lançant sans SDK, pour
+  vérifier que l'échec vient bien de là et pas d'une erreur du script.
+
+### État après cette session
+- Workflow écrit, YAML validé (`python3 -c "import yaml; ..."`), SHA des
+  actions tierces vérifiés contre de vrais tags GitHub. `./gradlew
+  --version` (bootstrap du wrapper, sans évaluer le projet Android) a pu
+  être exécuté avec succès en local — confirme au moins que le bit
+  exécutable de `gradlew` et le téléchargement de la distribution Gradle
+  fonctionnent, ce qui couvre la moitié des deux régressions historiques
+  citées par l'issue.
+- **Non vérifié : le job complet (`assembleDebug testDebugUnitTest`) sur un
+  vrai runner GitHub Actions**, faute d'accès à `dl.google.com` dans ce
+  bac à sable. Première vérification réelle possible seulement après le
+  push, en lisant le résultat du run CI sur la PR.
+- Fiche(s) module mise(s) à jour : `modules/processus-github.md` (liste des
+  workflows, écart deploy-vps.yml/android.yml résolu, limite de
+  vérification ajoutée), `02-avancement.md` (nouvelle ligne `android`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 -c "import yaml; d = yaml.safe_load(open('.github/workflows/android.yml')); ..."
+OK, job keys: ['android'] ; job name: android
+
+$ git ls-remote --tags https://github.com/actions/setup-java.git | grep v4.9.1
+cf277c60eb25467037889841efdb72551f06f6c3   refs/tags/v4.9.1
+(idem pour android-actions/setup-android v4.0.4 et gradle/actions v4.4.4 — SHA confirmés)
+
+$ cd android && ./gradlew --version
+BUILD réussi (Gradle 8.9, wrapper opérationnel)
+
+$ cd android && ./gradlew tasks --no-daemon
+FAILURE — résolution du plugin com.android.application impossible : dépôt
+Google inaccessible depuis ce bac à sable (403 côté proxy sur dl.google.com).
+Confirme le point d'échec attendu (pas de SDK local), pas un bug du script.
+```
+- **Pas exécuté** : `./gradlew assembleDebug testDebugUnitTest` de bout en
+  bout (nécessite le SDK Android, indisponible ici). À vérifier sur le
+  premier run CI après le push.
 
 ## 2026-09-28 — US-224 : corrections suite à la revue de la PR #97
 

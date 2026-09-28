@@ -4,12 +4,15 @@
 **mécaniques** — imposées par l'outil — au lieu de déclaratives.
 **Correspond à la conception :** [`docs/olivier/proposition-organisation-github.md`](../../olivier/proposition-organisation-github.md)
 §4.3 (contenu de `.github/`), §5.3 (labels), §6 (DoR), §7 (DoD), §10.3 (revue croisée).
-**Dernière mise à jour :** 2026-09-28 (US-222 — jobs `audit` et `cross-vectors`)
+**Dernière mise à jour :** 2026-09-28 (issue #79 — workflow `android`)
 **État :** les **quatre workflows requis par la DoD §7.1 point 3 existent
 désormais** — `core` (US-104), `sim` (US-221), `audit` et `cross-vectors`
 (US-222). La protection de `main` n'en exige toujours **qu'un seul** (`core`,
 posé par `G1TS23` le 09/09 à 15:18) : l'élargissement est une commande
 d'admin, à jouer **après** le merge de l'US-222 — voir *Protection de `main`*.
+Les huit workflows de `proposition-organisation-github.md` §4.3 sont
+désormais tous écrits — `deploy-vps.yml` (US-224) et `android.yml`
+(issue #79, ci-dessous) complètent la liste.
 
 Cette fiche tient aussi lieu de **note d'onboarding de l'area `process`**
 (§10.3 point 3) : comment le dépôt est réglé, et les trois pièges.
@@ -45,11 +48,10 @@ refuse le merge sans son approbation.
     contracts.yml      schémas, fixtures golden, vecteurs de trame (US-107/222)
     dashboard.yml      ruff + pytest de dashboard/api (US-110)
     firmware.yml       idf.py build via image Docker épinglée (US-114)
+    android.yml        ./gradlew assembleDebug testDebugUnitTest (issue #79)
+    deploy-vps.yml     déploiement manuel du dashboard sur le VPS (US-224)
     labels.yml         synchro des labels, manuelle et en simulation par défaut
 ```
-
-Des huit workflows de `proposition-organisation-github.md` §4.3, il manque
-`android.yml` et `deploy-vps.yml`.
 
 ## Fichiers importants
 
@@ -348,7 +350,15 @@ la PR #58. Elles sont donc candidates à devenir des checks requis, en plus de
   `false`.
 - ~~`sim.yml`, `audit.yml`, `cross-vectors.yml`, `firmware.yml`,
   `dashboard.yml` restent à écrire~~ — faits (US-221, US-222, US-114,
-  US-110). **`android.yml` et `deploy-vps.yml` (§4.3) restent à écrire.**
+  US-110). ~~`android.yml` et `deploy-vps.yml` (§4.3) restent à écrire.~~ —
+  faits (US-224, issue #79).
+- **`android.yml` n'a pas pu être vérifié en exécutant réellement
+  `./gradlew` dans cette session** : le bac à sable qui a écrit ce workflow
+  bloque `dl.google.com` (403 sur le tunnel du proxy sortant), donc ni le
+  plugin AGP ni le SDK Android ne sont récupérables en local — seul
+  `./gradlew --version` (bootstrap du wrapper, sans évaluer le projet) a pu
+  être exécuté avec succès. La seule vérification réelle est le premier run
+  du workflow sur GitHub Actions après le push.
 - **Les 4 checks requis ne sont pas encore posés sur `main`** : c'est le
   dernier critère d'acceptation de l'US-222, et il ne peut être rempli
   qu'après le merge, par un compte admin. Voir la commande plus haut.
