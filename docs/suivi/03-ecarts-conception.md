@@ -1557,3 +1557,29 @@ _(aucun écart pour l'instant)_
   projection les ignore.
 - **Doc de conception mise à jour ?** non — cohérent avec le marquage *v2*
   déjà présent dans `docs/synthese/09`.
+
+---
+
+### 2026-09-28 — `GET /api/stream` sans authentification opérateur (US-218)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §6 liste
+  `GET /api/stream` parmi les routes de l'API sans préciser d'exigence
+  d'authentification particulière pour la lecture ; §9 rappelle que les
+  événements diffusés sont déjà anonymisés/redigés à la source (aucun
+  `msg_uuid`, texte ou identifiant de destinataire en clair).
+- **Réel :** la route ne vérifie aucune identité — quiconque atteint l'API
+  peut ouvrir le flux SSE et voir tous les événements ingérés (bruts, pas
+  seulement ceux d'un nœud particulier).
+- **Raison :** même situation que `POST /api/nodes` (écart déjà consigné,
+  US-216) — l'auth opérateur/admin (session, cookie, rôle) n'est couverte
+  par aucune US du backlog actuel. Contrairement à `/ingest/batch`
+  (authentifie un NŒUD), `/api/stream` sert un OPÉRATEUR humain, cas que
+  l'US-218 ne couvre pas.
+- **Conséquences :** acceptable pour une démo locale (B-4, réseau de
+  confiance), mais un vrai trou avant tout déploiement exposé (US-224) : le
+  flux d'événements (topologie, statuts de messages, santé des relais) est
+  lisible par quiconque atteint le port. Les événements restent redigés
+  (pas de fuite de contenu de message), mais la topologie/l'activité du
+  réseau ne l'est pas.
+- **Doc de conception mise à jour ?** non — à couvrir par une future US
+  d'auth opérateur, si elle est priorisée.

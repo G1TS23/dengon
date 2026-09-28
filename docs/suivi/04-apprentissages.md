@@ -1184,3 +1184,35 @@ fixe.
 référence (graine 0 → `0xE220A8397B1DCDAF`), sinon une faute de frappe dans
 une constante passe inaperçue.
 **Où c'est utilisé :** `crates/dengon-core/src/sync/routing.rs:616`.
+
+---
+
+### `starlette.testclient.TestClient` ne streame pas vraiment (US-218)
+
+**C'est quoi :** `TestClient` (utilisé par `fixture client` dans
+`conftest.py`) exécute la coroutine ASGI de l'app **jusqu'à sa fin complète**
+avant de rendre la main à l'appelant — y compris pour une réponse en
+streaming. Dans `starlette/testclient.py`, `handle_request()` fait
+`portal.call(self.app, scope, receive, send)`, où `send()` accumule chaque
+morceau du corps dans un `io.BytesIO()` ; `portal.call` ne revient que quand
+cette coroutine se termine.
+**Pourquoi dans dengon :** `GET /api/stream` (SSE) ne se termine **jamais**
+tant que le client ne se déconnecte pas (boucle `while True` avec
+heartbeat). Un test écrit avec `client.stream("GET", "/api/stream")` reste
+donc bloqué indéfiniment dès `__enter__` — avant même d'avoir lu un octet.
+**Piège / surprise :** ça ne lève aucune erreur, ne timeout pas, ne produit
+aucun message — juste un hang silencieux. Le diagnostic a demandé un script
+autonome avec un thread « chien de garde » (`faulthandler.dump_traceback()`
+après N secondes) pour voir que le thread de la boucle asyncio interne
+était idle en `select()`, preuve qu'il attendait le prochain événement
+plutôt que d'être bloqué dans une boucle infinie côté app — le blocage
+était bien côté `TestClient`, pas côté route.
+**La solution :** un vrai serveur `uvicorn.Server` lancé dans un thread
+(port choisi par l'OS, `port=0`), avec un `httpx.Client` réel dessus — un
+vrai socket TCP lit les octets progressivement dès qu'ils arrivent, sans
+attendre la fin de la réponse. Toujours dans le même process que le test :
+l'objet `app` (et donc `app.state.broadcaster`) reste directement
+inspectable pour synchroniser le test sans `sleep` fixe (poll borné sur
+`subscriber_count()`).
+**Où c'est utilisé :** `dashboard/api/tests/test_stream.py`
+(fixture `live_server`).

@@ -11,26 +11,32 @@ Routes :
 * ``POST /api/nodes``     — enregistre un nœud (`pub_sign`) et lui remet un
   jeton JWT. **Sans authentification opérateur** pour l'instant — écart
   consigné dans `03-ecarts-conception.md`.
+* ``GET  /api/stream``    — diffusion en **SSE** des événements ingérés
+  (US-218) : rattrapage depuis `Last-Event-ID` (ou depuis le début), puis
+  diffusion live via `app/stream.py::Broadcaster`.
 
-Les projections (`messages`/`links`/`message_hops`) et le flux SSE sont
-l'objet d'US-217/US-218 (sprint 2).
+Les projections (`messages`) sont l'objet de l'US-217 ; `links`/
+`message_hops` restent hors périmètre — voir `03-ecarts-conception.md`.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import ingest
 from .auth import InvalidToken, create_token, node_id_from_authorization_header
 from .config import jwt_secret, max_batch_bytes
 from .db import LockedConnection, connect, run_migrations
+from .stream import Broadcaster, StreamEvent
 
 
 class _BodyTooLarge(Exception):
@@ -64,6 +70,12 @@ async def lifespan(app: FastAPI):
         # revue #59, point 3) : ouvrir une connexion par batch (fichier + 3
         # PRAGMA) devient un coût redondant dès qu'un flush réel arrive.
         app.state.db = db
+        # `get_running_loop()` DANS `lifespan` (une coroutine, donc déjà sur
+        # la boucle qui servira toutes les requêtes) : le `Broadcaster` doit
+        # programmer ses `put_nowait` sur CETTE boucle précise depuis le
+        # threadpool (thread différent, pas de boucle asyncio à lui), pas sur
+        # une boucle récupérée au hasard d'un autre contexte.
+        app.state.broadcaster = Broadcaster(asyncio.get_running_loop())
         yield
     finally:
         db.close()
@@ -198,7 +210,11 @@ async def ingest_batch_route(request: Request) -> JSONResponse:
 
     try:
         result = await run_in_threadpool(
-            ingest.ingest_batch, request.app.state.db, jwt_node_id, raw
+            ingest.ingest_batch,
+            request.app.state.db,
+            jwt_node_id,
+            raw,
+            request.app.state.broadcaster,
         )
     except ingest.IngestError as exc:
         return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
@@ -301,4 +317,100 @@ async def register_node(request: Request) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={"node_id": node_id, "token": create_token(node_id)},
+    )
+
+
+# Entre deux événements réels, un commentaire SSE (`:` en tête de ligne,
+# ignoré par tout client conforme) maintient la connexion active — un
+# reverse-proxy (US-224) coupe couramment une connexion HTTP sans octet
+# échangé au bout de 30-60 s, bien avant qu'un vrai événement n'arrive dans
+# une démo calme.
+_HEARTBEAT_INTERVAL_S = 15.0
+_HEARTBEAT_SSE = ": keep-alive\n\n"
+
+
+def _events_since(db: LockedConnection, after_rowid: int) -> list[StreamEvent]:
+    """Les événements de `rowid` strictement supérieur à `after_rowid`, dans
+    l'ordre d'insertion. `after_rowid = 0` (par défaut, aucun `Last-Event-ID`
+    reçu) renvoie tout l'historique — un client qui se connecte pour la
+    première fois rattrape l'état actuel plutôt que de partir à vide.
+    """
+    with db.locked() as conn:
+        rows = conn.execute(
+            "SELECT rowid, event_id, ts_ms, node_id, name, payload FROM events "
+            "WHERE rowid > ? ORDER BY rowid",
+            (after_rowid,),
+        ).fetchall()
+    return [
+        StreamEvent(
+            rowid=row["rowid"],
+            event_id=row["event_id"],
+            ts_ms=row["ts_ms"],
+            node_id=row["node_id"],
+            name=row["name"],
+            payload=json.loads(row["payload"]),
+        )
+        for row in rows
+    ]
+
+
+def _parse_last_event_id(header: str | None) -> int:
+    # Un `Last-Event-ID` absent ou mal formé équivaut à « depuis le début »
+    # (0) plutôt qu'une erreur 4xx : un client SSE ne sait pas fabriquer cet
+    # en-tête lui-même à la connexion initiale (c'est le navigateur qui le
+    # renvoie automatiquement, sur RECONNEXION, avec la valeur du dernier
+    # `id:` reçu) — le rejeter casserait la toute première connexion.
+    if header is None:
+        return 0
+    try:
+        return int(header)
+    except ValueError:
+        return 0
+
+
+async def _event_stream(request: Request) -> AsyncIterator[str]:
+    db: LockedConnection = request.app.state.db
+    broadcaster: Broadcaster = request.app.state.broadcaster
+    after_rowid = _parse_last_event_id(request.headers.get("last-event-id"))
+
+    # Abonné AVANT le rattrapage : un événement publié pendant la lecture de
+    # rattrapage ne doit être ni perdu (abonnement après lecture : fenêtre où
+    # un événement publié entre les deux échapperait aux deux mécanismes) ni
+    # dupliqué (filtré ci-dessous via `last_rowid`).
+    queue = broadcaster.subscribe()
+    try:
+        last_rowid = after_rowid
+        for event in await run_in_threadpool(_events_since, db, after_rowid):
+            yield event.to_sse()
+            last_rowid = event.rowid
+
+        while True:
+            if await request.is_disconnected():
+                return
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_INTERVAL_S)
+            except TimeoutError:
+                yield _HEARTBEAT_SSE
+                continue
+            if event.rowid <= last_rowid:
+                continue  # déjà servi pendant le rattrapage ci-dessus
+            yield event.to_sse()
+            last_rowid = event.rowid
+    finally:
+        broadcaster.unsubscribe(queue)
+
+
+@app.get("/api/stream")
+async def stream_events(request: Request) -> StreamingResponse:
+    """SSE (US-218) : rattrapage depuis `Last-Event-ID` (0 = tout
+    l'historique), puis diffusion live. `Last-Event-ID` est l'en-tête que
+    tout navigateur renvoie automatiquement à la reconnexion avec le dernier
+    `id:` reçu — la reprise « sans perdre le fil » demandée par le critère
+    d'acceptation ne nécessite donc aucune logique côté client au-delà de
+    l'API `EventSource` standard.
+    """
+    return StreamingResponse(
+        _event_stream(request),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
