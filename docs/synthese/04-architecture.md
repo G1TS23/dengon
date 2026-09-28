@@ -83,7 +83,7 @@ pub trait Transport: Send {
 | --- | --- | --- |
 | Android (MVP) | `android/.../ble/AndroidTransport.kt` + pont JNI dans `dengon-ffi` | `BluetoothGattServer`, `BluetoothLeScanner`, `BluetoothLeAdvertiser` + foreground service |
 | iOS (v2) | `ios/.../CoreBluetoothTransport.swift` | CoreBluetooth (bindings Swift générés par UniFFI depuis le **même** `dengon-core`) |
-| Desktop / CLI | `crates/dengon-ble/src/btleplug_transport.rs` | `btleplug` (BlueZ / CoreBluetooth / WinRT) |
+| Desktop / CLI | `crates/dengon-ble/src/btleplug_transport.rs` (nom de fichier à revoir, voir note) | ⚠️ `btleplug` **rôle central seul** — voir note |
 | ESP32 | `firmware/dengon-relay/src/transport_nimble.c` (+ FFI vers la lib core) | NimBLE (ESP-IDF) |
 
 C'est **l'unique couture** entre le cœur et les plateformes : seuls la radio
@@ -92,9 +92,20 @@ le journal sont partagés. C'est aussi ce qui rend l'**ouverture iOS** peu
 coûteuse (un shell SwiftUI + une impl `Transport` CoreBluetooth, sans toucher au
 cœur — A-11).
 
-**Rôle GATT** : chaque nœud est **serveur ET client**. Service `dengon` (UUID
-fixe, voir C-2), 2 caractéristiques : `RX` (write-without-response, pair →
+**Rôle GATT** : chaque nœud est **serveur ET client** — **sauf Desktop/CLI**
+(voir note ci-dessous, `btleplug` ne fait que client/central). Service `dengon`
+(UUID fixe, voir C-2), 2 caractéristiques : `RX` (write-without-response, pair →
 nœud), `TX` (notify, nœud → pair).
+
+> ⚠️ **Correction post-Spike B (US-102, 2026-09-25)** : `btleplug` ne fournit
+> le rôle peripheral (annonce + serveur GATT) sur **aucune** plateforme
+> (Linux/BlueZ, macOS, Windows) — bibliothèque *central-only* par conception.
+> La ligne « Desktop/CLI » ci-dessus supposait à tort le contraire. Repli
+> recommandé (à ratifier) : `bluer` (BlueZ/D-Bus), Linux uniquement — voir
+> [B-6](01-sujets-a-trancher.md) et
+> [`suivi/spikes/US-102-btleplug-peripheral.md`](../suivi/spikes/US-102-btleplug-peripheral.md).
+> Ne change pas le trait `Transport` ci-dessus, seulement son implémentation
+> desktop (US-303).
 
 ## 4. Découpage en couches — vue fonctionnelle
 

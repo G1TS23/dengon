@@ -791,6 +791,43 @@ résolution.
   dashboard) ; la seule brique Rust est le binaire `dengon-verify` appelé en
   sous-processus pour la vérif de journal. Détail du langage = C-8.
 
+### B-6. Backend BLE desktop/CLI (`dengon-node`) : `btleplug` peut-il tenir le rôle peripheral ?
+
+- **Sources** : `docs/synthese/04-architecture.md §3` (table des impl `Transport`,
+  ligne Desktop/CLI), `docs/synthese/10-benchmarks-mvp-tests.md §2.2` (tableau
+  peripheral+central, ligne Desktop/CLI) ; ces deux tableaux reprennent une case
+  cochée dans `docs/powl/01-benchmarks.md:96`.
+- **Options** : (a) `btleplug` seul, en admettant que `dengon-node` reste
+  **central seul** (ne peut qu'initier des connexions, jamais être découvert) ;
+  (b) remplacer `btleplug` par **`bluer`** (bindings officiels BlueZ/D-Bus),
+  qui couvre nativement central **et** peripheral, mais **Linux uniquement**.
+- **Piste de résolution** : **Spike B** au Lot 0 (US-102, issue #2). Livrable :
+  rapport de décision.
+- **Statut** : **`tranché` par recherche documentaire (pas d'exécution — voir
+  limite ci-dessous), 2026-09-25, US-102, issue #2.** Réponse : **NON**,
+  `btleplug` ne tient le rôle peripheral **sur aucune plateforme** (pas
+  seulement Linux) — c'est un choix de conception assumé par la bibliothèque
+  elle-même (« *host/central mode only* »), sans roadmap pour l'étendre.
+  Rapport complet :
+  [`suivi/spikes/US-102-btleplug-peripheral.md`](../suivi/spikes/US-102-btleplug-peripheral.md).
+  - **Conséquence plus large que prévu par l'issue** : les cases cochées ✅
+    pour `btleplug` sur macOS/Windows dans `10-benchmarks-mvp-tests.md:49`
+    étaient **déjà fausses avant ce spike**, pas seulement l'inconnue Linux —
+    `btleplug` ne fournit le rôle peripheral nulle part.
+  - **Recommandation (option b), à ratifier en réunion** — même statut que
+    B-2/B-3 : remplacer `btleplug` par `bluer` pour `dengon-ble` desktop, et
+    assumer `dengon-node` **Linux uniquement**. Ça n'abandonne rien de réel :
+    `docs/synthese/02-probleme-et-besoins.md:66` et `docs/powl/00-overview.md:45`
+    désignaient déjà `dengon-node` comme « PC**/Linux** », jamais macOS/Windows.
+  - **Ne remet pas en cause le contrat `Transport`** (US-105) :
+    `TransportError::Backend(String)` absorbe un changement de backend sans
+    toucher au trait — anticipé dans `docs/suivi/modules/dengon-ble.md`.
+  - **Limite du spike** : recherche documentaire (README + docs.rs de
+    `btleplug`), pas d'exécution réelle — aucune machine Linux/BlueZ disponible
+    dans l'environnement où le spike a été mené. `bluer` lui-même n'a pas été
+    compilé ni exécuté ; **l'US-303 devra reprendre le spike sur une vraie
+    machine Linux** avant de considérer le choix définitivement validé.
+
 ---
 
 ## C. Points ouverts internes `olivier`
