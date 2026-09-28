@@ -10,6 +10,87 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-212 : `sync::courier` — dépôt / collecte d'enveloppes scellées, expiration
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/{mod.rs, courier.rs, courier/tests.rs}`, `crates/dengon-core/src/lib.rs`
+**Lot :** US-212 (#26), sprint 2, jalon J1
+
+### Fait
+- **Nouveau module `sync`** (`src/sync/mod.rs`) avec `courier` seul. La PR
+  US-211 (#84) crée le même fichier avec `status` : conflit d'ajout attendu,
+  à résoudre en gardant les deux `pub mod`.
+- **`Courier`** (`src/sync/courier.rs`) : magasin borné d'enveloppes scellées
+  détenues pour autrui.
+  - `deposit(msg_id, raw_packet, now)` : décode le paquet avec le codec
+    (US-201), exige un `SEALED_ENVELOPE`, lit **uniquement**
+    `recipient_tag(16) ‖ epoch_day(2)` (`parse_sealed_payload`) et stocke le
+    paquet **octet pour octet**. Dédup par `msgID`.
+  - `offer(now)` → tags distincts à annoncer (`ENVELOPE_OFFER`) ;
+    `matching(tags, now)` → enveloppes à renvoyer sur `ENVELOPE_REQUEST` ;
+    `confirm_handoff(msg_id)` → retrait après envoi réussi.
+  - `expire(now)` → supprime les périmées, renvoie leurs `msgID`
+    (événement `envelope.expired`).
+- **Bornes** : `capacity` (`ENVELOPE_STORE_MAX = 64` par défaut),
+  `ENVELOPE_MAX_BYTES` par paquet, politique explicite `EvictionPolicy`
+  (`RejectNew` par défaut, `EvictOldest` configurable).
+
+### Pourquoi / décisions
+- **Échéance = `min(timestamp_ms + TTL, dépôt + TTL)`** : avec le seul
+  `deposit_ms` de `synthese/07` §7, une enveloppe pourrait vivre
+  indéfiniment en passant de courrier en courrier. Le `min` borne aussi une
+  horloge d'émetteur en avance.
+- **`RejectNew` par défaut** (`synthese/08` §7 : « refus de nouvelles
+  enveloppes, existantes protégées »), `EvictOldest` disponible
+  (`synthese/05` §6.4). Les deux docs divergent : la politique est un réglage
+  explicite plutôt qu'un choix caché.
+- **Lecture → envoi → confirmation** plutôt qu'un retrait à la lecture : si
+  le lien BLE tombe pendant l'envoi, l'enveloppe n'est pas perdue.
+- **Aucune clé dans l'API** : le courrier ne voit que la partie en clair.
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-212) : échéance
+  bornée par l'horodatage d'origine ; test négatif avec un AEAD de
+  substitution (Noise `X` pas encore mergé) ; `copy_budget` (v2) absent ;
+  remise confirmée en deux temps.
+
+### Appris
+- Rien de nouveau à consigner (patron déjà noté : property test sur les
+  bornes, cf. US-202).
+
+### État après cette session
+- Critères US-212 : dépôt / collecte ✅, expiration ✅, test négatif ✅ (avec
+  un AEAD de substitution, à rejouer avec Noise `X` après US-204), stockage
+  borné + politique explicite ✅, `no_std` ✅, couverture ≥ 85 % ✅.
+- Pas encore appelé : le branchement (pipeline de réception, échange
+  `ENVELOPE_OFFER`/`REQUEST`) viendra avec `sync::routing` et l'`api`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+_Commandes d'origine ; revérifiées après rebase sur `main` (#84, #85, #88, #89), voir ci-dessous._
+```
+$ cargo test --workspace --all-features
+168 tests passés, 0 échec (dont 15 sync::courier)
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+aucun avertissement
+$ cargo check -p dengon-core --no-default-features
+Finished (no_std OK)
+$ cargo llvm-cov -p dengon-core --summary-only
+sync/courier.rs  lignes 100,00 %  régions 100,00 %
+TOTAL dengon-core  lignes 97,66 %
+```
+- Le test négatif ne tourne qu'avec la feature `std` (l'AEAD de
+  substitution, `chacha20poly1305`, est une dépendance optionnelle liée à
+  `std`) : c'est le cas de `cargo test` par défaut et de la CI.
+- **Après rebase sur `main`** (#88 puis #89 ; conflits `lib.rs`, `sync/mod.rs` → `courier`,
+  `routing`, `status` gardés ; fiches `suivi/` refusionnées à la main) :
+  `cargo fmt --check` OK ; `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings` OK ; `cargo test --workspace --all-features`
+  376 passés, 0 échec ; `cargo check -p dengon-core --no-default-features` OK.
+
+---
+
 ## 2026-09-28 — US-208 : rebase de la PR #89 sur `main` (après #84, #85, #87, #88)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

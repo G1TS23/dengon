@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
 **Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `observability` (US-208).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::courier` (US-212) + `observability` (US-208).
 
 ## À quoi ça sert
 
@@ -49,8 +49,10 @@ dengon-core/
       fragment.rs      — fragmentation / réassemblage L2 (US-202)
       fragment/tests.rs — tests unitaires + property de la fragmentation
     sync/
-      mod.rs           — table des sous-modules sync (routing, status livrés ;
-                         inventory, courier = US-210/212)
+      mod.rs           — table des sous-modules sync (routing, status, courier
+                         livrés ; inventory = US-210)
+      courier.rs       — enveloppes scellées détenues pour autrui (US-212)
+      courier/tests.rs — tests du courrier, dont le test négatif de lecture
       routing.rs       — routeur sans-IO : TTL, dédup, jitter, clamp densité,
                          quotas, anti-inondation (US-209)
       status.rs        — Status, StatusEvent, next_status, StatusChange (US-211)
@@ -76,7 +78,7 @@ dengon-core/
 fichier Ed25519 de US-203 n'a pas été déplacé (pas de déplacement
 de fichier pendant que les PR #78/#81/#82 sont empilées).
 
-Modules encore absents : `sync::{inventory, courier}`, `api` (sprint 2).
+Modules encore absents : `sync::inventory`, `api` (sprint 2).
 
 ## Concepts / types importants
 
@@ -888,6 +890,36 @@ décodage sans panic). Couverture : 98,8 % des lignes.
 **Limites :** pas d'habillage L3 `0x09` (codec, US-201) ; pas encore branché
 dans le pipeline de réception ; au MVP le nœud réassemble avant de relayer
 (A-13), pas de relais fragment par fragment.
+
+## Sous-module `sync::courier` (US-212)
+
+Le **store-and-forward** : un nœud garde des enveloppes scellées pour un
+destinataire hors de portée et les lui remet à la rencontre, **sans pouvoir
+les lire**. Conception : `synthese/05` §4 et §6.3, `synthese/07` §7,
+`synthese/06` §3.
+
+| Type / fonction | Fichier | Ce que ça fait |
+|---|---|---|
+| `Courier::deposit` | `src/sync/courier.rs` | Décode le `SEALED_ENVELOPE` (codec), lit `recipient_tag ‖ epoch_day`, stocke le paquet tel quel. Dédup par `msgID`. |
+| `Courier::offer` | `src/sync/courier.rs` | Tags distincts à annoncer dans `ENVELOPE_OFFER`. |
+| `Courier::matching` / `confirm_handoff` | `src/sync/courier.rs` | Enveloppes à renvoyer sur `ENVELOPE_REQUEST`, puis retrait une fois l'envoi réussi. |
+| `Courier::expire` | `src/sync/courier.rs` | Supprime les périmées, rend leurs `msgID` (`envelope.expired`). |
+| `parse_sealed_payload` | `src/sync/courier.rs` | `recipient_tag(16) ‖ epoch_day(2) ‖ ciphertext` ; le ciphertext n'est jamais interprété. |
+| `CourierConfig` / `EvictionPolicy` | `src/sync/courier.rs` | `capacity` (64), `RejectNew` (défaut) ou `EvictOldest`, `ttl_ms` (24 h). |
+
+**Échéance :** `min(timestamp_ms + 24 h, dépôt + 24 h)` — changer de
+courrier ne prolonge pas la vie d'une enveloppe.
+
+**Tests :** `src/sync/courier/tests.rs`, 15 tests dont 3 property tests
+(stockage borné et politique respectée sur des suites aléatoires ; octets
+rendus identiques ; dépôt d'octets arbitraires sans panic) et le **test
+négatif** `le_courrier_ne_peut_pas_dechiffrer_ce_qu_il_transporte` (le clair
+n'apparaît pas dans ce que détient le courrier ; sa clé échoue, celle du
+destinataire réussit). Couverture : 100 % des lignes.
+
+**Limites :** le test négatif utilise XChaCha20-Poly1305 à la place de Noise
+`X` (US-204 pas encore mergée) ; pas de `copy_budget` (v2) ; stockage en
+mémoire seulement (persistance NVS / SQLite à brancher) ; pas encore appelé.
 
 ## Pour l'oral
 
