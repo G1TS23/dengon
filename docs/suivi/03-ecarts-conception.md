@@ -1437,3 +1437,54 @@ _(aucun écart pour l'instant)_
   pas après coup.
 - **Doc de conception mise à jour ?** non — à trancher si une US future
   ajoute un écran opérateur de gestion des nœuds.
+
+---
+
+### 2026-09-28 — `links`/`message_hops` (§11.2) non créées, `hop_count` approximatif (US-217)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §11.2 décrit, en
+  plus de `messages`, deux tables : `message_hops` (un événement de saut par
+  ligne — `node_id`, `kind`, `ttl_in`/`ttl_out`/`fanout`/`rssi`) et `links`
+  (topologie dérivée de `peer.connected`/`disconnected`).
+- **Réel :** seule `messages` existe (migration v3,
+  `dashboard/api/app/migrations.py`). `messages.hop_count` est une simple
+  approximation — le nombre d'événements `pkt.relayed` vus pour ce
+  `msg_log_id`, tous nœuds confondus — pas un journal par nœud avec
+  TTL/fanout/RSSI. `links` n'existe pas du tout.
+- **Raison :** l'US-217 (« Dashboard — projections + reconstruction de
+  statut ») porte formellement sur la reconstruction de **statut d'un
+  message** (critères d'acceptation de l'issue #31), pas sur la topologie ni
+  l'historique détaillé des sauts. Créer les deux tables sans US qui les
+  remplit et les lit aurait été un bouchon vide, la même discipline que pour
+  `store`/`ledger` (US-206/207).
+- **Conséquences :** le dashboard peut afficher un statut de message et un
+  compte de sauts grossier, mais pas encore « quel nœud a relayé ce message,
+  quand, avec quel TTL » ni un graphe de topologie. Aucune US actuelle du
+  backlog sprint 2 ne couvre `links`/`message_hops` — à planifier si l'écran
+  « parcours d'un message » (US-219) en a besoin.
+- **Doc de conception mise à jour ?** non — la cible reste `message_hops`/
+  `links` tels que décrits par §11.2.
+
+---
+
+### 2026-09-28 — Statut `read` (v2) jamais produit par la projection (US-217)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §9 catalogue
+  `msg.read`/`read.observed` (marqués *v2*) et §11.2 inclut `read` dans
+  l'enum `messages.status`.
+- **Réel :** `app/projections.py` ne traite que
+  `queued`/`in_flight`/`delivered`/`expired`/`unknown` — exactement les
+  statuts couverts par la table de déduction de §10. `msg.read`/
+  `read.observed` sont ignorés (ni erreur, ni effet sur le statut) ; `read`
+  reste déclaré dans la contrainte `CHECK` SQL (fidèle au schéma cible) mais
+  aucun code ne le produit.
+- **Raison :** §9 marque explicitement ces événements *v2* — hors périmètre
+  MVP — et §10, la référence normative de l'US-217, ne les mentionne pas du
+  tout dans sa table de déduction.
+- **Conséquences :** un message marqué lu par son destinataire reste affiché
+  `delivered` côté dashboard. Aucune perte de données : les événements
+  `msg.read`/`read.observed`, s'ils sont un jour émis, sont insérés dans
+  `events` comme les autres (l'ingestion, elle, ne filtre par nom), seule la
+  projection les ignore.
+- **Doc de conception mise à jour ?** non — cohérent avec le marquage *v2*
+  déjà présent dans `docs/synthese/09`.
