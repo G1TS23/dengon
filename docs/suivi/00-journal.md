@@ -29,6 +29,53 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
   deux flux d'exemple, dépendances ; la limite « pas de codec » est retirée).
 - Journal : l'ancienne version de l'entrée US-203, recopiée par
   `merge=union`, est supprimée (celle de `main`, corrigée après revue, fait foi).
+## 2026-09-28 — US-205 : retours de revue de #82 (coffre fichier)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/identity/vault.rs`, `docs/suivi/`.
+**Lot :** US-205 (issue #19), PR #82. Branche `feat/US-205-identity`.
+
+### Fait
+
+- **Test `file_vault_erreur_io` rouge sous Windows (bloquant)** :
+  `FileVault::new(temp_dir())` ; sous Windows `temp_dir()` finit par `\`,
+  `fs::read` rend `NotFound`, donc `Ok(None)` au lieu de `VaultIo`. Le test
+  crée maintenant un sous-répertoire dédié (correctif proposé par Oswin).
+- **Durabilité du renommage** : sous Unix, `FileVault::save` fait
+  `File::open(parent)?.sync_all()` après le `rename` (parent vide → `.`).
+- **`.tmp` résiduel** : `mode(0o600)` ne vaut qu'à la création ; un `.tmp`
+  laissé par un crash gardait ses droits. `save` le supprime d'abord (en
+  ignorant `NotFound`) et l'ouvre en `create_new`. Nouveau test
+  `file_vault_tmp_residuel_remplace` (`.tmp` préexistant en `0644` → coffre
+  final en `0600`, `.tmp` absent).
+- **`VaultKey`** : reste un `[u8; 32]`, documenté : le cœur ne la copie pas,
+  l'appelant l'efface (`Zeroizing<VaultKey>` se passe tel quel). `Identity`
+  n'est déjà plus `Clone` depuis le rebase.
+- Description de la PR : « 4 écarts » → 3 entrées dans
+  `03-ecarts-conception.md` (base64url et pseudo regroupés).
+
+### Pourquoi / décisions
+
+- `create_new` après suppression plutôt que `truncate` : si un autre
+  processus recrée le `.tmp` entre les deux, l'ouverture échoue au lieu
+  d'hériter de ses droits.
+- Pas de `sync` du répertoire sous Windows : un répertoire ne s'ouvre pas
+  comme un fichier sans drapeaux spécifiques.
+- Hors périmètre : le point 3 de la revue (correctif clippy dans le commit
+  US-204) relève de #78 ; le point 4 (contrat FFI : pseudo, format du
+  `peerID`, erreurs QR) est porté sur #6.
+
+### Vérifié
+
+- `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` :
+  propre.
+- `cargo test -p dengon-core` : 142 unitaires + 2 crypto + 3 identity +
+  4 protocole, tout vert (Linux/WSL). Le correctif Windows n'a **pas** été
+  rejoué sous Windows ici.
+- `cargo check -p dengon-core --no-default-features` : OK.
+
+---
+
 ## 2026-09-28 — US-205 : rebase sur US-204 revue (#81) et sur `main` (`store`, `ledger`)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

@@ -37,6 +37,10 @@ use crate::crypto::SEED_LEN;
 pub const VAULT_KEY_LEN: usize = 32;
 
 /// Clé symétrique du coffre.
+///
+/// Simple tableau : le cœur ne la copie pas (elle est prise par référence),
+/// et c'est à l'appelant de l'effacer. Le plus simple est de la garder dans un
+/// `Zeroizing<VaultKey>`, qui se passe tel quel là où `&VaultKey` est attendu.
 pub type VaultKey = [u8; VAULT_KEY_LEN];
 
 /// Signature de fichier du blob.
@@ -243,7 +247,8 @@ impl fmt::Debug for MemoryVault {
 ///
 /// Écriture atomique (fichier temporaire `<chemin>.tmp` puis renommage) : un
 /// arrêt brutal ne laisse jamais un coffre à moitié écrit. Sous Unix, le
-/// fichier est créé en `0600`.
+/// fichier est créé en `0600` et le répertoire est synchronisé après le
+/// renommage, pour que celui-ci survive à une coupure de courant.
 #[cfg(feature = "std")]
 #[derive(Debug, Clone)]
 pub struct FileVault {
@@ -279,8 +284,14 @@ impl Vault for FileVault {
 
         let io = |e: std::io::Error| IdentityError::VaultIo(e.kind());
         let tmp = self.tmp_path();
+        // Un `.tmp` laissé par un crash garderait ses droits d'origine :
+        // `mode(0o600)` ne s'applique qu'à la création.
+        match std::fs::remove_file(&tmp) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(e)),
+            _ => {}
+        }
         let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
@@ -289,7 +300,20 @@ impl Vault for FileVault {
         let mut file = opts.open(&tmp).map_err(io)?;
         file.write_all(blob).map_err(io)?;
         file.sync_all().map_err(io)?;
-        std::fs::rename(&tmp, &self.path).map_err(io)
+        std::fs::rename(&tmp, &self.path).map_err(io)?;
+        // Rend le renommage durable (sous Windows, un répertoire ne s'ouvre
+        // pas comme un fichier ; `rename` y passe par `MoveFileEx`).
+        #[cfg(unix)]
+        {
+            let parent = match self.path.parent() {
+                Some(p) if !p.as_os_str().is_empty() => p,
+                _ => std::path::Path::new("."),
+            };
+            std::fs::File::open(parent)
+                .and_then(|d| d.sync_all())
+                .map_err(io)?;
+        }
+        Ok(())
     }
 }
 
@@ -469,9 +493,40 @@ mod tests {
     #[cfg(feature = "std")]
     #[test]
     fn file_vault_erreur_io() {
-        // Un répertoire à la place du fichier : lecture impossible.
-        let vault = FileVault::new(std::env::temp_dir());
+        // Un répertoire à la place du fichier : lecture impossible. Pas
+        // `temp_dir()` directement : sous Windows il finit par `\` et la
+        // lecture rend `NotFound` (coffre vide) au lieu d'une erreur.
+        let dir = std::env::temp_dir().join("dengon-vault-est-un-dossier");
+        std::fs::create_dir_all(&dir).unwrap();
+        let vault = FileVault::new(&dir);
         assert!(matches!(vault.load(), Err(IdentityError::VaultIo(_))));
+    }
+
+    #[cfg(all(feature = "std", unix))]
+    #[test]
+    fn file_vault_tmp_residuel_remplace() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = std::env::temp_dir().join(alloc::format!(
+            "dengon-us205-tmp-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("identity.bin");
+        let mut vault = FileVault::new(&path);
+
+        // `.tmp` d'un crash précédent, lisible par tous.
+        let tmp = vault.tmp_path();
+        std::fs::write(&tmp, b"reste d'un crash").unwrap();
+        std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        load_or_create(&mut vault, &KEY, "alice", rng(1)).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        assert!(!tmp.exists());
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     proptest! {

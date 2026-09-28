@@ -915,6 +915,27 @@ libsignal `displayable_fingerprint` (chunks de 5 octets, `% 100000`).
 
 ---
 
+### Écriture atomique d'un fichier : `rename` ne suffit pas (US-205)
+
+**C'est quoi :** écrire dans `x.tmp`, `fsync`, puis `rename(x.tmp, x)` garantit
+qu'un lecteur voit l'ancien ou le nouveau contenu, jamais un mélange. Mais le
+renommage est une modification **du répertoire** : tant que le répertoire
+n'est pas lui-même synchronisé (`File::open(dir)?.sync_all()`), une coupure
+de courant peut l'annuler.
+**Pourquoi dans dengon :** le coffre d'identité (`FileVault`) ; perdre le
+renommage ne corrompt rien (l'ancien coffre reste), mais la nouvelle écriture
+serait perdue.
+**Piège / surprise :** `OpenOptions::mode(0o600)` ne s'applique qu'à la
+**création**. Un `.tmp` laissé par un crash, avec d'autres droits, les
+garde après `truncate`. D'où : supprimer le `.tmp`, puis `create_new`.
+Autre piège, côté tests : sous Windows, `temp_dir()` finit par `\` et
+`fs::read` sur ce chemin rend `NotFound`, pas une erreur « c'est un
+répertoire ».
+**Où c'est utilisé :** `crates/dengon-core/src/identity/vault.rs`
+(`FileVault::save`).
+**Pour aller plus loin :** `man 2 rename`, `man 2 fsync` (section sur les
+répertoires).
+
 ### AAD : authentifier l'en-tête d'un blob chiffré sans le chiffrer (US-205)
 
 **C'est quoi :** un AEAD (ChaCha20-Poly1305, XChaCha20-Poly1305) prend en

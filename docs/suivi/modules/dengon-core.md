@@ -103,7 +103,7 @@ Modules encore absents : `sync`,
 | `to_qr` / `from_qr` | `src/identity/qr.rs` | `dengon:v1:` + base64url sans padding de `len ‖ pseudo ‖ pub_static ‖ pub_sign`. Décodage strict, canonique, une erreur par cause. |
 | `SafetyNumber` / `safety_number` / `verification_code` | `src/identity/safety.rs` | `SHA-512(min(fp) ‖ max(fp))`, 12 groupes `u40_be(5 o) % 100000`. Symétrique. `Display` = `"75116 36485 …"`, `digits()` = 60 chiffres. |
 | `Identity::seal` / `unseal` | `src/identity/vault.rs` | Blob `"DGID" ‖ 1 ‖ nonce 24 ‖ XChaCha20-Poly1305(secret ‖ graine ‖ len ‖ pseudo)`, en-tête en AAD, nonce de la RNG injectée. Erreurs `VaultFormat` / `VaultVersion` / `VaultDecrypt`. |
-| `Vault`, `MemoryVault`, `FileVault`, `load_or_create` | `src/identity/vault.rs` | Rangement d'octets opaques. `FileVault` (std) écrit via `.tmp` + `rename`, mode `0600`. `load_or_create` : déchiffre si présent, sinon génère + scelle + enregistre → `peerID` stable. |
+| `Vault`, `MemoryVault`, `FileVault`, `load_or_create` | `src/identity/vault.rs` | Rangement d'octets opaques. `FileVault` (std) écrit via `.tmp` (supprimé puis recréé en `create_new`, mode `0600`) + `rename`, puis `fsync` du répertoire sous Unix. `load_or_create` : déchiffre si présent, sinon génère + scelle + enregistre → `peerID` stable. |
 | `IdentityError` | `src/identity.rs` | `InvalidPseudo`, `Qr{Prefix,Version,Encoding,Length,PublicKey}`, `Vault{Format,Version,Decrypt}`, `VaultIo(ErrorKind)` (std). |
 
 ## Flux principal (exemple)
@@ -497,7 +497,7 @@ encore le codec (US-201).
   écrites dans le fichier, GitGuardian les signalant comme secrets).
   Régénération volontaire :
   `cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs`.
-- `src/identity/*` (US-205), 26 tests unitaires + 8 property tests :
+- `src/identity/*` (US-205), 27 tests unitaires + 8 property tests :
   - `peer_id` et empreinte recalculés à la main, génération déterministe
     pour une RNG donnée, pseudo vide ou de 256 octets refusé, base32
     (RFC 4648), `Debug` sans secret ;
@@ -510,7 +510,8 @@ encore le codec (US-201).
     fichier, version, blob tronqué, clair authentique mais mal formé ;
   - `load_or_create` stable et avec une mauvaise clé ;
   - `FileVault` : « grep binaire » du fichier, absence du `.tmp`, mode
-    `0600`, réouverture, erreur d'E/S.
+    `0600`, réouverture, erreur d'E/S (sous-répertoire dédié, portable
+    Windows), `.tmp` résiduel en `0644` remplacé (Unix).
 - **Property tests `identity`** :
   - aller-retour QR dans les deux sens (`from_qr(to_qr(p)) == p` et
     `to_qr(from_qr(s)) == s`) ;
