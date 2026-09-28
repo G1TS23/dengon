@@ -1290,6 +1290,80 @@ $ cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs 
   absente du poste) — seul le `no_std` hôte est vérifié.
 
 ---
+## 2026-09-28 — US-216 : correctifs de revue de la PR #91 (node_id/node_kind, upsert de nœud, longueur du secret JWT)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{ingest,main,config}.py`,
+`dashboard/api/tests/test_api.py`, `docs/suivi/`.
+**Lot :** US-216 (issue #30). PR #91 (`feat/US-216-ingest-validation`), revue
+de POWLAIR.
+
+### Fait
+- `app/ingest.py` — **point bloquant** : `_lookup_node_pub_sign` renommée
+  `_lookup_node`, renvoie aussi `kind` (en plus de `pub_sign`) ;
+  `_verify_event_ids(body, expected_node_kind)` rejette désormais en 400 tout
+  événement dont `node_id` ≠ `node_id` du batch, ou `node_kind` ≠ `kind`
+  enregistré pour ce nœud dans `nodes`. Avant ce correctif, `event_id` était
+  recalculé avec le `node_id` du **batch** mais `_insert_events` stockait
+  celui de l'**événement** — un nœud whitelisté pouvait signer un batch
+  valide tout en attribuant ses événements à un autre nœud enregistré.
+- `app/main.py::register_node` — **point important** : `POST /api/nodes` ne
+  fait plus d'upsert (`ON CONFLICT DO UPDATE` supprimé). Un `SELECT`
+  préalable sous le même verrou renvoie **409** si le `node_id` existe déjà,
+  au lieu de remplacer sa clé publique et de le re-whitelister.
+- `app/config.py::jwt_secret()` — **point mineur** : refuse un secret de
+  moins de 32 octets (`MIN_JWT_SECRET_BYTES`) au démarrage — PyJWT lève
+  `InsecureKeyLengthWarning` en dessous de cette taille pour HS256.
+- 5 tests ajoutés à `tests/test_api.py` (34 → 39) :
+  `test_ingest_rejects_event_node_id_different_from_batch_node_id`,
+  `test_ingest_rejects_event_node_kind_different_from_registered_kind`,
+  `test_register_node_rejects_re_registration_of_an_existing_node_id`,
+  `test_startup_fails_fast_when_jwt_secret_is_too_short`, plus l'extension de
+  `_build_signed_batch()` (params `spoof_event_node_id`/
+  `spoof_event_node_kind`) qui les rend possibles.
+- Rebase de `feat/US-216-ingest-validation` sur `main` (la PR était en
+  conflit, signalé par la revue).
+
+### Pourquoi / décisions
+- Voir `docs/suivi/modules/dashboard-api.md` §Décisions d'implémentation
+  (« Revue de la PR #91 ») pour le détail des trois correctifs.
+
+### Écarts vs conception
+- Le point important **réduit** l'écart déjà consigné (`POST /api/nodes`
+  sans auth opérateur) sans le fermer : ré-enregistrer un `node_id` existant
+  est bloqué (409), mais enregistrer un `node_id` **inédit** reste ouvert à
+  quiconque atteint l'API. Mise à jour ajoutée à l'entrée existante dans
+  `03-ecarts-conception.md` plutôt qu'une nouvelle entrée, pour garder
+  l'historique du même trou ensemble.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les trois points de la revue (1 bloquant, 1 important, 1 mineur) sont
+  corrigés et couverts par un test de régression chacun (sauf le mineur, qui
+  réutilise le test de démarrage existant, étendu).
+- Reste à faire : pousser la branche rebasée, attendre la ré-approbation de
+  POWLAIR.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui (ligne « Dashboard `api` »).
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv non disponible dans cet environnement d'exécution — installation
+  équivalente via un venv temporaire :
+  python -m venv .venv_tmp && .venv_tmp/Scripts/python.exe -m pip install -e ".[dev]"
+
+$ .venv_tmp/Scripts/python.exe -m pytest -q
+39 passed
+
+$ .venv_tmp/Scripts/python.exe -m ruff check app tests
+All checks passed!
+```
+- `.venv_tmp` supprimé après vérification, non commité.
+
+---
+
 ## 2026-09-28 — US-216 : ingestion validée du dashboard — schéma, JWT, signature Ed25519, dédup
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

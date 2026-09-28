@@ -84,12 +84,19 @@ def _build_signed_batch(
     events: list[tuple[int, str, dict]] | None = None,
     ts_ms: int = 1_725_800_000_000,
     tamper_event_id: bool = False,
+    spoof_event_node_id: str | None = None,
+    spoof_event_node_kind: str | None = None,
 ) -> dict:
     """Construit un batch valide (schéma + `event_id` cohérents), signé avec
     `signing_key`. `tamper_event_id=True` force un `event_id` incohérent sur
     le premier événement — la signature reste valide (calculée APRÈS la
     falsification, comme le ferait un nœud buggé), pour tester le contrôle
     de cohérence indépendamment de la vérification de signature.
+    `spoof_event_node_id`/`spoof_event_node_kind` remplacent le `node_id`/
+    `node_kind` du PREMIER événement seulement — `event_id` reste calculé
+    avec le `node_id` du BATCH (comme le ferait `_verify_event_ids` côté
+    serveur), pour reproduire un événement qui prétend appartenir à un autre
+    nœud (revue PR #91, point bloquant).
     """
     if events is None:
         events = [
@@ -102,11 +109,18 @@ def _build_signed_batch(
         eid = _event_id(node_id, seq)
         if tamper_event_id and seq == events[0][0]:
             eid = "0" * 64
+        event_node_id = node_id
+        event_node_kind = node_kind
+        if seq == events[0][0]:
+            if spoof_event_node_id is not None:
+                event_node_id = spoof_event_node_id
+            if spoof_event_node_kind is not None:
+                event_node_kind = spoof_event_node_kind
         built_events.append(
             {
                 "event_id": eid,
-                "node_id": node_id,
-                "node_kind": node_kind,
+                "node_id": event_node_id,
+                "node_kind": event_node_kind,
                 "seq": seq,
                 "ts_ms": ts_ms,
                 "name": name,
@@ -171,6 +185,22 @@ def test_startup_fails_fast_when_jwt_secret_is_missing(tmp_path, monkeypatch):
             pass
 
 
+def test_startup_fails_fast_when_jwt_secret_is_too_short(tmp_path, monkeypatch):
+    # PyJWT lève InsecureKeyLengthWarning en dessous de 32 octets pour HS256
+    # — vérifié au démarrage plutôt que laissé comme un avertissement
+    # ignorable à chaque requête (revue PR #91, point mineur).
+    monkeypatch.setenv("DENGON_DASHBOARD_DB", str(tmp_path / "startup3.db"))
+    monkeypatch.setenv("DENGON_DASHBOARD_JWT_SECRET", "trop-court")
+
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    with pytest.raises(RuntimeError, match="DENGON_DASHBOARD_JWT_SECRET"):
+        with TestClient(app):
+            pass
+
+
 # --- POST /api/nodes ---------------------------------------------------
 
 
@@ -195,6 +225,25 @@ def test_register_node_returns_a_usable_token(client):
 def test_register_node_rejects_malformed_bodies(client, body):
     response = client.post("/api/nodes", json=body)
     assert response.status_code == 400
+
+
+def test_register_node_rejects_re_registration_of_an_existing_node_id(client):
+    # L'upsert précédent (`ON CONFLICT(node_id) DO UPDATE`) remplaçait la clé
+    # publique d'un nœud déjà enregistré et le re-whitelistait — sans auth
+    # opérateur sur cette route, n'importe qui pouvait ainsi prendre le
+    # contrôle d'un node_id existant, y compris un nœud qu'un opérateur
+    # aurait retiré (revue PR #91, point important).
+    _register_node(client, node_id="relay-3f2a9c")
+    imposter_key = SigningKey.generate()
+    response = client.post(
+        "/api/nodes",
+        json={
+            "node_id": "relay-3f2a9c",
+            "kind": "relay",
+            "pub_sign": imposter_key.verify_key.encode().hex(),
+        },
+    )
+    assert response.status_code == 409
 
 
 # --- POST /ingest/batch — authentification et validation ---------------
@@ -304,6 +353,39 @@ def test_ingest_rejects_tampered_event_id(client):
     # signature (qui, elle, est valide : signée après la falsification).
     signing_key, token = _register_node(client, node_id="relay-3f2a9c")
     batch = _build_signed_batch("relay-3f2a9c", signing_key, tamper_event_id=True)
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert response.status_code == 400
+
+
+def test_ingest_rejects_event_node_id_different_from_batch_node_id(client):
+    # `_verify_event_ids` recalculait l'event_id avec le node_id du BATCH,
+    # mais `_insert_events` stockait celui de l'ÉVÉNEMENT sans jamais
+    # vérifier qu'ils correspondent — un nœud whitelisté pouvait donc signer
+    # un batch valide tout en attribuant ses événements à un AUTRE node_id
+    # enregistré, ce qui annule la garantie « signé par le nœud émetteur »
+    # (revue PR #91, point bloquant).
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c")
+    batch = _build_signed_batch(
+        "relay-3f2a9c", signing_key, spoof_event_node_id="client-9c1d84"
+    )
+    response = client.post("/ingest/batch", json=batch, headers=_auth(token))
+    assert response.status_code == 400
+
+    from app.db import connect
+
+    conn = connect()
+    count = conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"]
+    conn.close()
+    assert count == 0, "un node_id d'événement usurpé ne doit stocker aucun événement"
+
+
+def test_ingest_rejects_event_node_kind_different_from_registered_kind(client):
+    # Même défaut que ci-dessus côté `node_kind` : rien ne vérifiait qu'il
+    # correspond au `kind` enregistré pour ce nœud dans `nodes`.
+    signing_key, token = _register_node(client, node_id="relay-3f2a9c", kind="relay")
+    batch = _build_signed_batch(
+        "relay-3f2a9c", signing_key, spoof_event_node_kind="client"
+    )
     response = client.post("/ingest/batch", json=batch, headers=_auth(token))
     assert response.status_code == 400
 

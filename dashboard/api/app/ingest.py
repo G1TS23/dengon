@@ -70,10 +70,10 @@ def _validate_schema(parsed: object) -> dict:
     return parsed
 
 
-def _lookup_node_pub_sign(db: LockedConnection, node_id_: str) -> bytes:
+def _lookup_node(db: LockedConnection, node_id_: str) -> tuple[bytes, str]:
     with db.locked() as conn:
         row = conn.execute(
-            "SELECT pub_sign, whitelisted FROM nodes WHERE node_id = ?", (node_id_,)
+            "SELECT pub_sign, kind, whitelisted FROM nodes WHERE node_id = ?", (node_id_,)
         ).fetchone()
     if row is None or not row["whitelisted"]:
         # Même message pour "n'existe pas" et "existe mais pas whitelisté" :
@@ -83,7 +83,7 @@ def _lookup_node_pub_sign(db: LockedConnection, node_id_: str) -> bytes:
         # plutôt qu'une quarantaine — pas d'écran opérateur pour lever une
         # quarantaine dans le périmètre de l'US-216).
         raise IngestError(401, "nœud inconnu ou non whitelisté")
-    return row["pub_sign"]
+    return row["pub_sign"], row["kind"]
 
 
 def _verify_signature(body: dict, pub_sign: bytes) -> None:
@@ -100,12 +100,22 @@ def _verify_signature(body: dict, pub_sign: bytes) -> None:
         raise IngestError(401, f"signature invalide : {exc}") from exc
 
 
-def _verify_event_ids(body: dict) -> None:
+def _verify_event_ids(body: dict, expected_node_kind: str) -> None:
     """Recalcule `event_id` pour chaque événement plutôt que de faire
     confiance à la valeur envoyée : le schéma vérifie seulement le
     *format* (64 hex), pas la cohérence avec `node_id`/`seq`. Un `event_id`
     forgé pourrait sinon empoisonner la déduplication (masquer un vrai
     événement derrière un faux `event_id` qui collisionne).
+
+    Vérifie aussi que `node_id`/`node_kind` de CHAQUE événement correspondent
+    au `node_id` du batch (== celui du JWT, déjà vérifié) et au `kind`
+    enregistré pour ce nœud dans `nodes` — le schéma JSON documente cette
+    contrainte (`batch.schema.json` : « doit correspondre au node_id de
+    chaque événement ») mais ne peut pas l'imposer, et rien d'autre ne le
+    faisait avant : un nœud whitelisté pouvait signer un batch valide tout
+    en attribuant ses événements à un AUTRE node_id (`_insert_events` stocke
+    `event["node_id"]`, pas celui du batch), ce qui annule la garantie
+    « signé par le nœud émetteur » (revue PR #91, point bloquant).
     """
     node_id_ = body["node_id"]
     for event in body["events"]:
@@ -113,6 +123,14 @@ def _verify_event_ids(body: dict) -> None:
         expected = event_id(node_id_, seq)
         if event.get("event_id") != expected:
             raise IngestError(400, f"event_id incohérent pour seq {seq}")
+        if event.get("node_id") != node_id_:
+            raise IngestError(
+                400, f"node_id de l'événement (seq {seq}) différent du node_id du batch"
+            )
+        if event.get("node_kind") != expected_node_kind:
+            raise IngestError(
+                400, f"node_kind de l'événement (seq {seq}) différent du kind enregistré du nœud"
+            )
 
 
 def _insert_events(db: LockedConnection, body: dict) -> int:
@@ -157,9 +175,9 @@ def ingest_batch(db: LockedConnection, jwt_node_id: str, raw_body: bytes) -> Ing
     if body["node_id"] != jwt_node_id:
         raise IngestError(401, "node_id du batch différent du node_id du jeton")
 
-    pub_sign = _lookup_node_pub_sign(db, jwt_node_id)
+    pub_sign, node_kind = _lookup_node(db, jwt_node_id)
     _verify_signature(body, pub_sign)
-    _verify_event_ids(body)
+    _verify_event_ids(body, node_kind)
 
     new_count = _insert_events(db, body)
 

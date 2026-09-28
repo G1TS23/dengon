@@ -19,6 +19,11 @@ MAX_BATCH_BYTES_ENV_VAR = "DENGON_DASHBOARD_MAX_BATCH_BYTES"
 DEFAULT_MAX_BATCH_BYTES = 2 * 1024 * 1024  # 2 MiB
 
 JWT_SECRET_ENV_VAR = "DENGON_DASHBOARD_JWT_SECRET"
+# PyJWT lève InsecureKeyLengthWarning en dessous de 32 octets pour HS256 (la
+# taille de sortie de HMAC-SHA256) — vérifié au démarrage plutôt que laissé
+# comme un avertissement ignorable à chaque requête (revue PR #91, point
+# mineur), même logique « échouer tôt » que le reste de ce module.
+MIN_JWT_SECRET_BYTES = 32
 
 
 def db_path() -> Path:
@@ -60,5 +65,9 @@ def jwt_secret() -> str:
     if not raw:
         raise RuntimeError(
             f"{JWT_SECRET_ENV_VAR} doit être défini (secret JWT, aucune valeur par défaut)"
+        )
+    if len(raw.encode("utf-8")) < MIN_JWT_SECRET_BYTES:
+        raise RuntimeError(
+            f"{JWT_SECRET_ENV_VAR} doit faire au moins {MIN_JWT_SECRET_BYTES} octets"
         )
     return raw

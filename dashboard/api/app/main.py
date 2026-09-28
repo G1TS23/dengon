@@ -277,10 +277,24 @@ async def register_node(request: Request) -> JSONResponse:
 
     db: LockedConnection = request.app.state.db
     with db.locked() as conn:
+        existing = conn.execute(
+            "SELECT 1 FROM nodes WHERE node_id = ?", (node_id,)
+        ).fetchone()
+        if existing is not None:
+            # Pas d'upsert : un ON CONFLICT DO UPDATE remplaçait la clé
+            # publique d'un nœud déjà enregistré et le re-whitelistait, y
+            # compris un nœud qu'un opérateur aurait retiré — sans auth
+            # opérateur sur cette route, n'importe qui pouvait ainsi prendre
+            # le contrôle d'un node_id existant (revue PR #91, point
+            # important). Correctif minimal en attendant l'auth opérateur
+            # (écart consigné dans 03-ecarts-conception.md) : un node_id
+            # déjà pris se réenregistre pas.
+            return JSONResponse(
+                status_code=status.HTTP_409_CONFLICT,
+                content={"error": f"node_id {node_id!r} déjà enregistré"},
+            )
         conn.execute(
-            "INSERT INTO nodes (node_id, kind, pub_sign, whitelisted) VALUES (?, ?, ?, 1) "
-            "ON CONFLICT(node_id) DO UPDATE SET "
-            "kind = excluded.kind, pub_sign = excluded.pub_sign, whitelisted = 1",
+            "INSERT INTO nodes (node_id, kind, pub_sign, whitelisted) VALUES (?, ?, ?, 1)",
             (node_id, kind, pub_sign),
         )
 

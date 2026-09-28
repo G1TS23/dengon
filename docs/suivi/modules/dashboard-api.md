@@ -43,7 +43,7 @@ dashboard/api/
     main.py             — app FastAPI ; lifespan → migrations + connexion partagée + jwt_secret() ; routes /healthz, /ingest/batch, /api/nodes
   tests/
     conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan, secret JWT de test
-    test_api.py          — 34 tests (voir plus bas)
+    test_api.py          — 39 tests (voir plus bas)
 ```
 
 ## Concepts / types importants
@@ -80,9 +80,11 @@ un nœud : POST /ingest/batch   Authorization: Bearer <jwt>   body = {batch sign
        parsed = _parse_json(raw)                → 400 si UTF-8/JSON invalide
        body = _validate_schema(parsed)          → 400 si hors du schéma batch.schema.json
        body["node_id"] == jwt_node_id ?         → 401 sinon
-       pub_sign = _lookup_node_pub_sign(...)     → 401 si nœud inconnu/non whitelisté
+       pub_sign, node_kind = _lookup_node(...)   → 401 si nœud inconnu/non whitelisté
        _verify_signature(body, pub_sign)        → 401 si signature Ed25519 invalide
-       _verify_event_ids(body)                  → 400 si event_id recalculé != envoyé
+       _verify_event_ids(body, node_kind)       → 400 si event_id recalculé != envoyé,
+                                                    ou si node_id/node_kind d'un événement
+                                                    diffère du batch/de node_kind enregistré
        new_count = _insert_events(...)          → INSERT OR IGNORE par event_id, idempotent
           └─ sqlite3.OperationalError ?          → 503 + Retry-After: 1
   → 202  {"batch_id": "...", "node_id": "...", "event_count": 2, "new_event_count": 2}
@@ -385,10 +387,33 @@ ajoutera les projections `messages` / `links` / `message_hops`.
   - **`raw_batches` gardée mais plus écrite** plutôt que supprimée par
     migration : une table déjà déployée qu'on `DROP` est un risque de plus
     pour un gain nul (elle est vide et inoffensive).
+- **Revue de la PR #91 (US-216) — trois correctifs avant merge :**
+  - **`node_id`/`node_kind` de chaque événement vérifiés contre le batch**
+    (point **bloquant**) : `_verify_event_ids` recalculait l'`event_id` avec
+    le `node_id` du **batch**, mais `_insert_events` stockait celui de
+    l'**événement** sans que rien ne vérifie qu'ils correspondent — un nœud
+    whitelisté pouvait signer un batch valide tout en attribuant ses
+    événements à un **autre** `node_id` enregistré, ce qui annule la
+    garantie « signé par le nœud émetteur ». `_lookup_node` renvoie
+    désormais aussi `kind` (en plus de `pub_sign`), et `_verify_event_ids`
+    rejette en 400 tout événement dont `node_id` ≠ `node_id` du batch ou
+    `node_kind` ≠ `kind` enregistré pour ce nœud.
+  - **`POST /api/nodes` n'upsert plus** (point **important**) :
+    `ON CONFLICT(node_id) DO UPDATE` remplaçait la clé publique d'un nœud
+    déjà enregistré et le re-whitelistait — y compris un nœud qu'un
+    opérateur aurait retiré — sans authentification opérateur sur cette
+    route, n'importe qui pouvait ainsi prendre le contrôle d'un `node_id`
+    existant. Correctif minimal en attendant l'auth opérateur (écart déjà
+    consigné dans `03-ecarts-conception.md`, inchangé par ailleurs) : un
+    `node_id` déjà pris renvoie **409**, pas d'upsert.
+  - **`jwt_secret()` refuse un secret < 32 octets** (point mineur) : PyJWT
+    lève `InsecureKeyLengthWarning` en dessous de cette taille pour HS256 ;
+    vérifié au démarrage plutôt que laissé comme avertissement ignorable à
+    chaque requête, même logique « échouer tôt » que le reste du module.
 
 ## Tests
 
-- `tests/test_api.py` — **34 tests**. Hérités et adaptés (auth ajoutée aux
+- `tests/test_api.py` — **39 tests**. Hérités et adaptés (auth ajoutée aux
   tests de taille/drain) : `/healthz` ; démarrage refusé sur
   `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé ; **démarrage refusé si
   `DENGON_DASHBOARD_JWT_SECRET` absent** (nouveau) ; corps trop gros → 413
@@ -418,9 +443,19 @@ ajoutera les projections `messages` / `links` / `message_hops`.
   `test_ingest_is_idempotent_on_exact_replay` (`new_event_count` = 0 au
   rejeu, vérifié aussi par `SELECT COUNT(*)`) ;
   `test_ingest_accepts_multiple_events_in_one_batch`.
+  Ajoutés en revue de la PR #91 : `test_ingest_rejects_event_node_id_different_from_batch_node_id`
+  (reproduit le point bloquant — un événement spoofé sur un autre `node_id`
+  enregistré, vérifie aussi qu'aucune ligne n'est stockée) ;
+  `test_ingest_rejects_event_node_kind_different_from_registered_kind` ;
+  `test_register_node_rejects_re_registration_of_an_existing_node_id`
+  (reproduit le point important — ré-enregistrer un `node_id` existant avec
+  une autre clé renvoie 409, pas un upsert) ;
+  `test_startup_fails_fast_when_jwt_secret_is_too_short`.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
   `uv run ruff check .` (« All checks passed! ») et `uv run pytest` →
-  **34 passed** (vérifié le 2026-09-28). Bug trouvé en écrivant les tests :
+  **39 passed** (vérifié le 2026-09-28, `uv` indisponible dans cet
+  environnement — exécuté via un venv `pip install -e ".[dev]"` équivalent
+  à `uv sync --extra dev`). Bug trouvé en écrivant les tests :
   `test_ingest_rejects_unregistered_node` utilisait d'abord un `node_id` au
   mauvais format (`relay-inconnu`), qui échoue la validation de schéma (400)
   avant d'atteindre le code testé (401 attendu) — corrigé en utilisant un
@@ -432,8 +467,10 @@ ajoutera les projections `messages` / `links` / `message_hops`.
   message. → US-217.
 - **Pas de SSE**, pas de routes REST de lecture. → US-218, US-219.
 - **`POST /api/nodes` sans auth opérateur** : n'importe qui peut enregistrer
-  un nœud et obtenir un JWT valide. Aucune US actuelle ne couvre l'auth
-  admin/opérateur — écart consigné dans `03-ecarts-conception.md`.
+  un `node_id` **inédit** et obtenir un JWT valide (**re**-enregistrer un
+  `node_id` déjà pris est bloqué depuis la revue de la PR #91 — 409, plus
+  d'upsert). Aucune US actuelle ne couvre l'auth admin/opérateur — écart
+  consigné dans `03-ecarts-conception.md`.
 - **Pas de vérification de journal chaîné** : `dengon-verify` n'est pas
   appelé, `integrity` reste toujours `'unverified'`. → hors périmètre US-216.
 - **Nœud inconnu traité comme un 401 direct**, pas comme la quarantaine +

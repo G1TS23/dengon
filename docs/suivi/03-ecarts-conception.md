@@ -1377,6 +1377,15 @@ _(aucun écart pour l'instant)_
   (auth admin) avant toute exposition publique.
 - **Doc de conception mise à jour ?** non — signalé ici, dans le docstring
   de la route (`app/main.py`) et dans `modules/dashboard-api.md` (Limites).
+- **Mise à jour 2026-09-28 (revue de la PR #91) :** le trou était en réalité
+  plus grave que « se créer un nœud » — l'`ON CONFLICT(node_id) DO UPDATE`
+  remplaçait la clé publique d'un nœud **déjà enregistré** et le
+  re-whitelistait, y compris un nœud qu'un opérateur aurait retiré
+  (prise de contrôle, pas seulement création). Corrigé : un `node_id` déjà
+  pris renvoie désormais **409**, plus d'upsert. L'écart lui-même (pas
+  d'auth opérateur sur `POST /api/nodes`, donc n'importe qui peut encore
+  enregistrer un `node_id` **inédit**) reste entier et n'a pas de US pour
+  le couvrir.
 
 ---
 
