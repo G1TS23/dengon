@@ -5,7 +5,20 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let args = match std::env::args_os()
+        .skip(1)
+        .map(|a| a.into_string())
+        .collect::<Result<Vec<String>, _>>()
+    {
+        Ok(args) => args,
+        Err(_) => {
+            eprintln!(
+                "dengon-verify : argument non UTF-8\n{}",
+                dengon_verify::USAGE
+            );
+            return ExitCode::from(dengon_verify::EXIT_USAGE);
+        }
+    };
     match dengon_verify::run(&args, std::io::stdin().lock()) {
         Ok(report) => {
             println!("{}", report.to_json());

@@ -371,8 +371,9 @@ impl Anchor {
 pub fn verify_entries(entries: &[Entry], anchor: Anchor) -> Verdict {
     // Deux passes, volontairement séparées :
     //
-    // 1. Positions (`seq`) : un doublon est un fork, un trou dans 0..=max
-    //    en est un. Vérifié sur l'ENSEMBLE des `seq`, pas seulement
+    // 1. Positions (`seq`) : un doublon est un fork, un trou dans
+    //    anchor.first_seq..=max en est un. Vérifié sur l'ENSEMBLE des
+    //    `seq`, pas seulement
     //    contre l'entrée immédiatement précédente — un premier essai qui
     //    ne comparait qu'à la précédente classait à tort `[0, 1, 2, 1]`
     //    (rejeu d'une ancienne entrée en fin de chaîne — un vrai cas de
@@ -383,7 +384,7 @@ pub fn verify_entries(entries: &[Entry], anchor: Anchor) -> Verdict {
     //    aurait fini par détecter une incohérence de toute façon), mais
     //    le verdict précis était faux.
     //
-    // 2. Chaîne de hash, dans l'ORDRE DE STOCKAGE (`self.entries`), qui
+    // 2. Chaîne de hash, dans l'ORDRE DE STOCKAGE (`entries`), qui
     //    doit correspondre à l'ordre de production (`append` empile
     //    dans cet ordre) : une entrée déplacée ou rejouée à la mauvaise
     //    position casse ce chaînage même si sa `seq` est par ailleurs
