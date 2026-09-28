@@ -10,6 +10,44 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-205 : rebase sur `main` après le merge de #81 (US-204), relecture
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/{lib.rs,identity.rs}`, `docs/suivi/`.
+**Lot :** US-205 (issue #19), PR #82. Branche `feat/US-205-identity`.
+
+### Fait
+
+- #81 a été **squash-mergée** (`93533e9`), après #80 (codec, US-201) :
+  `git rebase --onto origin/main 287575a` rejoue les trois commits US-205.
+  Push en `--force-with-lease`.
+- Conflits : doc de module de `lib.rs` (codec US-201 + `identity`), fiche
+  `modules/dengon-core.md` (état ; `codec` et `identity` retirés des
+  « modules encore absents »).
+- `02-avancement.md` : la ligne `dengon-core` existait en **trois** copies
+  sur `main` (reste de fusions `merge=union`), plus celle de la branche.
+  Fusionnées en une seule (codec US-201 + `identity` US-205).
+- **Relecture** : `IdentityError` implémentait `std::error::Error` sous
+  `cfg(feature = "std")`, alors que `CryptoError` implémente
+  `core::error::Error` sans condition depuis la revue de #78. Aligné : l'erreur
+  est maintenant utilisable comme `Error` en `no_std`. Rien d'autre relevé :
+  `PeerId` d'`identity` est bien celui de `protocol::types` utilisé par le
+  codec.
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo fmt --all -- --check
+$ cargo clippy --workspace --all-targets -- -D warnings
+OK
+$ cargo test --workspace
+dengon-core : 161 unitaires + codec_proptest 7 + crypto 2 + identity 3 + protocole 7, tout vert
+$ cargo check -p dengon-core --no-default-features
+OK
+```
+
+---
+
 ## 2026-09-28 — US-204 : rebase sur `main` après le merge de #78 (US-203) et #80 (US-201)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
@@ -29,6 +67,104 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
   deux flux d'exemple, dépendances ; la limite « pas de codec » est retirée).
 - Journal : l'ancienne version de l'entrée US-203, recopiée par
   `merge=union`, est supprimée (celle de `main`, corrigée après revue, fait foi).
+## 2026-09-28 — US-205 : retours de revue de #82 (coffre fichier)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/identity/vault.rs`, `docs/suivi/`.
+**Lot :** US-205 (issue #19), PR #82. Branche `feat/US-205-identity`.
+
+### Fait
+
+- **Test `file_vault_erreur_io` rouge sous Windows (bloquant)** :
+  `FileVault::new(temp_dir())` ; sous Windows `temp_dir()` finit par `\`,
+  `fs::read` rend `NotFound`, donc `Ok(None)` au lieu de `VaultIo`. Le test
+  crée maintenant un sous-répertoire dédié (correctif proposé par Oswin).
+- **Durabilité du renommage** : sous Unix, `FileVault::save` fait
+  `File::open(parent)?.sync_all()` après le `rename` (parent vide → `.`).
+- **`.tmp` résiduel** : `mode(0o600)` ne vaut qu'à la création ; un `.tmp`
+  laissé par un crash gardait ses droits. `save` le supprime d'abord (en
+  ignorant `NotFound`) et l'ouvre en `create_new`. Nouveau test
+  `file_vault_tmp_residuel_remplace` (`.tmp` préexistant en `0644` → coffre
+  final en `0600`, `.tmp` absent).
+- **`VaultKey`** : reste un `[u8; 32]`, documenté : le cœur ne la copie pas,
+  l'appelant l'efface (`Zeroizing<VaultKey>` se passe tel quel). `Identity`
+  n'est déjà plus `Clone` depuis le rebase.
+- Description de la PR : « 4 écarts » → 3 entrées dans
+  `03-ecarts-conception.md` (base64url et pseudo regroupés).
+
+### Pourquoi / décisions
+
+- `create_new` après suppression plutôt que `truncate` : si un autre
+  processus recrée le `.tmp` entre les deux, l'ouverture échoue au lieu
+  d'hériter de ses droits.
+- Pas de `sync` du répertoire sous Windows : un répertoire ne s'ouvre pas
+  comme un fichier sans drapeaux spécifiques.
+- Hors périmètre : le point 3 de la revue (correctif clippy dans le commit
+  US-204) relève de #78 ; le point 4 (contrat FFI : pseudo, format du
+  `peerID`, erreurs QR) est porté sur #6.
+
+### Vérifié
+
+- `cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings` :
+  propre.
+- `cargo test -p dengon-core` : 142 unitaires + 2 crypto + 3 identity +
+  4 protocole, tout vert (Linux/WSL). Le correctif Windows n'a **pas** été
+  rejoué sous Windows ici.
+- `cargo check -p dengon-core --no-default-features` : OK.
+
+---
+
+## 2026-09-28 — US-205 : rebase sur US-204 revue (#81) et sur `main` (`store`, `ledger`)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `Cargo.toml`, `crates/dengon-core/Cargo.toml`, `Cargo.lock`,
+`crates/dengon-core/src/lib.rs`, `crates/dengon-core/src/identity/{keys,vault}.rs`, `docs/suivi/`.
+**Lot :** US-205 (issue #19), PR #82. Branche `feat/US-205-identity`.
+
+### Fait
+
+- **Rebase** : `git rebase --onto feat/US-204-crypto-noise 1cb099c` (puis une
+  seconde fois après l'amendement du commit de correction US-204). Le commit
+  US-205 est rejoué sur les têtes revues de #78 et #81, donc sur `main`.
+- **`chacha20poly1305` partagé avec `store`** : `main` le déclarait avec
+  `features = ["getrandom"]` (pour `aead::OsRng` dans `store`), US-205 le voulait
+  `no_std` (`default-features = false`, `alloc`). Git a fusionné sans conflit…
+  en déclarant la clé deux fois. Résolu : une seule déclaration `no_std` dans
+  le workspace ; dans `dengon-core`, la dépendance n'est plus optionnelle et la
+  feature `std` devient `["dep:rusqlite", "chacha20poly1305/getrandom"]`.
+  Vérifié : `getrandom` absent de l'arbre `--no-default-features`, présent avec
+  `std`.
+- **`Clone` retiré de `Identity`** : `#[derive(Clone)]` ne compilait plus, car
+  `SigningKey` n'est plus `Clone` (revue #78). Aucun appelant ne clonait une
+  identité. Changement fait dans le commit rebasé, pour qu'il compile seul.
+- **Recouvrement avec `store`** : l'écart « Coffre d'identité » est complété.
+  `Store::set_identity` et `Identity::seal` + `Vault` rangent tous deux les
+  secrets de l'identité ; aucun n'est appelé, à unifier en intégration
+  (US-301/302). Doc de `vault.rs` mise à jour.
+- Fiche module et `02-avancement.md` : doublons laissés par `merge=union`
+  fusionnés, liste des tests et compte mis à jour.
+
+### Pourquoi / décisions
+
+- `chacha20poly1305/getrandom` sous `std` plutôt que deux versions de la crate :
+  une seule copie dans l'arbre, et le firmware ne tire jamais `getrandom`.
+- Pas d'unification `Vault`/`store` dans cette PR : c'est une décision
+  d'intégration (quelle source de clé plateforme), hors du périmètre d'US-205.
+
+### Écarts vs conception
+
+- Aucun nouveau ; l'écart « Coffre d'identité » est mis à jour.
+
+### Appris
+
+- Rien de nouveau (le piège `merge=union` est déjà documenté dans
+  `04-apprentissages.md`).
+
+### État après cette session
+
+- #82 est prête pour une revue, empilée sur #81 et #78.
+- Fiche module mise à jour : [`modules/dengon-core.md`](modules/dengon-core.md).
+- 01-etat-du-code.md mis à jour : non.
 
 ### Vérification (commandes réellement exécutées)
 
@@ -41,6 +177,22 @@ dengon-core : 126 unitaires + vecteurs crypto (2, 1 ignoré) + protocole, tout v
 $ cargo check -p dengon-core --no-default-features
 OK
 ```
+$ cargo clippy --workspace --all-targets -- -D warnings   # premier passage
+error[E0277]: the trait bound `crypto::SigningKey: Clone` is not satisfied (identity/keys.rs:66)
+$ cargo fmt --all -- --check
+OK
+$ cargo clippy --workspace --all-targets -- -D warnings
+OK
+$ cargo test --workspace
+OK — dengon-core : 141 unitaires + 3 vecteurs identity (1 ignoré) + 2 vecteurs crypto (1 ignoré) + 4 vecteurs protocole
+$ cargo check -p dengon-core --no-default-features
+OK
+$ cargo tree -p dengon-core -e normal --no-default-features | grep -c getrandom
+0
+$ cargo tree -p dengon-core -e normal | grep -c getrandom
+1
+```
+- Couverture non remesurée après le rebase.
 
 ---
 
@@ -146,6 +298,129 @@ $ cargo tree -p dengon-core -e normal --no-default-features | grep -c getrandom
   du commit de correction (le marqueur du journal n'avait pas la forme
   attendue par le script d'insertion) ; ajoutée par `commit --amend`.
 
+---
+
+## 2026-09-28 — US-205 : module `identity` (clés, QR, code 60 chiffres, coffre)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/identity.rs` et
+`src/identity/{keys,qr,safety,vault}.rs` (nouveaux), `src/lib.rs`,
+`src/crypto.rs` et `src/crypto/noise.rs` (accès `pub(crate)` aux secrets),
+`tests/identity_vectors.rs` et `tests/vectors/identity_v0.json` (nouveaux),
+`Cargo.toml` et `crates/dengon-core/Cargo.toml`, `docs/synthese/06` et `09`,
+`docs/suivi/`.
+**Lot :** US-205 (issue #19). Branche `feat/US-205-identity`, empilée sur
+`feat/US-204-crypto-noise` (PR #81, non mergée).
+
+### Fait
+
+- `identity::keys` :
+  - `Identity::generate(pseudo, rng)` tire 32 o de secret X25519 puis 32 o
+    de graine Ed25519 (`keys.rs:81`) ;
+  - `peer_id` = `SHA-256(pub_static)[0..8]` ; `fingerprint` =
+    `SHA-256(pub_static ‖ pub_sign)` ;
+  - `PublicIdentity` est la carte de contact ; `peer_id_base32` produit
+    13 caractères en minuscules.
+- `identity::qr` : `to_qr` / `from_qr` au format
+  `dengon:v1:<base64url>`. Le décodage est strict, avec une erreur par cause
+  (préfixe, version, encodage, longueur, pseudo, clé Ed25519).
+- `identity::safety` : `safety_number(fpA, fpB)` et
+  `verification_code(a, b)` donnent 12 groupes de 5 chiffres ; l'affichage
+  est `"75116 36485 …"`.
+- `identity::vault` :
+  - `seal` / `unseal` : blob `"DGID" ‖ v1 ‖ nonce 24 ‖ XChaCha20-Poly1305`,
+    en-tête en AAD ;
+  - trait `Vault`, `MemoryVault`, `FileVault` (std : écriture atomique via
+    `.tmp` puis `rename`, mode `0600` sous Unix) ;
+  - `load_or_create` garde le `peerID` stable d'un lancement à l'autre.
+- `crypto` : `StaticKeypair::secret()` et `SigningKey::to_seed()` ajoutés
+  en **`pub(crate)`**, nécessaires au scellement. L'API publique ne change
+  pas.
+- Dépendances :
+  - `chacha20poly1305` 0.10 (`default-features = false`, `alloc`) ;
+  - `data-encoding` 2.11 (`alloc`) ;
+  - `zeroize` passe à `features = ["alloc"]`, pour `Zeroizing<Vec<u8>>`.
+- Vecteurs `tests/vectors/identity_v0.json` : deux identités (dont un pseudo
+  avec emoji), leurs QR et le code entre elles. Le test d'intégration
+  `appairage_a_et_b` joue le scénario de l'écran US-215 : A et B scannent le
+  QR l'un de l'autre et affichent le même code ; une carte MITM change le
+  code.
+
+### Pourquoi / décisions
+
+- **Formule du code corrigée** (décision de Paul, 2026-09-28) : 5 octets
+  par groupe au lieu de 2 (détail dans `03-ecarts-conception.md`).
+- **Coffre derrière un trait, clé fournie par l'appelant** (décision de
+  Paul). `store` (US-207, PR #76) est du même sprint et on ne peut pas en
+  dépendre. On suit le même principe que son `KeySource`.
+- **Nonce du coffre tiré de la RNG injectée**, pas d'`OsRng` : c'est ce qui
+  permet de rester `no_std`. `getrandom` reste absent de l'arbre normal.
+- **`data-encoding`** fournit à la fois base64url et base32, soit une seule
+  crate `no_std` au lieu de deux. Son décodage est **canonique** (bits de fin
+  vérifiés), donc `to_qr(from_qr(s)) == s` : c'est testé.
+- **Écartée : une image QR dans le cœur.** Le rendu et le scan appartiennent
+  à l'UI (US-215).
+
+### Écarts vs conception
+
+- Quatre écarts, reportés dans `03-ecarts-conception.md` :
+  1. la formule du code sur 5 octets ;
+  2. le coffre derrière un trait ;
+  3. le base64url sans padding ;
+  4. le pseudo limité à 1–255 octets.
+- La formule est corrigée dans `docs/synthese/06-securite.md` §2 et
+  `docs/synthese/09-dashboard-et-donnees.md` §11.3. `docs/powl/04` n'est pas
+  modifié : c'est la matière d'origine.
+
+### Appris
+
+- Biais d'un modulo et le bug `u16 % 100000` ; le rôle de l'AAD dans un blob
+  AEAD. Ajoutés à `04-apprentissages.md`.
+
+### État après cette session
+
+- Les cinq critères de l'issue #19 sont remplis : génération + coffre
+  chiffré, aller-retour QR, code symétrique déterministe, property tests,
+  couverture ≥ 85 %.
+- Pas encore fait (hors US) :
+  - les coffres plateforme (Keystore Android via `dengon-ffi`, Secret
+    Service via `dengon-node`) ;
+  - la décision TOFU et l'alerte `contact.key_changed` (`store` / `sync`) ;
+  - la signature des `ANNOUNCE`.
+- Merge : la PR #76 déclare `chacha20poly1305` avec `features =
+  ["getrandom"]` dans le workspace. Il faudra garder
+  `default-features = false` au workspace et activer `getrandom` dans le
+  `Cargo.toml` de `store`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non (plus à toucher).
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo fmt --all -- --check
+OK
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+OK (0 warning) — un lint `sliced_string_as_bytes` corrigé en cours de route
+$ cargo test --workspace
+dengon-core : 109 unitaires + 3 (vecteurs identity) + 2 (vecteurs crypto)
++ 4 (vecteurs protocole) passés, 2 ignorés (générateurs), 0 échec
+$ cargo check -p dengon-core --no-default-features
+OK
+$ cargo check -p dengon-core --no-default-features --target thumbv7em-none-eabi
+OK
+$ cargo tree -p dengon-core -e normal | grep -c getrandom
+0
+$ cargo llvm-cov -p dengon-core --all-features --summary-only
+identity.rs 100 % · keys.rs 100 % · qr.rs 99,1 % · safety.rs 98,4 %
+· vault.rs 98,4 % (lignes) ; crate : 99,09 %
+```
+
+- Recoupement indépendant (Python `cryptography` + `hashlib`) : les
+  `pub_static`, `pub_sign`, `peer_id`, base32, empreintes, chaînes QR et le
+  code de 60 chiffres de `identity_v0.json` sont recalculés depuis les
+  graines ChaCha20, et tous identiques.
+- Non vérifié : la compilation `xtensa-esp32-none-elf`, faute de toolchain
+  `esp` sur le poste (même limite que pour US-204).
 ---
 
 ## 2026-09-28 — US-204 : rebase sur `main` (US-108 mergée) et scan de secrets

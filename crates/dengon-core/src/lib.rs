@@ -7,8 +7,10 @@
 //! `Transport` (voir la crate `dengon-ble`).
 //!
 //! Modules, d'après `docs/synthese/04-architecture.md` §2 : [`protocol`]
-//! (livré — types & constantes US-108, codec US-201), puis `crypto`, `identity`, `store`, `sync`,
-//! `ledger`, `observability` et la façade `api` (sprint 2).
+//! (livré — types & constantes US-108, codec US-201), [`crypto`] (livré),
+//! [`identity`] (livré — clés, QR, code de vérification, coffre), [`ledger`]
+//! (livré), `store` (livré, feature `std`), puis `sync`, `observability` et la
+//! façade `api` (sprint 2).
 //!
 //! # Contrainte `no_std`
 //!
@@ -33,6 +35,7 @@
 extern crate alloc;
 
 pub mod crypto;
+pub mod identity;
 pub mod ledger;
 pub mod protocol;
 #[cfg(feature = "std")]

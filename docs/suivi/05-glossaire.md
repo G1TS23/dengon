@@ -28,6 +28,10 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Budget de copies** | Nombre max d'exemplaires d'une enveloppe qu'on laisse circuler (inspiré de *Spray-and-Wait*). |
 | **TOFU** | *Trust On First Use* : on fait confiance à la première clé vue pour un contact, et on alerte si elle change. |
 | **Code de vérification / safety number** | Suite de chiffres identique des deux côtés, à comparer hors bande, pour détecter un intercepteur au premier contact. |
+| **Empreinte / fingerprint** | `SHA-256(pub_static ‖ pub_sign)` : 32 octets qui résument les deux clés publiques d'un nœud. Le code de vérification se calcule à partir des empreintes des deux correspondants (`identity::keys`). |
+| **Coffre / vault** | Endroit où l'identité (les clés privées) est rangée **chiffrée au repos**. Côté cœur : un trait `Vault` qui range un blob XChaCha20-Poly1305 ; la clé vient de l'appelant (à terme Android Keystore / Secret Service). |
+| **Carte de contact (`PublicIdentity`)** | Pseudo + deux clés publiques d'un nœud, sans secret : ce que contient le QR `dengon:v1:…`. |
+| **AAD** (*associated data*) | Données passées à un chiffrement authentifié qui ne sont **pas chiffrées** mais **sont authentifiées** : les modifier fait échouer le déchiffrement. |
 | **Journal chaîné (hash-chain)** | Liste d'événements où chaque entrée contient le hash de la précédente : impossible d'en modifier une sans casser la suite. |
 | **Attestation (`LOG_ATTEST`)** | Un nœud diffuse le « résumé » (racine) de son journal ; d'autres le rapportent au dashboard, ce qui rend le mensonge détectable. |
 | **Fork (de journal)** | Un nœud présente deux historiques différents pour la même hauteur → signe de triche. |
