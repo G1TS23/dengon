@@ -539,6 +539,150 @@ EOF
 
 ---
 
+## 2026-09-28 — US-106 : revue PR #69 de Paul, bouchon Kotlin aligné sur les bindings générés
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-ffi/src/{dengon.udl, lib.rs}`,
+`crates/dengon-ffi/uniffi.toml` (nouveau),
+`android/app/src/main/java/com/dengon/app/ffi/{DengonTypes.kt, DengonNodeStub.kt}`,
+`android/app/src/test/java/com/dengon/app/ffi/DengonNodeStubTest.kt`
+**Lot :** US-106, PR #69
+
+### Fait
+- **Point bloquant 1** : le bouchon Kotlin écrit à la main n'avait pas la
+  forme des bindings qu'UniFFI génèrera, donc l'UI écrite contre lui aurait
+  cassé à l'US-302. Bindings de référence générés avec `uniffi-bindgen`
+  0.28.3 (crate jetable hors dépôt) puis alignés :
+  - `.udl` : `bytes` au lieu de `sequence<u8>`, `sent_ms` en `i64` ;
+  - Kotlin : `ByteArray`, `Long`, `UInt`, `data class` à champs `var`,
+    `DengonNodeInterface`, `DengonException` scellée ;
+  - fonctions d'identité de premier niveau (écart non listé par la revue,
+    trouvé en générant) ;
+  - `uniffi.toml` : paquet `com.dengon.app.ffi`.
+- **Point bloquant 2** : `identityFromQrCode` levait
+  `IllegalArgumentException` sur un QR non dengon ; lève maintenant
+  `DengonException.Internal` comme toute autre entrée invalide. Test ajouté.
+- **Mineurs** : pseudo > 255 octets tronqué à la frontière de caractère des
+  deux côtés (Rust coupait un caractère UTF-8 en deux, Kotlin levait) ;
+  bouchon Kotlin thread-safe (un verrou), avec un test concurrent.
+- Tests « QR malformé » (commentaire non bloquant de G1TS23), écrits
+  auparavant dans la copie de travail : intégrés à ce correctif.
+- Points 3 à 5 de la revue (conception, à trancher avant le gel) : reportés
+  en commentaire sur #6.
+
+### Pourquoi / décisions
+- `i64` pour les horodatages (préférence de Paul) : `Long` en Kotlin, pas de
+  types non signés à manipuler dans l'UI pour une date.
+- Égalité d'`Identity` **non** réécrite : c'est ce que fera le code généré ;
+  mieux vaut que l'UI ne s'appuie pas sur une égalité qui disparaîtra.
+- Preuve de forme par compilation plutôt que par relecture : le fichier de
+  test inchangé est compilé contre les bindings générés.
+
+### Écarts vs conception
+- Aucun nouveau. Les points 3-4 (`constructor(Identity)` sans clés secrètes,
+  `on_peer_connected(string)` vs `on_peer_connected(transport)` de
+  `synthese/04` §3) sont des divergences possibles, **à trancher** au point
+  d'équipe (sur #6), pas encore des écarts actés.
+
+### Appris
+- UniFFI 0.28 : `sequence<u8>` → `List<UByte>` mais `bytes` → `ByteArray` ;
+  une interface UDL devient `class X` + `interface XInterface` ; un `[Error]
+  enum` devient une exception scellée. → `04-apprentissages.md`.
+
+### État après cette session
+- Points bloquants de la revue traités ; PR prête pour une nouvelle relecture.
+- Fiche(s) module mise(s) à jour : `modules/dengon-ffi.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo run -- generate crates/dengon-ffi/src/dengon.udl \
+    --config crates/dengon-ffi/uniffi.toml --language kotlin   (crate jetable, uniffi =0.28.3 + cli)
+→ out/com/dengon/app/ffi/dengon.kt : ByteArray, Long, UInt, DengonNodeInterface, DengonException scellée
+$ (copie jetable du projet Android : dengon.kt généré + classe DengonNodeStub seule + test inchangé)
+  ./gradlew :app:compileDebugUnitTestKotlin --dependency-verification=off → BUILD SUCCESSFUL
+  même chose avec l'ANCIEN fichier de test → 16 erreurs de compilation (contre-épreuve)
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings → 0 warning
+$ cargo test -p dengon-ffi --locked → 7 passed ; cargo test --workspace → vert
+$ ./gradlew testDebugUnitTest assembleDebug → BUILD SUCCESSFUL,
+  DengonNodeStubTest : tests="10" failures="0" errors="0"
+```
+- La vérification de dépendances Gradle n'a été désactivée **que** dans la
+  copie jetable (JNA ajouté pour compiler le fichier généré) ; le projet réel
+  n'est pas modifié.
+
+
+---
+
+## 2026-09-28 — US-106 : tests QR malformé (dernier retour de revue PR #69)
+
+**Auteur :** Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-ffi/src/lib.rs` (tests),
+`android/app/src/test/java/com/dengon/app/ffi/DengonNodeStubTest.kt`
+**Lot :** US-106, Sprint 1 — réponse au commentaire non bloquant de G1TS23
+(PR #69, 2026-09-25 14:13)
+
+### Fait
+- Kotlin : nouveau test `fromQrCode leve DengonException sur un payload non
+  vide mais tronque` — un octet `pseudo_len` (5) seul, puis un QR valide
+  amputé de son dernier octet. Exerce la seconde garde de `fromQrCode`
+  (taille du payload), que le test existant (payload vide) ne couvrait pas.
+- Rust : nouveau test `un_qr_code_malforme_renvoie_une_erreur_au_lieu_de_paniquer`
+  — mêmes deux cas + préfixe `dengon:v1:` absent, tous →
+  `Err(DengonError::Internal)`. Seul le cas heureux était testé.
+- Fiche `dengon-ffi` : retiré l'avertissement « Rust jamais compilé /
+  `Cargo.lock` non régénéré », périmé depuis `24cd926` (2026-09-25). Ligne
+  `dengon-ffi` de `02-avancement.md` mise à jour (elle décrivait encore le
+  squelette d'avant US-106).
+
+### Pourquoi / décisions
+- Les tests encodent le payload eux-mêmes (`encode_base64url` côté Rust,
+  `java.util.Base64` URL sans padding côté Kotlin — test JVM pur) pour
+  fabriquer des entrées qui passent le décodage base64url et atteignent
+  bien les gardes de taille.
+- Aucun code de production modifié : les gardes étaient déjà correctes, il
+  manquait seulement leur couverture.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rien de nouveau
+
+### État après cette session
+- Tous les retours de revue de la PR #69 sont traités.
+- Fiche(s) module mise(s) à jour : `modules/dengon-ffi.md`, `modules/_index.md`
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh issue view 2 --json title,body,labels,assignees
+US-102, assignee OswinFreyr, pas de label needs:materiel (contrairement à
+US-103/US-114) — confirme que ce spike n'exige pas de matériel spécifique,
+seulement un Linux/BlueZ, absent ici.
+
+$ grep -n "btleplug" crates/dengon-ble/Cargo.toml Cargo.toml
+aucune dépendance btleplug ajoutée à ce jour (US-105 = contrat seul) —
+terrain vierge, rien à retirer après le spike.
+
+$ wsl --list --verbose
+seul "docker-desktop" (arrêté) — pas de distro Linux utilisable ici.
+```
+- **Pas exécuté / pas possible** : compilation ou exécution de `btleplug`
+  ou `bluer` — recherche documentaire uniquement (README GitHub + docs.rs de
+  `btleplug`, citations exactes dans le rapport). Recommandation `bluer` non
+  vérifiée empiriquement, voir limites du rapport.
+
+$ cargo fmt --all
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+→ 0 warning
+$ cargo test -p dengon-ffi --locked
+→ test result: ok. 6 passed; 0 failed
+$ cd android && ./gradlew testDebugUnitTest --tests 'com.dengon.app.ffi.*'
+→ DengonNodeStubTest : tests="7" failures="0" errors="0"
+```
+
+---
+
 ## 2026-09-28 — US-110 : dashboard-api, round 8 de revue (OswinFreyr)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -1105,27 +1249,8 @@ aucun code modifié
   repli appelle une ratification d'équipe avant de la considérer actée).
 - Fiche(s) module mise(s) à jour : [modules/dengon-ble.md](modules/dengon-ble.md)
   (limite Spike B levée), [modules/_index.md](modules/_index.md) (dates)
-- 01-etat-du-code.md mis à jour : non
 
-### Vérification (commandes réellement exécutées)
-```
-$ gh issue view 2 --json title,body,labels,assignees
-US-102, assignee OswinFreyr, pas de label needs:materiel (contrairement à
-US-103/US-114) — confirme que ce spike n'exige pas de matériel spécifique,
-seulement un Linux/BlueZ, absent ici.
-
-$ grep -n "btleplug" crates/dengon-ble/Cargo.toml Cargo.toml
-aucune dépendance btleplug ajoutée à ce jour (US-105 = contrat seul) —
-terrain vierge, rien à retirer après le spike.
-
-$ wsl --list --verbose
-seul "docker-desktop" (arrêté) — pas de distro Linux utilisable ici.
-```
-- **Pas exécuté / pas possible** : compilation ou exécution de `btleplug`
-  ou `bluer` — recherche documentaire uniquement (README GitHub + docs.rs de
-  `btleplug`, citations exactes dans le rapport). Recommandation `bluer` non
-  vérifiée empiriquement, voir limites du rapport.
-
+---
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
@@ -2442,6 +2567,65 @@ SonarCloud sur du travail déjà livré
   d'un id inconnu).
 - Pas de commit/push : `CLAUDE.md` interdit de committer sans demande
   explicite. Changement laissé dans l'arbre de travail pour relecture.
+## 2026-09-25 — Réponse à la revue PR #69 (US-106) + correctifs SonarCloud PR #70 (US-111)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-ffi/src/lib.rs` (branche `feat/US-106-ffi-contract-v0`,
+PR #69), `android/app/src/main/java/com/dengon/app/ffi/DengonNodeStub.kt` +
+`android/app/src/test/java/com/dengon/app/ffi/DengonNodeStubTest.kt` (idem),
+`dashboard/web/app.js` (branche `chore/US-111-squelette-dashboard-web`, PR #70)
+**Lot :** US-106 (Sprint 1) et US-111 (Sprint 2) — pas de nouveau lot, réponse
+à des retours sur du travail déjà livré
+
+### Fait
+- Passage en revue des PR ouvertes (`gh pr list --author @me`) : PR #69
+  (`CHANGES_REQUESTED`), PR #70 et #67 (`APPROVED`).
+- **PR #69** — traité les 3 points bloquants du commentaire de revue
+  (`crates/dengon-ffi/src/lib.rs`), à la main, **sans `cargo`** (voir
+  Vérification ci-dessous) :
+  - Ajouté `#![allow(unused_qualifications, clippy::empty_line_after_doc_comments)]`
+    à côté de `#![allow(unsafe_code)]` (lints déclenchés par le scaffolding
+    généré par `uniffi::include_scaffolding!`, pas par notre code).
+  - Reformaté à la main ce que `cargo fmt` aurait changé : variante
+    `NodeEvent::StatusChanged` sur plusieurs lignes (largeur > seuil
+    `struct_variant_width` de `use_small_heuristics = "Default"`), et les
+    chaînes `.get(...).ok_or(...)?[.to_vec()]` / `match state.conversations
+    .iter_mut().find(...)` cassées sur plusieurs lignes (largeur > seuil
+    `chain_width`), conformément à `crates/rustfmt.toml`.
+  - `super::version()` → `version()` dans le test (qualification inutile,
+    `use super::*;` déjà en scope) ; `pending_events.drain(..).collect()` →
+    `std::mem::take(&mut self.lock_state().pending_events)`.
+  - **`Cargo.lock` toujours pas régénéré** : ça exige un vrai `cargo build`,
+    impossible dans cet environnement (voir Vérification). Reste le seul
+    point bloquant restant côté Rust, déjà documenté dans la description de
+    la PR #69.
+  - **Bug Kotlin réel** (`DengonNodeStub.kt`, `DengonIdentity.fromQrCode`) :
+    un payload tronqué (ex. `"dengon:v1:"`) plantait avec
+    `IndexOutOfBoundsException` au lieu de lever `DengonException` comme le
+    promet le contrat (`[Throws=DengonError] identity_from_qr_code` dans le
+    `.udl`). Ajouté un bornage explicite (`payload.isEmpty()`, puis
+    `payload.size < offset + pseudoLen + 2*KEY_LEN`) qui lève
+    `DengonException`, symétrique au `.get(...).ok_or(...)` côté Rust.
+    Test de régression ajouté (`DengonNodeStubTest.kt`) et vérifié vert.
+- **PR #70** — corrigé les 3 *code smells* SonarCloud (`MINOR`, tous dans
+  `dashboard/web/app.js`, interrogés via l'API publique
+  `sonarcloud.io/api/issues/search?componentKeys=G1TS23_dengon&pullRequest=70`) :
+  `statut.replace(/_/g, "-")` → `statut.replaceAll("_", "-")` (l.72),
+  `DATA.messages.filter(...)[0]` → `DATA.messages.find(...)` (l.163),
+  `hash.match(/^#\/message\/(.+)$/)` → `/^#\/message\/(.+)$/.exec(hash)`
+  (l.217). PR #67 : 0 issue SonarCloud ouverte.
+
+### Pourquoi / décisions
+- Corrections Rust faites à la main plutôt qu'avec `cargo fmt`/`clippy` :
+  cette machine n'a **aucun toolchain Rust installé** (déjà signalé dans la
+  description de la PR #69 comme condition de l'environnement où la PR a été
+  codée à l'origine — même limite ici). Les changements sont donc du
+  **best-effort documenté**, à confirmer par quelqu'un avec `cargo` avant de
+  considérer les points fmt/clippy réellement clos.
+- Pas de commit/push : `CLAUDE.md` interdit de committer sans demande
+  explicite. Les fichiers modifiés sont laissés dans l'arbre de travail sur
+  chacune des deux branches (`feat/US-106-ffi-contract-v0`,
+  `chore/US-111-squelette-dashboard-web`) pour relecture avant commit.
 
 ### Écarts vs conception
 - aucun
@@ -2453,6 +2637,18 @@ SonarCloud sur du travail déjà livré
 - Les 3 issues SonarCloud `MINOR` de la PR #70 corrigées dans le diff
   local ; à repousser pour qu'un nouveau scan les ferme côté SonarCloud.
 - Fiche(s) module mise(s) à jour : aucune (pas de changement de forme)
+- rien de nouveau (voir 04-apprentissages.md pour la note existante sur
+  l'absence de toolchain Rust côté US-106, toujours valable)
+
+### État après cette session
+- PR #69 : reste bloquée sur `Cargo.lock` (nécessite un `cargo build` réel)
+  et sur la vérification effective de `cargo fmt --check` /
+  `cargo clippy -D warnings` — les correctifs Rust ci-dessus n'ont pas pu
+  être compilés localement.
+- PR #70 : les 3 issues SonarCloud `MINOR` corrigées, à repousser pour
+  qu'un nouveau scan confirme.
+- Fiche(s) module mise(s) à jour : aucune (pas de changement de forme/API,
+  seulement fmt/clippy/bugfix)
 - 01-etat-du-code.md mis à jour : non
 
 ### Vérification (commandes réellement exécutées)
@@ -2559,6 +2755,146 @@ OK — aucune exception levée pendant les 5 rendus.
   visuelle — aucun navigateur disponible. **Reste à faire avant de clore
   l'US-111** : ouvrir `dashboard/web/index.html` dans un navigateur, vérifier
   à 360 px, capture d'écran dans la PR.
+$ gh pr list --author "@me" --state all --json number,reviewDecision
+PR #69 CHANGES_REQUESTED, #70 et #67 APPROVED
+
+$ curl -s "https://sonarcloud.io/api/issues/search?componentKeys=G1TS23_dengon&pullRequest=70&resolved=false"
+3 issues MINOR (javascript:S7781, S7750, S6594) — confirmées corrigées par relecture du diff
+
+$ cd android && ./gradlew testDebugUnitTest --tests "com.dengon.app.ffi.DengonNodeStubTest"
+BUILD SUCCESSFUL — 6/6 tests (dont le nouveau test de régression fromQrCode)
+
+$ cd android && ./gradlew assembleDebug
+BUILD SUCCESSFUL
+```
+- **Pas exécuté / pas possible** : `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo build --workspace`, `cargo test -p dengon-ffi` — `cargo` absent de
+  cette machine (`command not found`, pas de `rustup`/`cargo.exe` trouvé sur
+  le système). Les correctifs `lib.rs` sont donc **non compilés**, à vérifier
+  avant de merger la PR #69.
+
+---
+
+## 2026-09-20 — US-106 : contrat `dengon-ffi` v0 (UDL) + bouchon Kotlin
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-ffi/` (nouveau `dengon.udl`, `build.rs`,
+réécriture de `lib.rs`), `Cargo.toml` racine (dépendance `uniffi`),
+`android/app/src/main/java/com/dengon/app/ffi/` (nouveau package),
+`android/app/src/test/java/com/dengon/app/ffi/`
+**Lot :** US-106, Sprint 1 (S1, 08→14/09, en retard — pris le 20/09) — Must,
+bloque US-214/US-215 (UI Android, S2) et US-302 (vrai FFI, S3)
+
+### Fait
+- Écrit `crates/dengon-ffi/src/dengon.udl` : `dictionary Identity/Message/
+  Conversation`, `enum MessageStatus`, `[Enum] interface NodeEvent`,
+  `[Error] enum DengonError`, `interface DengonNode` (constructeur +
+  `send_message`/`poll_events`/`on_peer_connected`/`list_conversations`/
+  `list_messages`), fonctions libres `generate_identity`/`identity_qr_code`/
+  `identity_from_qr_code`/`verification_code`.
+- Ajouté `uniffi = "=0.28.3"` (`default-features = false`) aux
+  `[workspace.dependencies]` ; `crates/dengon-ffi/Cargo.toml` l'utilise en
+  dépendance normale, plus en dépendance de build avec la feature `"build"`
+  (seule celle nécessaire à `uniffi::generate_scaffolding`).
+- `build.rs` génère le scaffolding depuis le `.udl` ; `lib.rs` l'inclut
+  (`uniffi::include_scaffolding!("dengon")`) et implémente un bouchon
+  `DengonNode` en mémoire (`Mutex<NodeState>`) + les fonctions identité/QR
+  avec un encodeur base64url et un mélange FNV-1a écrits à la main (pas de
+  nouvelle dépendance externe pour ça seul).
+- Côté Android : `ffi/DengonTypes.kt` (miroirs Kotlin des types du contrat),
+  `ffi/DengonNodeStub.kt` (interface `DengonNode` + `DengonNodeStub` avec une
+  conversation canned pré-remplie + objet `DengonIdentity`), et
+  `DengonNodeStubTest.kt` (5 tests JVM purs).
+
+### Pourquoi / décisions
+- **UDL plutôt que macros procédurales** : imposé par la DoR de l'US-106.
+- **`uniffi` épinglé en exact `=0.28.3`, pas la dernière version
+  disponible** (`0.31`/`0.32`, 2026) : ces dernières ont changé
+  d'architecture interne (« pipeline »), et l'API que je connais avec
+  confiance (sans pouvoir compiler pour vérifier, voir plus bas) est celle
+  des versions `0.2x`/`0.28`. Choisir une version que je ne maîtrise pas
+  aurait ajouté un second axe d'incertitude en plus de l'absence de
+  compilateur.
+- **Pas de vraie cryptographie dans les placeholders** identité/QR/code de
+  vérification : `identity`/`crypto` n'existent pas encore côté
+  `dengon-core` (US-108/US-203/US-205). Écrit en toutes lettres en
+  commentaire à chaque fonction concernée, des deux côtés. Voir
+  `03-ecarts-conception.md`, entrée du 2026-09-20.
+- **`android.util.Base64` évité côté Kotlin**, remplacé par un
+  encodeur/décodeur écrit à la main : `unitTests.isReturnDefaultValues =
+  true` (pas de Robolectric) fait qu'un appel à une API `android.*` en test
+  JVM pur renvoie `null` au lieu de s'exécuter — un aller-retour QR basé sur
+  `android.util.Base64` n'aurait rien prouvé. Repéré **avant** d'écrire le
+  test, pas après un échec silencieux.
+- **`Identity` (Kotlin) n'est pas une `data class`** : elle contient des
+  `ByteArray` (égalité par identité d'objet, pas par contenu, avec l'egalité
+  générée automatiquement) ; `equals`/`hashCode` réécrits à la main
+  (`contentEquals`/`contentHashCode`).
+
+### Écarts vs conception
+- Voir `03-ecarts-conception.md`, entrée « `dengon-ffi` v0 : identité/QR/code
+  de vérification sans vraie cryptographie ».
+
+### Appris
+- L'API Kotlin `android.*` en test JVM pur avec `isReturnDefaultValues =
+  true` ne lève pas d'erreur : elle renvoie silencieusement une valeur par
+  défaut. Un test qui « passe » peut donc ne rien avoir vérifié. Ajouté à
+  `04-apprentissages.md`.
+- Contrat UniFFI en UDL (types par nom, `[Enum] interface` pour les enums à
+  données, `[Error] enum` pour les erreurs) : ajouté à `04-apprentissages.md`
+  et `05-glossaire.md` (UDL, scaffolding).
+
+### État après cette session — ⚠️ vérification partielle, à finir avant merge
+
+**Environnement sans toolchain Rust** (`cargo`/`rustc`/`rustup` absents,
+contrainte dure découverte en cours de tâche, comme l'absence d'appareil
+Android pour le Spike C/US-103) :
+
+- **`Cargo.lock` n'a PAS été régénéré.** Le job CI `core` lance
+  `cargo build --workspace --all-targets --locked` : ça va très probablement
+  échouer avec « the lock file … needs to be updated but --locked was
+  passed ». **C'est un échec attendu, documenté ici avant même le premier
+  push** — pas une régression à chasser. Étape obligatoire avant merge :
+  quelqu'un avec `cargo` lance `cargo build --workspace` une fois à la
+  racine (régénère `Cargo.lock`), commit, push.
+- `cargo fmt --check` et `cargo clippy --workspace --all-targets
+  --all-features --locked -- -D warnings` n'ont pas pu tourner sur
+  `crates/dengon-ffi/`. Le code a été écrit et relu à la main en visant
+  `crates/rustfmt.toml` (max_width 100 — vérifié ligne par ligne avec `awk`)
+  et `[workspace.lints]` (pas d'`unwrap`/`expect` hors test — `clippy.toml`
+  autorise `allow-unwrap-in-tests`/`allow-expect-in-tests`, mais je m'en suis
+  passé par choix, pas par contrainte —, `Debug` sur tout type public).
+- `cargo test -p dengon-ffi` (5 tests dans `lib.rs`) n'a pas pu être
+  exécuté. Relu à la main, raisonnement détaillé sur l'emprunteur/la
+  propriété fait ligne par ligne, mais rien ne remplace un vrai `cargo
+  build`.
+
+**Côté Kotlin, tout est réellement vérifié** (JDK + Gradle disponibles dans
+cet environnement) :
+- `./gradlew compileDebugKotlin testDebugUnitTest` → `BUILD SUCCESSFUL`,
+  `DengonNodeStubTest` : `tests="5" skipped="0" failures="0" errors="0"`.
+- `./gradlew assembleDebug` → `BUILD SUCCESSFUL` (pas de régression sur le
+  reste de l'app).
+
+Fiche module mise à jour : `modules/dengon-ffi.md` (avec le même
+avertissement en tête). `modules/_index.md` mis à jour. `02-avancement.md`
+**non touché** volontairement : il documente ce qui est sur `main`, pas les
+PR en vol (cf. son propre en-tête) — à mettre à jour au merge.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+tests="5" skipped="0" failures="0" errors="0"  (DengonNodeStubTest)
+
+$ ./gradlew assembleDebug --console=plain
+BUILD SUCCESSFUL
+```
+- **Non exécuté et non vérifiable dans cet environnement** : `cargo build`,
+  `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test -p
+  dengon-ffi` — aucun toolchain Rust installé. À faire tourner par la CI ou
+  par quelqu'un avec `cargo` avant de considérer l'US-106 close.
 
 ---
 
