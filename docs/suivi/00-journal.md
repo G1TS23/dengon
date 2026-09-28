@@ -524,6 +524,167 @@ Finished (observability compile en no_std + alloc)
 - Pas encore appelé : le branchement (émission par `Transport`, réception
   avant `sync::routing`) viendra avec le codec et le pipeline.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+## 2026-09-28 — US-215 : corrections de la revue de la PR #94
+
+**Auteur :** Oswin + Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/identite/IdentiteLocale.kt`, `android/app/src/main/java/com/dengon/app/ui/appairage/{QrCode.kt,AppairageScreen.kt}`, tests `identite/IdentiteLocaleTest.kt`, `ui/appairage/QrCodeTest.kt`
+**Lot :** US-215 (#29), suite de la revue automatisée (Claude Code) sur PR #94
+
+### Fait
+- **Entropie du `peerId` corrigée** (`IdentiteLocale.kt`) : le pseudo
+  provisoire `tel-xxxx` ne faisait varier que 2 des 8 octets pris par le
+  `peerId` du bouchon FFI (`tel-` occupant, constant, les 4 premiers) —
+  2^16 valeurs possibles au lieu de 2^8 octets = jusqu'à 2^64 en théorie.
+  Le préfixe est abandonné : pseudo purement hexadécimal (8 octets UTF-8,
+  4 octets de source aléatoire, `OCTETS_ALEATOIRES` 2 → 4). Les 8 octets du
+  `peerId` tombent désormais tous dans la fenêtre aléatoire — 2^32 valeurs
+  possibles (le hexadécimal double la taille en octets, donc pas 2^64
+  malgré ce que suggérait la revue automatisée — voir « Écarts vs revue »).
+- **Repli silencieux sur QR indétectable signalé** (`QrCode.kt`) :
+  `matriceQr` retombait sur la matrice par défaut sans un mot si aucun des
+  8 masques n'est détectable. Ajout d'un `Log.w` (tag `QrCode`) dans ce cas ;
+  la matrice reste affichée (mieux qu'un QR vide) mais le défaut est
+  désormais traçable en `logcat` plutôt qu'invisible jusqu'au scan réel sur
+  le terrain.
+- **Encodage QR déplacé hors du thread UI** (`AppairageScreen.kt`) :
+  `ImageQr` appelait `matriceQr` directement dans `remember { }`, donc sur le
+  thread de composition — jusqu'à 9 cycles encode+rastérisation+decode dans
+  le pire cas (repli ci-dessus). Remplacé par `produceState` +
+  `withContext(Dispatchers.Default)` ; le canvas ne dessine rien tant que la
+  matrice n'est pas prête (état initial `null`).
+
+### Pourquoi / décisions
+- Pas touché à `generateIdentity` (bouchon partagé, même algorithme que le
+  bouchon Rust `crates/dengon-ffi`) : le corriger aurait fait diverger les
+  deux bouchons. Le point de correction reste côté appelant Android
+  (`IdentiteLocale`), conforme à l'ancre de la revue.
+- Hexadécimal conservé (plutôt qu'un alphabet plus dense type base64url) :
+  reste lisible/imprimable à l'affichage, cohérent avec l'ancien format, et
+  le gain (2^16 → 2^32) est déjà large pour une identité **provisoire**
+  vouée à disparaître à l'US-306.
+
+### Écarts vs conception
+- Aucun nouveau (l'écart « identité provisoire / bouchon » était déjà
+  consigné dans `03-ecarts-conception.md`, entrée US-215 du 2026-09-28 ;
+  seul le format exact du pseudo change, détail non repris là-bas).
+
+### Écarts vs revue
+- La revue automatisée annonçait « 2^64 valeurs possibles » en utilisant
+  les 8 octets pour l'aléatoire. En pratique, encoder N octets aléatoires en
+  hexadécimal produit 2×N caractères ASCII, donc 2×N octets UTF-8 : pour
+  tenir dans la fenêtre de 8 octets du `peerId` sans prefixe gaspillé, seuls
+  4 octets de source aléatoire (donnant 2^32) y tiennent, pas 8. Repéré en
+  implémentant le correctif — voir `04-apprentissages.md`.
+
+### Appris
+- Entrée ajoutée à `04-apprentissages.md` (encodage hexadécimal double la
+  taille en octets — piège pour tout calcul d'entropie « en octets
+  disponibles » qui suppose une correspondance 1:1 octet source ↔ octet
+  transporté).
+
+### État après cette session
+- Les 3 constats de la revue de la PR #94 sont traités. `AppairageViewModelTest`
+  non touché (n'appelle pas `IdentiteLocale` directement). Fiche module mise
+  à jour : `modules/android-app.md`.
+- 01-etat-du-code.md : non touché (règle projet : ne plus le mettre à jour,
+  voir README de `docs/suivi/`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew --no-daemon -q assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 34/34 tests JVM verts (IdentiteLocaleTest 4/4, QrCodeTest 7/7)
+```
+- Pas revérifié sur appareil réel (scan caméra, comparaison des deux
+  téléphones) : les 3 changements sont couverts par les tests JVM existants
+  et adaptés ; un nouveau passage sur 2 téléphones physiques n'a pas été
+  refait pour cette correction de revue.
+
+---
+
+## 2026-09-28 — US-215 : écran QR (affichage + scan) + comparaison du code 60 chiffres
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/{ui/appairage/, identite/, MainActivity.kt}`, `AndroidManifest.xml`, `res/values/strings.xml`, `app/build.gradle.kts`, `gradle/libs.versions.toml`, `app/gradle.lockfile`, `gradle/verification-metadata.xml`, tests `ui/appairage/`, `identite/`
+**Lot :** US-215 (#29), sprint 2, jalon J2
+
+### Fait
+- **Écran d'appairage** (`ui/appairage/AppairageScreen.kt`) : mon QR
+  (`dengon:v1:…`, dessiné en Compose) + bouton « Scanner le QR de mon
+  correspondant » (scanner caméra de `zxing-android-embedded`) ; puis le
+  **code de 60 chiffres** en 3 lignes de 4 groupes, avec deux boutons
+  explicites « Les codes sont identiques » / « Les codes sont différents ».
+- **`AppairageViewModel`** (JVM pur, `StateFlow`) : étapes
+  `AfficherMonQr → Comparaison → Verifie | Refuse`, erreurs « QR non dengon »
+  et « votre propre QR », scan annulé sans effet, contacts vérifiés gardés en
+  mémoire. Alimenté **uniquement** par le bouchon FFI de US-106
+  (`identityQrCode`, `identityFromQrCode`, `verificationCode`).
+- **`IdentiteLocale`** : identité provisoire par installation, pseudo
+  aléatoire `tel-xxxx` conservé dans les préférences.
+- Dépendances : `com.google.zxing:core:3.5.3`,
+  `com.journeyapps:zxing-android-embedded:4.3.0` ; `gradle.lockfile` (+2)
+  et `verification-metadata.xml` (+86) régénérés
+  (`--write-verification-metadata sha256 :app:dependencies --write-locks`,
+  puis `… assembleDebug testDebugUnitTest assembleRelease`). Les nouveaux
+  artefacts n'étaient pas en cache : pas de piège « cache chaud ».
+- `CaptureActivity` du scanner en `fullSensor` (manifest) pour scanner
+  téléphone tenu droit.
+
+### Trois défauts trouvés et corrigés en route (règle n°7)
+1. **QR illisible par le détecteur** : en test JVM, le QR de l'identité
+   « alice » n'était **jamais détecté** par ZXing (`NotFoundException` à
+   toute échelle, même `TRY_HARDER`), alors qu'en `PURE_BARCODE` il se
+   décodait : données justes, repères introuvables avec le masque par
+   défaut. Le scanner caméra utilise ce même détecteur. Correctif :
+   `matriceQr` vérifie la relecture **par détection** et essaie les 8
+   masques. Test de régression + balayage de 300 identités.
+2. **Tous les téléphones avaient le même `peerId`** (constaté sur appareil :
+   « C'est votre propre QR » au premier scan). Le bouchon fait `peerId` = 8
+   premiers octets du pseudo, et mes pseudos `appareil-xxxx` commençaient
+   tous par « appareil ». Correctif : `tel-xxxx` (8 octets) ; tests : 65 536
+   tirages → 65 536 `peerId` distincts.
+3. **Mon QR disparaissait après mon scan** (constaté sur appareil) : l'écran
+   de comparaison remplaçait le QR, l'autre téléphone n'avait plus rien à
+   viser. Invisible aux tests unitaires (un téléphone par test). Correctif :
+   l'écran de comparaison affiche aussi mon QR, avec un rappel.
+
+### Vérification sur appareils réels
+- **Google Pixel 8 Pro** (Android 17, API 37) et **Samsung Galaxy A16**
+  (SM-A165F, Android 16, API 36), en USB (`adb`).
+- Lecture croisée complète : Samsung scanne le Pixel, Pixel scanne le
+  Samsung (caméra, téléphone tenu à la main). Le Pixel (`tel-9e95`) nomme
+  `tel-612d`, le Samsung nomme `tel-9e95` ; **codes identiques chiffre pour
+  chiffre** (lus par `adb`/`uiautomator`) : `99083 88326 31081 93212 49943 35746 33429 06232 54259 64334 82577 91716`.
+  « Les codes sont identiques » → « ✔ tel-612d est vérifié » /
+  « ✔ tel-9e95 est vérifié ».
+- Captures : `docs/suivi/assets/us-215/`.
+- L'app déjà installée était signée par une autre clé debug
+  (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) : désinstallée sur les deux
+  téléphones avec l'accord de l'utilisateur ; `pm clear` ensuite pour
+  oublier l'ancien pseudo `appareil-xxxx`.
+
+### Pourquoi / décisions
+- **`zxing-core` + `zxing-android-embedded`** plutôt que CameraX + ML Kit :
+  2 artefacts au lieu d'une dizaine, pas de modèle Google Play à
+  télécharger, et `zxing-core` (Java pur) rend le QR testable en JVM.
+- **ViewModel synchrone** comme US-214 : le bouchon calcule en mémoire.
+- **Navigation minimale** (un booléen dans `MainActivity`), comme US-214 —
+  conflit attendu avec la PR #87 sur ce fichier.
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-215) : contact
+  vérifié gardé en mémoire (pas d'appel FFI « marquer vérifié ») ;
+  identité provisoire `tel-xxxx` ; code de vérification = placeholder du
+  bouchon (forme conforme, pas le SHA-512 de `powl/04` §2.3).
+
+### Appris
+- Note « Un QR code peut être valide et pourtant indétectable » dans
+  `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-215 : QR affiché + scan ✅, comparaison du code 60 chiffres
+  avec confirmation explicite ✅, alimenté par le bouchon FFI ✅, testé sur
+  2 appareils réels (caméra) ✅, tests unitaires ViewModel ✅.
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
 
 ### Vérification (commandes réellement exécutées)
@@ -1747,6 +1908,18 @@ $ uv run --extra dev pytest -q
 ```
 - CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
   ouverte au moment de cette entrée).
+
+$ ./gradlew --no-daemon -q --write-verification-metadata sha256 assembleDebug testDebugUnitTest assembleRelease
+BUILD OK — 34 tests JVM, 0 échec (dont 23 nouveaux : 12 AppairageViewModelTest,
+7 QrCodeTest, 4 IdentiteLocaleTest) ; assembleRelease (R8) OK sans règle proguard
+$ adb -s <série> install -r app/build/outputs/apk/debug/app-debug.apk
+Success (Pixel 8 Pro, Galaxy A16)
+```
+- Non vérifié sur appareil : le bouton « Les codes sont différents » (couvert
+  par `codes differents - contact rejete et non enregistre`), et l'affichage
+  d'un QR non dengon (couvert par test unitaire).
+
+---
 
 ## 2026-09-28 — US-203 : `crypto`, rebase sur `main` et retours de revue de #78
 

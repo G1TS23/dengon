@@ -139,6 +139,50 @@ tardif.
 **Où c'est utilisé :** `crates/dengon-core/src/protocol/fragment/tests.rs`
 (`reassemblage_mtu_et_ordre_aleatoires`).
 **Pour aller plus loin :** <https://proptest-rs.github.io/proptest/proptest/tutorial/shrinking-basics.html>
+### Un QR code peut être valide et pourtant indétectable
+
+**C'est quoi :** un lecteur de QR fait deux choses : **détecter** le code dans
+l'image (les trois carrés de repérage) puis **décoder** les modules. Le
+contenu est brouillé par un **masque** (8 possibles) choisi par l'encodeur
+pour éviter les motifs gênants.
+**Pourquoi dans dengon :** l'appairage repose sur le scan caméra du QR de
+l'autre. Un QR que le détecteur ne trouve pas bloque l'appairage.
+**Piège / surprise :** le QR de l'identité de test « alice », généré par
+ZXing avec son masque par défaut, se décodait en mode « image pure » (données
+justes) mais n'était **jamais détecté** — à toute échelle, même en
+`TRY_HARDER` —, alors que ceux de « bob » ou « Élodie » passaient. Le défaut
+dépend du contenu : un test sur un seul exemple ne l'aurait pas vu.
+Correctif : vérifier la relecture par détection juste après l'encodage et
+changer de masque si besoin, plus un balayage de 300 identités en test.
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ui/appairage/QrCode.kt`
+(`matriceQr`, `seRelitParDetection`).
+**Pour aller plus loin :** ISO/IEC 18004 (masques et évaluation des pénalités).
+
+---
+
+### L'encodage hexadécimal double la taille en octets
+
+**C'est quoi :** représenter N octets en hexadécimal ASCII (`"%02x"` par
+octet) produit 2×N caractères, donc 2×N octets une fois ré-encodés en
+UTF-8 (chaque caractère hexadécimal est un octet ASCII). Ce n'est **pas**
+une transformation 1:1 octet à octet.
+**Pourquoi dans dengon :** `IdentiteLocale.pseudoPour` doit tenir dans les 8
+premiers octets du pseudo (c'est toute la fenêtre que le bouchon FFI utilise
+pour dériver le `peerId`, US-215/US-106). Vouloir y faire tenir 8 octets de
+véritable aléa en les hexadécimant en donnerait 16 — la moitié déborderait
+hors de la fenêtre utile.
+**Piège / surprise :** la revue automatisée de la PR #94 recommandait
+d'« utiliser les 8 octets disponibles pour l'aléatoire… donnerait 2^64
+valeurs possibles », en supposant implicitement un octet source par octet de
+pseudo. En pratique, avec un encodage hexadécimal, seuls **4** octets de
+source aléatoire tiennent dans 8 octets de pseudo — 2^32 valeurs, pas 2^64.
+Toujours vrai que c'est un gain énorme sur les 2^16 d'avant (le préfixe
+constant `tel-` gaspillait la moitié de la fenêtre), mais le chiffre exact
+de la revue ne tenait pas compte du doublement de taille de l'encodage.
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/identite/IdentiteLocale.kt`
+(`pseudoPour`, `OCTETS_ALEATOIRES = 4`).
+**Pour aller plus loin :** RFC 4648 (encodages base16/base32/base64 et leurs
+ratios octets source / octets encodés).
 
 ---
 

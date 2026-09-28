@@ -71,6 +71,11 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    // US-215 : QR d'identité. `zxing-core` (Java pur) dessine le QR et le
+    // décode dans les tests JVM ; `zxing-android-embedded` fournit l'écran de
+    // scan caméra (et demande lui-même la permission CAMERA).
+    implementation(libs.zxing.core)
+    implementation(libs.zxing.android.embedded)
 
     testImplementation(libs.junit)
 

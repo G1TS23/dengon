@@ -5,8 +5,8 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,6 +32,9 @@ import com.dengon.app.ble.MeshForegroundService
 import com.dengon.app.ble.spike.HelloMeshSpikeScreen
 import com.dengon.app.ffi.DengonNodeStub
 import com.dengon.app.ffi.generateIdentity
+import com.dengon.app.identite.IdentiteLocale
+import com.dengon.app.ui.appairage.AppairageScreen
+import com.dengon.app.ui.appairage.AppairageViewModel
 import com.dengon.app.ui.conversations.ConversationsViewModel
 import com.dengon.app.ui.conversations.MessagerieRoute
 
@@ -46,6 +49,11 @@ class MainActivity : ComponentActivity() {
         ConversationsViewModel.fabrique(DengonNodeStub(generateIdentity("moi")))
     }
 
+    // US-215 : alimenté par le bouchon FFI (identité provisoire, voir IdentiteLocale).
+    private val appairage: AppairageViewModel by viewModels {
+        AppairageViewModel.fabrique(IdentiteLocale.identite(applicationContext))
+    }
+
     private val requestPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
             permissionsGranted.value = results.values.all { it }
@@ -58,6 +66,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             DengonApp(
                 conversationsViewModel = conversationsViewModel,
+                appairage = appairage,
                 permissionsGranted = permissionsGranted,
                 onRequestPermissions = { requestPermissions.launch(BlePermissions.required()) },
                 onStartService = ::startMeshService,
@@ -83,6 +92,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun DengonApp(
     conversationsViewModel: ConversationsViewModel,
+    appairage: AppairageViewModel,
     permissionsGranted: MutableState<Boolean>,
     onRequestPermissions: () -> Unit,
     onStartService: () -> Unit,
@@ -92,6 +102,7 @@ private fun DengonApp(
     var serviceRunning by remember { mutableStateOf(false) }
     var showSpike by remember { mutableStateOf(false) }
     var showMessagerie by remember { mutableStateOf(false) }
+    var showAppairage by remember { mutableStateOf(false) }
 
     // Démarrage auto dès que les permissions sont accordées (une
     // seule fois par passage à `true`, pas à chaque recomposition).
@@ -108,6 +119,8 @@ private fun DengonApp(
                 MessagerieRoute(viewModel = conversationsViewModel, onQuitter = { showMessagerie = false })
             } else if (showSpike) {
                 HelloMeshSpikeScreen(onBack = { showSpike = false })
+            } else if (showAppairage) {
+                AppairageScreen(viewModel = appairage, onRetour = { showAppairage = false })
             } else {
                 DengonScreen(
                     permissionsGranted = granted,
@@ -123,6 +136,7 @@ private fun DengonApp(
                     },
                     onOpenSpike = { showSpike = true },
                     onOpenMessagerie = { showMessagerie = true },
+                    onOpenAppairage = { showAppairage = true },
                 )
             }
         }
@@ -137,6 +151,7 @@ private fun DengonScreen(
     onToggleService: () -> Unit,
     onOpenSpike: () -> Unit,
     onOpenMessagerie: () -> Unit,
+    onOpenAppairage: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -152,6 +167,12 @@ private fun DengonScreen(
         // pas branché (US-306).
         Button(onClick = onOpenMessagerie) {
             Text(text = "Conversations")
+        }
+
+        // L'appairage par QR ne dépend pas du Bluetooth : accessible même
+        // sans les permissions BLE.
+        Button(onClick = onOpenAppairage) {
+            Text(text = stringResource(R.string.appairage_ouvrir))
         }
 
         if (!permissionsGranted) {

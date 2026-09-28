@@ -165,6 +165,26 @@ _(aucun écart pour l'instant)_
   signaler) un lien dont le MTU négocié est < 46. La déduplication de paquets
   reste le rôle du seen-set de `sync::routing` ; celle du réassembleur ne
   vaut que pour `timeout_ms`.
+### 2026-09-28 — Appairage (US-215) : contact vérifié en mémoire, identité provisoire, code placeholder
+
+- **Prévu :** `powl/04` §2.3 : « Match → contact marqué ✔ vérifié (stocké
+  dans `contacts.verified_at`) » ; code = `SHA-512(min(fpA,fpB) ‖ max(fpA,fpB))`,
+  12 groupes de `u16 mod 100000`.
+- **Réel :**
+  1. Le contrat FFI v0 (US-106) n'a pas d'appel « marquer vérifié » : les
+     contacts vérifiés vivent dans `AppairageViewModel` (perdus au
+     redémarrage de l'app).
+  2. Identité locale provisoire : `generateIdentity("tel-xxxx")` du
+     bouchon, pseudo aléatoire par installation. Le bouchon dérivant le
+     `peerId` des 8 premiers octets du pseudo, l'aléa doit y tenir.
+  3. Le code affiché est celui du bouchon (FNV-1a) : forme conforme (12 × 5
+     chiffres, identique des deux côtés, ordre-indépendant), calcul non
+     conforme — comme prévu par US-106.
+- **Raison :** l'US est explicitement « sur bouchon FFI » ; le branchement
+  réel est l'US-306.
+- **Conséquences :** US-302/US-306 devront ajouter au FFI un appel
+  « marquer vérifié » (et la persistance `contacts.verified_at`), et
+  remplacer `IdentiteLocale` par la vraie identité (US-205).
 - **Doc de conception mise à jour ?** non.
 
 ---

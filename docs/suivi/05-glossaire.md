@@ -45,6 +45,8 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Outbox** | File locale des messages envoyés mais pas encore confirmés distribués ; rejouée à chaque reconnexion. |
 | **Statut terminal** | Statut qui n'évolue plus : `delivered`, `expired`, `cancelled`. Le message sort alors de l'outbox. |
 | **Property test** | Test qui vérifie une propriété générale (« le statut ne redescend jamais ») sur des centaines d'entrées générées aléatoirement, au lieu de quelques exemples écrits à la main. En Rust : crate `proptest`. |
+| **Lecture croisée** | Vérification d'un contact où chaque téléphone scanne le QR de l'autre, puis les deux personnes comparent à voix haute le code de 60 chiffres affiché des deux côtés. |
+| **Masque (QR)** | Motif appliqué aux modules d'un QR code (8 possibles) pour éviter les zones qui perturbent la lecture ; le choix du masque change le dessin, pas le contenu. |
 | **ACK / read-receipt** | Accusés signés : « reçu par l'appareil » / « ouvert par l'utilisateur ». |
 | **Relais / `dengon-relay`** | Nœud fixe (ESP32) branché au secteur : densifie le maillage, met en cache, dépose des enveloppes, remonte des logs. Ne déchiffre rien. |
 | **`btleplug::api::Peripheral`** (piège de nommage) | Dans `btleplug`, ce trait désigne l'appareil **distant** trouvé en scannant (le serveur GATT d'en face), **pas** « notre rôle peripheral » : `btleplug` ne sait tenir que le rôle central (voir *Rôle central / peripheral* plus bas et B-6) — [`suivi/spikes/US-102-btleplug-peripheral.md`](spikes/US-102-btleplug-peripheral.md). |
