@@ -43,6 +43,11 @@ rand_chacha = { workspace = true }
 # decode(encode(p)) == p, aucun panic sur des octets arbitraires, et
 # sync::status US-211 : monotonie des statuts, format d'outbox).
 proptest    = { workspace = true }
+# Tests de bout en bout de `sync::routing` contre `MockTransport` (US-209,
+# tests/routing_mock.rs). Cycle de dépendances *de dev* uniquement
+# (dengon-ble dépend de dengon-core) : Cargo l'autorise, et les tests
+# d'intégration lient la même instance de dengon-core que dengon-ble.
+dengon-ble  = { workspace = true }
 # Lecture des vecteurs de conformité (tests/vectors_v0.json, tests/vectors/
 # crypto_v0.json) — via `Value`, pas de derive, donc `serde` n'est pas tiré
 # comme dépendance de proc-macro.

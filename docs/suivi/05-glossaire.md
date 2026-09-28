@@ -15,6 +15,10 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Déduplication / seen-set** | Mémoire des messages déjà vus (par leur `msgID`) pour ne pas les relayer en boucle. |
 | **Jitter de relais** | Petit délai aléatoire avant de relayer, pour que les doublons s'annulent. |
 | **Flood contrôlé** | Diffusion à tous les voisins, mais bornée par TTL + dedup + budget. |
+| **Sans-IO** (*sans-IO*) | Code qui décide sans faire lui-même d'entrée/sortie : l'appelant lui passe l'heure, les paquets, la graine, et exécute ses décisions. Cas de `sync::routing`. |
+| **Anti-inondation** | Plafond de nouveaux `msgID` acceptés par voisin et par minute (`FLOOD_MAX_PER_MIN_PEER = 20`) : un voisin qui inonde est ignoré jusqu'à ce que son débit retombe. |
+| **Clamp de densité** | Avec 6 voisins ou plus, le TTL relayé est plafonné à 5 : en zone dense, pas besoin d'aller loin. |
+| **Tempête de diffusion** (*broadcast storm*) | Saturation d'un réseau quand chaque nœud rediffuse tout ; combattue par le jitter + l'abandon sur doublons. |
 | **peerID** | Identifiant court (8 octets) d'un nœud = début du hash de sa clé publique. Stable, pseudonyme. |
 | **msgID** | Identifiant d'un paquet = hash de son contenu. Sert à dédupliquer et à suivre. |
 | **msg_uuid** | Identifiant d'un **message applicatif**, stable de bout en bout (le `msgID` peut changer si le paquet est re-scellé). |
@@ -25,6 +29,8 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Ed25519 / X25519** | Ed25519 = signatures (prouver qui parle). X25519 = accord de clés (établir un secret partagé). Même courbe (Curve25519), usages différents. |
 | **Enveloppe scellée** | Message chiffré pour un destinataire absent, déposé sur des relais en attendant qu'il revienne. |
 | **recipient_tag** | Étiquette anonyme et **tournante** (change chaque jour) qui désigne le destinataire d'une enveloppe sans révéler qui c'est. |
+| **Courrier (*courier*)** | Rôle d'un nœud qui garde des enveloppes scellées pour d'autres et les remet à la rencontre, sans pouvoir les lire (`sync::courier`). |
+| **`ENVELOPE_OFFER` / `ENVELOPE_REQUEST`** | Échange à la rencontre : le porteur annonce les `recipient_tag` qu'il détient, le pair demande ceux qui sont les siens. |
 | **Budget de copies** | Nombre max d'exemplaires d'une enveloppe qu'on laisse circuler (inspiré de *Spray-and-Wait*). |
 | **TOFU** | *Trust On First Use* : on fait confiance à la première clé vue pour un contact, et on alerte si elle change. |
 | **Code de vérification / safety number** | Suite de chiffres identique des deux côtés, à comparer hors bande, pour détecter un intercepteur au premier contact. |
@@ -107,6 +113,9 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **GATT** (*Generic Attribute Profile*) | Couche BLE qui structure les données échangées en **services** (regroupements) et **characteristics** (valeurs lisibles/écrivables/notifiables à l'intérieur d'un service). |
 | **Rôle central / peripheral (BLE)** | *Peripheral* : annonce sa présence et publie un service GATT (le « serveur »). *Central* : scanne, trouve, se connecte (le « client »). Un nœud `dengon` tient les **deux** rôles en permanence. |
 | **ATT_MTU** | Taille max d'un paquet BLE au niveau attribut (23 o par défaut, jusqu'à 517 si négocié à la connexion). Dimensionne la fragmentation protocole (`FRAG_SIZE`) — mesuré réellement par le Spike C (US-103). |
+| **Fragment / réassemblage** | Morceau d'un paquet trop grand pour une écriture BLE (paquet L3 de type `0x09`) ; le réassembleur recolle les morceaux à l'arrivée, dans n'importe quel ordre. |
+| **frag_id** | `SHA-256(paquet complet)[0..8]` : identifie les fragments d'un même paquet et sert à vérifier le paquet reconstruit. |
+| **Shrinking** | Étape d'un property test qui réduit une entrée en échec au plus petit contre-exemple, pour rendre le bug lisible. |
 | **Spike** | Tâche courte et bornée dans le temps (*timebox*) pour répondre à une question technique par l'expérimentation plutôt que par la lecture. Livrable = une décision écrite + des chiffres, pas une fonctionnalité ; le code produit est jetable. |
 | **KAT (Known Answer Test)** | Test qui compare la sortie d'un algorithme crypto à un résultat publié par les auteurs de la norme (ici RFC 8032 §7.1). Prouve qu'on implémente bien *le* standard, pas une variante. |
 | **Ed25519 déterministe** | Ed25519 ne tire aucun nombre aléatoire à la signature : le même message et la même clé donnent toujours la même signature. Rend les tests reproductibles et supprime toute une classe de failles liées à un mauvais RNG. |
@@ -122,3 +131,4 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Vecteur de conformité** | Entrée/sortie figée (octets exacts) qu'une implémentation doit reproduire ; sert de test de non-régression et d'interopérabilité entre plateformes. |
 | **Fenêtre anti-rejeu** | Mémoire des N derniers numéros de message reçus (ici 64) : un message déjà vu ou trop ancien est refusé, un message en retard mais récent est accepté. |
 | **Nonce** | Numéro à usage unique qui accompagne chaque chiffrement ; ne doit jamais se répéter avec la même clé. Dans une session dengon, c'est un compteur envoyé en clair devant le chiffré. |
+| **ViewModel / StateFlow** | Android : le `ViewModel` garde l'état d'un écran et survit aux rotations ; l'écran observe un `StateFlow` (valeur courante + notifications de changement) et appelle les actions du ViewModel. La messagerie (US-214) en a un seul : `ConversationsViewModel`. |

@@ -66,6 +66,556 @@ $ curl -sk https://51.255.38.214:8443/healthz
 {"status":"ok"}   # HTTP 200, corrigé
 ```
 
+## 2026-09-28 — US-217 : rebase de la PR #93 sur `main` (après #91, #99)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/`
+**Lot :** US-217, PR #93 — branche `feat/US-217-dashboard-projections`
+
+### Fait
+- La branche contenait encore le commit US-216 d'avant squash-merge
+  (`e565950`) ; rebase du seul commit US-217 :
+  `git rebase --onto origin/main e565950`.
+- Un conflit : `modules/dashboard-api.md` — arborescence des tests et
+  section « Décisions » (revue PR #91 côté `main`, US-217 côté branche) :
+  les deux côtés gardés.
+- Fusion automatique fautive corrigée à la main : entrée US-217 remise en
+  haut du journal (elle était tombée au milieu, sans séparateur `---`) ;
+  ligne `Dashboard api` en double dans `02-avancement.md` → une seule ligne.
+- Compteur `test_api.py` corrigé dans la fiche module : 38 tests collectés
+  (la fiche sur `main` annonçait 39 ; aucune fonction de test ajoutée ou
+  retirée par US-217 dans ce fichier).
+
+### Vérifications
+```
+$ uv run --extra dev pytest          # dashboard/api
+62 passed   (38 test_api.py + 24 test_projections.py)
+
+$ uv run --extra dev ruff check .
+All checks passed!
+```
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : `dashboard-api.md` (résolution du conflit)
+
+---
+
+## 2026-09-28 — US-217 : projections dashboard — reconstruction de statut par message
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{projections,ingest,migrations}.py`,
+`dashboard/api/tests/{test_api,test_projections}.py`, `docs/suivi/`.
+**Lot :** US-217 (issue #31). Branche `feat/US-217-dashboard-projections`,
+basée sur `feat/US-216-ingest-validation` (PR #91, pas encore mergée au
+moment de cette session — l'`events` table qu'US-217 lit vient de là ;
+dépendance formelle de l'issue = US-107/US-110 seulement, tous deux mergés).
+
+### Fait
+- `app/projections.py` — logique pure, sans I/O : `project_message()`
+  reconstruit le statut d'un `msg_log_id` à partir de **tous** ses
+  événements connus (`docs/synthese/09` §10 : delivered > expired >
+  in_flight > queued > unknown, `status_ms` = horodatage de l'événement
+  déclencheur, `hop_count` = nb de `pkt.relayed`, `delivery_latency_ms`
+  depuis `msg.delivered`) ; `group_by_msg_log_id()`/`project_messages()`
+  pour un flux complet.
+- Migration v3 (`messages`, schéma `docs/synthese/09` §11.2, sans
+  `links`/`message_hops` — écart consigné).
+- `app/ingest.py::_insert_events()` — après l'insertion des événements,
+  recalcule la projection de chaque `msg_log_id` touché par le batch en
+  relisant **tout** `events` pour ce `msg_log_id` (pas de fusion
+  incrémentale), `UPSERT` dans `messages`, même transaction.
+- Tests : 24 nouveaux (`test_projections.py`) — unitaires sur chaque règle
+  de `docs/synthese/09` §10, 10 tests paramétrés de robustesse à l'ordre
+  d'arrivée (5 sur un scénario synthétique, 5 sur les 20 fixtures golden
+  combinées), données partielles, idempotence aux doublons, et 2 tests bout
+  en bout qui ingèrent les **20 fixtures golden réelles** de US-107 via le
+  vrai pipeline HTTP (`POST /api/nodes` + `POST /ingest/batch`, signature
+  Ed25519 vérifiée avec la clé de test `contracts/events/test-signing-key.json`),
+  dont un dans l'ordre inverse.
+- 3 tests hérités de `test_api.py` avaient `[1, 2]` en dur pour les versions
+  de migration — mis à jour en `[1, 2, 3]`.
+
+### Pourquoi / décisions
+- Détail dans `docs/suivi/modules/dashboard-api.md` §Décisions
+  d'implémentation (US-217) : recalcul complet plutôt qu'incrémental (rend
+  l'indépendance à l'ordre structurelle, pas une garantie à maintenir),
+  `messages.status` plus granulaire que le résumé de §10 (`queued` vs
+  `in_flight`), `status_ms` = horodatage du déclencheur et non du dernier
+  événement reçu.
+
+### Écarts vs conception
+- `links`/`message_hops` (§11.2) non créées, `hop_count` approximatif —
+  consigné dans `03-ecarts-conception.md`.
+- Statut `read` (v2) jamais produit par la projection — consigné.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les 6 critères d'acceptation de l'US-217 sont couverts : projections
+  construites depuis le flux d'événements, conformes à `docs/synthese/09`
+  §10, vérifiées sur les 20 fixtures golden, tolérantes aux données
+  partielles, résultat indépendant de l'ordre d'arrivée, `pytest` vert.
+- Manque encore avant de fermer l'issue : ouvrir la PR (vers
+  `feat/US-216-ingest-validation`, tant que #91 n'est pas mergée), revue par
+  une personne d'une autre `area:`.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q
+58 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+```
+- CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
+  ouverte au moment de cette entrée).
+
+---
+
+## 2026-09-28 — US-212 : `sync::courier` — dépôt / collecte d'enveloppes scellées, expiration
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/{mod.rs, courier.rs, courier/tests.rs}`, `crates/dengon-core/src/lib.rs`
+**Lot :** US-212 (#26), sprint 2, jalon J1
+
+### Fait
+- **Nouveau module `sync`** (`src/sync/mod.rs`) avec `courier` seul. La PR
+  US-211 (#84) crée le même fichier avec `status` : conflit d'ajout attendu,
+  à résoudre en gardant les deux `pub mod`.
+- **`Courier`** (`src/sync/courier.rs`) : magasin borné d'enveloppes scellées
+  détenues pour autrui.
+  - `deposit(msg_id, raw_packet, now)` : décode le paquet avec le codec
+    (US-201), exige un `SEALED_ENVELOPE`, lit **uniquement**
+    `recipient_tag(16) ‖ epoch_day(2)` (`parse_sealed_payload`) et stocke le
+    paquet **octet pour octet**. Dédup par `msgID`.
+  - `offer(now)` → tags distincts à annoncer (`ENVELOPE_OFFER`) ;
+    `matching(tags, now)` → enveloppes à renvoyer sur `ENVELOPE_REQUEST` ;
+    `confirm_handoff(msg_id)` → retrait après envoi réussi.
+  - `expire(now)` → supprime les périmées, renvoie leurs `msgID`
+    (événement `envelope.expired`).
+- **Bornes** : `capacity` (`ENVELOPE_STORE_MAX = 64` par défaut),
+  `ENVELOPE_MAX_BYTES` par paquet, politique explicite `EvictionPolicy`
+  (`RejectNew` par défaut, `EvictOldest` configurable).
+
+### Pourquoi / décisions
+- **Échéance = `min(timestamp_ms + TTL, dépôt + TTL)`** : avec le seul
+  `deposit_ms` de `synthese/07` §7, une enveloppe pourrait vivre
+  indéfiniment en passant de courrier en courrier. Le `min` borne aussi une
+  horloge d'émetteur en avance.
+- **`RejectNew` par défaut** (`synthese/08` §7 : « refus de nouvelles
+  enveloppes, existantes protégées »), `EvictOldest` disponible
+  (`synthese/05` §6.4). Les deux docs divergent : la politique est un réglage
+  explicite plutôt qu'un choix caché.
+- **Lecture → envoi → confirmation** plutôt qu'un retrait à la lecture : si
+  le lien BLE tombe pendant l'envoi, l'enveloppe n'est pas perdue.
+- **Aucune clé dans l'API** : le courrier ne voit que la partie en clair.
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-212) : échéance
+  bornée par l'horodatage d'origine ; test négatif avec un AEAD de
+  substitution (Noise `X` pas encore mergé) ; `copy_budget` (v2) absent ;
+  remise confirmée en deux temps.
+
+### Appris
+- Rien de nouveau à consigner (patron déjà noté : property test sur les
+  bornes, cf. US-202).
+
+### État après cette session
+- Critères US-212 : dépôt / collecte ✅, expiration ✅, test négatif ✅ (avec
+  un AEAD de substitution, à rejouer avec Noise `X` après US-204), stockage
+  borné + politique explicite ✅, `no_std` ✅, couverture ≥ 85 % ✅.
+- Pas encore appelé : le branchement (pipeline de réception, échange
+  `ENVELOPE_OFFER`/`REQUEST`) viendra avec `sync::routing` et l'`api`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+_Commandes d'origine ; revérifiées après rebase sur `main` (#84, #85, #88, #89), voir ci-dessous._
+```
+$ cargo test --workspace --all-features
+168 tests passés, 0 échec (dont 15 sync::courier)
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+aucun avertissement
+$ cargo check -p dengon-core --no-default-features
+Finished (no_std OK)
+$ cargo llvm-cov -p dengon-core --summary-only
+sync/courier.rs  lignes 100,00 %  régions 100,00 %
+TOTAL dengon-core  lignes 97,66 %
+```
+- Le test négatif ne tourne qu'avec la feature `std` (l'AEAD de
+  substitution, `chacha20poly1305`, est une dépendance optionnelle liée à
+  `std`) : c'est le cas de `cargo test` par défaut et de la CI.
+- **Après rebase sur `main`** (#88 puis #89 ; conflits `lib.rs`, `sync/mod.rs` → `courier`,
+  `routing`, `status` gardés ; fiches `suivi/` refusionnées à la main) :
+  `cargo fmt --check` OK ; `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings` OK ; `cargo test --workspace --all-features`
+  376 passés, 0 échec ; `cargo check -p dengon-core --no-default-features` OK.
+
+---
+
+## 2026-09-28 — US-208 : rebase de la PR #89 sur `main` (après #84, #85, #87, #88)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/lib.rs`, `docs/suivi/`
+**Lot :** US-208, PR #89 — branche `feat/US-208-observability`
+
+### Fait
+- `git rebase origin/main` du commit de la PR. Deux conflits :
+  - `lib.rs` : doc de crate et commentaire d'`extern crate alloc` —
+    fusionnés (`crypto`, `sync` de `main` + `observability`) ; `pub mod
+    observability` gardé à côté de `crypto` / `identity` / `sync`.
+  - `modules/dengon-core.md` : ligne « État », arborescence, « Modules
+    encore absents » (`observability` retiré), tableau des types,
+    décisions, tests, résumé oral — les deux côtés gardés.
+- Fusion automatique fautive corrigée à la main : entrée US-208 remise en
+  haut du journal (elle était tombée au milieu, sans séparateur `---`) ;
+  ligne `dengon-core` en double dans `02-avancement.md` → une seule ligne ;
+  `modules/_index.md` complété.
+
+### Vérifications
+- `cargo fmt --all -- --check` : OK.
+- `cargo clippy --workspace --all-targets -- -D warnings` : OK.
+- `cargo check -p dengon-core --no-default-features` : OK.
+- `cargo test -p dengon-core` : 272 tests unitaires + tests d'intégration
+  (7 `codec_proptest`, 2 `crypto_vectors`, 3 `identity_vectors`,
+  7 `protocol_vectors`, 8 `routing_mock`) = 299 passés, 0 échec,
+  2 ignorés (régénération de vecteurs).
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : `dengon-core.md` (résolution du conflit)
+
+---
+
+## 2026-09-28 — US-208 : `observability` — catalogue, JSON canonique, redaction
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/observability/{mod.rs,catalog.rs,canonical.rs}`
+(nouveaux), `crates/dengon-core/src/lib.rs`, `docs/suivi/modules/dengon-core.md`,
+`docs/suivi/03-ecarts-conception.md`
+**Lot :** US-208, Sprint 2
+
+### Fait
+- `observability::canonical::Value` : JSON canonique maison (`Bool`/`Int`/
+  `Str`/`Array`/`Object`), `BTreeMap<String, Value>` pour le tri des clés
+  — pas de dépendance `serde_json` en runtime, pas de flottant
+  représentable (élimine par construction les deux pièges que
+  `contracts/events/CANONICAL.md` documente lui-même côté Rust : tri
+  manquant par défaut, `f64` qui casse la signature).
+- `observability::catalog::EVENT_NAMES` : les 28 noms d'événements du
+  périmètre MVP, miroir de `contracts/tools/catalogue.py::CATALOGUE`
+  (comparé manuellement, pas d'outillage cross-langage — écart consigné).
+- `observability::{Envelope, msg_log_id, pkt_seen, pkt_relayed, msg_queued,
+  peer_connected}` : construction d'enveloppe, redaction structurelle
+  (les constructeurs n'acceptent que des identifiants déjà redactés,
+  `MsgLogId` 8 o — pas de `MsgId` brut 32 o), 4 constructeurs de payload
+  représentatifs sur les 28 du catalogue.
+- **Vérifié octet à octet contre 3 fixtures golden réelles de l'US-107**
+  (`01-pkt-seen.json`, `10-msg-queued.json`,
+  `16-peer-connected-disconnected.json`) : `event_id` et JSON canonique
+  complet calculés indépendamment avec
+  `contracts/tools/catalogue.py::canonical_json`, codés en dur comme
+  octets attendus dans les tests Rust — critère d'acceptation explicite de
+  l'US.
+- **Test négatif de redaction** : construit 3 événements distincts à
+  partir du même `msg_uuid` « secret », vérifie que ni les octets bruts ni
+  leur forme hex n'apparaissent dans la sortie canonique — sur les 3
+  événements, pas seulement un.
+- 12 tests au total (5 `canonical`, 3 `catalog`, 4 `mod`).
+
+### Pourquoi / décisions
+- Redaction imposée par le **typage**, pas par convention : impossible
+  d'appeler un constructeur de payload avec un `MsgId` brut, ça ne
+  compile pas. Directement motivé par le critère d'acceptation
+  « aucun msg_uuid ... ne peut sortir, quelle que soit l'entrée ».
+- JSON canonique écrit à la main plutôt que `serde_json` + config : les
+  deux pièges documentés dans `CANONICAL.md` (tri des clés, flottants)
+  sont éliminés par la forme du type (`BTreeMap`, pas de variante
+  `Float`), pas par une configuration qu'un futur changement pourrait
+  défaire silencieusement.
+- 4 constructeurs sur 28, aucun site d'appel réel : `sync::routing`/
+  `sync::inventory` (US-209/US-210) ne sont pas livrés — écrire le
+  mécanisme maintenant (dépendances US-104/US-107 satisfaites) plutôt que
+  d'attendre une dépendance intra-sprint interdite par la règle du projet.
+  Écart consigné.
+
+### Écarts vs conception
+- Deux écarts consignés dans `03-ecarts-conception.md` : absence de site
+  d'appel réel, et absence de vérification cross-langage automatique du
+  catalogue.
+
+### État après cette session
+- `cargo test -p dengon-core` → 58 passés (54 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features`
+  (`observability` compris) tous verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core observability
+12 passed (0 failed)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+
+$ cargo fmt --all -- --check
+(rien — propre)
+
+$ cargo check -p dengon-core --no-default-features
+Finished (observability compile en no_std + alloc)
+```
+- Octets attendus des 3 tests de fixtures calculés indépendamment avec
+  `python3 -c "import json; json.dumps(..., sort_keys=True,
+  separators=(',',':'), ...)"` sur les mêmes champs que les fixtures
+  `contracts/events/fixtures/`, avant d'écrire le test Rust — pas déduits
+  a posteriori du code Rust lui-même.
+
+---
+
+## 2026-09-28 — US-202 : rebase de la PR #88 sur `main` (après #84, #85, #87)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/protocol/mod.rs`, `docs/suivi/`
+**Lot :** US-202 (#16), PR #88 — branche `feat/US-202-fragmentation`
+
+### Fait
+- `git rebase origin/main` du commit de la PR. Deux conflits :
+  - `protocol/mod.rs` : doc du module (`codec` de `main` + `fragment`) —
+    les deux lignes gardées ; `pub mod fragment` à côté de `pub mod codec`.
+  - `modules/dengon-core.md` : ligne « État » et arborescence — fusionnées
+    (`codec/`, `fragment.rs`, `sync/`).
+- Fusion automatique fautive corrigée à la main : entrée US-202 remise en
+  haut du journal (séparateur `---` manquant) ; ligne `dengon-core` en
+  double dans `02-avancement.md` et lignes obsolètes dans `modules/_index.md`
+  → une ligne par module.
+
+### Vérifications
+- `cargo fmt --all --check` : OK.
+- `cargo clippy -p dengon-core --all-targets -- -D warnings` : OK.
+- `cargo test -p dengon-core` : 260 tests unitaires + tests d'intégration
+  (7, 2, 3, 7, 8) passés, 0 échec, 2 ignorés (régénération de vecteurs).
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : `dengon-core.md` (résolution du conflit)
+
+---
+
+## 2026-09-28 — US-202 : `protocol::fragment` — fragmentation / réassemblage L2, MTU paramétrable
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/protocol/{mod.rs, fragment.rs, fragment/tests.rs}`
+**Lot :** US-202 (#16), sprint 2, jalon J1
+
+### Fait
+- **Format du payload de fragment** (`synthese/05` §5) : `Fragment { frag_id,
+  index, total, chunk }`, `encode` / `decode` (big-endian, décodage sans
+  panic), `validate` (`total ≥ 1`, `index < total`, chunk `1..=FRAG_SIZE`).
+- **`frag_id(packet)`** = `SHA-256(paquet)[0..8]` (crate `sha2`, déjà
+  dépendance de `dengon-core` depuis US-206).
+- **Découpe selon un MTU paramétrable** : `chunk_capacity(att_mtu)` =
+  `min(FRAG_SIZE, ATT_MTU − 3 − 30 − 12)` ; `split(packet, chunk_len)`,
+  `split_for_mtu(packet, att_mtu)`, `needs_fragmentation(len, att_mtu)`.
+- **`Reassembler`** : accepte les fragments dans n'importe quel ordre, ignore
+  les doublons, abandonne un réassemblage inactif depuis `FRAG_TIMEOUT_S`,
+  vérifie le paquet reconstruit contre son `frag_id`, et borne sa mémoire
+  (`FRAG_MAX_CONCURRENT` réassemblages, éviction du plus ancien ;
+  `PACKET_MAX_LEN` par paquet ; budget global `max_bytes`, 128 Kio par
+  défaut ; mémoire des `frag_id` terminés bornée à 64 entrées).
+
+### Pourquoi / décisions
+- **Payload seulement** : l'habillage en paquet L3 `0x09` relève du codec
+  (US-201, PR #80, pas encore mergée). La fragmentation opère sur les octets
+  d'un paquet déjà encodé, donc ne dépend pas du codec.
+- **En-tête L3 compté en forme adressée (30 o)** dans `chunk_capacity` : un
+  fragment hérite de l'adressage du paquet transporté ; on prend le pire cas.
+- **Intégrité par le `frag_id`** : pas de somme de contrôle par fragment
+  (`synthese/05` §5), mais le `frag_id` est un condensat SHA-256 du paquet ;
+  le vérifier après réassemblage détecte un fragment altéré ou un mélange.
+- **Budget en octets + coût forfaitaire par chunk (`CHUNK_OVERHEAD = 32`)** :
+  sans lui, un pair enverrait des chunks d'1 octet et ferait croître la
+  mémoire bien au-delà des octets comptés.
+- **Mémoire des `frag_id` terminés** : ajoutée après que le property test
+  `reassemblage_mtu_et_ordre_aleatoires` a trouvé qu'un paquet d'un seul
+  fragment, dupliqué, sortait **deux fois** (cas minimal : `p = [0]`, un
+  doublon). Même cause côté multi-fragments : un doublon tardif rouvrait un
+  réassemblage « zombie » qui occupait la mémoire jusqu'au timeout.
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-202) : MTU
+  minimal utilisable 46 (le minimum BLE 23 ne porte pas un fragment) ; budget
+  mémoire global et mémoire des terminés non prévus par la conception.
+
+### Appris
+- Note « Un property test trouve le cas que l'exemple rate » dans
+  `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-202 : MTU paramétrable ✅, property test MTU aléatoire ✅,
+  manquants / dupliqués / désordonnés sans corruption ni panic ✅, mémoire
+  bornée ✅, `no_std` ✅, couverture ≥ 85 % ✅.
+- Pas encore appelé : le branchement (émission par `Transport`, réception
+  avant `sync::routing`) viendra avec le codec et le pipeline.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check
+(vert)
+$ cargo clippy --workspace --all-targets -- -D warnings
+(vert)
+$ cargo test -p dengon-core
+194 passed (lib) ; 7 + 2 + 3 + 7 passed (intégration, 2 ignorés) ; 0 failed
+$ cargo check -p dengon-core --no-default-features
+(vert — frontière no_std)
+```
+
+---
+
+## 2026-09-28 — US-214 : rebase de la PR #87 sur `main` (après #84, #85)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/`
+**Lot :** US-214 (#28), PR #87 — branche `feat/US-214-ui-conversations`
+
+### Fait
+- `git rebase origin/main` du commit de la PR. Un seul conflit :
+  `docs/suivi/01-etat-du-code.md` (bloc « commandes ») — les deux côtés
+  gardés : commandes `dengon-core` de `main` + commandes Gradle de l'app
+  Android (US-214).
+- Fusion automatique (`merge=union`) fautive corrigée à la main : l'entrée
+  US-214 de `00-journal.md` s'était retrouvée au milieu du journal, sous
+  les entrées de `main` ; remise en haut.
+- `02-avancement.md`, `modules/_index.md`, `05-glossaire.md` : fusion
+  automatique relue, correcte (pas de ligne en double).
+
+### Vérifications
+- `main` n'a modifié aucun fichier sous `android/` depuis la base de la
+  branche (`git diff --stat <base> origin/main -- android/` vide) : le code
+  Kotlin est identique à celui relu.
+- Tests Gradle **non relancés** sur ce poste (pas de SDK Android :
+  `android/local.properties` absent) ; la CI de la PR fait foi.
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : aucune
+- 01-etat-du-code.md mis à jour : oui (résolution du conflit)
+
+---
+
+## 2026-09-28 — US-214 : messagerie Compose sur bouchon FFI (conversations, fil, saisie, statuts)
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ui/conversations/`
+(nouveau : `ConversationsViewModel.kt`, `ConversationsScreen.kt`,
+`LibelleStatut.kt`), `MainActivity.kt`, `ffi/DengonNodeStub.kt` (correctif),
+tests `ui/conversations/ConversationsViewModelTest.kt`, `ffi/DengonNodeStubTest.kt`
+**Lot :** US-214 (#28), branche `feat/US-214-ui-conversations`
+
+### Fait
+- **`ConversationsViewModel`** : état unique `StateFlow<ConversationsUiState>`
+  et actions `ouvrir` / `fermer` / `modifierBrouillon` / `envoyer` / `sonder`,
+  alimenté **uniquement** par `DengonNodeInterface` (bouchon US-106). Une
+  erreur du nœud (`DengonException`) est affichée, et le brouillon conservé.
+- **Écrans Compose** : liste des conversations (pseudo, aperçu du dernier
+  message, statut s'il est sortant, compteur de non lus), fil (bulles
+  entrantes/sortantes, statut sous chaque message sortant, défilement
+  automatique), saisie + bouton « Envoyer » actif seulement avec du texte.
+  Interrogation `pollEvents` toutes les secondes ; retour système
+  fil → liste → accueil. Libellés de statut de `synthese/07` §1.
+- **`MainActivity`** : bouton « Conversations » ; le ViewModel est créé par
+  `by viewModels { fabrique(DengonNodeStub(...)) }` (survit aux rotations).
+  Seul ce point d'injection changera à l'US-306.
+- **Correctif du bouchon Kotlin** : répondre dans la conversation canned
+  (`conv-canned`, pair `peer-canned`) créait une seconde conversation
+  `conv-peer-canned`, et la réponse n'apparaissait pas dans le fil ouvert.
+  `sendMessage` cherche d'abord la conversation du pair. Test de régression.
+
+### Pourquoi / décisions
+- **ViewModel synchrone** : le bouchon répond en mémoire. Les tests lisent
+  `etat.value` sans `kotlinx-coroutines-test`, et aucune dépendance n'est
+  ajoutée (`ViewModel`, `StateFlow`, `by viewModels` sont déjà sur le
+  classpath via `activity-compose` / `lifecycle-runtime-ktx`). Ajouter une
+  dépendance obligerait à régénérer `gradle.lockfile` et
+  `verification-metadata.xml`.
+- **Pas de `navigation-compose`**, pour la même raison : trois états booléens
+  dans `MainActivity` suffisent aujourd'hui.
+- Messagerie accessible **sans** permissions BLE : aucune radio n'est
+  utilisée tant que le vrai nœud n'est pas branché.
+
+### Écarts vs conception
+- Aucun. Limites notées dans la fiche : pas de `mark_read` dans le contrat
+  v0 (compteur de non lus jamais remis à zéro), le bouchon ne génère ni
+  réception ni changement de statut.
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- Critères US-214 : liste / fil / saisie / statuts ✅, bouchon exclusivement ✅,
+  tests ViewModel ✅, `assembleDebug` ✅. **Rendu sur la matrice d'appareils :
+  non fait** (aucun appareil ni émulateur sur le poste) — d'où `Refs #28`.
+- Fiche(s) module mise(s) à jour : `modules/android-app.md` (+ index).
+- 01-etat-du-code.md mis à jour : oui (commandes Android).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew testDebugUnitTest assembleDebug
+BUILD SUCCESSFUL — BlePermissionsTest 1/1, DengonNodeStubTest 11/11,
+ConversationsViewModelTest 9/9
+$ ./gradlew assembleRelease
+BUILD SUCCESSFUL (R8 minify/shrink)
+$ (correctif du bouchon retiré temporairement) ./gradlew :app:testDebugUnitTest
+21 tests, 3 échecs (régression détectée) — correctif restauré
+$ adb devices
+(aucun appareil) ; aucun AVD installé
+```
+- Non vérifié : rendu réel (tailles d'écran, clavier, thème sombre), faute
+  d'appareil. Les aperçus `@Preview` (360 dp) sont dans `ConversationsScreen.kt`.
+
+---
+
+## 2026-09-28 — US-209 : rebase de la PR #85 sur `main` (après #84)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/sync/mod.rs}`,
+`Cargo.lock`, `docs/suivi/`
+**Lot :** US-209 (#23), PR #85 — branche `feat/US-209-routing`
+
+### Fait
+- `git rebase origin/main` des deux commits de la PR. Conflits résolus :
+  - `crates/dengon-core/Cargo.toml` : dev-dependencies de `main` gardées
+    (`rand_chacha`, `proptest`/`serde_json` en `workspace = true`) +
+    `dengon-ble` (US-209) ajouté.
+  - `crates/dengon-core/src/lib.rs` : doc de module fusionnée (`sync` livre
+    `status` US-211 et `routing` US-209).
+  - `crates/dengon-core/src/sync/mod.rs` (ajouté des deux côtés) : table des
+    sous-modules de US-209 gardée, `status` rendu lien ; `pub mod routing;`
+    + `pub mod status;`.
+  - `Cargo.lock` : version de `main`, régénérée par `cargo`.
+  - `docs/suivi/modules/dengon-core.md` : 5 blocs fusionnés (état, arbre des
+    fichiers — une seule entrée `sync/`, dépendances de dev, tests, résumé
+    oral).
+- Fusions automatiques fautives corrigées à la main : ligne `dengon-core`
+  en double dans `02-avancement.md` (fusionnée, 50 %) et trois lignes
+  périmées dans `modules/_index.md`.
+
+### Vérifications
+```
+$ cargo test -p dengon-core   → 264 passés, 2 ignorés, 0 échec
+$ cargo clippy --workspace --all-targets -- -D warnings   → OK
+$ cargo fmt --all -- --check                               → OK
+$ cargo check -p dengon-core --no-default-features         → OK
+```
+
+### État après cette session
+- `tests/routing_mock.rs` garde son codec de test provisoire alors que le
+  vrai codec (US-201) est désormais sur `main` : bascule non faite ici.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non
+
+---
+
 ## 2026-09-28 — US-211 : rebase de la PR #84 sur `main` (après #76, #78, #80, #81, #82, #83)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
@@ -98,19 +648,6 @@ $ curl -sk https://51.255.38.214:8443/healthz
 
 ### État après cette session
 - PR #84 à jour de `main`, sans conflit.
-- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
-
-### Vérification (commandes réellement exécutées)
-```
-$ cargo fmt --all -- --check
-(vert)
-$ cargo clippy --workspace --all-targets -- -D warnings
-(vert)
-$ cargo test -p dengon-core
-194 passed (lib) ; 7 + 2 + 3 + 7 passed (intégration, 2 ignorés) ; 0 failed
-$ cargo check -p dengon-core --no-default-features
-(vert — frontière no_std)
-```
 
 ---
 
@@ -215,11 +752,134 @@ une seule ligne par module
   `dengon-sim`) viendra avec les US suivantes.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+## 2026-09-28 — US-209 : retours de revue #85 (OswinFreyr) sur `sync::routing`
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/routing.rs`,
+`crates/dengon-core/tests/routing_mock.rs`, `docs/suivi/`
+**Lot :** US-209, PR #85
+
+### Fait
+- **Point 1 — reconnexion** : `Router::bind_peer(link, peer, mono_ms)`.
+  L'anti-inondation est compté par `peerID` du voisin, reporté depuis le
+  lien au moment du lien, partagé entre liens vers le même pair, et
+  conservé après `link_down` jusqu'à ce que la fenêtre se vide (purge au
+  `bind_peer` suivant). Test `se_reconnecter_ne_rend_pas_de_quota_d_inondation`.
+- **Point 2 — seen-set 5 min vs 24 h** : un paquet dont l'âge atteint
+  `seen_ttl_ms` est accepté mais pas relayé (`NoRelayReason::Late`, ou
+  `Store` pour une enveloppe). Le seen-set retient une entrée jusqu'à
+  `max(réception, horodatage) + SEEN_TTL_S` (index par échéance), ce qui
+  garantit qu'un paquet encore relayable est toujours reconnu. `Deliver`
+  peut se répéter au-delà : dédup longue durée au `store`, documenté et
+  testé.
+- **Point 3 — horloges** : `Now { wall_ms, mono_ms }`. `poll_due`,
+  `next_deadline`, `RelayScheduled::at_ms`, fenêtres de quota et seen-set
+  en monotone ; murale pour `ClockSkew` / `Expired` / `Late` seulement.
+- **Point 4** : `Router::note_originated(&MsgId, timestamp_ms, Now)` ;
+  `tests/routing_mock.rs` l'appelle dans `Reseau::emettre`.
+- **Point 7** : ligne ajoutée au pipeline de la doc du module (quota de
+  lien avant la dédup ⇒ un doublon refusé par quota ne compte pas pour
+  l'annulation).
+- Doc du module : la signature n'est plus « `crypto` pas sur `main` ».
+- 11 tests unitaires ajoutés (43 au total).
+
+### Pourquoi / décisions
+- Garder la fenêtre du **lien** après `link_down` (piste a de la revue) ne
+  suffisait pas : le lien suivant a un autre `LinkId`. Seule l'identité du
+  pair permet de retrouver le quota, d'où la piste b.
+- Point 2 : ne pas relayer le tardif plutôt qu'un seen-set 24 h (mémoire
+  ESP32) ou un Bloom (faux positifs = messages perdus). Décision **à
+  valider à trois** avec le seuil de doublons.
+
+### Écarts vs conception
+- 3 entrées dans `03-ecarts-conception.md` (horizon du seen-set,
+  anti-inondation par `peerID`, deux horloges) ; l'entrée « trois
+  réglages » est annotée (« un lien = un pair » n'est plus vrai).
+
+### État après cette session
+- Branche **pas** rebasée : `origin/main` a 6 commits d'avance (US-201,
+  US-203/204/205, US-221) — rebase à faire avant merge. `bind_peer` et la dédup `Deliver` côté
+  `store` restent à brancher à l'intégration (US-211 / US-221).
+
+---
+
+## 2026-09-28 — US-209 : `sync::routing` — TTL, dédup, jitter, clamp densité, quotas, anti-inondation
+
+**Auteur :** Paul Claverie (POWLAIR) + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/sync/{mod,routing}.rs` (nouveaux),
+`crates/dengon-core/src/lib.rs`, `crates/dengon-core/Cargo.toml`,
+`crates/dengon-core/tests/routing_mock.rs` (nouveau), `Cargo.lock`,
+`docs/suivi/`
+**Lot :** US-209, issue #23 — J1 « Cœur en simulation »
+
+### Fait
+- **`Router<L>`** (`src/sync/routing.rs:249`) : routeur **sans I/O**,
+  générique sur l'identifiant de lien. `on_packet` (`:337`) applique le
+  pipeline de `synthese/05` §6.1 et rend une `Decision` ; `poll_due`
+  (`:364`) rend les `RelayOrder` dont le jitter est écoulé, vers tous les
+  voisins sauf la source. Plus `link_up`/`link_down`, `next_deadline`,
+  `cancel` (pour `status`/`courier`), `stats`.
+- Pipeline : version, cohérence des drapeaux, lien connu, horloge (futur
+  > 2 h, passé > 24 h), **quota par lien** (50 paquets/s, doublons compris),
+  **dédup** (seen-set borné `SEEN_SET_CAP`, expiration `SEEN_TTL_S`),
+  **anti-inondation** (`FLOOD_MAX_PER_MIN_PEER` nouveaux `msgID` / 60 s /
+  voisin), livraison locale, `RELAY_OK` / `ttl ≤ 1` (dépôt si
+  `SEALED_ENVELOPE`), **clamp de densité** (≥ 6 voisins → TTL ≤ 5), TTL
+  broadcast ≤ 3, **jitter** `RELAY_JITTER_MS` tiré par un SplitMix64 seedé,
+  annulation sur doublons pendant le jitter.
+- **Tests** : 32 unitaires dans `routing.rs` (dont 2 property tests :
+  « relayé au plus une fois » et « même graine ⇒ même trace ») ; 8 de bout
+  en bout dans `tests/routing_mock.rs`, où des `MockTransport` sont reliés
+  par un fil de test et décodés par un **codec de test provisoire** (en-tête
+  L3 réel lu à la main, TTL réécrit à l'octet 2).
+- `dengon-ble` ajouté en dev-dependency de `dengon-core`.
+
+### Pourquoi / décisions
+- Sans I/O parce que `dengon-ble` dépend de `dengon-core` (cycle interdit
+  hors dev-deps) et parce que c'est ce qui donne `no_std` + déterminisme.
+- **Seuil d'annulation du relais = 2 doublons, pas 1.** Le premier jet
+  suivait la règle littérale (1) : le test du losange A→{B,C}→D→E a
+  **échoué** (E : 0 message reçu au lieu de 1) — D entendait la copie de C
+  pendant son jitter et s'abstenait. Rendu configurable, défaut 2 ; le cas
+  à 1 est gardé comme test de régression documenté.
+- Un `msgID` refusé par l'anti-inondation n'entre pas au seen-set (un voisin
+  honnête peut le relivrer).
+- Le relais d'un paquet dont la source se déconnecte pendant le jitter est
+  **conservé** (le plan disait « purgé ») : le paquet reste valable pour
+  les autres voisins.
+- Vérif de signature laissée à l'appelant (`crypto` pas sur `main`) ; les
+  ACK chiffrés ne sont pas visibles du routeur → `Router::cancel`.
+
+### Écarts vs conception
+- 4 entrées dans `03-ecarts-conception.md` : seuil de doublons 2 au lieu
+  de 1 (**à valider à trois**) ; routeur sans I/O + dev-dep `dengon-ble` ;
+  3 réglages sans constante de conception (quota lien, TTL broadcast,
+  seuil) ; tolérance ±2 h appliquée seulement vers le futur (sinon
+  contradiction avec `MSG_TTL_S` = 24 h).
+
+### Appris
+- 4 notes dans `04-apprentissages.md` : sans-IO, tempête de diffusion et
+  seuil à compteur, cycle via dev-dependencies, SplitMix64.
+
+### État après cette session
+- Critères d'acceptation de #23 : pipeline complet ✅ ; bout en bout contre
+  `MockTransport` ✅ ; inondation bornée avec chiffre explicite ✅ (voir
+  ci-dessous) ; déterministe à graine fixe ✅ ; `no_std` + clippy +
+  couverture ≥ 85 % ✅.
+- Reste hors périmètre : branchement dans `dengon-node` / `dengon-sim`
+  (US-221), vrai codec (US-201), signature (US-203), `status`/`courier`
+  (US-211/212, Oswin) qui appelleront `cancel`. Le point de signatures
+  avec Oswin (`repartition-sprint2.md` §3) **n'a pas eu lieu** avant le
+  code : l'API est à relire avec lui en revue.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non
 
 ### Vérification (commandes réellement exécutées)
 ```
 $ cargo test -p dengon-core
 test result: ok. 48 passed (lib, dont 33 sync::status) ; 4 passed (intégration) ; 0 doc
+$ cargo test -p dengon-core
+test result: ok. 65 passed (lib, dont 23 protocol::fragment) ; 4 passed (intégration) ; 0 doc
 $ cargo clippy --workspace --all-targets --all-features -- -D warnings
 aucun avertissement
 $ cargo check -p dengon-core --no-default-features
@@ -972,6 +1632,150 @@ $ cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs 
   absente du poste) — seul le `no_std` hôte est vérifié.
 
 ---
+## 2026-09-28 — US-216 : correctifs de revue de la PR #91 (node_id/node_kind, upsert de nœud, longueur du secret JWT)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{ingest,main,config}.py`,
+`dashboard/api/tests/test_api.py`, `docs/suivi/`.
+**Lot :** US-216 (issue #30). PR #91 (`feat/US-216-ingest-validation`), revue
+de POWLAIR.
+
+### Fait
+- `app/ingest.py` — **point bloquant** : `_lookup_node_pub_sign` renommée
+  `_lookup_node`, renvoie aussi `kind` (en plus de `pub_sign`) ;
+  `_verify_event_ids(body, expected_node_kind)` rejette désormais en 400 tout
+  événement dont `node_id` ≠ `node_id` du batch, ou `node_kind` ≠ `kind`
+  enregistré pour ce nœud dans `nodes`. Avant ce correctif, `event_id` était
+  recalculé avec le `node_id` du **batch** mais `_insert_events` stockait
+  celui de l'**événement** — un nœud whitelisté pouvait signer un batch
+  valide tout en attribuant ses événements à un autre nœud enregistré.
+- `app/main.py::register_node` — **point important** : `POST /api/nodes` ne
+  fait plus d'upsert (`ON CONFLICT DO UPDATE` supprimé). Un `SELECT`
+  préalable sous le même verrou renvoie **409** si le `node_id` existe déjà,
+  au lieu de remplacer sa clé publique et de le re-whitelister.
+- `app/config.py::jwt_secret()` — **point mineur** : refuse un secret de
+  moins de 32 octets (`MIN_JWT_SECRET_BYTES`) au démarrage — PyJWT lève
+  `InsecureKeyLengthWarning` en dessous de cette taille pour HS256.
+- 5 tests ajoutés à `tests/test_api.py` (34 → 39) :
+  `test_ingest_rejects_event_node_id_different_from_batch_node_id`,
+  `test_ingest_rejects_event_node_kind_different_from_registered_kind`,
+  `test_register_node_rejects_re_registration_of_an_existing_node_id`,
+  `test_startup_fails_fast_when_jwt_secret_is_too_short`, plus l'extension de
+  `_build_signed_batch()` (params `spoof_event_node_id`/
+  `spoof_event_node_kind`) qui les rend possibles.
+- Rebase de `feat/US-216-ingest-validation` sur `main` (la PR était en
+  conflit, signalé par la revue).
+
+### Pourquoi / décisions
+- Voir `docs/suivi/modules/dashboard-api.md` §Décisions d'implémentation
+  (« Revue de la PR #91 ») pour le détail des trois correctifs.
+
+### Écarts vs conception
+- Le point important **réduit** l'écart déjà consigné (`POST /api/nodes`
+  sans auth opérateur) sans le fermer : ré-enregistrer un `node_id` existant
+  est bloqué (409), mais enregistrer un `node_id` **inédit** reste ouvert à
+  quiconque atteint l'API. Mise à jour ajoutée à l'entrée existante dans
+  `03-ecarts-conception.md` plutôt qu'une nouvelle entrée, pour garder
+  l'historique du même trou ensemble.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les trois points de la revue (1 bloquant, 1 important, 1 mineur) sont
+  corrigés et couverts par un test de régression chacun (sauf le mineur, qui
+  réutilise le test de démarrage existant, étendu).
+- Reste à faire : pousser la branche rebasée, attendre la ré-approbation de
+  POWLAIR.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui (ligne « Dashboard `api` »).
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv non disponible dans cet environnement d'exécution — installation
+  équivalente via un venv temporaire :
+  python -m venv .venv_tmp && .venv_tmp/Scripts/python.exe -m pip install -e ".[dev]"
+
+$ .venv_tmp/Scripts/python.exe -m pytest -q
+39 passed
+
+$ .venv_tmp/Scripts/python.exe -m ruff check app tests
+All checks passed!
+```
+- `.venv_tmp` supprimé après vérification, non commité.
+
+---
+
+## 2026-09-28 — US-216 : ingestion validée du dashboard — schéma, JWT, signature Ed25519, dédup
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{auth,canonical,ingest,schemas,config,main,migrations}.py`,
+`dashboard/api/pyproject.toml`, `dashboard/api/uv.lock`,
+`dashboard/api/tests/{conftest,test_api}.py`, `docs/suivi/`.
+**Lot :** US-216 (issue #30). Branche `feat/US-216-ingest-validation`.
+
+### Fait
+- `app/schemas.py::batch_validator()` — `Draft202012Validator` contre
+  `contracts/events/batch.schema.json` (résolution du `$ref` vers
+  `envelope.schema.json` via `referencing.Registry`, lecture par chemin
+  filesystem, pas d'import cross-paquet).
+- `app/canonical.py::canonical_json()`/`event_id()` — copie volontaire de
+  `contracts/tools/catalogue.py` (deux implémentations indépendantes, même
+  algorithme).
+- `app/auth.py` — JWT HS256 courts (24h) par nœud :
+  `create_token()`/`node_id_from_authorization_header()`, secret
+  `jwt_secret()` sans valeur par défaut (échec au démarrage si absent).
+- `app/ingest.py::ingest_batch()` — pipeline complet : parse JSON → schéma →
+  `node_id` du batch == `node_id` du JWT → nœud whitelisté (`pub_sign`
+  connu) → vérification de la signature Ed25519 du batch → `event_id`
+  recalculé par événement (pas seulement validé en format) → insertion
+  idempotente dans `events` (`INSERT OR IGNORE` sur `event_id`, clé
+  primaire).
+- `app/main.py` — remplace le squelette permissif de l'US-110 :
+  `POST /ingest/batch` route désormais vers `ingest.ingest_batch`, JWT
+  vérifié **avant** la lecture du corps ; nouvelle route
+  `POST /api/nodes` (enregistrement d'un nœud, remise d'un JWT). Migration
+  v2 (`nodes`/`events` + index).
+- Tests : 34 (`test_api.py`) — 13 nouveaux pour l'US-216 (rejet schéma
+  invalide, JWT absent/expiré/forgé, `node_id` incohérent batch/JWT, nœud
+  inconnu, signature forgée, `event_id` trafiqué, idempotence au rejeu,
+  batch multi-événements accepté).
+
+### Pourquoi / décisions
+- Détail des choix (JWT avant lecture du corps, `contracts/` lu par chemin
+  plutôt qu'importé, `event_id` recalculé côté serveur, message 401
+  identique pour nœud inconnu/non whitelisté, `jwt_secret()` sans défaut,
+  `raw_batches` gardée mais plus écrite) : voir
+  `docs/suivi/modules/dashboard-api.md` §Décisions d'implémentation.
+
+### Écarts vs conception
+- `POST /api/nodes` sans authentification opérateur — consigné dans
+  `03-ecarts-conception.md`.
+- Nœud inconnu traité comme un 401 direct plutôt que la quarantaine décrite
+  par `docs/synthese/09` §3 — consigné dans `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les 4 critères d'acceptation de l'US-216 sont couverts : validation de
+  schéma (rejet 4xx), signature Ed25519, JWT, idempotence prouvée par test,
+  `pytest` vert sur base SQLite éphémère.
+- Manque encore avant de fermer l'issue : ouvrir la PR, revue par une
+  personne d'une autre `area:` (DoD globale §7.1).
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui (ligne « Dashboard `api` »).
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev ruff check app tests
+All checks passed!
+
+$ uv run --extra dev pytest -q
+34 passed
+```
+- CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
+  ouverte au moment de cette entrée).
 
 ## 2026-09-28 — US-203 : `crypto`, rebase sur `main` et retours de revue de #78
 
@@ -1090,6 +1894,19 @@ $ cargo doc -p dengon-core --no-deps
   rouvrant une discussion de PR déjà fermée — le contenu est de la
   documentation de suivi, pas du code sensible, et les deux PR sources
   sont closes.
+protocol/fragment.rs  lignes 98,81 %  régions 99,17 %
+TOTAL dengon-core     lignes 97,23 %
+```
+- Premier passage : `reassemblage_mtu_et_ordre_aleatoires` **échouait**
+  (paquet d'un fragment dupliqué → sorti deux fois) ; corrigé (mémoire des
+  terminés), puis un test de la correction échouait à cause d'une erreur
+  **dans le test** (même paquet réutilisé, donc même `frag_id`) ; corrigé.
+- `rustfmt --check` : propre sur les fichiers de l'US ; `protocol/mod.rs`
+  signalé « Incorrect newline style » uniquement à cause du checkout CRLF
+  Windows (normalisé en LF par git au commit).
+
+---
+
 ## 2026-09-28 — US-221 : `dengon-sim`, harness N nœuds + réseau simulé déterministe
 
 **Auteur :** OswinFreyr + Claude (Opus 5.5)
@@ -1159,6 +1976,23 @@ $ (binaire release, deux exécutions) diff run1 run2 → identiques
   touchés** (`Incorrect newline style`) : copie de travail Windows en CRLF ;
   sans objet sur la CI Linux.
 - Couverture non mesurée localement (`cargo-llvm-cov` absent).
+74 passed (lib) ; 4 passed (protocol_vectors) ; 8 passed (routing_mock)
+$ cargo test -p dengon-core --test routing_mock -- --nocapture
+inondation 1 voisin : 30000 reçus, 20 relais, 40 trames émises,
+  2980 anti-inondation, 27000 quota lien, seen-set = 20
+inondation 3 voisins : 60 relais, 120 trames émises
+$ cargo test --workspace                       → tout vert
+$ cargo clippy --workspace --all-targets -- -D warnings   → OK
+  (1 erreur manual_range_contains corrigée dans un test)
+$ cargo fmt --all --check                      → OK
+$ cargo check -p dengon-core --no-default-features   → OK (no_std)
+$ cargo llvm-cov -p dengon-core --summary-only
+sync/routing.rs : 99.16 % lignes, 98.17 % régions ; crate : 97.69 % lignes
+```
+- Premier passage de `routing_mock` : 6/7, échec du losange (voir
+  « Pourquoi ») — c'est ce qui a conduit au seuil 2.
+- Non vérifié : cross-compilation réelle `xtensa-esp32-none-elf` (seul le
+  `no_std` sur cible hôte est contrôlé) ; job CI `sim` (US-222) inexistant.
 
 ---
 

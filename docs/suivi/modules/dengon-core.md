@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
 **Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::courier` (US-212) + `observability` (US-208).
 
 ## À quoi ça sert
 
@@ -46,11 +46,22 @@ dengon-core/
       codec/
         mod.rs         — Packet, encode / decode L3, FrameRule, entrée de signature
         app.rs         — AppFrame (Message, Ack), encode / decode L4
+      fragment.rs      — fragmentation / réassemblage L2 (US-202)
+      fragment/tests.rs — tests unitaires + property de la fragmentation
     sync/
-      mod.rs           — sous-modules sync (seul `status` livré)
+      mod.rs           — table des sous-modules sync (routing, status, courier
+                         livrés ; inventory = US-210)
+      courier.rs       — enveloppes scellées détenues pour autrui (US-212)
+      courier/tests.rs — tests du courrier, dont le test négatif de lecture
+      routing.rs       — routeur sans-IO : TTL, dédup, jitter, clamp densité,
+                         quotas, anti-inondation (US-209)
       status.rs        — Status, StatusEvent, next_status, StatusChange (US-211)
       status/outbox.rs — Outbox, OutboxStore, MemoryStore, OutboxRecord
       status/outbox/tests.rs — tests de l'outbox
+    observability/
+      mod.rs           — Envelope, redaction (msg_log_id), constructeurs de payload (US-208)
+      catalog.rs       — EVENT_NAMES (28 noms MVP, miroir de contracts/tools/catalogue.py)
+      canonical.rs     — Value + sérialisation JSON canonique (CANONICAL.md), sans serde_json
   tests/
     vectors_v0.json        — vecteurs de conformité v0 du format de trame (US-108)
     protocol_vectors.rs    — contrôle structurel + décodage réel de ces vecteurs
@@ -59,14 +70,15 @@ dengon-core/
     vectors/crypto_v0.json — vecteurs crypto (padding, tags, transcript XX, enveloppe X)
     identity_vectors.rs    — vecteurs identity + scénario d'appairage A↔B (US-205)
     vectors/identity_v0.json — 2 identités : clés publiques, peerID, empreinte, QR, code
+    routing_mock.rs        — sync::routing de bout en bout contre MockTransport
+                             (+ codec de test provisoire)
 ```
 
 `crypto.rs` et le dossier `crypto/` coexistent (disposition Rust 2018) : le
 fichier Ed25519 de US-203 n'a pas été déplacé (pas de déplacement
 de fichier pendant que les PR #78/#81/#82 sont empilées).
 
-Modules encore absents : `sync::{routing, inventory, courier}`,
-`observability`, `api` (sprint 2).
+Modules encore absents : `sync::inventory`, `api` (sprint 2).
 
 ## Concepts / types importants
 
@@ -86,6 +98,13 @@ Modules encore absents : `sync::{routing, inventory, courier}`,
 | `Entry::to_bytes`/`Entry::from_bytes` | `src/ledger.rs` | Sérialisation binaire simple d'une entrée — sert le test de reprise après redémarrage, pas un vrai backend de stockage (voir « Décisions »). |
 | `store::Store<K: KeySource>` | `src/store.rs` | Connexion SQLite + migrations. `open()`/`open_in_memory()`, puis `set_identity`/`get_identity_private_keys`, `upsert_contact`, `insert_conversation`, `insert_message`/`get_message_body`, `set_noise_session`/`get_noise_session_state`. |
 | `store::KeySource` / `store::FixedKeySource` | `src/store.rs` | Trait qui fournit la clé de chiffrement des champs sensibles + bouchon à clé fixe (tests uniquement) — voir « Décisions », même schéma que `ledger::Signer` (US-206). |
+| `sync::routing::Router<L>` | `src/sync/routing.rs` | Routeur d'un nœud, **sans I/O**, générique sur l'identifiant de lien `L` (`dengon_ble::LinkId` côté appelant). `new(cfg, seed)`, `link_up`/`link_down`, `bind_peer(link, peerID, mono_ms)` (anti-inondation par pair, revue #85), `on_packet(from, &Header, &MsgId, Now) -> Decision`, `poll_due(mono_ms) -> Vec<RelayOrder>`, `next_deadline()`, `cancel(&MsgId)` (pour `status`/`courier` quand un ACK passe), `note_originated(&MsgId, ts, Now)` (messages émis / rejoués par l'outbox), `stats()`. |
+| `sync::routing::Now` | `src/sync/routing.rs` | `{ wall_ms, mono_ms }` : horloge murale (comparée à `timestamp_ms` seulement) + horloge monotone (quotas, seen-set, jitter). Revue #85. |
+| `sync::routing::Decision` | `src/sync/routing.rs:183` | `Reject(RejectReason)` / `Deliver` / `Store` (enveloppe à déposer) / `NoRelay(NoRelayReason)` / `RelayScheduled { at_ms, ttl }`. Tout sauf `Reject` = paquet **nouveau**. |
+| `sync::routing::RejectReason` | `src/sync/routing.rs:149` | `BadVersion`, `Malformed`, `UnknownLink`, `ClockSkew`, `Expired`, `LinkQuota`, `Duplicate`, `FloodLimited` — prêt pour l'événement `pkt.rejected` (US-208). |
+| `sync::routing::RelayOrder<L>` | `src/sync/routing.rs:205` | `msg_id`, `ttl` à écrire, `targets` = tous les voisins **sauf la source**, calculés à l'échéance. |
+| `sync::routing::RoutingConfig` | `src/sync/routing.rs:98` | Réglages, `new(local_id)` = valeurs de `protocol::consts` + 3 valeurs propres au routeur : `LINK_MAX_PKT_PER_S = 50` (`:70`), `BROADCAST_TTL_MAX = 3` (`:76`), `DUP_CANCEL_THRESHOLD = 2` (`:87`). |
+| `SeenSet`, `RateWindow`, `SplitMix64` (privés) | `src/sync/routing.rs:563`, `:536`, `:616` | Seen-set borné (cap + expiration), fenêtre glissante bornée par son quota, PRNG 64 bits seedé pour le jitter. |
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
 | `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
 | `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
@@ -110,6 +129,11 @@ Modules encore absents : `sync::{routing, inventory, courier}`,
 | `Identity::seal` / `unseal` | `src/identity/vault.rs` | Blob `"DGID" ‖ 1 ‖ nonce 24 ‖ XChaCha20-Poly1305(secret ‖ graine ‖ len ‖ pseudo)`, en-tête en AAD, nonce de la RNG injectée. Erreurs `VaultFormat` / `VaultVersion` / `VaultDecrypt`. |
 | `Vault`, `MemoryVault`, `FileVault`, `load_or_create` | `src/identity/vault.rs` | Rangement d'octets opaques. `FileVault` (std) écrit via `.tmp` (supprimé puis recréé en `create_new`, mode `0600`) + `rename`, puis `fsync` du répertoire sous Unix. `load_or_create` : déchiffre si présent, sinon génère + scelle + enregistre → `peerID` stable. |
 | `IdentityError` | `src/identity.rs` | `InvalidPseudo`, `Qr{Prefix,Version,Encoding,Length,PublicKey}`, `Vault{Format,Version,Decrypt}`, `VaultIo(ErrorKind)` (std). |
+| `observability::Envelope` | `src/observability/mod.rs` | Enveloppe d'événement (`event_id`/`node_id`/`node_kind`/`seq`/`ts_ms`/`name`/`payload`). `event_id = hex(SHA-256(node_id ‖ seq_be))`. `to_canonical_bytes()` produit les mêmes octets que `contracts/tools/catalogue.py::canonical_json` (vérifié octet à octet contre 3 fixtures golden réelles). |
+| `observability::msg_log_id` | `src/observability/mod.rs` | `SHA-256(msg_uuid)[0..8]` — seul point de passage du brut (`MsgId`, 32 o) vers le redacté (`MsgLogId`, 8 o). Voir « Décisions ». |
+| `observability::{pkt_seen, pkt_relayed, msg_queued, peer_connected}` | `src/observability/mod.rs` | 4 constructeurs de `payload` représentatifs (sur les 28 du catalogue) — n'acceptent que des identifiants déjà redactés. |
+| `observability::catalog::EVENT_NAMES` | `src/observability/catalog.rs` | Les 28 noms d'événements du périmètre MVP, triés — miroir de `contracts/tools/catalogue.py::CATALOGUE`. |
+| `observability::canonical::Value` | `src/observability/canonical.rs` | JSON canonique maison (`Bool`/`Int`/`Str`/`Array`/`Object`, `BTreeMap` pour le tri des clés) — pas de dépendance `serde_json` dans la crate. |
 
 ## Flux principal (exemple)
 
@@ -172,11 +196,21 @@ Store::open("dengon.db", key_source)
   → get_message_body(msg_uuid) → déchiffre, renvoie "salut"
 ```
 
+Et `observability` :
+
+```
+let log_id = observability::msg_log_id(msg_uuid);   // redaction : SEUL point de passage brut → redacté
+let payload = observability::msg_queued(log_id, conv_hash);
+let env = Envelope::new(node_id, NodeKind::Client, seq, ts_ms, "msg.queued", payload);
+env.to_canonical_bytes()   // → mêmes octets que canonical_json() côté Python, signés par le batch appelant
+```
+
 Le flux applicatif complet (Alice écrit → chiffrement → trame → diffusion BLE
 → relais → Bob → accusé) reste décrit dans
 [`04-architecture.md`](../../synthese/04-architecture.md) §4 — `ledger` n'en
-est qu'un maillon (la traçabilité) et `store` la persistance locale, pas le
-chemin des messages.
+est qu'un maillon (la traçabilité), `store` la persistance locale, et
+`observability` ce qui en sort vers le dashboard — pas le chemin des
+messages lui-même.
 
 Côté trame : US-108 livre les **types** (`PacketType`, `Flags`, `Header`), pas
 encore le codec (US-201).
@@ -204,9 +238,16 @@ encore le codec (US-201).
   `aead::OsRng`) : `getrandom` n'est donc tiré que par la feature `std`.
   Viendront encore `serde`.
 - **Externes (dev) :** `rand_chacha` 0.3 (RNG déterministe des vecteurs),
-  `proptest` 1 (property tests de `ledger`, `crypto` et du codec), `serde_json` 1
+  `dengon-ble` (US-209 : `MockTransport` pour `tests/routing_mock.rs` — cycle
+  de dépendances *de dev* seulement, `dengon-ble` dépendant de `dengon-core` ;
+  Cargo l'autorise), `proptest` 1 (property tests de `ledger`, `crypto`, du
+  codec et de `sync::routing`), `serde_json` 1
   (lecture des vecteurs via `Value`, sans derive). N'affectent pas la
   compilation `no_std` (`cargo check` ne compile pas les dev-deps).
+- **`observability` : aucune dépendance externe** — `sha2` (déjà présent
+  pour `ledger`) pour `event_id`/`msg_log_id`, et un sérialiseur JSON
+  canonique écrit à la main (`canonical.rs`) plutôt qu'un `serde_json` en
+  dépendance de runtime, voir « Décisions ».
 
 ## Décisions d'implémentation
 
@@ -414,6 +455,68 @@ encore le codec (US-201).
   le message 1 part en clair et refuse tout payload, et avec des payloads vides
   les tailles sont fixées par le motif. Écart vs 06 §3, consigné.
 
+- **`sync::routing` est sans I/O (US-209)** : pas d'appel à `Transport`
+  (impossible : `dengon-ble` dépend de `dengon-core` et tire `std`), pas
+  d'horloge (`now_ms` en argument), pas d'aléa système (graine au
+  constructeur, PRNG SplitMix64 maison). Conséquences : `no_std`, testable
+  sans radio, **déterministe à graine fixe**. Le relais est découpé en deux
+  temps — `on_packet` programme, `poll_due` rend ce qui est échu — ce qui
+  permet le « écouter avant de rediffuser » sans thread ni timer.
+- **Ordre du pipeline** (`decide`, `src/sync/routing.rs:398`) : version →
+  cohérence des drapeaux → lien connu → horloge (futur > 2 h / passé >
+  24 h) → quota brut du lien (doublons compris) → dédup → anti-inondation
+  (nouveaux `msgID` seulement) → insertion au seen-set → livraison locale →
+  relais. Un `msgID` refusé par l'anti-inondation **n'entre pas** au
+  seen-set, pour qu'un voisin honnête puisse le relivrer.
+- **Seuil d'annulation pendant le jitter = 2 doublons, pas 1** : écart
+  consigné (le seuil littéral affame un losange, prouvé par
+  `seuil_litteral_affame_le_losange`).
+- **Mémoire bornée sous flood** : les fenêtres glissantes ne retiennent que
+  les événements *acceptés* (≤ quota), le seen-set est plafonné à
+  `SEEN_SET_CAP`, et un `msgID` n'y est inséré qu'une fois (l'ordre
+  d'insertion est l'ordre d'âge : une `VecDeque` suffit, pas de LRU fin).
+  **Remplacé en revue #85** : l'échéance d'une entrée dépend maintenant de
+  l'horodatage du paquet, le seen-set est indexé par échéance
+  (`BTreeSet<(échéance, msgID)>`) et évince l'entrée qui expire le plus tôt.
+- **Retours de revue #85 (OswinFreyr)** : (1) anti-inondation compté par
+  `peerID` du voisin via `bind_peer`, conservé après `link_down` jusqu'à ce
+  que la fenêtre se vide — une reconnexion (nouveau `LinkId`) ne rend plus
+  de quota ; (2) un paquet plus vieux que l'horizon du seen-set (5 min)
+  est accepté mais **pas relayé** (`NoRelay(Late)`), l'entrée vit jusqu'à
+  `max(réception, horodatage) + SEEN_TTL_S` — un porteur de retour ne
+  relance plus de flood, la dédup longue durée de `Deliver` revient au
+  `store` ; (3) deux horloges (`Now`) ; (4) `note_originated` pour les
+  messages émis localement. Trois écarts consignés.
+- **JSON canonique écrit à la main (`observability::canonical::Value`),
+  pas `serde_json` en dépendance de runtime** (US-208) : `CANONICAL.md`
+  exige des clés triées et interdit tout flottant. `serde_json` ne trie pas
+  par défaut (il faudrait `preserve_order` + tri explicite, ou un crate
+  tiers `serde_json_canonicalizer`), et une désérialisation en `f64` casse
+  la signature (`2` vs `2.0`) — deux pièges que `CANONICAL.md` documente
+  lui-même côté Rust. Un `BTreeMap<String, Value>` trie déjà les clés par
+  construction, et `Value` ne représente même pas les flottants (pas de
+  variante `Float`) : les deux pièges sont éliminés par le typage, pas par
+  discipline. Coût : pas de dérive `Serialize`, chaque constructeur de
+  payload (`pkt_seen`, `msg_queued`, …) construit son `BTreeMap` à la main.
+- **Redaction appliquée structurellement, pas par convention** (US-208) :
+  les constructeurs de payload n'acceptent que `MsgLogId` (8 o, déjà
+  `SHA-256(msg_uuid)[0..8]`), jamais `MsgId` (32 o, `protocol::MsgId`) —
+  impossible d'appeler `msg_queued(msg_uuid, ...)` par erreur, ça ne
+  compile pas. `msg_log_id()` est le seul point de passage du brut vers le
+  redacté. Testé positivement (le `msg_log_id` redacté apparaît bien dans
+  la sortie) et négativement (le `msg_uuid` brut, et sa forme hex,
+  n'apparaissent jamais) sur plusieurs événements distincts.
+- **Catalogue Rust (`EVENT_NAMES`) sans vérification cross-langage
+  automatique avec `contracts/tools/catalogue.py`** (US-208) : les 28 noms
+  ont été recomptés et comparés manuellement à l'écriture de ce module —
+  écart consigné dans `03-ecarts-conception.md`, le job CI `cross-vectors`
+  (US-222) serait le bon endroit pour l'automatiser.
+- **4 constructeurs de payload sur 28, pas l'intégralité du catalogue**
+  (US-208) : `pkt_seen`, `pkt_relayed`, `msg_queued`, `peer_connected` —
+  représentatifs du domaine `pkt`/`msg`/`peer`, mais pas exhaustifs. Chaque
+  événement restant suit le même patron mécanique (un `BTreeMap` de champs
+  redactés) — écart consigné, pas un blocage technique.
+
 ## Tests
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
@@ -543,14 +646,76 @@ encore le codec (US-201).
 - Couverture (`cargo llvm-cov -p dengon-core --all-features`, mesurée avant le
   rebase sur `ledger`/`store`) : **99,14 % des lignes** ; `crypto` : 98,3 à
   100 % selon le fichier.
+- `src/sync/routing.rs`, module `tests` (US-209) : **30 tests unitaires**
+  (une ligne de `synthese/10` §4.2 = au moins un test : dédup, TTL
+  décrémenté, `ttl ≤ 1` → pas de relais, clamp à 6 voisins, `RELAY_OK`
+  absent, abandon sur doublons pendant le jitter, anti-inondation au 21ᵉ
+  `msgID` + libération après 60 s + autre voisin non pénalisé ; plus
+  quota de lien, horloge, expiration à 24 h, enveloppe déposée, livraison
+  locale, cibles calculées à l'échéance, seen-set borné / expiré, vecteur de
+  référence SplitMix64) + **2 property tests** : chaque `msgID` relayé au
+  plus une fois (et `ttl' < ttl`, clamp respecté, jitter dans
+  `RELAY_JITTER_MS`) ; même graine + même séquence ⇒ même trace.
+  Revue #85 : **+11 tests** (43 au total) — reconnexion sans regain de
+  quota, report du quota au `bind_peer`, purge des pairs partis, porteur de
+  retour non re-floodé, `Deliver` répété au-delà de l'horizon (assumé),
+  horodatage en avance retenu tant qu'il est frais, recul de l'horloge
+  murale sans gel des relais ni des quotas, seen-set en monotone,
+  `note_originated` (doublon au retour, ne raccourcit pas une entrée).
+- `tests/routing_mock.rs` (US-209) : **8 tests de bout en bout** — des
+  `MockTransport` reliés par un « fil » de test : chaîne A–B–C–D (livré à
+  D avec TTL 5), losange (1 seul exemplaire, ≤ 1 relais par nœud), seuil
+  littéral qui affame le losange (régression documentée), portée bornée
+  par TTL 3 sur une chaîne de 8, clamp de densité + exclusion de la
+  source, **inondation** 1 voisin et 3 voisins, déterminisme de la trace.
+  Chiffres mesurés (sortie `--nocapture`) : 1 voisin à **500 msg/s
+  pendant 60 s** → 30 000 reçus, **20 relais, 40 trames émises**, 27 000
+  refusés par le quota de lien, 2 980 par l'anti-inondation, seen-set = 20 ;
+  3 voisins → **60 relais, 120 trames**.
+- Commande (2026-09-28, US-209) : `cargo test -p dengon-core` → **86 passés**
+  (74 lib + 4 `protocol_vectors` + 8 `routing_mock`).
+  Après rebase de la PR #85 sur `main` (avec `crypto`, `identity`, codec,
+  `sync::status`) : **264 passés** (226 lib + 7 `codec_proptest` + 2
+  `crypto_vectors` + 3 `identity_vectors` + 7 `protocol_vectors` + 8
+  `routing_mock`), 2 ignorés (générateurs), 0 échec.
+- Couverture `cargo llvm-cov -p dengon-core --summary-only` (2026-09-28) :
+  `sync/routing.rs` **99,16 % des lignes**, 98,17 % des régions ; total
+  crate 97,69 % des lignes.
+- `src/observability/canonical.rs` — 5 tests : clés triées même insérées
+  dans le désordre, pas d'espace après les séparateurs, entier négatif sans
+  notation exposant, guillemets/antislash échappés, caractère non-ASCII en
+  UTF-8 littéral (pas `\uXXXX`).
+- `src/observability/catalog.rs` — 3 tests : exactement 28 noms (recompté
+  contre `catalogue.py`), la liste reste triée et sans doublon (exigence de
+  `binary_search`), `is_known` reconnaît un nom du catalogue et rejette un
+  nom inconnu **et** un nom explicitement hors périmètre MVP (`msg.read`,
+  `integrity.chain_broken`).
+- `src/observability/mod.rs` — 4 tests : **3 comparaisons octet à octet
+  contre des fixtures golden réelles** de l'US-107
+  (`01-pkt-seen.json`/`10-msg-queued.json`/
+  `16-peer-connected-disconnected.json` — `event_id` et JSON canonique
+  complet, calculés indépendamment avec
+  `contracts/tools/catalogue.py::canonical_json` puis codés en dur comme
+  octets attendus, critère d'acceptation US-208) ; **test négatif de
+  redaction** sur 3 événements distincts (`pkt.seen`/`pkt.relayed`/
+  `msg.queued`) construits à partir du même `msg_uuid` « secret » : ni les
+  octets bruts ni leur forme hex n'apparaissent dans la sortie, seul le
+  `msg_log_id` redacté y figure (et le test vérifie aussi sa présence,
+  pour ne pas passer trivialement sur un événement vide).
+- `src/lib.rs` — 2 tests fumigènes (inchangés).
+- Commande : `cargo test -p dengon-core` → **58 passés** (54 lib + 4
+  intégration + 0 doc — 14 `ledger`, 13 `store`, 13 `protocol`, 12
+  `observability`, 2 `lib.rs`), vérifié le 2026-09-28 (US-208). `clippy -D
+  warnings` propre, `cargo fmt --all -- --check` propre, `cargo check -p
+  dengon-core --no-default-features` (frontière `no_std`, `observability`
+  compris) vert.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
   temporairement fait échouer `accept_vectors_are_structurally_consistent`
   sur le nouveau vecteur `noise-msg-addressed-reserved-bit-ignored` (30
   octets, exactement `hdr`) — confirme le « mirror bug » signalé par Paul
   (un paquet valide à `payload_len` faible rejeté à tort).
-- Couverture non mesurée par un outil (`cargo llvm-cov` pas encore posé dans
-  ce sprint) — objectif ≥ 85 % de la DoD §7.2 non vérifié formellement,
-  mais chaque branche de `verify_chain` (Ok/Broken/Fork/Gap) a un test
+- Couverture de `ledger` non mesurée à l'époque (`cargo llvm-cov` pas encore
+  posé) — depuis mesurée avec l'US-209 (voir ci-dessus), mais chaque branche de `verify_chain` (Ok/Broken/Fork/Gap) a un test
   dédié qui l'exerce explicitement.
 
 ## Limites connues / TODO
@@ -591,6 +756,16 @@ encore le codec (US-201).
   `xtensa-esp32-none-elf` est l'objet du Spike A (US-101), déjà validé pour
   `protocol`/`crypto` mais pas encore rejoué pour `ledger` spécifiquement.
   `store` n'a jamais vocation à y compiler (voir « Décisions »).
+- **`observability` : aucun site d'appel réel** — `sync::routing`/
+  `sync::inventory` (US-209/US-210), qui produiraient réellement `pkt.*`,
+  ne sont pas encore livrés. Ce module fournit le mécanisme (catalogue,
+  redaction, sérialisation canonique) et 4 constructeurs représentatifs,
+  pas une intégration dans du code qui n'existe pas encore.
+- **`observability::catalog::EVENT_NAMES` n'a pas de vérification
+  cross-langage automatique** avec `contracts/tools/catalogue.py` —
+  recompté manuellement (28 des deux côtés), pas garanti par un outil.
+- **`observability` : 4 constructeurs de payload sur 28** — les 24 restants
+  suivent le même patron, pas encore écrits (voir « Décisions »).
 - **`timestamp_ms` des vecteurs `accept` figé à une date fixe (2024-07-29),
   hors tolérance anti-rejeu `TIMESTAMP_TOLERANCE_MS` (±2 h)** — signalé
   hors-diff par Paul (revue PR #63) — **sans objet pour le codec** (US-201 :
@@ -676,9 +851,79 @@ d'implémentation SQLite d'`OutboxStore` (après US-207) ; un `msg_uuid` déjà
 terminé puis ré-enqueué repartirait en `QUEUED` (précondition documentée :
 `msg_uuid` aléatoire sur 128 bits, jamais réutilisé).
 
+- **`sync::routing`** : la signature des paquets est supposée vérifiée
+  **en amont** (pas de `crypto` sur `main`) ; le décodage de
+  `tests/routing_mock.rs` est un **codec de test provisoire** (sans
+  signature), à remplacer par `protocol::codec` (US-201) ; le routeur ne
+  voit pas les ACK (chiffrés dans Noise) — c'est `status`/`courier` qui
+  appelleront `Router::cancel`. Pas de RSSI-gating (optionnel MVP).
+  Pas encore branché dans `dengon-node` ni `dengon-sim`.
+
+## Sous-module `protocol::fragment` (US-202)
+
+Découpe un paquet L3 trop grand pour une écriture BLE, et le recolle à
+l'arrivée. Conception : [`synthese/05`](../../synthese/05-protocole-et-trame.md)
+§5. Payload d'un fragment : `frag_id(8) ‖ index(2) ‖ total(2) ‖ chunk`, avec
+`frag_id = SHA-256(paquet)[0..8]`.
+
+| Type / fonction | Fichier | Ce que ça fait |
+|---|---|---|
+| `chunk_capacity(att_mtu)` | `src/protocol/fragment.rs` | `min(FRAG_SIZE, ATT_MTU − 3 − 30 − 12)` ; `None` sous `MIN_USABLE_ATT_MTU = 46`. |
+| `split` / `split_for_mtu` | `src/protocol/fragment.rs` | Découpe en `Fragment`s (taille de chunk explicite ou tirée du MTU). |
+| `Fragment` | `src/protocol/fragment.rs` | Payload décodé ; `encode`, `decode` (sans panic), `validate`. |
+| `Reassembler::push` | `src/protocol/fragment.rs` | Ajoute un fragment ; rend le paquet complet **une seule fois**, vérifié contre son `frag_id`. |
+| `ReassemblerConfig` | `src/protocol/fragment.rs` | `max_concurrent` (64), `timeout_ms` (30 s), `max_bytes` (128 Kio). |
+
+**Bornes mémoire (un pair malveillant ne peut pas faire croître le
+réassembleur) :** au plus `max_concurrent` réassemblages (éviction du plus
+ancien) ; au plus `PACKET_MAX_LEN` octets par paquet ; au plus `max_bytes`
+octets en attente au total, chaque chunk comptant ses octets + 32
+(`CHUNK_OVERHEAD`) ; au plus 64 `frag_id` terminés mémorisés, oubliés après
+`timeout_ms`. Vérifié par le property test
+`memoire_bornee_face_a_un_pair_malveillant`.
+
+**Tests :** `src/protocol/fragment/tests.rs`, 23 tests dont 4 property tests
+(réassemblage avec MTU, ordre et doublons aléatoires ; fragment manquant →
+rien ne sort et tout est purgé ; bornes mémoire sur entrées hostiles ;
+décodage sans panic). Couverture : 98,8 % des lignes.
+
+**Limites :** pas d'habillage L3 `0x09` (codec, US-201) ; pas encore branché
+dans le pipeline de réception ; au MVP le nœud réassemble avant de relayer
+(A-13), pas de relais fragment par fragment.
+
+## Sous-module `sync::courier` (US-212)
+
+Le **store-and-forward** : un nœud garde des enveloppes scellées pour un
+destinataire hors de portée et les lui remet à la rencontre, **sans pouvoir
+les lire**. Conception : `synthese/05` §4 et §6.3, `synthese/07` §7,
+`synthese/06` §3.
+
+| Type / fonction | Fichier | Ce que ça fait |
+|---|---|---|
+| `Courier::deposit` | `src/sync/courier.rs` | Décode le `SEALED_ENVELOPE` (codec), lit `recipient_tag ‖ epoch_day`, stocke le paquet tel quel. Dédup par `msgID`. |
+| `Courier::offer` | `src/sync/courier.rs` | Tags distincts à annoncer dans `ENVELOPE_OFFER`. |
+| `Courier::matching` / `confirm_handoff` | `src/sync/courier.rs` | Enveloppes à renvoyer sur `ENVELOPE_REQUEST`, puis retrait une fois l'envoi réussi. |
+| `Courier::expire` | `src/sync/courier.rs` | Supprime les périmées, rend leurs `msgID` (`envelope.expired`). |
+| `parse_sealed_payload` | `src/sync/courier.rs` | `recipient_tag(16) ‖ epoch_day(2) ‖ ciphertext` ; le ciphertext n'est jamais interprété. |
+| `CourierConfig` / `EvictionPolicy` | `src/sync/courier.rs` | `capacity` (64), `RejectNew` (défaut) ou `EvictOldest`, `ttl_ms` (24 h). |
+
+**Échéance :** `min(timestamp_ms + 24 h, dépôt + 24 h)` — changer de
+courrier ne prolonge pas la vie d'une enveloppe.
+
+**Tests :** `src/sync/courier/tests.rs`, 15 tests dont 3 property tests
+(stockage borné et politique respectée sur des suites aléatoires ; octets
+rendus identiques ; dépôt d'octets arbitraires sans panic) et le **test
+négatif** `le_courrier_ne_peut_pas_dechiffrer_ce_qu_il_transporte` (le clair
+n'apparaît pas dans ce que détient le courrier ; sa clé échoue, celle du
+destinataire réussit). Couverture : 100 % des lignes.
+
+**Limites :** le test négatif utilise XChaCha20-Poly1305 à la place de Noise
+`X` (US-204 pas encore mergée) ; pas de `copy_budget` (v2) ; stockage en
+mémoire seulement (persistance NVS / SQLite à brancher) ; pas encore appelé.
+
 ## Pour l'oral
 
-Trois livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
+Quatre livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
 protocole** : les 13 types de paquets, les 5 drapeaux, la forme de l'en-tête,
 et une trentaine de constantes (durée de vie d'un message, seuils
 d'anti-inondation, TTL de départ…) — rien ne « fonctionne » encore, mais
@@ -702,3 +947,19 @@ téléphones affichent le même code de 60 chiffres, que l'on compare de visu.
 Anecdote utile à l'oral : la formule du document de conception ne pouvait
 jamais produire un groupe au-dessus de 65535. On l'a vu, corrigée, et
 consignée.
+
+US-209 (`sync::routing`) est le **cœur du maillage** : pour chaque paquet
+reçu, décider si on le relaie, avec quel TTL, après quel délai, et à qui.
+Message clé : sous un flot de 500 messages/seconde venant d'un voisin, un
+nœud ne relaie **que 20 messages par minute** de ce voisin, et le trafic
+honnête des autres passe toujours. Et une vraie trouvaille de conception : la
+règle « abandonner au premier doublon » de la doc empêchait la livraison dans
+un simple losange — mesuré, corrigé, documenté.
+
+US-208 (`observability`) est le pont vers le dashboard : produit **le même
+JSON canonique**, octet pour octet, que le contrat Python déjà utilisé par
+`dashboard/api` — deux langages, une seule vérité — et applique la règle de
+redaction du projet (« rien d'identifiant ne doit sortir du téléphone ») de
+façon **structurelle** : le typage empêche de construire un événement avec
+un identifiant de message non redacté, ce n'est pas une discipline
+qu'un développeur pourrait oublier.

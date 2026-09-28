@@ -14,6 +14,37 @@ et le mentionner dans l'entrée de journal.
 
 ## Modèle d'entrée
 
+
+---
+
+### 2026-09-28 — `sync::courier` (US-212) : échéance bornée par l'origine, remise en deux temps, test négatif sur AEAD de substitution
+
+- **Prévu :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §7 : une
+  enveloppe expire à `deposit_ms + MSG_TTL_S` (et budget de copies = 0, v2) ;
+  `synthese/05` §6.3 : le porteur « renvoie le `SEALED_ENVELOPE` » sur
+  `ENVELOPE_REQUEST` ; `synthese/05` §6.4 et `synthese/08` §7 : éviction
+  « LRU / plus ancien » **ou** « refus des nouvelles, existantes
+  protégées » (les deux docs divergent).
+- **Réel :**
+  1. Échéance = `min(timestamp_ms + TTL, deposit_ms + TTL)`.
+  2. La remise se fait en deux temps : `matching` (lecture) puis
+     `confirm_handoff` (retrait) après envoi réussi.
+  3. Politique d'éviction = réglage `EvictionPolicy`, `RejectNew` par défaut.
+  4. Pas de `copy_budget` (colonne `held_envelopes.copy_budget`) : v2 (A-13).
+  5. Le test négatif « le courrier ne peut pas déchiffrer » simule le
+     scellement avec XChaCha20-Poly1305, Noise `X` (US-204, PR #81) n'étant
+     pas sur `main`.
+- **Raison :** (1) avec le seul `deposit_ms`, une enveloppe re-déposée de
+  courrier en courrier vivrait indéfiniment ; (2) un lien BLE qui tombe
+  pendant l'envoi ne doit pas perdre l'enveloppe ; (3) rendre visible le
+  désaccord entre `synthese/05` et `synthese/08` ; (5) ne pas bloquer l'US
+  sur une PR non mergée — la propriété testée (le courrier ne reçoit aucune
+  clé, rend le ciphertext intact, ne détient aucun octet du clair) ne
+  dépend pas de l'AEAD.
+- **Conséquences :** après le merge d'US-204, remplacer l'AEAD du test par
+  un vrai scellement Noise `X`. L'équipe doit trancher la politique
+  d'éviction par défaut (téléphone vs ESP32).
+- **Doc de conception mise à jour ?** non.
 ### [date] — [titre court de l'écart]
 
 - **Prévu :** ce que dit `docs/powl/NN-....md` (référence précise).
@@ -58,6 +89,33 @@ _(aucun écart pour l'instant)_
   d'`OutboxStore` (une table `outbox(msg_uuid BLOB PRIMARY KEY, record
   BLOB)` suffit). Si le dashboard veut `msg.cancelled`, l'ajouter au
   catalogue (US-107 / `contracts/events`).
+### 2026-09-28 — `protocol::fragment` (US-202) : MTU minimal 46, budget mémoire global, mémoire des `frag_id` terminés
+
+- **Prévu :** `docs/synthese/05-protocole-et-trame.md` §5 : fragments de
+  `FRAG_SIZE` au plus, réassemblage borné par `FRAG_TIMEOUT_S` et
+  `FRAG_MAX_CONCURRENT` ; §2 : `ATT_MTU_MIN = 23` comme repli.
+- **Réel :**
+  1. La taille de chunk dépend du MTU : `min(FRAG_SIZE, ATT_MTU − 3 − 30 −
+     12)`. Au MTU minimal BLE (23 → 20 octets utiles), **même l'en-tête L3
+     (30 o) ne tient pas** : aucun paquet dengon ne passe. Le plus petit MTU
+     utilisable est 46. Sans effet pratique (Spike C : 517 négocié), mais le
+     « repli sur 23 » de `synthese/05` §2 n'est pas viable.
+  2. Budget mémoire **global** en octets (`max_bytes`, 128 Kio par défaut,
+     avec un coût forfaitaire de 32 o par chunk) en plus des deux bornes
+     prévues : sans lui, 64 réassemblages × `PACKET_MAX_LEN` ≈ 4 Mio, hors
+     de portée d'un ESP32.
+  3. Le réassembleur retient les `frag_id` terminés (64 au plus, pendant
+     `timeout_ms`) pour ignorer leurs fragments en retard : sans cela, un
+     paquet ressortait deux fois et un doublon tardif rouvrait un
+     réassemblage inutile.
+  4. Seul le **payload** du fragment est produit ; l'en-tête L3 `0x09` est
+     laissé au codec (US-201).
+- **Raison :** (1) arithmétique du format ; (2)(3) critère « mémoire bornée »
+  de l'US ; (4) codec pas encore mergé, et indépendant.
+- **Conséquences :** `dengon-ble` / l'appli Android doivent refuser (ou
+  signaler) un lien dont le MTU négocié est < 46. La déduplication de paquets
+  reste le rôle du seen-set de `sync::routing` ; celle du réassembleur ne
+  vaut que pour `timeout_ms`.
 - **Doc de conception mise à jour ?** non.
 
 ---
@@ -1166,3 +1224,320 @@ _(aucun écart pour l'instant)_
 - **Doc de conception mise à jour ?** non — `docs/synthese/09` visait un
   déploiement avec domaine, non disponible ici ; documenté dans
   `docs/suivi/modules/deploiement-vps.md`.
+### 2026-09-28 — `sync::routing` : un doublon pendant le jitter n'annule plus le relais, il en faut deux (US-209)
+
+- **Prévu :** `docs/synthese/05-protocole-et-trame.md` §6.1 et `docs/powl/03`
+  §7.1 : « reçu en double pendant l'attente ? — oui → abandonner le relais »,
+  soit un seuil de **1** doublon.
+- **Réel :** `RoutingConfig::dup_cancel_threshold`, par défaut
+  `DUP_CANCEL_THRESHOLD = 2` (`crates/dengon-core/src/sync/routing.rs:87`).
+  `1` reste disponible (règle littérale), `0` désactive l'annulation.
+- **Raison :** mesurée, pas supposée. Dans un losange A→{B,C}→D→E, D reçoit
+  la copie de B, programme son relais, entend la copie de C pendant son
+  jitter et s'abstient : **E ne reçoit jamais le message**. Le test
+  `seuil_litteral_affame_le_losange` (`crates/dengon-core/tests/routing_mock.rs`)
+  le reproduit à chaque exécution ; `plusieurs_chemins_un_seul_relais_par_noeud`
+  montre qu'avec 2, E est servi et chaque nœud relaie au plus une fois. C'est
+  le défaut connu du schéma « à compteur » avec un seuil de 1 (Ni et al.,
+  *The broadcast storm problem*, 1999, recommandent 3 à 4).
+- **Conséquences :** un peu plus de relais redondants en zone dense (au plus
+  un par nœud et par `msgID`, la dédup ne change pas). Un seuil de 2 ne
+  garantit pas tout : un nœud qui a 3 entrées et une seule sortie peut encore
+  s'abstenir — la réconciliation d'inventaire (US-210) reste le filet.
+  **À valider à trois** (point d'équipe) ; revenir à 1 = une ligne.
+- **Doc de conception mise à jour ?** non — à faire si l'équipe valide.
+
+---
+
+### 2026-09-28 — `sync::routing` : routeur sans I/O, générique sur le lien, au lieu d'appeler `Transport` (US-209)
+
+- **Prévu :** l'issue #23 : « s'écrit contre `MockTransport` (US-105) » ;
+  `docs/synthese/04` §2 place le routage dans `dengon-core::sync`.
+- **Réel :** `Router<L>` ne connaît pas `Transport`. Il prend un en-tête
+  décodé et rend une `Decision` ; `poll_due` rend des `RelayOrder<L>` que
+  l'appelant envoie. `L` = `dengon_ble::LinkId` côté appelant. Le test de
+  bout en bout contre `MockTransport` est dans `dengon-core/tests/`, avec
+  `dengon-ble` en **dev-dependency** de `dengon-core`.
+- **Raison :** `dengon-ble` dépend de `dengon-core` (et de `std`) : importer
+  `Transport` dans `dengon-core` créerait un cycle et casserait le `no_std`.
+  Le cycle limité aux dev-dependencies est accepté par Cargo.
+- **Conséquences :** la boucle d'événements (poll du transport → routeur →
+  send) est à écrire par chaque hôte (`dengon-node`, `dengon-sim`, FFI).
+  Elle fait ~30 lignes (`Noeud::tick` dans `tests/routing_mock.rs`).
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `sync::routing` : trois réglages sans constante de conception (US-209)
+
+- **Prévu :** `synthese/05` §6.4 : « quota par `peerID` et par lien
+  (paquets/s) » ; §6.1 : broadcast « TTL faible (2–3) ». Aucune valeur dans
+  `protocol::consts`.
+- **Réel :** constantes **du routeur** (pas du contrat `protocol::consts`) et
+  champs de `RoutingConfig` : `LINK_MAX_PKT_PER_S = 50` (quota brut par
+  lien, doublons compris, fenêtre 1 s), `BROADCAST_TTL_MAX = 3` (TTL relayé
+  max. pour `ANNOUNCE` / `LOG_ATTEST`), `DUP_CANCEL_THRESHOLD = 2` (voir
+  l'écart ci-dessus). Le quota « par `peerID` » n'est pas distinct du quota
+  par lien : un lien = un pair au MVP. **Corrigé en revue #85** : voir
+  l'entrée « anti-inondation par `peerID` » plus bas.
+- **Raison :** `protocol::consts` est un contrat « revue à trois » ; ces
+  valeurs ne sont pas lues par les autres implémentations (firmware,
+  dashboard) et peuvent varier sans casser l'interopérabilité.
+- **Conséquences :** à promouvoir dans `consts` si le firmware doit les
+  partager.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `sync::routing` : la tolérance d'horloge ±2 h ne s'applique que vers le futur (US-209)
+
+- **Prévu :** `synthese/05` §6.4 : « `timestamp_ms` hors fenêtre ±2 h →
+  rejeté ».
+- **Réel :** futur au-delà de `now + TIMESTAMP_TOLERANCE_MS` → `ClockSkew` ;
+  passé : rejet seulement au-delà de `MSG_TTL_S` (24 h) → `Expired`.
+- **Raison :** appliquée vers le passé, la fenêtre ±2 h rejetterait tout
+  message porté plus de 2 h en store-and-forward, alors que la même
+  conception lui donne 24 h de vie (§6.5, §7 étape 2). Les deux règles se
+  contredisent ; on garde celle qui permet le DTN. L'anti-rejeu reste
+  assuré par le seen-set + `msgID`.
+- **Conséquences :** un paquet rejoué entre 5 min (`SEEN_TTL_S`) et 24 h
+  après son premier passage peut être accepté une seconde fois par un
+  nœud qui l'a oublié. Déjà le cas dans la conception (seen-set à 300 s) ;
+  `conv_seq` (couche applicative) le rattrape côté destinataire.
+  **Mise à jour (revue #85, point 2)** : ce second passage n'est plus
+  **relayé** — voir l'entrée « horizon du seen-set » ci-dessous.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-28 — `sync::routing` : un paquet plus vieux que l'horizon du seen-set est accepté mais pas relayé (US-209, revue #85 point 2)
+
+- **Prévu :** `synthese/05` §6.1 : seen-set de `SEEN_TTL_S` = 300 s ; §6.5 /
+  §7 : un message vit `MSG_TTL_S` = 24 h. La conception ne dit pas ce qui
+  arrive quand un porteur revient après l'oubli du seen-set.
+- **Réel :** si l'âge du paquet (horloge murale − `timestamp_ms`) atteint
+  `seen_ttl_ms`, le routeur l'accepte (`Deliver` s'il est pour moi, `Store`
+  pour une enveloppe, `NoRelay(Late)` sinon) mais **ne le relaie pas**.
+  L'entrée du seen-set vit jusqu'à `max(réception, horodatage) +
+  SEEN_TTL_S` (index trié par échéance), donc un paquet encore relayable
+  est toujours reconnu, même horodaté jusqu'à 2 h dans le futur.
+- **Raison :** signalé en revue par `OswinFreyr` : sans cette règle, chaque
+  retour d'un porteur (1 h après, par ex.) relançait un flood complet chez
+  tous les nœuds qui l'avaient déjà relayé, et le destinataire recevait un
+  second `Deliver`. Aligner le seen-set sur 24 h coûterait trop de mémoire
+  (ESP32 sans PSRAM) ; un filtre de Bloom 24 h ajoute des faux positifs
+  (messages perdus). Ne relayer que du frais borne le coût à zéro flood
+  supplémentaire, et le transport du tardif passe par la livraison directe
+  ou le dépôt (`sync::courier`, US-212).
+- **Conséquences :** (1) un `Deliver` peut se **répéter** au-delà de
+  l'horizon : la dédup longue durée des messages livrés revient au `store`
+  (clé `msgID`) — à brancher à l'intégration (US-211). (2) Un message non
+  scellé (`NOISE_MSG`) porté plus de 5 min ne progresse plus en multi-saut :
+  il n'atteint son destinataire que par contact direct avec le porteur.
+  Le store-and-forward multi-saut passe par `SEALED_ENVELOPE`. (3) Un
+  recul de l'horloge murale entre deux passages peut encore laisser passer
+  un relais de plus (entrée expirée en monotone, paquet redevenu « frais »
+  en mural) : un par saut d'horloge, borné.
+- **Doc de conception mise à jour ?** non — **à valider à trois** avec le
+  seuil de doublons ; à reporter dans `synthese/05` §6.1 si retenu.
+
+---
+
+### 2026-09-28 — `sync::routing` : anti-inondation par `peerID` du voisin, conservé après déconnexion (US-209, revue #85 point 1)
+
+- **Prévu :** `synthese/05` §6.4 : `FLOOD_MAX_PER_MIN_PEER` nouveaux
+  `msgID` par minute **par `peerID`**. La première version comptait par
+  **lien** et supprimait la fenêtre à `link_down` ; l'écart « trois
+  réglages » ci-dessus disait « un lien = un pair au MVP ».
+- **Réel :** `Router::bind_peer(link, peer, mono_ms)` associe un lien au
+  `peerID` authentifié du voisin. L'anti-inondation est alors compté par
+  `peerID` (les `msgID` déjà comptés sur le lien sont reportés, plusieurs
+  liens vers le même pair partagent le quota) et la fenêtre **survit à la
+  déconnexion** jusqu'à se vider (60 s). Un lien jamais lié garde une
+  fenêtre par lien.
+- **Raison :** signalé en revue par `OswinFreyr` : `LinkId` est un compteur
+  monotone, donc un voisin malveillant pouvait envoyer 20 `msgID`, se
+  reconnecter, et repartir avec un quota neuf. Garder la fenêtre du lien
+  après `link_down` n'aurait rien changé (le lien suivant a un autre
+  `LinkId`) : il faut l'identité du pair, que le transport ignore
+  volontairement (`LinkId` n'est pas un `peerID`).
+- **Conséquences :** l'appelant doit appeler `bind_peer` dès qu'il a
+  authentifié le voisin (handshake Noise, ou `ANNOUNCE` signé reçu en
+  direct) — à brancher à l'intégration. Avant ce moment, un pair peut
+  toujours contourner le quota en se reconnectant. Un attaquant qui change
+  d'identité à chaque reconnexion (Sybil) n'est pas couvert non plus :
+  c'est hors de portée d'un quota par voisin. La table des pairs est
+  purgée à chaque `bind_peer` (pairs sans lien dont la fenêtre est vide).
+- **Doc de conception mise à jour ?** non — c'est l'implémentation qui
+  rejoint la conception.
+
+---
+
+### 2026-09-28 — `sync::routing` : deux horloges, murale et monotone (US-209, revue #85 point 3)
+
+- **Prévu :** rien de précis ; la première version prenait un seul
+  `now_ms` (UTC) pour tout.
+- **Réel :** `Now { wall_ms, mono_ms }`. La murale ne sert qu'à comparer à
+  `timestamp_ms` (`ClockSkew`, `Expired`, `Late`) ; quotas, seen-set et
+  échéances du jitter suivent la monotone. `poll_due`, `next_deadline` et
+  `RelayScheduled::at_ms` sont en temps **monotone**.
+- **Raison :** signalé en revue par `OswinFreyr` : un recul de l'heure
+  (réglage manuel, synchro réseau, ESP32 qui reçoit l'heure après son boot)
+  gelait les relais en attente, empêchait les fenêtres de quota et le
+  seen-set d'expirer, et bloquait un lien saturé pendant toute la durée
+  du saut. Changer la signature coûte peu avant l'intégration.
+- **Conséquences :** chaque hôte fournit les deux horloges
+  (`Instant`/uptime + heure système sur desktop, `esp_timer_get_time` +
+  heure SNTP sur ESP32).
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### `observability` : aucun site d'appel réel, catalogue Rust non vérifié automatiquement contre `catalogue.py` (US-208)
+
+- **Conception :** `docs/synthese/04-architecture.md` §2 et
+  `docs/powl/08-observability-events.md` décrivent `observability` comme le
+  module qui **produit** les événements aux « bons endroits » —
+  implicitement, depuis le code qui gère le trafic (`sync::routing`,
+  `sync::inventory`, etc.) et la santé du nœud.
+- **Code :** `crates/dengon-core/src/observability/` livre le
+  **mécanisme** — `Envelope`, la redaction structurelle (`msg_log_id`), la
+  sérialisation JSON canonique (vérifiée octet à octet contre 3 fixtures
+  golden réelles de l'US-107) — et 4 constructeurs de payload
+  représentatifs (`pkt_seen`, `pkt_relayed`, `msg_queued`,
+  `peer_connected`) sur les 28 du catalogue. **Aucun appelant réel
+  n'existe** : `sync::routing`/`sync::inventory` (US-209/US-210), qui
+  produiraient réellement du trafic `pkt.*`, ne sont pas encore livrés à
+  l'heure où ce module est écrit.
+- **Pourquoi :** `observability` (US-208) n'a de dépendance formelle
+  qu'envers `US-104`/`US-107` (sprint antérieur) — rien n'empêchait de
+  l'écrire avant `sync`, et attendre `sync` (même sprint, US-209/US-210)
+  aurait été une dépendance intra-sprint interdite par la règle du projet.
+  Le module est donc écrit en **fournisseur de mécanisme**, prêt à être
+  appelé dès que `sync` existe, plutôt qu'en essayant de deviner par
+  avance la forme exacte des appels depuis un code qui n'existe pas
+  encore.
+- **Deuxième écart, apparenté :** `observability::catalog::EVENT_NAMES`
+  (28 noms) a été comparé **manuellement** à
+  `contracts/tools/catalogue.py::CATALOGUE` (28 clés des deux côtés,
+  vérifié à l'écriture de ce module) — aucun outil ne garantit que les
+  deux listes resteront synchronisées si l'une des deux évolue sans
+  l'autre. Le job CI `cross-vectors` (US-222, pas encore livré) est
+  l'endroit naturel pour l'automatiser, sur le même principe que
+  `tests/protocol_vectors.rs` (comparaison structurelle contre des
+  vecteurs partagés).
+- **Conséquences :** aucun risque immédiat — la **forme** du contrat
+  (l'enveloppe, la redaction, le JSON canonique) est déjà correcte et
+  testée contre le vrai contrat Python. Ce qui manque est la
+  **couverture** (24 événements sur 28 sans constructeur dédié) et
+  l'**intégration** (aucun code ne les émet encore). Les deux sont des
+  suites mécaniques une fois `sync` livré, pas des inconnues de conception.
+- **Condition de levée :** quand `sync::routing`/`sync::inventory`
+  arriveront (US-209/US-210), câbler les appels réels à
+  `observability::*` et écrire les constructeurs manquants au fil de l'eau
+  ; envisager la vérification cross-langage automatique au moment de
+  US-222 (CI `cross-vectors`).
+- **Doc de conception mise à jour ?** Non — le mécanisme correspond déjà à
+  la conception, seule l'intégration reste à faire quand son code appelant
+  existera.
+
+---
+
+### 2026-09-28 — `POST /api/nodes` sans authentification opérateur (US-216)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §7 décrit
+  l'enregistrement d'un relais via `POST /api/nodes` comme une étape du
+  déploiement, sans préciser qui a le droit de l'appeler.
+- **Réel :** la route enregistre n'importe quel `node_id`/`pub_sign` reçu
+  sans vérifier l'identité de l'appelant, et renvoie un JWT valide en
+  retour — quiconque atteint l'API peut se créer un nœud whitelisté.
+- **Raison :** l'US-216 couvre l'authentification des **nœuds** pour
+  `/ingest/batch` (JWT + signature Ed25519), pas l'authentification d'un
+  **opérateur humain** (session/cookie/admin). Aucune US du backlog actuel
+  ne couvre ce second cas.
+- **Conséquences :** acceptable pour une démo locale (B-4), mais c'est un
+  vrai trou avant tout déploiement exposé (US-224, VPS) : n'importe qui sur
+  le réseau peut fabriquer un nœud de confiance. À couvrir par une future US
+  (auth admin) avant toute exposition publique.
+- **Doc de conception mise à jour ?** non — signalé ici, dans le docstring
+  de la route (`app/main.py`) et dans `modules/dashboard-api.md` (Limites).
+- **Mise à jour 2026-09-28 (revue de la PR #91) :** le trou était en réalité
+  plus grave que « se créer un nœud » — l'`ON CONFLICT(node_id) DO UPDATE`
+  remplaçait la clé publique d'un nœud **déjà enregistré** et le
+  re-whitelistait, y compris un nœud qu'un opérateur aurait retiré
+  (prise de contrôle, pas seulement création). Corrigé : un `node_id` déjà
+  pris renvoie désormais **409**, plus d'upsert. L'écart lui-même (pas
+  d'auth opérateur sur `POST /api/nodes`, donc n'importe qui peut encore
+  enregistrer un `node_id` **inédit**) reste entier et n'a pas de US pour
+  le couvrir.
+
+---
+
+### 2026-09-28 — Nœud inconnu : rejet direct 401, pas la quarantaine décrite par la conception (US-216)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §3 décrit, pour un
+  batch venant d'un `node_id` inconnu, une mise en **quarantaine** avec
+  alerte opérateur (donc un état intermédiaire, pas un rejet).
+- **Réel :** `app/ingest.py::_lookup_node_pub_sign` rejette directement avec
+  un 401, message identique à « nœud connu mais non whitelisté » (pour ne
+  pas renseigner un attaquant qui devine des `node_id`).
+- **Raison :** aucun écran opérateur pour lever une quarantaine n'existe
+  dans le périmètre de l'US-216 (ni d'aucune US actuelle) — une quarantaine
+  sans moyen de la lever serait un état mort.
+- **Conséquences :** un relais légitime pas encore enregistré via
+  `/api/nodes` voit ses batchs rejetés (401) plutôt que mis en attente —
+  l'opérateur doit enregistrer le nœud avant qu'il ne pousse des données,
+  pas après coup.
+- **Doc de conception mise à jour ?** non — à trancher si une US future
+  ajoute un écran opérateur de gestion des nœuds.
+
+---
+
+### 2026-09-28 — `links`/`message_hops` (§11.2) non créées, `hop_count` approximatif (US-217)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §11.2 décrit, en
+  plus de `messages`, deux tables : `message_hops` (un événement de saut par
+  ligne — `node_id`, `kind`, `ttl_in`/`ttl_out`/`fanout`/`rssi`) et `links`
+  (topologie dérivée de `peer.connected`/`disconnected`).
+- **Réel :** seule `messages` existe (migration v3,
+  `dashboard/api/app/migrations.py`). `messages.hop_count` est une simple
+  approximation — le nombre d'événements `pkt.relayed` vus pour ce
+  `msg_log_id`, tous nœuds confondus — pas un journal par nœud avec
+  TTL/fanout/RSSI. `links` n'existe pas du tout.
+- **Raison :** l'US-217 (« Dashboard — projections + reconstruction de
+  statut ») porte formellement sur la reconstruction de **statut d'un
+  message** (critères d'acceptation de l'issue #31), pas sur la topologie ni
+  l'historique détaillé des sauts. Créer les deux tables sans US qui les
+  remplit et les lit aurait été un bouchon vide, la même discipline que pour
+  `store`/`ledger` (US-206/207).
+- **Conséquences :** le dashboard peut afficher un statut de message et un
+  compte de sauts grossier, mais pas encore « quel nœud a relayé ce message,
+  quand, avec quel TTL » ni un graphe de topologie. Aucune US actuelle du
+  backlog sprint 2 ne couvre `links`/`message_hops` — à planifier si l'écran
+  « parcours d'un message » (US-219) en a besoin.
+- **Doc de conception mise à jour ?** non — la cible reste `message_hops`/
+  `links` tels que décrits par §11.2.
+
+---
+
+### 2026-09-28 — Statut `read` (v2) jamais produit par la projection (US-217)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §9 catalogue
+  `msg.read`/`read.observed` (marqués *v2*) et §11.2 inclut `read` dans
+  l'enum `messages.status`.
+- **Réel :** `app/projections.py` ne traite que
+  `queued`/`in_flight`/`delivered`/`expired`/`unknown` — exactement les
+  statuts couverts par la table de déduction de §10. `msg.read`/
+  `read.observed` sont ignorés (ni erreur, ni effet sur le statut) ; `read`
+  reste déclaré dans la contrainte `CHECK` SQL (fidèle au schéma cible) mais
+  aucun code ne le produit.
+- **Raison :** §9 marque explicitement ces événements *v2* — hors périmètre
+  MVP — et §10, la référence normative de l'US-217, ne les mentionne pas du
+  tout dans sa table de déduction.
+- **Conséquences :** un message marqué lu par son destinataire reste affiché
+  `delivered` côté dashboard. Aucune perte de données : les événements
+  `msg.read`/`read.observed`, s'ils sont un jour émis, sont insérés dans
+  `events` comme les autres (l'ingestion, elle, ne filtre par nom), seule la
+  projection les ignore.
+- **Doc de conception mise à jour ?** non — cohérent avec le marquage *v2*
+  déjà présent dans `docs/synthese/09`.

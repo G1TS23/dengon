@@ -6,6 +6,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,10 +30,21 @@ import androidx.core.content.ContextCompat
 import com.dengon.app.ble.BlePermissions
 import com.dengon.app.ble.MeshForegroundService
 import com.dengon.app.ble.spike.HelloMeshSpikeScreen
+import com.dengon.app.ffi.DengonNodeStub
+import com.dengon.app.ffi.generateIdentity
+import com.dengon.app.ui.conversations.ConversationsViewModel
+import com.dengon.app.ui.conversations.MessagerieRoute
 
 class MainActivity : ComponentActivity() {
 
     private var permissionsGranted = mutableStateOf(false)
+
+    // Messagerie (US-214) alimentée par le bouchon FFI (US-106). Le vrai nœud
+    // (`DengonNode` généré par UniFFI) le remplacera à l'US-306 : seul ce
+    // point d'injection change. Le ViewModel survit aux rotations d'écran.
+    private val conversationsViewModel: ConversationsViewModel by viewModels {
+        ConversationsViewModel.fabrique(DengonNodeStub(generateIdentity("moi")))
+    }
 
     private val requestPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
@@ -45,6 +57,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             DengonApp(
+                conversationsViewModel = conversationsViewModel,
                 permissionsGranted = permissionsGranted,
                 onRequestPermissions = { requestPermissions.launch(BlePermissions.required()) },
                 onStartService = ::startMeshService,
@@ -69,6 +82,7 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun DengonApp(
+    conversationsViewModel: ConversationsViewModel,
     permissionsGranted: MutableState<Boolean>,
     onRequestPermissions: () -> Unit,
     onStartService: () -> Unit,
@@ -77,6 +91,7 @@ private fun DengonApp(
     val granted by permissionsGranted
     var serviceRunning by remember { mutableStateOf(false) }
     var showSpike by remember { mutableStateOf(false) }
+    var showMessagerie by remember { mutableStateOf(false) }
 
     // Démarrage auto dès que les permissions sont accordées (une
     // seule fois par passage à `true`, pas à chaque recomposition).
@@ -89,7 +104,9 @@ private fun DengonApp(
 
     MaterialTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
-            if (showSpike) {
+            if (showMessagerie) {
+                MessagerieRoute(viewModel = conversationsViewModel, onQuitter = { showMessagerie = false })
+            } else if (showSpike) {
                 HelloMeshSpikeScreen(onBack = { showSpike = false })
             } else {
                 DengonScreen(
@@ -105,6 +122,7 @@ private fun DengonApp(
                         serviceRunning = !serviceRunning
                     },
                     onOpenSpike = { showSpike = true },
+                    onOpenMessagerie = { showMessagerie = true },
                 )
             }
         }
@@ -118,6 +136,7 @@ private fun DengonScreen(
     onRequestPermissions: () -> Unit,
     onToggleService: () -> Unit,
     onOpenSpike: () -> Unit,
+    onOpenMessagerie: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -127,6 +146,13 @@ private fun DengonScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(text = stringResource(R.string.app_name))
+
+        // Messagerie sur bouchon FFI (US-214) : accessible sans permissions
+        // BLE, puisqu'aucune radio n'est utilisée tant que le vrai nœud n'est
+        // pas branché (US-306).
+        Button(onClick = onOpenMessagerie) {
+            Text(text = "Conversations")
+        }
 
         if (!permissionsGranted) {
             Text(text = stringResource(R.string.permissions_rationale_body))
