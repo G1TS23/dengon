@@ -351,6 +351,40 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-16 — US-112 : deux écarts vs `powl/09` omis du journal (retour de revue #66, point de Paul)
+
+- **Prévu :** [`docs/powl/09-data-model.md`](../powl/09-data-model.md) §1
+  annote `messages.body` d'un commentaire SQL `-- clair local uniquement`, et
+  marque `identity.priv_static` / `identity.priv_sign` comme `BLOB`
+  « (chiffré) », sans préciser le mécanisme de chiffrement.
+- **Réel :** `06-securite.md` §5.1 (US-112) traite les deux différemment :
+  `messages.body` est reclassé **XChaCha20-Poly1305 champ par champ** (B-3),
+  le commentaire `powl/09` étant réinterprété comme décrivant le *contenu*
+  (texte déchiffré côté app) et non l'état de chiffrement au repos ; et
+  `identity.priv_static`/`priv_sign` sont confiées au **stockage de clés du
+  téléphone (Keystore/Keychain, Android/iOS)** plutôt qu'à un chiffrement
+  logiciel générique (XChaCha20 comme les autres colonnes sensibles) — c'est
+  le mécanisme qui change, pas le fait qu'elles soient chiffrées.
+- **Raison :** B-3 (chiffrement champ par champ des données sensibles) est une
+  décision postérieure à `powl/09`, qui ne pouvait pas l'anticiper ; et les
+  clés privées d'identité justifient le coffre matériel de la plateforme
+  plutôt qu'un chiffrement logiciel générique — c'est *le* cas d'usage du
+  Keystore.
+- **Conséquences :** aucune régression — les deux reclassements sont des
+  renforcements (chiffrement au repos de `messages.body` ; clés privées dans
+  le coffre matériel au lieu d'un chiffrement logiciel), pas des
+  affaiblissements, de ce que `powl/09` décrivait.
+  L'erreur signalée par Paul n'est pas dans le contenu de `06-securite.md`
+  (correct dès la PR initiale) mais dans **le journal** : les deux entrées du
+  2026-09-11 pour US-112 déclarent toutes deux « Écarts vs conception :
+  Aucun », alors que ces deux reclassements en sont, et auraient dû être
+  consignés ici dès leur rédaction plutôt que découverts en revue.
+- **Doc de conception mise à jour ?** non — `docs/powl/` reste inchangé par
+  convention (matière première figée) ; `06-securite.md` (le delta) portait
+  déjà la bonne information, seul le suivi (`00-journal.md`) était en faute.
+
+---
+
 ### 2026-09-10 — Vecteurs de conformité v0 dans `crates/dengon-core/tests/`, pas `contracts/packet/` (US-108)
 
 - **Prévu :** l'US-108 demande « un fichier partagé, consommé par le core, le
