@@ -49,6 +49,16 @@
         </activity>
 
         <!--
+            US-215 : écran de scan de `zxing-android-embedded`. Par défaut il
+            est verrouillé en paysage ; `fullSensor` + `setOrientationLocked(false)`
+            (AppairageScreen) permettent de scanner téléphone tenu droit.
+        -->
+        <activity
+            android:name="com.journeyapps.barcodescanner.CaptureActivity"
+            android:screenOrientation="fullSensor"
+            tools:replace="screenOrientation" />
+
+        <!--
             US-109 : squelette du service de fond du maillage BLE. La logique
             de transport (GATT server/scanner/advertiser, US-213) n'est pas
             encore branchée ici — seule la survie écran éteint est visée.

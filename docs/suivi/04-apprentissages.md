@@ -23,6 +23,83 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### `conn_handle` NimBLE vs `LinkId` : un identifiant recyclé n'est pas une identité
+
+**C'est quoi :** NimBLE désigne chaque connexion par un `conn_handle`
+(`uint16_t`) et **redonne le même numéro** à la connexion suivante dès que le
+précédent est libéré. Le contrat `Transport` exige au contraire un `LinkId`
+**jamais réutilisé** au cours d'une exécution.
+**Pourquoi dans dengon :** une trame en retard sur un lien mort, ou un
+événement GAP traité après la fermeture, serait attribué au pair **suivant** —
+et la déduplication en amont ne rattraperait rien, elle raisonne sur le
+`msgID`. Le cœur du transport tient donc une table `conn_handle ↔ LinkId`,
+rompue à la fermeture ; le `LinkId` vient d'un compteur monotone 64 bits.
+**Piège / surprise :** un test naïf (« deux connexions successives ont deux
+`LinkId` différents ») passe même avec le bug si le banc donne des
+`conn_handle` différents. Le banc Unity imite NimBLE et redonne le **plus
+petit `conn_handle` libre** : c'est ce qui rend le test significatif.
+**Où c'est utilisé :** `firmware/dengon-relay/components/dengon_transport_core/dengon_transport_core.c:146`
+(`dengon_tc_link_open`), test `cas_link_id_jamais_reutilise`.
+**Pour aller plus loin :** rustdoc de `LinkId`, `crates/dengon-ble/src/transport.rs`.
+
+---
+
+### Séparer un pilote radio en « cœur pur » + « glue » pour le tester sans matériel
+
+**C'est quoi :** toute la logique qui ne dépend pas de la radio (états,
+tables, files, validation, ordre des événements) est écrite en C pur dans un
+composant qui ne connaît que des entiers (`conn_handle`, codes HCI). La glue
+NimBLE ne fait que traduire les callbacks en appels au cœur. ESP-IDF sait
+compiler un tel composant pour la cible **`linux`** : le binaire de test Unity
+tourne alors sur le PC, en CI.
+**Pourquoi dans dengon :** « testé sur 2 cartes réelles » ne peut pas tourner
+en CI. Réduire ce qui n'est vérifiable qu'avec deux cartes au strict minimum
+(la traduction) laisse 32 tests automatiques sur la sémantique, dont le
+portage 1:1 des 12 cas de conformité Rust.
+**Piège / surprise :** (1) Unity attribue par défaut **tous** les cas au
+fichier de `UNITY_BEGIN` — faux numéros de ligne dans les échecs ; remède :
+`UnitySetTestFile(__FILE__)` au début de chaque lanceur. (2) Sur la cible
+linux, `app_main` doit appeler `exit()` avec le résultat, sinon la CI ne voit
+jamais un échec. (3) Deux cibles dans le même projet s'écrasent : `-B
+build-esp32 -D SDKCONFIG=build-esp32/sdkconfig` pour la seconde. (4) Un test
+de mutation (injecter volontairement le bogue « purge de la file à la
+fermeture ») a confirmé que la suite le voit : 2 échecs, code de sortie 1.
+**Où c'est utilisé :** `firmware/dengon-relay/components/dengon_transport_core/test_apps/`,
+étape « Tests Unity du transport » de `.github/workflows/firmware.yml`.
+**Pour aller plus loin :** <https://docs.espressif.com/projects/esp-idf/en/v5.5/esp32/api-guides/host-apps.html>
+
+---
+
+### BLE : ce qui s'arrête tout seul et qu'il faut relancer
+
+**C'est quoi :** trois activités radio de NimBLE s'arrêtent sans que le code
+le demande : l'**annonce** dès qu'un pair se connecte en périphérique ; le
+**scan**, qu'il faut couper soi-même avant `ble_gap_connect()` (sinon
+`BLE_HS_EBUSY`) ; et un scan avec **filtre de doublons** qui, lancé « pour
+toujours », ne reverra jamais une carte déjà vue une fois — même partie puis
+revenue.
+**Pourquoi dans dengon :** c'est exactement le critère « survit à une
+déconnexion brutale » : après une coupure, la carte doit redevenir visible et
+retrouver ses voisins. Chaque fin d'activité (`DISCONNECT`, `ADV_COMPLETE`,
+`DISC_COMPLETE`, échec de connexion) repasse par `ensure_advertising()` et
+`ensure_scanning()`, et le scan tourne par passes de 10 s pour que le filtre de
+doublons soit remis à zéro.
+**Piège / surprise :** une coupure brutale n'a **aucun** message associé : le
+lien meurt au *supervision timeout* (code HCI `0x08`), quelques secondes plus
+tard. Une déconnexion « propre » est un `LL_TERMINATE_IND` du pair (code
+`0x13`), une fermeture par nous revient avec `0x16`. Et NimBLE ne rend pas le
+code HCI brut mais `BLE_HS_ERR_HCI_BASE + code`. **Couper le Bluetooth
+d'un téléphone n'est pas une coupure brutale** : Android envoie d'abord un
+`LL_TERMINATE_IND` (`0x15`, « power off »). Pour en provoquer une vraie
+depuis un Pixel sans le déplacer : `adb shell am force-stop
+com.google.android.bluetooth` tue la pile sans prévenir → `0x08` ~5 s plus
+tard côté ESP32.
+**Où c'est utilisé :** `firmware/dengon-relay/main/transport_nimble.c`
+(`on_disconnect`, `ensure_scanning`), `dengon_tc_map_hci_reason`.
+**Pour aller plus loin :** Core Spec v5.4, Vol 1 Part F (codes d'erreur).
+
+---
+
 ### Machine à états : une fonction pure + un property test de monotonie
 
 **C'est quoi :** au lieu de disperser des `if statut == …` dans le code, toutes
@@ -62,6 +139,50 @@ tardif.
 **Où c'est utilisé :** `crates/dengon-core/src/protocol/fragment/tests.rs`
 (`reassemblage_mtu_et_ordre_aleatoires`).
 **Pour aller plus loin :** <https://proptest-rs.github.io/proptest/proptest/tutorial/shrinking-basics.html>
+### Un QR code peut être valide et pourtant indétectable
+
+**C'est quoi :** un lecteur de QR fait deux choses : **détecter** le code dans
+l'image (les trois carrés de repérage) puis **décoder** les modules. Le
+contenu est brouillé par un **masque** (8 possibles) choisi par l'encodeur
+pour éviter les motifs gênants.
+**Pourquoi dans dengon :** l'appairage repose sur le scan caméra du QR de
+l'autre. Un QR que le détecteur ne trouve pas bloque l'appairage.
+**Piège / surprise :** le QR de l'identité de test « alice », généré par
+ZXing avec son masque par défaut, se décodait en mode « image pure » (données
+justes) mais n'était **jamais détecté** — à toute échelle, même en
+`TRY_HARDER` —, alors que ceux de « bob » ou « Élodie » passaient. Le défaut
+dépend du contenu : un test sur un seul exemple ne l'aurait pas vu.
+Correctif : vérifier la relecture par détection juste après l'encodage et
+changer de masque si besoin, plus un balayage de 300 identités en test.
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ui/appairage/QrCode.kt`
+(`matriceQr`, `seRelitParDetection`).
+**Pour aller plus loin :** ISO/IEC 18004 (masques et évaluation des pénalités).
+
+---
+
+### L'encodage hexadécimal double la taille en octets
+
+**C'est quoi :** représenter N octets en hexadécimal ASCII (`"%02x"` par
+octet) produit 2×N caractères, donc 2×N octets une fois ré-encodés en
+UTF-8 (chaque caractère hexadécimal est un octet ASCII). Ce n'est **pas**
+une transformation 1:1 octet à octet.
+**Pourquoi dans dengon :** `IdentiteLocale.pseudoPour` doit tenir dans les 8
+premiers octets du pseudo (c'est toute la fenêtre que le bouchon FFI utilise
+pour dériver le `peerId`, US-215/US-106). Vouloir y faire tenir 8 octets de
+véritable aléa en les hexadécimant en donnerait 16 — la moitié déborderait
+hors de la fenêtre utile.
+**Piège / surprise :** la revue automatisée de la PR #94 recommandait
+d'« utiliser les 8 octets disponibles pour l'aléatoire… donnerait 2^64
+valeurs possibles », en supposant implicitement un octet source par octet de
+pseudo. En pratique, avec un encodage hexadécimal, seuls **4** octets de
+source aléatoire tiennent dans 8 octets de pseudo — 2^32 valeurs, pas 2^64.
+Toujours vrai que c'est un gain énorme sur les 2^16 d'avant (le préfixe
+constant `tel-` gaspillait la moitié de la fenêtre), mais le chiffre exact
+de la revue ne tenait pas compte du doublement de taille de l'encodage.
+**Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/identite/IdentiteLocale.kt`
+(`pseudoPour`, `OCTETS_ALEATOIRES = 4`).
+**Pour aller plus loin :** RFC 4648 (encodages base16/base32/base64 et leurs
+ratios octets source / octets encodés).
 
 ---
 
@@ -1026,6 +1147,7 @@ repli utilisé quand la connexion n'en fournit aucun.
 **Où c'est utilisé :** `dashboard/deploy/Caddyfile`.
 **Pour aller plus loin :** RFC 6066 §3 (SNI) ; documentation Caddy sur
 `default_sni` et `tls_connection_policies`.
+
 ---
 
 ### Routeur « sans I/O » (*sans-IO*) : l'heure et l'aléa en arguments
@@ -1094,3 +1216,35 @@ fixe.
 référence (graine 0 → `0xE220A8397B1DCDAF`), sinon une faute de frappe dans
 une constante passe inaperçue.
 **Où c'est utilisé :** `crates/dengon-core/src/sync/routing.rs:616`.
+
+---
+
+### `starlette.testclient.TestClient` ne streame pas vraiment (US-218)
+
+**C'est quoi :** `TestClient` (utilisé par `fixture client` dans
+`conftest.py`) exécute la coroutine ASGI de l'app **jusqu'à sa fin complète**
+avant de rendre la main à l'appelant — y compris pour une réponse en
+streaming. Dans `starlette/testclient.py`, `handle_request()` fait
+`portal.call(self.app, scope, receive, send)`, où `send()` accumule chaque
+morceau du corps dans un `io.BytesIO()` ; `portal.call` ne revient que quand
+cette coroutine se termine.
+**Pourquoi dans dengon :** `GET /api/stream` (SSE) ne se termine **jamais**
+tant que le client ne se déconnecte pas (boucle `while True` avec
+heartbeat). Un test écrit avec `client.stream("GET", "/api/stream")` reste
+donc bloqué indéfiniment dès `__enter__` — avant même d'avoir lu un octet.
+**Piège / surprise :** ça ne lève aucune erreur, ne timeout pas, ne produit
+aucun message — juste un hang silencieux. Le diagnostic a demandé un script
+autonome avec un thread « chien de garde » (`faulthandler.dump_traceback()`
+après N secondes) pour voir que le thread de la boucle asyncio interne
+était idle en `select()`, preuve qu'il attendait le prochain événement
+plutôt que d'être bloqué dans une boucle infinie côté app — le blocage
+était bien côté `TestClient`, pas côté route.
+**La solution :** un vrai serveur `uvicorn.Server` lancé dans un thread
+(port choisi par l'OS, `port=0`), avec un `httpx.Client` réel dessus — un
+vrai socket TCP lit les octets progressivement dès qu'ils arrivent, sans
+attendre la fin de la réponse. Toujours dans le même process que le test :
+l'objet `app` (et donc `app.state.broadcaster`) reste directement
+inspectable pour synchroniser le test sans `sleep` fixe (poll borné sur
+`subscriber_count()`).
+**Où c'est utilisé :** `dashboard/api/tests/test_stream.py`
+(fixture `live_server`).

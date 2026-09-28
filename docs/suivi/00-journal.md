@@ -192,6 +192,55 @@ $ ssh dengon-vps "cd ~/dengon/dashboard/deploy && ./purge-demo.sh"
 $ curl -sk https://51.255.38.214:8443/healthz
 {"status":"ok"}   # HTTP 200, corrigé
 ```
+## 2026-09-28 — US-220 : retour de revue de la PR #101 — MTU enregistré par un seul chemin
+
+**Auteur :** Paul + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/transport_nimble.c`
+**Lot :** US-220 (#34), suite de la PR #101 (mergée avant ce correctif)
+
+### Fait
+- `on_mtu` (callback de `ble_gattc_exchange_mtu`, rôle central) n'appelle
+  plus `dengon_tc_link_set_mtu()` : il ne fait plus que journaliser un refus
+  et enchaîner sur la découverte du service. Le MTU d'un lien n'est désormais
+  enregistré **que** par `BLE_GAP_EVENT_MTU`, dans les deux rôles.
+
+### Pourquoi / décisions
+- Commentaire de revue (PR #101, `transport_nimble.c:658`) : le MTU était
+  réglé deux fois par connexion centrale. Pas un bogue (`set_mtu` est
+  idempotent), mais deux chemins pour une même donnée.
+- **Vérifié dans le code NimBLE de l'image épinglée avant de retirer
+  l'appel**, parce que le rôle central n'a jamais tourné sur carte :
+  `ble_att_clt_rx_mtu()` (`components/bt/host/nimble/nimble/nimble/host/src/ble_att_clt.c`)
+  appelle `ble_gap_mtu_event()` **puis** `ble_gattc_rx_mtu()`, qui déclenche
+  `on_mtu`. Le MTU est donc déjà sur le lien quand la découverte démarre.
+- Le second commentaire de la revue (rôle central jamais exercé contre un vrai
+  pair) n'appelle pas de correctif de code : c'est l'essai 2 cartes.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (ordre des événements NimBLE noté dans le commentaire du code).
+
+### État après cette session
+- Inchangé fonctionnellement. Essai 2 cartes toujours à faire.
+- Fiche(s) module mise(s) à jour : `modules/firmware-relay.md` (décision).
+- 01-etat-du-code.md mis à jour : non (plus à toucher).
+
+### Vérification (commandes réellement exécutées)
+```
+$ idf.py build   (firmware/dengon-relay)
+rc=0, 0 warning (-Werror sur main)
+
+$ idf.py build && ./build/test_dengon_transport_core.elf   (test_apps, cible linux)
+32 Tests 0 Failures 0 Ignored — OK
+```
+- **Non vérifié sur carte** : la carte n'était plus rattachée à WSL
+  (`/dev/ttyUSB0` absent) au moment du correctif. Le chemin périphérique
+  (`BLE_GAP_EVENT_MTU`, seul exercé par l'essai téléphone) n'est pas modifié ;
+  le chemin central ne l'a jamais été.
+
+---
 
 ## 2026-09-28 — US-217 : rebase de la PR #93 sur `main` (après #91, #99)
 
@@ -226,6 +275,83 @@ All checks passed!
 - Fiche(s) module mise(s) à jour : `dashboard-api.md` (résolution du conflit)
 
 ---
+## 2026-09-28 — US-218 : `GET /api/stream` en SSE, rattrapage + diffusion live
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{stream,ingest,main}.py`,
+`dashboard/api/tests/test_stream.py`, `docs/suivi/`.
+**Lot :** US-218 (issue #32). Branche `feat/US-218-sse-stream`, basée sur
+`feat/US-217-dashboard-projections` (PR #93, pas encore mergée — dépendance
+formelle de l'issue = US-110 seulement, déjà mergée).
+
+### Fait
+- `app/stream.py` — `StreamEvent` (formatage SSE, `rowid` comme identifiant
+  de reprise) et `Broadcaster` (ensemble d'abonnés `asyncio.Queue`,
+  `publish()` thread-safe via `loop.call_soon_threadsafe`, pont entre le
+  threadpool d'ingestion et la boucle asyncio qui sert les connexions SSE).
+- `app/ingest.py::_insert_events()` — capture désormais les lignes
+  RÉELLEMENT insérées (avec leur `rowid`, via `cur.lastrowid` gardé
+  seulement quand `cur.rowcount`) ; `ingest_batch()` publie ces événements
+  sur le `Broadcaster` après le `COMMIT`.
+- `app/main.py` — `lifespan` capture la boucle asyncio courante et pose un
+  `Broadcaster` sur `app.state` ; nouvelle route `GET /api/stream`
+  (`StreamingResponse`) : abonnement avant rattrapage (`_events_since`,
+  `rowid > Last-Event-ID` ou 0), puis boucle live bornée par un timeout de
+  15 s (`asyncio.wait_for`) doublé d'un heartbeat SSE.
+- Tests : 7 nouveaux (`test_stream.py`). 2 purs (formatage `StreamEvent`,
+  `Broadcaster.publish`). 5 sur un **vrai serveur `uvicorn`** (fixture
+  `live_server`, port OS, thread dédié) : rattrapage, reconnexion
+  (`Last-Event-ID` ne refait pas revoir l'événement déjà vu),
+  `Last-Event-ID` illisible → depuis le début, et **diffusion live réelle**
+  (client connecté avant l'ingestion, attente bornée sur
+  `subscriber_count()`, événement reçu via `Broadcaster.publish`).
+
+### Pourquoi / décisions
+- `docs/suivi/modules/dashboard-api.md` §Décisions (US-218) : `rowid`
+  SQLite comme identifiant SSE plutôt qu'une colonne dédiée ; abonnement
+  avant rattrapage (pas l'inverse) pour ne perdre ni dupliquer un événement
+  publié pendant la lecture de rattrapage ; timeout sur la boucle live pour
+  détecter une déconnexion sans nouvel événement et doubler comme
+  heartbeat anti-reverse-proxy (US-224) ; `Last-Event-ID` illisible traité
+  comme absent plutôt que rejeté (c'est le navigateur qui le fournit
+  automatiquement à la RECONNEXION, jamais à la connexion initiale).
+- **Piège de test découvert en cours de route** : `starlette.testclient.
+  TestClient` fait tourner la coroutine ASGI complète avant de rendre la
+  main (bufferise toute la réponse), incompatible avec un flux qui ne se
+  termine jamais — `client.stream(...)` restait bloqué indéfiniment.
+  Confirmé avec un script de reproduction + `faulthandler.dump_traceback()`
+  avant de changer d'approche pour un vrai serveur `uvicorn` en thread.
+
+### Écarts vs conception
+- `GET /api/stream` sans authentification opérateur — consigné dans
+  `03-ecarts-conception.md` (même famille que l'écart déjà noté pour
+  `POST /api/nodes`, US-216).
+
+### Appris
+- `docs/suivi/04-apprentissages.md` : à enrichir sur le piège
+  `TestClient`/ASGI streaming (voir ci-dessus) — utile pour toute future US
+  qui testerait un endpoint SSE/streaming.
+
+### État après cette session
+- Les 4 critères d'acceptation de l'US-218 sont couverts : SSE sur
+  `GET /api/stream`, reconnexion gérée (`Last-Event-ID`), test d'intégration
+  batch → SSE (via un vrai serveur), `pytest` vert.
+- Manque encore avant de fermer l'issue : ouvrir la PR (vers
+  `feat/US-217-dashboard-projections`, tant que #93 n'est pas mergée),
+  revue par une personne d'une autre `area:`.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q
+65 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+```
+- CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
+  ouverte au moment de cette entrée).
 
 ## 2026-09-28 — US-217 : projections dashboard — reconstruction de statut par message
 
@@ -300,6 +426,129 @@ All checks passed!
 - CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
   ouverte au moment de cette entrée).
 
+---
+
+## 2026-09-28 — US-220 : `transport_nimble.c`, transport BLE à rôle double sur l'ESP32
+
+**Auteur :** Paul + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/{main/*, components/dengon_transport_core/**, sdkconfig.defaults}`, `.github/workflows/firmware.yml`, `.gitignore`
+**Lot :** US-220 (#34), sprint 2, jalon J4
+
+### Fait
+- **Cœur pur `components/dengon_transport_core/`** (C, sans NimBLE) : miroirs C
+  de `LinkId`, `TransportEvent`, `DisconnectReason`, `TransportError`,
+  `TransportConfig` ; table `conn_handle ↔ LinkId` (compteur monotone) ; file
+  FIFO unique de 32 événements avec réserve pour le cycle de vie ; validation
+  de `send` / `broadcast` ; mapping code HCI → motif. `dengon_adv.c` :
+  manufacturer data (format US-114 inchangé) et règle anti-boucle.
+- **Glue `main/transport_nimble.c`** + API `main/dengon_transport.h`
+  (start / poll / send / broadcast / event_free) : annonce, scan par passes de
+  10 s, connexion sortante selon l'anti-boucle, chaîne MTU → service →
+  caractéristiques → CCCD → abonnement côté central, abonnement reçu côté
+  périphérique, RX par notification ou écriture, émission hors verrou,
+  réarmement annonce + scan à chaque fin de lien.
+- `dengon_gatt.c` : les écritures sur `CHAR_RX` partent au transport (au lieu
+  d'être jetées) ; UUID RX/TX exportés pour la découverte.
+- `main.c` réduit à NVS + peerID + `dengon_transport_start()` ; annonce et
+  événements GAP déplacés dans le transport.
+- **Tâche de démo** `main/dengon_demo.c` (Kconfig `DENGON_TRANSPORT_DEMO`) :
+  trames opaques à motif vérifiable, sonde MTU-3 / MTU-2 à chaque lien,
+  `send` sur lien fermé, bouton BOOT = fermer tous les liens.
+- `sdkconfig.defaults` : `ROLE_CENTRAL=y`, `ROLE_OBSERVER=y`.
+- **Tests Unity** `components/dengon_transport_core/test_apps/` : 12 cas de
+  conformité portés 1:1 depuis `conformance.rs` + 14 cas propres au C + 6 cas
+  d'annonce = 32. Cible `linux` (hôte) et `esp32`.
+- **CI** `firmware.yml` : exécution des tests sur la cible linux, compilation
+  de leur version carte. `.gitignore` : `sdkconfig` et `build-*/` des
+  `test_apps`.
+
+### Pourquoi / décisions
+- **Cœur pur + glue** : seul ce qui touche NimBLE exige deux cartes ; tout le
+  reste est testé en CI. Alternative écartée : tests Unity sur la glue avec
+  une NimBLE simulée — trop de surface à bouchonner pour peu de preuve.
+- **1 trame = 1 PDU ATT** : `protocol::fragment` (US-202) découpe déjà à
+  MTU-3 ; pas de format de trame BLE à inventer ni à partager avec Android.
+- **`PeerConnected` à l'abonnement**, pas à la connexion GAP : sinon le premier
+  `ANNOUNCE` du cœur partirait avant que le pair écoute.
+- **Aucun appel NimBLE sous le verrou du cœur** (route prise sous verrou,
+  émission hors verrou).
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-220) : pas de
+  fragmentation BLE, `PeerConnected` à l'abonnement, quota borné à 3,
+  anti-boucle sur 4 octets, mapping des motifs HCI.
+
+### Appris
+- 3 entrées dans `04-apprentissages.md` : `conn_handle` recyclé vs `LinkId` ;
+  cœur pur + cible linux d'ESP-IDF ; ce qui s'arrête tout seul en BLE (annonce,
+  scan, filtre de doublons). Glossaire : `conn_handle`, `LinkId`, supervision
+  timeout, règle anti-boucle, cible linux.
+
+### État après cette session
+- Le firmware compile, le cœur passe ses 32 tests **sur l'hôte et sur la
+  carte**, et le rôle **périphérique** a été exercé de bout en bout contre un
+  téléphone (connexion, abonnement, trames dans les deux sens, MTU 23 puis
+  517, déconnexion propre, **coupure brutale réelle**, réannonce, `LinkId`
+  neuf sur `conn_handle` recyclé). Reste pour clore l'US : l'essai sur
+  **2 cartes** (rôle central jamais exécuté), et la revue par une personne
+  d'une autre `area:`.
+- Fiche(s) module mise(s) à jour : `modules/firmware-relay.md` (réécrite hors
+  onboarding), `modules/dengon-ble.md` (règle 3), `modules/_index.md`.
+- 01-etat-du-code.md mis à jour : non (plus à toucher, `docs/suivi/README.md`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker run … -w …/dengon_transport_core/test_apps $IDF sh -ec \
+    'idf.py --preview set-target linux && idf.py build && ./build/test_dengon_transport_core.elf'
+32 Tests 0 Failures 0 Ignored — OK (exit 0)
+
+# mutation : purge de la file dans dengon_tc_link_close (code restauré ensuite)
+32 Tests 2 Failures — cas_trame_recue_avant_coupure_est_livree,
+test_file_saturee_garde_la_fermeture — exit 1
+
+$ docker run … test_apps $IDF idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build
+OK
+
+$ docker run … -w /repo/firmware/dengon-relay $IDF sh -c 'idf.py fullclean; rm -f sdkconfig; idf.py build'
+Project build complete — 0 warning dans main et dengon_transport_core (-Werror)
+
+$ docker run … idf.py size
+Total image 507 865 o (bin 507 984 o, 463,5 Ko en US-114) ; DRAM 22,58 % (96 452 o libres) ; IRAM 75,08 %
+```
+- `gcc -Wall -Wextra -Werror` hôte sur le cœur : OK (avant l'image Docker).
+- **Sur carte (une seule ESP32-D0WD-V3, CH340 via `usbipd`)** :
+```
+$ idf.py -B build-esp32 … -p /dev/ttyUSB0 flash   (test_apps) + lecture série (pyserial)
+32 Tests 0 Failures 0 Ignored — OK
+
+$ idf.py -p /dev/ttyUSB0 flash   (firmware relais) + captures série de 4 et 10 min
+annonce « dengon-relay-39e1 », scan toutes les 10 s, 0 reset, 0 panic
+```
+- **Pair réel : Pixel 8 Pro (Android 17) + nRF Connect 4.29.1**, piloté par
+  `adb.exe` (winget `Google.PlatformTools`) depuis WSL : `uiautomator dump`
+  pour lire l'écran, `input tap` pour agir, `screencap` quand `uiautomator`
+  cessait de répondre. Observé sur la carte :
+  - abonnement → `PeerConnected link#1` ; sondes `20 o -> ok`, `21 o -> trame
+    trop grande` (MTU 23) ; le téléphone lit « DGN0 » + motif intact ;
+  - écriture `DEADBEEF` → `FrameReceived 4 o, crc32=7c9ca35a` (= `zlib.crc32`
+    sur PC) ;
+  - Request MTU 517 → `ATT MTU négocié = 517` ;
+  - DISCONNECT → `HCI 0x13 -> Propre` ; reconnexion → `conn=0` redonné,
+    `link#2` ;
+  - Bluetooth du téléphone désactivé → `HCI 0x15 -> Propre` (Android prévient :
+    **pas** une coupure brutale — première tentative ratée, constatée) ;
+  - `am force-stop com.google.android.bluetooth` pendant un lien annoncé →
+    ~5 s plus tard `HCI 0x08 -> Brutale -> PeerDisconnected link#1, motif
+    Brutale`, `send` → pair inconnu ; nouveau scan : carte toujours annoncée,
+    `PeerConnected link#2`.
+  - Incidents de manipulation (pas du firmware) : après un `force-stop`, la
+    pile du téléphone refusait de se reconnecter jusqu'à un `bluetooth_manager
+    disable/enable` ; une première coupure brutale a eu lieu sur un lien pas
+    encore abonné → `HCI 0x08 -> Brutale (lien jamais annoncé)`, sans
+    événement, conforme au contrat mais refaite sur un lien annoncé.
+- **Non vérifié :** le rôle **central** (scan d'un pair dengon, anti-boucle,
+  découverte GATT, `NOTIFY_RX`) et le relais **entre deux cartes** — une seule
+  carte disponible. Workflow CI pas encore exécuté au moment de l'écriture.
 ---
 
 ## 2026-09-28 — US-212 : `sync::courier` — dépôt / collecte d'enveloppes scellées, expiration
@@ -584,6 +833,167 @@ Finished (observability compile en no_std + alloc)
 - Pas encore appelé : le branchement (émission par `Transport`, réception
   avant `sync::routing`) viendra avec le codec et le pipeline.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+## 2026-09-28 — US-215 : corrections de la revue de la PR #94
+
+**Auteur :** Oswin + Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/identite/IdentiteLocale.kt`, `android/app/src/main/java/com/dengon/app/ui/appairage/{QrCode.kt,AppairageScreen.kt}`, tests `identite/IdentiteLocaleTest.kt`, `ui/appairage/QrCodeTest.kt`
+**Lot :** US-215 (#29), suite de la revue automatisée (Claude Code) sur PR #94
+
+### Fait
+- **Entropie du `peerId` corrigée** (`IdentiteLocale.kt`) : le pseudo
+  provisoire `tel-xxxx` ne faisait varier que 2 des 8 octets pris par le
+  `peerId` du bouchon FFI (`tel-` occupant, constant, les 4 premiers) —
+  2^16 valeurs possibles au lieu de 2^8 octets = jusqu'à 2^64 en théorie.
+  Le préfixe est abandonné : pseudo purement hexadécimal (8 octets UTF-8,
+  4 octets de source aléatoire, `OCTETS_ALEATOIRES` 2 → 4). Les 8 octets du
+  `peerId` tombent désormais tous dans la fenêtre aléatoire — 2^32 valeurs
+  possibles (le hexadécimal double la taille en octets, donc pas 2^64
+  malgré ce que suggérait la revue automatisée — voir « Écarts vs revue »).
+- **Repli silencieux sur QR indétectable signalé** (`QrCode.kt`) :
+  `matriceQr` retombait sur la matrice par défaut sans un mot si aucun des
+  8 masques n'est détectable. Ajout d'un `Log.w` (tag `QrCode`) dans ce cas ;
+  la matrice reste affichée (mieux qu'un QR vide) mais le défaut est
+  désormais traçable en `logcat` plutôt qu'invisible jusqu'au scan réel sur
+  le terrain.
+- **Encodage QR déplacé hors du thread UI** (`AppairageScreen.kt`) :
+  `ImageQr` appelait `matriceQr` directement dans `remember { }`, donc sur le
+  thread de composition — jusqu'à 9 cycles encode+rastérisation+decode dans
+  le pire cas (repli ci-dessus). Remplacé par `produceState` +
+  `withContext(Dispatchers.Default)` ; le canvas ne dessine rien tant que la
+  matrice n'est pas prête (état initial `null`).
+
+### Pourquoi / décisions
+- Pas touché à `generateIdentity` (bouchon partagé, même algorithme que le
+  bouchon Rust `crates/dengon-ffi`) : le corriger aurait fait diverger les
+  deux bouchons. Le point de correction reste côté appelant Android
+  (`IdentiteLocale`), conforme à l'ancre de la revue.
+- Hexadécimal conservé (plutôt qu'un alphabet plus dense type base64url) :
+  reste lisible/imprimable à l'affichage, cohérent avec l'ancien format, et
+  le gain (2^16 → 2^32) est déjà large pour une identité **provisoire**
+  vouée à disparaître à l'US-306.
+
+### Écarts vs conception
+- Aucun nouveau (l'écart « identité provisoire / bouchon » était déjà
+  consigné dans `03-ecarts-conception.md`, entrée US-215 du 2026-09-28 ;
+  seul le format exact du pseudo change, détail non repris là-bas).
+
+### Écarts vs revue
+- La revue automatisée annonçait « 2^64 valeurs possibles » en utilisant
+  les 8 octets pour l'aléatoire. En pratique, encoder N octets aléatoires en
+  hexadécimal produit 2×N caractères ASCII, donc 2×N octets UTF-8 : pour
+  tenir dans la fenêtre de 8 octets du `peerId` sans prefixe gaspillé, seuls
+  4 octets de source aléatoire (donnant 2^32) y tiennent, pas 8. Repéré en
+  implémentant le correctif — voir `04-apprentissages.md`.
+
+### Appris
+- Entrée ajoutée à `04-apprentissages.md` (encodage hexadécimal double la
+  taille en octets — piège pour tout calcul d'entropie « en octets
+  disponibles » qui suppose une correspondance 1:1 octet source ↔ octet
+  transporté).
+
+### État après cette session
+- Les 3 constats de la revue de la PR #94 sont traités. `AppairageViewModelTest`
+  non touché (n'appelle pas `IdentiteLocale` directement). Fiche module mise
+  à jour : `modules/android-app.md`.
+- 01-etat-du-code.md : non touché (règle projet : ne plus le mettre à jour,
+  voir README de `docs/suivi/`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew --no-daemon -q assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 34/34 tests JVM verts (IdentiteLocaleTest 4/4, QrCodeTest 7/7)
+```
+- Pas revérifié sur appareil réel (scan caméra, comparaison des deux
+  téléphones) : les 3 changements sont couverts par les tests JVM existants
+  et adaptés ; un nouveau passage sur 2 téléphones physiques n'a pas été
+  refait pour cette correction de revue.
+
+---
+
+## 2026-09-28 — US-215 : écran QR (affichage + scan) + comparaison du code 60 chiffres
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/{ui/appairage/, identite/, MainActivity.kt}`, `AndroidManifest.xml`, `res/values/strings.xml`, `app/build.gradle.kts`, `gradle/libs.versions.toml`, `app/gradle.lockfile`, `gradle/verification-metadata.xml`, tests `ui/appairage/`, `identite/`
+**Lot :** US-215 (#29), sprint 2, jalon J2
+
+### Fait
+- **Écran d'appairage** (`ui/appairage/AppairageScreen.kt`) : mon QR
+  (`dengon:v1:…`, dessiné en Compose) + bouton « Scanner le QR de mon
+  correspondant » (scanner caméra de `zxing-android-embedded`) ; puis le
+  **code de 60 chiffres** en 3 lignes de 4 groupes, avec deux boutons
+  explicites « Les codes sont identiques » / « Les codes sont différents ».
+- **`AppairageViewModel`** (JVM pur, `StateFlow`) : étapes
+  `AfficherMonQr → Comparaison → Verifie | Refuse`, erreurs « QR non dengon »
+  et « votre propre QR », scan annulé sans effet, contacts vérifiés gardés en
+  mémoire. Alimenté **uniquement** par le bouchon FFI de US-106
+  (`identityQrCode`, `identityFromQrCode`, `verificationCode`).
+- **`IdentiteLocale`** : identité provisoire par installation, pseudo
+  aléatoire `tel-xxxx` conservé dans les préférences.
+- Dépendances : `com.google.zxing:core:3.5.3`,
+  `com.journeyapps:zxing-android-embedded:4.3.0` ; `gradle.lockfile` (+2)
+  et `verification-metadata.xml` (+86) régénérés
+  (`--write-verification-metadata sha256 :app:dependencies --write-locks`,
+  puis `… assembleDebug testDebugUnitTest assembleRelease`). Les nouveaux
+  artefacts n'étaient pas en cache : pas de piège « cache chaud ».
+- `CaptureActivity` du scanner en `fullSensor` (manifest) pour scanner
+  téléphone tenu droit.
+
+### Trois défauts trouvés et corrigés en route (règle n°7)
+1. **QR illisible par le détecteur** : en test JVM, le QR de l'identité
+   « alice » n'était **jamais détecté** par ZXing (`NotFoundException` à
+   toute échelle, même `TRY_HARDER`), alors qu'en `PURE_BARCODE` il se
+   décodait : données justes, repères introuvables avec le masque par
+   défaut. Le scanner caméra utilise ce même détecteur. Correctif :
+   `matriceQr` vérifie la relecture **par détection** et essaie les 8
+   masques. Test de régression + balayage de 300 identités.
+2. **Tous les téléphones avaient le même `peerId`** (constaté sur appareil :
+   « C'est votre propre QR » au premier scan). Le bouchon fait `peerId` = 8
+   premiers octets du pseudo, et mes pseudos `appareil-xxxx` commençaient
+   tous par « appareil ». Correctif : `tel-xxxx` (8 octets) ; tests : 65 536
+   tirages → 65 536 `peerId` distincts.
+3. **Mon QR disparaissait après mon scan** (constaté sur appareil) : l'écran
+   de comparaison remplaçait le QR, l'autre téléphone n'avait plus rien à
+   viser. Invisible aux tests unitaires (un téléphone par test). Correctif :
+   l'écran de comparaison affiche aussi mon QR, avec un rappel.
+
+### Vérification sur appareils réels
+- **Google Pixel 8 Pro** (Android 17, API 37) et **Samsung Galaxy A16**
+  (SM-A165F, Android 16, API 36), en USB (`adb`).
+- Lecture croisée complète : Samsung scanne le Pixel, Pixel scanne le
+  Samsung (caméra, téléphone tenu à la main). Le Pixel (`tel-9e95`) nomme
+  `tel-612d`, le Samsung nomme `tel-9e95` ; **codes identiques chiffre pour
+  chiffre** (lus par `adb`/`uiautomator`) : `99083 88326 31081 93212 49943 35746 33429 06232 54259 64334 82577 91716`.
+  « Les codes sont identiques » → « ✔ tel-612d est vérifié » /
+  « ✔ tel-9e95 est vérifié ».
+- Captures : `docs/suivi/assets/us-215/`.
+- L'app déjà installée était signée par une autre clé debug
+  (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`) : désinstallée sur les deux
+  téléphones avec l'accord de l'utilisateur ; `pm clear` ensuite pour
+  oublier l'ancien pseudo `appareil-xxxx`.
+
+### Pourquoi / décisions
+- **`zxing-core` + `zxing-android-embedded`** plutôt que CameraX + ML Kit :
+  2 artefacts au lieu d'une dizaine, pas de modèle Google Play à
+  télécharger, et `zxing-core` (Java pur) rend le QR testable en JVM.
+- **ViewModel synchrone** comme US-214 : le bouchon calcule en mémoire.
+- **Navigation minimale** (un booléen dans `MainActivity`), comme US-214 —
+  conflit attendu avec la PR #87 sur ce fichier.
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-215) : contact
+  vérifié gardé en mémoire (pas d'appel FFI « marquer vérifié ») ;
+  identité provisoire `tel-xxxx` ; code de vérification = placeholder du
+  bouchon (forme conforme, pas le SHA-512 de `powl/04` §2.3).
+
+### Appris
+- Note « Un QR code peut être valide et pourtant indétectable » dans
+  `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-215 : QR affiché + scan ✅, comparaison du code 60 chiffres
+  avec confirmation explicite ✅, alimenté par le bouchon FFI ✅, testé sur
+  2 appareils réels (caméra) ✅, tests unitaires ViewModel ✅.
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`
 - 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
 
 ### Vérification (commandes réellement exécutées)
@@ -1903,6 +2313,18 @@ $ uv run --extra dev pytest -q
 ```
 - CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
   ouverte au moment de cette entrée).
+
+$ ./gradlew --no-daemon -q --write-verification-metadata sha256 assembleDebug testDebugUnitTest assembleRelease
+BUILD OK — 34 tests JVM, 0 échec (dont 23 nouveaux : 12 AppairageViewModelTest,
+7 QrCodeTest, 4 IdentiteLocaleTest) ; assembleRelease (R8) OK sans règle proguard
+$ adb -s <série> install -r app/build/outputs/apk/debug/app-debug.apk
+Success (Pixel 8 Pro, Galaxy A16)
+```
+- Non vérifié sur appareil : le bouton « Les codes sont différents » (couvert
+  par `codes differents - contact rejete et non enregistre`), et l'affichage
+  d'un QR non dengon (couvert par test unitaire).
+
+---
 
 ## 2026-09-28 — US-203 : `crypto`, rebase sur `main` et retours de revue de #78
 
