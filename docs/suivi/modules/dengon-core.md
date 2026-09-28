@@ -958,15 +958,58 @@ l'ouverture (`noise::open` avec notre propre clé) **avant** le dépôt en
 courrier, sur `Decision::Store` : succès → traité directement ; échec →
 gardé pour un autre pair.
 
-**Tests :** `tests/api_mock.rs` (3 tests, bout en bout contre deux
-`dengon_ble::MockTransport`, un par nœud) + `src/api.rs::tests` (11 tests
+**Cinq constats de la revue de la PR #102, tous corrigés :**
+- **`redeliver_pending_envelopes` pouvait relayer un message vers le mauvais
+  pair** — `Outbox::replay_candidates` ne filtre délibérément pas par
+  destinataire (sa propre doc : ce filtre relève de `sync::routing`, US-209,
+  pas câblé par cette façade). Sans filtre côté `api.rs`, un message en
+  attente pour Bob pouvait partir vers Carol si elle se connectait avant lui.
+  Corrigé en ne gardant que les candidats dont `dest_peer_id` est bien le
+  pair qui vient de se connecter — cette façade n'ayant pas de rôle relais.
+  Régression : `redeliver_pending_envelopes_ne_fuite_pas_vers_un_autre_pair`
+  (vérifiée : échoue bien sans le filtre).
+- **`persist_message` ne reflétait jamais les transitions de statut** —
+  `store::Store` n'avait aucune méthode de mise à jour, seulement
+  `insert_message` (appelée une fois, à la création) ; `update_message_status`
+  ne touchait que l'index en mémoire. Ajout de `Store::update_message_status`
+  (`UPDATE messages SET status, status_ms`), appelée aux 4 points de
+  transition (`send_message`, `apply_ack`, `poll_events`/`expire_due`,
+  `redeliver_pending_envelopes`). Corrigé au passage : pour un message reçu,
+  `persist_message` réutilisait `sent_ms` (horloge de l'expéditeur distant)
+  comme `status_ms` — `persist_message` prend maintenant les deux
+  séparément, `status_ms` étant toujours l'horloge locale.
+- **`send_message` échouait avec `UnknownPeer` malgré une session établie**
+  — la doc promettait qu'un pair pouvait être appris automatiquement d'une
+  session Noise `XX` établie, mais `handle_handshake_message` ne peuplait
+  jamais `peer.identity`, seulement `peer.crypto`. Un `PublicIdentity`
+  complet (pseudo + clé de signature Ed25519) ne peut pas se reconstruire
+  depuis la seule clé statique X25519 échangée par le handshake — plutôt que
+  d'élargir le protocole, `send_message` n'exige plus qu'*au moins une des
+  deux* source (contact ajouté ou session établie) soit présente ; le pseudo
+  de la conversation retombe sur une chaîne vide si l'identité n'est pas
+  connue (même convention que `deliver_message` pour un message reçu).
+  Régression : `send_message_reussit_avec_une_session_etablie_sans_add_contact`
+  (`tests/api_mock.rs`, session réelle via `MockTransport`).
+- **`handle_sealed_envelope` faisait systématiquement une ouverture Noise X
+  coûteuse** (DH X25519 + AEAD) au lieu de filtrer d'abord sur
+  `recipient_tag` — `crypto::tag::own_tags`/`recipient_tag` existaient déjà
+  pour ça mais n'étaient jamais appelés. Ajout du filtre HMAC (bon marché)
+  avant l'ouverture ; les deux tests existants
+  (`enveloppe_scellee_ouverte_par_son_vrai_destinataire`,
+  `enveloppe_pour_un_autre_pair_est_gardee_en_courrier`) couvrent déjà les
+  deux branches (tag qui matche / qui ne matche pas) et confirment que le
+  filtre ne casse pas la remise réelle.
+- **`peer_id_of_pub_static` dupliquait à la main `identity::keys::peer_id_of`**
+  (privée à son module) — exposée `pub(crate)`, la copie locale supprimée.
+
+**Tests :** `tests/api_mock.rs` (5 tests, bout en bout contre deux
+`dengon_ble::MockTransport`, un par nœud) + `src/api.rs::tests` (12 tests
 unitaires : statuts, erreurs, enveloppe hors ligne, enveloppe ouverte par son
 destinataire, enveloppe gardée en courrier pour un tiers, déconnexion,
-persistance `store`). Couverture du module : 88 % des lignes (seuil AC : 85
-%). Le reste non couvert est surtout `record_ledger`/`persist_message` sur
-des chemins déjà exercés indirectement par d'autres tests, et
-`redeliver_pending_envelopes` (nécessite une déconnexion puis reconnexion
-avec message en attente, non encore testé).
+persistance `store`, non-fuite du rejeu d'outbox) +
+`store::tests::update_message_status_reflete_la_transition_sur_la_ligne_persistee`.
+Couverture pas re-mesurée depuis les correctifs (l'AC visait 85 %, la PR
+initiale était à 88 % avant ces ajouts).
 
 **Limites / écarts (détail dans `03-ecarts-conception.md`) :**
 - Module entier gated `#[cfg(feature = "std")]` : le firmware ESP32

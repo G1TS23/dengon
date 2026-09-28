@@ -190,6 +190,37 @@ fn message_transite_de_bout_en_bout_en_session() {
 }
 
 #[test]
+fn send_message_reussit_avec_une_session_etablie_sans_add_contact() {
+    // Trouvé en revue de la PR #102 : la doc de `send_message` promet que
+    // l'identité d'un pair peut être apprise automatiquement d'une session
+    // établie avec lui, mais aucun chemin ne peuplait `peer.identity` à la
+    // fin du handshake XX — `send_message` échouait avec `UnknownPeer`
+    // malgré une session active.
+    let mut alice = Participant::new("alice", 30);
+    let mut bob = Participant::new("bob", 31);
+    let mut now = T0;
+
+    // Seule alice connaît bob (`add_contact`) — bob, lui, ne fait JAMAIS
+    // `add_contact(alice)`, seulement la connexion + le handshake XX.
+    alice.node.add_contact(bob.node.public_identity());
+
+    connecter_et_stabiliser(&mut alice, &mut bob, &mut now, 6);
+
+    let events_bob = bob.node.poll_events(Now::new(now, now));
+    assert!(events_bob.contains(&NodeEvent::PeerConnected(alice.peer_id)));
+
+    // Bob doit pouvoir répondre malgré tout : la session est établie.
+    bob.node
+        .send_message(
+            alice.peer_id,
+            "salut alice, moi aussi",
+            Now::new(now, now),
+            rng(98),
+        )
+        .expect("bob a une session établie avec alice, même sans add_contact");
+}
+
+#[test]
 fn envoi_vers_un_pair_inconnu_est_refuse() {
     let mut alice = Participant::new("alice", 10);
     let inconnu = [0xEE; 8];

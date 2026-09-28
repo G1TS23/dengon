@@ -549,11 +549,15 @@ impl Node {
     /// Envoie un message texte à `dest_peer_id` (`.udl` : `send_message`).
     ///
     /// `dest_peer_id` doit être un correspondant déjà connu
-    /// ([`Node::add_contact`], ou appris automatiquement d'une session
-    /// établie avec lui) : le `.udl` ne prend qu'un `peer_id`, pas une
-    /// identité complète — voir la doc de module. `rng` n'est consommé que
-    /// si aucune session n'est établie avec ce pair (chemin enveloppe,
-    /// [`crate::crypto::noise::seal`]).
+    /// ([`Node::add_contact`]) **ou** avoir une session Noise `XX` établie
+    /// avec nous : le `.udl` ne prend qu'un `peer_id`, pas une identité
+    /// complète — voir la doc de module. Avant ce correctif (revue PR #102),
+    /// le second cas renvoyait quand même `UnknownPeer` — `PeerCrypto`
+    /// n'enregistre aucune identité, seulement une session, et
+    /// `handle_handshake_message` n'appelait jamais `add_contact` à
+    /// l'établissement — malgré cette même doc qui promettait déjà le
+    /// contraire. `rng` n'est consommé que si aucune session n'est établie
+    /// avec ce pair (chemin enveloppe, [`crate::crypto::noise::seal`]).
     ///
     /// # Errors
     ///
@@ -571,11 +575,25 @@ impl Node {
     where
         R: rand_core::RngCore + rand_core::CryptoRng + Send + Sync + 'static,
     {
-        let dest = self
+        let has_session = matches!(
+            self.peers
+                .get(&dest_peer_id)
+                .and_then(|p| p.crypto.as_ref()),
+            Some(PeerCrypto::Established(_))
+        );
+        let identity = self
             .peers
             .get(&dest_peer_id)
-            .and_then(|p| p.identity.clone())
-            .ok_or(DengonError::UnknownPeer)?;
+            .and_then(|p| p.identity.clone());
+        if !has_session && identity.is_none() {
+            return Err(DengonError::UnknownPeer);
+        }
+        // Pseudo connu si un contact a été ajouté ; sinon vide, comme
+        // `deliver_message` le fait déjà pour un pair reçu sans contact
+        // connu — ne bloque plus l'envoi tant qu'une session existe.
+        let pseudo = identity
+            .as_ref()
+            .map_or_else(String::new, |i| i.pseudo().to_string());
 
         let mut msg_uuid = [0u8; 16];
         rand_core::RngCore::fill_bytes(&mut rng, &mut msg_uuid);
@@ -585,7 +603,7 @@ impl Node {
             .entry(conv_id)
             .or_insert_with(|| ConversationRecord {
                 peer_id: dest_peer_id,
-                peer_pseudo: dest.pseudo().to_string(),
+                peer_pseudo: pseudo,
                 ..ConversationRecord::default()
             });
         let conv_seq = self.next_conv_seq(conv_id);
@@ -597,13 +615,6 @@ impl Node {
             text: body.to_string(),
         });
         let plaintext = app::encode_app_frame(&frame);
-
-        let has_session = matches!(
-            self.peers
-                .get(&dest_peer_id)
-                .and_then(|p| p.crypto.as_ref()),
-            Some(PeerCrypto::Established(_))
-        );
 
         let (kind, packet_bytes) = if has_session {
             let Some(PeerCrypto::Established(session)) = self
@@ -619,6 +630,11 @@ impl Node {
                 .ok_or(DengonError::Internal)?;
             (DeliveryKind::Session, bytes)
         } else {
+            // `identity` est forcément `Some` ici : sinon `!has_session &&
+            // identity.is_none()` aurait déjà renvoyé `UnknownPeer` plus haut.
+            let Some(dest) = identity.as_ref() else {
+                unreachable!("chemin enveloppe : identité vérifiée présente au-dessus")
+            };
             let epoch_day = crate::crypto::tag::epoch_day(now.wall_ms);
             let tag = crate::crypto::tag::recipient_tag(&dest.pub_static(), epoch_day);
             let ciphertext = noise::seal(
@@ -672,6 +688,7 @@ impl Node {
             body,
             now.wall_ms,
             "queued",
+            now.wall_ms,
         );
 
         // Remise immédiate si le pair est déjà connecté (session comme
@@ -689,7 +706,7 @@ impl Node {
                     .mark_handed_off(&msg_uuid, &dest_peer_id, now.wall_ms)?
             {
                 self.record_ledger(change.event_name(), &change.msg_uuid, now.wall_ms);
-                self.update_message_status(&msg_uuid, change.to);
+                self.update_message_status(&msg_uuid, change.to, now.wall_ms);
                 self.events
                     .push_back(NodeEvent::StatusChanged(msg_uuid, change.to.into()));
             }
@@ -830,23 +847,38 @@ impl Node {
     /// `false` sinon — auquel cas l'appelant ([`Node::on_bytes_received`]) la
     /// dépose en courrier pour un autre pair.
     fn handle_sealed_envelope(&mut self, packet: &Packet, now: RoutingNow) -> bool {
-        let Ok((_header, ciphertext)) = crate::sync::courier::parse_sealed_payload(&packet.payload)
+        let Ok((header, ciphertext)) = crate::sync::courier::parse_sealed_payload(&packet.payload)
         else {
             return false;
         };
+        // Filtre bon marché (3 comparaisons HMAC) avant l'ouverture Noise X
+        // coûteuse (DH X25519 + AEAD) — corrigé après revue de la PR #102 :
+        // `own_tags`/`recipient_tag` existaient déjà précisément pour ça
+        // (rejeter à bas coût la grande majorité des enveloppes qui ne nous
+        // sont pas destinées sur un maillage chargé) mais n'étaient jamais
+        // appelés ici. `own_tags` sur NOTRE horloge (J-1/J/J+1) tolère la
+        // dérive d'horloge de l'expéditeur sans avoir à faire confiance à
+        // son `epoch_day` embarqué.
+        let mine = crate::crypto::tag::own_tags(
+            &self.identity.static_keypair().public(),
+            crate::crypto::tag::epoch_day(now.wall_ms),
+        );
+        if !mine.contains(&header.recipient_tag) {
+            return false; // pas pour nous : évite l'ouverture Noise X
+        }
         let Ok(opened) = noise::open(self.identity.static_keypair(), ciphertext) else {
-            return false; // pas pour nous (autre destinataire), ou altérée
+            return false; // tag pour nous, mais ouverture échouée (altérée)
         };
         let Ok(frame) = app::decode_app_frame(&opened.plaintext) else {
             return false;
         };
         // L'expéditeur d'une enveloppe n'est identifié que par sa clé
         // statique (jamais un `peerID` L3, l'enveloppe est anonyme au
-        // niveau transport) : on en dérive un `PeerId` de la même façon que
-        // `identity::keys::peer_id_of` (privée à ce module — voir
-        // `peer_id_of_pub_static` plus bas), pour rester cohérent avec le
-        // reste de la façade qui indexe tout par `PeerId`.
-        let sender = peer_id_of_pub_static(&opened.sender_static);
+        // niveau transport) : on en dérive un `PeerId` avec la même formule
+        // que le reste de la façade (`identity::keys::peer_id_of`, exposée
+        // `pub(crate)` — corrigé après revue de la PR #102, qui la
+        // réimplémentait ici à la main).
+        let sender = identity::keys::peer_id_of(&opened.sender_static);
         match frame {
             AppFrame::Message(m) => self.deliver_message(sender, m, now.wall_ms),
             AppFrame::Ack(a) => self.apply_ack(a, now.wall_ms),
@@ -894,6 +926,7 @@ impl Node {
             &m.text,
             m.sent_ms,
             "delivered",
+            wall_ms,
         );
 
         self.record_ledger("msg.received", &m.msg_uuid, wall_ms);
@@ -913,7 +946,7 @@ impl Node {
             return;
         };
         self.record_ledger(change.event_name(), &change.msg_uuid, wall_ms);
-        self.update_message_status(&change.msg_uuid, change.to);
+        self.update_message_status(&change.msg_uuid, change.to, wall_ms);
         self.events
             .push_back(NodeEvent::StatusChanged(change.msg_uuid, change.to.into()));
     }
@@ -928,7 +961,7 @@ impl Node {
         if let Ok(changes) = self.outbox.expire_due(now.wall_ms) {
             for change in changes {
                 self.record_ledger(change.event_name(), &change.msg_uuid, now.wall_ms);
-                self.update_message_status(&change.msg_uuid, change.to);
+                self.update_message_status(&change.msg_uuid, change.to, now.wall_ms);
                 self.events
                     .push_back(NodeEvent::StatusChanged(change.msg_uuid, change.to.into()));
             }
@@ -1006,9 +1039,20 @@ impl Node {
             .map_or(0, |r| r.message_order.len() as u64)
     }
 
-    fn update_message_status(&mut self, msg_uuid: &MsgUuid, status: Status) {
+    /// Reflète une transition de statut à la fois dans l'index en mémoire
+    /// (source de vérité de la session, voir la doc de module) et, si
+    /// `store` est attaché, dans la ligne persistée correspondante. Avant ce
+    /// correctif (revue PR #102), seul l'index en mémoire était mis à jour :
+    /// `store` restait figé sur le statut de création de chaque message,
+    /// pour toujours (`QUEUED` pour tout message sortant, `DELIVERED` pour
+    /// tout message reçu), en désaccord avec `list_messages`/`poll_events`.
+    fn update_message_status(&mut self, msg_uuid: &MsgUuid, status: Status, wall_ms: u64) {
         if let Some(record) = self.messages.get_mut(msg_uuid) {
             record.status = status;
+        }
+        if let Some(store) = &self.store {
+            let status_ms_i64 = i64::try_from(wall_ms).unwrap_or(i64::MAX);
+            let _ = store.update_message_status(msg_uuid, status.as_str(), status_ms_i64);
         }
     }
 
@@ -1033,18 +1077,28 @@ impl Node {
     /// déjà scellée, pas besoin d'attendre une session ; voie session, si
     /// elle existe déjà d'une connexion précédente au même pair dans le
     /// même processus).
+    ///
+    /// `Outbox::replay_candidates` ne filtre **pas** par destinataire — sa
+    /// propre doc le dit explicitement : « le filtre \"peer est destinataire
+    /// ou bon candidat relais\" relève de `sync::routing` » (US-209, pas
+    /// câblé par cette façade, voir `03-ecarts-conception.md`). Sans ce
+    /// filtre ici, un message en attente pour Bob partait vers n'importe
+    /// quel pair qui se connecte ou termine un handshake en premier (trouvé
+    /// en revue de la PR #102) — cette façade n'ayant pas de rôle relais,
+    /// on ne garde que les candidats dont `dest_peer_id` est bien `peer_id`.
     fn redeliver_pending_envelopes(&mut self, peer_id: PeerId, wall_ms: u64) {
         let candidates: Vec<(MsgUuid, Vec<u8>)> = self
             .outbox
             .replay_candidates(&peer_id, wall_ms)
             .into_iter()
+            .filter(|r| r.dest_peer_id == peer_id)
             .map(|r| (r.msg_uuid, r.packet.clone()))
             .collect();
         for (msg_uuid, packet) in candidates {
             self.outgoing.push((peer_id, packet));
             if let Ok(Some(change)) = self.outbox.mark_handed_off(&msg_uuid, &peer_id, wall_ms) {
                 self.record_ledger(change.event_name(), &change.msg_uuid, wall_ms);
-                self.update_message_status(&msg_uuid, change.to);
+                self.update_message_status(&msg_uuid, change.to, wall_ms);
                 self.events
                     .push_back(NodeEvent::StatusChanged(msg_uuid, change.to.into()));
             }
@@ -1059,6 +1113,16 @@ impl Node {
         }
     }
 
+    /// `sent_ms` et `status_ms` sont deux horloges distinctes (et deux
+    /// colonnes distinctes du schéma, voir `store::insert_message`) :
+    /// `sent_ms` est toujours l'horloge de l'**expéditeur** du message (la
+    /// nôtre pour un message sortant, celle du pair distant, embarquée dans
+    /// `MessageFrame`, pour un message reçu), alors que `status_ms` est
+    /// l'horloge **locale** à laquelle ce statut a été atteint. Avant ce
+    /// correctif (revue PR #102), `persist_message` ne recevait qu'un seul
+    /// paramètre `sent_ms` réutilisé pour les deux colonnes — pour un
+    /// message reçu, l'horloge distante du `msg.queued` de l'expéditeur se
+    /// retrouvait ainsi en `status_ms` local de sa réception.
     #[allow(clippy::too_many_arguments)]
     fn persist_message(
         &mut self,
@@ -1070,9 +1134,11 @@ impl Node {
         body: &str,
         sent_ms: u64,
         status: &str,
+        status_ms: u64,
     ) {
         if let Some(store) = &self.store {
             let sent_ms_i64 = i64::try_from(sent_ms).unwrap_or(i64::MAX);
+            let status_ms_i64 = i64::try_from(status_ms).unwrap_or(i64::MAX);
             let conv_seq_i64 = i64::try_from(conv_seq).unwrap_or(i64::MAX);
             let _ = store.insert_message(
                 &msg_uuid,
@@ -1083,7 +1149,7 @@ impl Node {
                 body,
                 sent_ms_i64,
                 status,
-                sent_ms_i64,
+                status_ms_i64,
             );
         }
     }
@@ -1097,18 +1163,6 @@ fn hex_string(bytes: &[u8]) -> String {
         s.push(DIGITS[(b & 0x0f) as usize] as char);
     }
     s
-}
-
-/// `peerID = SHA-256(pub_static)[0..8]` — même calcul que
-/// `identity::keys::peer_id_of` (privé à ce module), nécessaire ici pour
-/// identifier l'expéditeur d'une enveloppe scellée (connu seulement par sa
-/// clé statique, jamais par un `peerID` L3 — l'enveloppe est anonyme au
-/// niveau transport, voir `handle_sealed_envelope`).
-fn peer_id_of_pub_static(pub_static: &[u8; noise::DH_LEN]) -> PeerId {
-    let digest = Sha256::digest(pub_static);
-    let mut id = [0u8; PEER_ID_LEN];
-    id.copy_from_slice(&digest[..PEER_ID_LEN]);
-    id
 }
 
 #[cfg(test)]
@@ -1208,6 +1262,52 @@ mod tests {
             .expect("le message envoyé doit apparaître dans sa conversation");
         assert_eq!(sent.status, MessageStatus::Queued);
         assert!(sent.outgoing);
+    }
+
+    #[test]
+    fn redeliver_pending_envelopes_ne_fuite_pas_vers_un_autre_pair() {
+        // Trouvé en revue de la PR #102 : `redeliver_pending_envelopes` ne
+        // filtrait jamais par destinataire (la doc de `Outbox::
+        // replay_candidates` le dit explicitement : ce filtre relève de
+        // `sync::routing`, pas câblé par cette façade). Un message en
+        // attente pour bob partait donc vers n'importe quel pair qui se
+        // connectait en premier.
+        let mut alice = noeud("alice", 1);
+        let bob = noeud("bob", 2);
+        let carol = noeud("carol", 3);
+        alice.add_contact(bob.public_identity());
+
+        alice
+            .send_message(bob.peer_id(), "pour bob seulement", now(T0), rng(10))
+            .expect("bob est un contact connu");
+        // Bob n'est pas connecté : pas de remise immédiate (pas de
+        // `PeerCrypto` pour bob), le message reste dans l'outbox.
+        assert!(alice.take_outgoing().is_empty());
+
+        // Carol se connecte à alice AVANT bob.
+        alice.on_peer_connected(carol.peer_id(), now(T0), rng(11));
+
+        let fuite_vers_carol = alice.take_outgoing().into_iter().any(|(dest, bytes)| {
+            dest == carol.peer_id()
+                && codec::decode(&bytes)
+                    .is_ok_and(|p| p.header.packet_type == PacketType::SealedEnvelope)
+        });
+        assert!(
+            !fuite_vers_carol,
+            "le message pour bob ne doit pas partir vers carol"
+        );
+
+        // Bob, lui, doit toujours pouvoir le recevoir en se connectant.
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(12));
+        let vers_bob = alice.take_outgoing().into_iter().any(|(dest, bytes)| {
+            dest == bob.peer_id()
+                && codec::decode(&bytes)
+                    .is_ok_and(|p| p.header.packet_type == PacketType::SealedEnvelope)
+        });
+        assert!(
+            vers_bob,
+            "bob doit bien recevoir son message en se connectant"
+        );
     }
 
     #[test]

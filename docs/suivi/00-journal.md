@@ -10,6 +10,91 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-301 : corrections suite à la revue de la PR #102
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/{api.rs,store.rs,identity/keys.rs}`,
+`crates/dengon-core/tests/api_mock.rs`, `docs/suivi/`.
+**Lot :** US-301 (issue #39). Branche `feat/US-301-api-facade` (PR #102), base
+`main`.
+
+### Fait
+- Revue automatisée postée par OswinFreyr sur la PR #102 : 5 constats,
+  vérifiés un par un contre le code réel (lecture directe, pas de confiance
+  aveugle) avant correction — tous confirmés.
+1. **`redeliver_pending_envelopes` (`api.rs`) pouvait relayer un message vers
+   le mauvais pair** — `Outbox::replay_candidates` ne filtre délibérément pas
+   par destinataire (sa doc : « le filtre "peer est destinataire ou bon
+   candidat relais" relève de `sync::routing` », US-209, pas câblé ici).
+   Ajout d'un `.filter(|r| r.dest_peer_id == peer_id)`. Test de régression
+   ajouté et vérifié manuellement en échec sans le correctif (le filtre
+   retiré temporairement, le test échoue bien, puis restauré).
+2. **`persist_message` ne reflétait jamais les transitions de statut, et
+   confondait `sent_ms`/`status_ms`** — `store::Store` n'avait aucune méthode
+   de mise à jour de statut. Ajout de `Store::update_message_status`
+   (`UPDATE ... SET status, status_ms`), branchée aux 4 points de transition.
+   `persist_message` prend maintenant `status_ms` séparément de `sent_ms`
+   (l'horloge locale de réception, pas celle — distante — de l'expéditeur).
+3. **`send_message` échouait avec `UnknownPeer` malgré une session établie**
+   — `handle_handshake_message` ne peuplait jamais `peer.identity`.
+   Vérification faite que reconstruire un `PublicIdentity` complet depuis la
+   seule clé statique X25519 du handshake n'est pas possible (il manque la
+   clé de signature Ed25519, jamais échangée en `XX`) : plutôt qu'élargir le
+   protocole, `send_message` n'exige plus qu'une des deux sources (contact
+   **ou** session) soit connue.
+4. **`handle_sealed_envelope` ouvrait systématiquement une session Noise X**
+   (coûteux) au lieu de filtrer d'abord sur `recipient_tag` —
+   `own_tags`/`recipient_tag` existaient déjà mais n'étaient jamais appelés.
+   Filtre HMAC ajouté avant l'ouverture.
+5. **`peer_id_of_pub_static` dupliquait `identity::keys::peer_id_of` à la
+   main** (privée à son module) — exposée `pub(crate)`, copie supprimée.
+- 2 tests de régression ajoutés (`api.rs::tests::
+  redeliver_pending_envelopes_ne_fuite_pas_vers_un_autre_pair`,
+  `tests/api_mock.rs::send_message_reussit_avec_une_session_etablie_sans_add_contact`)
+  + 1 test pour la nouvelle méthode `Store::update_message_status`.
+
+### Pourquoi / décisions
+- Correctifs appliqués directement sur `feat/US-301-api-facade` (branche de
+  la PR #102), pas sur une branche séparée — même raisonnement que pour les
+  PR #100/#97 : ce sont des correctifs de revue sur une PR déjà ouverte.
+- Point 3 : décision explicite de ne PAS étendre le protocole Noise `XX`
+  pour transporter une identité complète (pseudo + clé de signature) — hors
+  scope d'un correctif de revue, et l'US-306 (branchement de la vraie
+  identité) rendra la question différente de toute façon. La relaxation de
+  `send_message` (accepter contact OU session) est le correctif minimal
+  cohérent avec le comportement déjà documenté par la fonction elle-même.
+
+### Écarts vs conception
+- Aucun nouveau — écarts déjà consignés pour US-301 inchangés.
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md`.
+
+### État après cette session
+- Les 5 constats de la revue de la PR #102 sont corrigés et testés.
+- Fiche module mise à jour : `modules/dengon-core.md` (section `api`).
+- `02-avancement.md` : pas de changement de périmètre/pourcentage, pas édité.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+300 passed (lib) + 4 passed (api_mock) + tests annexes — 0 failed
+
+$ cargo clippy -p dengon-core --all-targets --all-features -- -D warnings
+(rien — propre)
+
+$ cargo fmt -p dengon-core -- --check
+(rien — propre, après un `cargo fmt` pour reformater les nouveaux blocs)
+
+$ cargo check -p dengon-core --no-default-features
+(rien — contrainte no_std respectée)
+
+$ cargo build --workspace
+(rien — build complet ok)
+```
+- Test de régression #1 vérifié activement en échec sans le correctif (voir
+  Fait ci-dessus) — pas seulement écrit et supposé correct.
+
 ## 2026-09-28 — US-301 : façade `dengon-core::api`, test de bout en bout, deux bugs trouvés
 
 **Auteur :** Claude (Sonnet 5)
