@@ -100,6 +100,293 @@ $ gh issue view 46 --repo G1TS23/dengon --json body -q '.body' | grep CryptoReso
 $ gh issue view 18 --repo G1TS23/dengon --json body -q '.body' | grep snow
 - [ ] `snow` épinglé à **≥ 0.10.0**, jamais 0.9.x (...)
 ```
+## 2026-09-28 — `contracts/events` : round 5 de revue (OswinFreyr) sur la PR #60
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `contracts/events/envelope.schema.json`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/modules/contracts-events.md`
+**Lot :** US-107, PR #60
+
+### Fait
+- **`envelope.schema.json` : `name` ferme réellement le trou `\n`** avec
+  `"not": {"pattern": "\n"}`, en plus de `minLength`/`maxLength`. La
+  description précédente présentait ces bornes comme la parade au trou —
+  trompeur : vérifié avec `jsonschema` en isolant la propriété `name`,
+  `"msg.queued\n"` (11 caractères) passait toujours le schéma seul, seul
+  l'`enum` de `payloads.schema.json` le rejetait en pratique.
+- **Décision de contrat explicite sur la longueur de `node_id`** (6
+  caractères hex = 24 bits) : nouvelle entrée dans
+  `03-ecarts-conception.md` qui quantifie le risque de collision
+  (approximation des anniversaires : ~2,9 % pour 1000 nœuds, négligeable à
+  l'échelle du MVP — 5-8 appareils, B-4) et fixe la condition de levée
+  (augmenter la longueur avant un déploiement à plusieurs centaines de
+  nœuds).
+
+### Pourquoi / décisions
+- Round 5 de revue d'OswinFreyr sur la PR #60 (commentaire GitHub daté du
+  2026-09-28) : 2 points non bloquants, tous deux traités.
+- `name` : fermer le trou directement (option 2 proposée par Oswin) plutôt
+  que corriger seulement la description (option 1) — plus robuste pour un
+  futur consommateur direct de l'enveloppe, coût nul (`not` est standard
+  JSON Schema, neutre en langage comme le reste de `contracts/`).
+
+### Écarts vs conception
+- `docs/synthese/09-dashboard-et-donnees.md:64` reste volontairement vague
+  (« un hash », pas de longueur) — la longueur réelle (6 hex) est
+  maintenant documentée comme décision de contrat dans
+  `03-ecarts-conception.md`, pas dans la synthèse.
+
+### État après cette session
+- Les 2 points du round 5 sont traités. Fiche module mise à jour.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run python3 -c "
+import json, jsonschema
+schema = json.load(open('events/envelope.schema.json'))
+v = jsonschema.Draft202012Validator(schema['properties']['name'])
+print(list(v.iter_errors('msg.queued\n')))
+"
+[<ValidationError: 'msg.queued\n' should not be valid under {'pattern': '\n'}>]
+
+$ uv run ruff check .
+All checks passed!
+```
+## 2026-09-28 — US-103 : Spike C exécuté intégralement (2 Android réels), GO pour A-1
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md`,
+`docs/synthese/01-sujets-a-trancher.md` (§A-1). Aucun code applicatif
+modifié — exécution du protocole de mesure déjà écrit sur
+`feat/US-103-SpikeC-HelloMesh` (PR #67).
+**Lot :** US-103 (issue #3), Sprint 1
+
+### Fait
+- Suivi le protocole de mesure manuelle de `docs/suivi/modules/android-app.md`
+  §« Spike C » avec deux appareils Android réels, tous deux détectés par
+  `adb` puis installés avec l'APK debug de la branche `feat/US-103-SpikeC-HelloMesh`
+  (tête `bdf2b95`) : **Samsung Galaxy A16** (SM-A165F, Android 16/SDK 36) et
+  **Pixel 8 Pro** (Android 17/SDK 37).
+- Pixel 8 Pro avait déjà une installation de `com.dengon.app` signée
+  différemment (probablement un build antérieur d'un autre poste de
+  l'équipe) — `adb uninstall` puis réinstallation nécessaires
+  (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), sans conséquence : l'app squelette
+  n'a aucune donnée utilisateur réelle.
+- Rôle **Peripheral** lancé sur le Samsung (confirmé par `BLE_GAP:
+  ADV_SET_START` dans `logcat`), rôle **Central** lancé sur le Pixel dans la
+  minute qui suit. Résultat lu à l'écran du Pixel (seul côté où le MTU est
+  lisible côté API Android).
+- **Les 4 critères d'acceptation de l'issue #3 sont démontrés** : 20 octets
+  échangés avec écho reçu ; **MTU négocié = 517** ; **scan→connexion =
+  354 ms** ; **connexion→échange = 1308 ms** (MTU compris) ; matrice d'un
+  couple d'appareils réels (2 fabricants, 2 versions Android : 16 et 17).
+- `docs/suivi/modules/android-app.md` (tableau de résultats + section
+  « Résultats mesurés ») et `docs/synthese/01-sujets-a-trancher.md` (§A-1 :
+  statut du Spike C, statut global passé à `tranché techniquement`) mis à
+  jour.
+
+### Pourquoi / décisions
+- Le test du 25/09 (Android + iPhone via nRF Connect) avait démontré
+  l'échange bout-en-bout mais pas le MTU (limitation iOS/CoreBluetooth,
+  documentée à l'époque) ni les timings. Ce test-ci referme les 3 critères
+  restants avec du vrai matériel Android des deux côtés, exécutant
+  réellement notre code (`HelloMeshPeripheral`/`HelloMeshCentral`), pas un
+  scanner générique tiers.
+- **Le Spike C étant réussi, la décision A-1 (Kotlin natif + Compose) est
+  techniquement confirmée** — dernière réserve explicite (« le Spike C reste
+  le go/no-go », `01-sujets-a-trancher.md` §A-1) levée. Reste une
+  confirmation orale en réunion d'équipe pour la forme, cohérente avec le
+  reste du process, mais plus un blocage technique.
+- Ceci lève aussi la question de gouvernance en suspens sur la PR #67
+  (merger avec un écart consigné vs attendre une vraie mesure 2-Android) :
+  la vraie mesure existe maintenant, plus besoin d'écart à consigner.
+
+### Écarts vs conception
+- Aucun nouveau — un seul couple d'appareils testé (pas plusieurs), jugé
+  suffisant pour la décision go/no-go (aucun signal de comportement
+  dépendant du fabricant sur ce test simple).
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md` — confirme un point déjà
+  documenté (séquencement CCCD/écriture du round de revue #67).
+
+### État après cette session
+- Spike C **terminé**, les 4 critères de l'issue #3 sont vérifiés. Reste à
+  décider : merger la PR #67 (le code du spike, jetable par nature, DoD
+  §7.2), fermer l'issue #3, et planifier la suppression de `ble/spike/`
+  avant `AndroidTransport` (US-213).
+- Fiche module mise à jour : `docs/suivi/modules/android-app.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ adb devices -l
+3C181FDJG0024V    device  ... model:Pixel_8_Pro
+R58Y10M1W8A       device  ... model:SM_A165F
+
+$ cd android && ./gradlew assembleDebug --console=plain
+BUILD SUCCESSFUL
+
+$ adb -s R58Y10M1W8A install -r app/build/outputs/apk/debug/app-debug.apk
+Success
+$ adb -s 3C181FDJG0024V uninstall com.dengon.app && adb -s 3C181FDJG0024V install -r app/build/outputs/apk/debug/app-debug.apk
+Success
+
+$ adb -s R58Y10M1W8A logcat -d | grep BLE_GAP
+09-28 09:42:55.828  ... W BLE_GAP : ADV_SET_START :: appName: com.dengon.app, id: 0, isLegacy: true
+```
+- Résultat lu manuellement à l'écran du Pixel (le code du spike n'écrit pas
+  dans `logcat`, seulement dans l'UI Compose — `HelloMeshSpikeScreen`) :
+  MTU 517, scan→connexion 354 ms, connexion→échange 1308 ms, échange
+  réussi.
+
+---
+
+## 2026-09-25 — US-103 : Spike C exécuté partiellement (Android + iPhone)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md` (section « Spike C »),
+aucun code modifié
+**Lot :** US-103, Sprint 1
+
+### Fait
+- Préparé l'environnement de build Android sur macOS : installé le nouvel
+  outil unifié **Android CLI** de Google (`curl ... install.sh`, différent de
+  l'ancien `sdkmanager`), SDK installé dans `~/Library/Android/sdk`
+  (`platform-tools`, `platforms;android-34`, `build-tools;34.0.0`),
+  `android/local.properties` créé.
+- Corrigé deux bugs bloquants trouvés en cours de route (voir PR #72,
+  branche séparée, hors périmètre de cette entrée) : `gradlew` committé sans
+  bit exécutable, `verification-metadata.xml` sans checksum `aapt2` pour
+  macOS.
+- Build (`./gradlew assembleDebug`) réussi sur la branche `feat/US-103-
+  SpikeC-HelloMesh`, APK installé via `adb` sur un Samsung Galaxy A16
+  (SM-A165F, Android 16 / SDK 36) branché en USB.
+- Rôle **Peripheral** lancé sur l'Android. Faute d'un second appareil
+  Android, testé avec un **iPhone 13 Pro Max (iOS 27.2 beta)** faisant
+  office de central via **nRF Connect for Mobile**, plutôt que sur le même
+  téléphone (qui ne peut pas détecter ses propres annonces BLE — limitation
+  matérielle classique, pas un bug de l'app).
+- Confirmé : annonce démarrée côté système (`BLE_GAP: ADV_SET_START` en
+  `logcat`), détection + connexion réussies depuis nRF Connect (filtre par
+  `SERVICE_UUID`, l'annonce n'incluant pas de nom d'appareil), table GATT
+  correcte, et **écho bout-en-bout réussi** : write manuel des 20 octets
+  ASCII sur `CHAR_RX` → notification reçue en écho sur `CHAR_TX`.
+- **MTU non mesurable** : recherché l'écran « Request MTU » de nRF Connect
+  sur iOS, introuvable — vérifié par recherche web que CoreBluetooth (iOS)
+  n'expose aucune API pour déclencher/lire la négociation MTU côté central,
+  contrairement à Android. Ce n'est donc pas un problème de manipulation.
+
+### Pourquoi / décisions
+- Le test croisé Android/iPhone n'est pas le protocole officiel (qui demande
+  2 Android), mais il apporte une vraie preuve fonctionnelle indépendante
+  (deux radios BLE distinctes, un scanner générique qui n'est pas notre
+  code) en attendant un second appareil Android.
+
+### Écarts vs conception
+- Aucun — test partiel documenté comme tel, pas une clôture de l'US.
+
+### État après cette session
+- 1 des 4 critères d'acceptation de l'issue #3 démontré (« 2 appareils
+  échangent 20 octets », avec réserve sur le central non-Android). Les 3
+  autres (MTU, timing, matrice d'appareils) restent ouverts — nécessitent un
+  second téléphone Android. US-103 reste ouverte.
+
+---
+
+## 2026-09-25 — Spike B (US-102) : `btleplug` et le rôle peripheral
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/spikes/US-102-btleplug-peripheral.md` (nouveau),
+`docs/synthese/01-sujets-a-trancher.md` (nouvelle entrée B-6),
+`docs/synthese/04-architecture.md`, `docs/synthese/10-benchmarks-mvp-tests.md`
+(annotations), `docs/suivi/modules/dengon-ble.md`,
+`docs/suivi/modules/_index.md`, `docs/suivi/05-glossaire.md`
+**Lot :** Lot 0 (spike), Sprint 1 — issue #2, `should`, 2 pts
+
+### Fait
+- Répondu à la question de l'issue #2 : `btleplug` peut-il tenir le rôle
+  *peripheral* (annonce + serveur GATT) sous Linux/BlueZ ? **Réponse : non.**
+  Pas seulement sous Linux — `btleplug` est *central-only* par conception, sur
+  les trois OS qu'il supporte (confirmé par la doc officielle du projet :
+  README GitHub + docs.rs, voir le rapport pour les citations exactes).
+- Repéré au passage que cette réponse invalide une case du comparatif
+  `docs/synthese/10-benchmarks-mvp-tests.md:49` (et sa contrepartie
+  `docs/synthese/04-architecture.md:86`) qui cochait `btleplug` ✅ pour le
+  rôle peripheral sur Linux/macOS/Windows — erreur préexistante, pas propre à
+  Linux. Les deux tableaux sont annotés (pas réécrits) avec un renvoi vers le
+  rapport de spike.
+- Recommandé un repli : remplacer `btleplug` par `bluer` (bindings officiels
+  BlueZ/D-Bus, couvre central **et** peripheral) pour le backend desktop de
+  `dengon-ble`, en assumant `dengon-node` **Linux uniquement** — cohérent avec
+  la cible déjà documentée ailleurs (« PC/Linux »). Consigné en B-6, **à
+  ratifier en réunion** (même statut que B-2/B-3), pas encore implémenté.
+- Ajouté 5 termes au glossaire (`GATT`, rôle central/peripheral, `BlueZ`,
+  `D-Bus`, `bluer`) et mis à jour la fiche `dengon-ble` (limite Spike B levée)
+  + l'index des modules (dates).
+
+### Pourquoi / décisions
+- **Spike mené par recherche documentaire, pas par exécution** : aucune
+  machine Linux avec BlueZ disponible dans cet environnement (poste Windows,
+  pas de WSL avec distro active). La question posée porte sur la **surface
+  publique** de `btleplug` (expose-t-elle une API d'annonce/serveur GATT ?),
+  constatable en lisant sa documentation officielle — contrairement au Spike A
+  (US-101) qui vérifiait un résultat de compilation. Détaillé et assumé comme
+  limite dans le rapport (§3 et §6).
+- Pas de code jetable écrit : rien à compiler sans Linux/BlueZ pour le
+  vérifier — le critère d'acceptation « code jetable jeté » est donc vide par
+  construction ici, pas contourné.
+- Le contrat `Transport` (US-105) n'est pas touché : `dengon-ble.md`
+  anticipait déjà ce cas de figure (`TransportError::Backend(String)` conçu
+  pour absorber un changement de backend).
+
+### Écarts vs conception
+- Le comparatif `10-benchmarks-mvp-tests.md` et le tableau d'implémentations
+  `04-architecture.md` affirmaient un support peripheral cross-OS de
+  `btleplug` qui n'a jamais existé — corrigé par annotation en ligne (voir
+  « Fait » ci-dessus), pas dans `03-ecarts-conception.md` : c'est une
+  correction de prémisse de conception (B-6), pas un écart entre du code et
+  la conception (aucun code `dengon-ble` desktop n'existe encore).
+
+### Appris
+- `btleplug::api::Peripheral` est un piège de nommage : il désigne l'appareil
+  **distant** trouvé en scannant (le serveur GATT d'en face), pas « notre
+  rôle peripheral ». Ajouté au glossaire pour ne pas retomber dedans à
+  l'US-303.
+
+### État après cette session
+- Décision B-6 consignée, **non ratifiée en réunion** — reste une
+  recommandation. Rien n'est implémenté (spike = décision écrite, pas du
+  code) ; l'US-303 (vraie implémentation `dengon-ble` desktop) devra rejouer
+  ce spike sur une vraie machine Linux avant de s'engager définitivement sur
+  `bluer`.
+- Issue #2 : à fermer une fois la décision ratifiée (le rapport à lui seul
+  suffit à répondre à la question posée par le DoR, mais la recommandation de
+  repli appelle une ratification d'équipe avant de la considérer actée).
+- Fiche(s) module mise(s) à jour : [modules/dengon-ble.md](modules/dengon-ble.md)
+  (limite Spike B levée), [modules/_index.md](modules/_index.md) (dates)
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh issue view 2 --json title,body,labels,assignees
+US-102, assignee OswinFreyr, pas de label needs:materiel (contrairement à
+US-103/US-114) — confirme que ce spike n'exige pas de matériel spécifique,
+seulement un Linux/BlueZ, absent ici.
+
+$ grep -n "btleplug" crates/dengon-ble/Cargo.toml Cargo.toml
+aucune dépendance btleplug ajoutée à ce jour (US-105 = contrat seul) —
+terrain vierge, rien à retirer après le spike.
+
+$ wsl --list --verbose
+seul "docker-desktop" (arrêté) — pas de distro Linux utilisable ici.
+```
+- **Pas exécuté / pas possible** : compilation ou exécution de `btleplug`
+  ou `bluer` — recherche documentaire uniquement (README GitHub + docs.rs de
+  `btleplug`, citations exactes dans le rapport). Recommandation `bluer` non
+  vérifiée empiriquement, voir limites du rapport.
 
 ---
 
@@ -244,6 +531,7 @@ YAML valide
   validation se limite à un contrôle de syntaxe YAML. Son premier vrai run aura
   lieu à l'ouverture de la PR.
 
+---
 
 ## 2026-09-25 — US-112 : revue round 2 d'OswinFreyr sur la PR #66
 
@@ -287,6 +575,50 @@ description de la PR #66
 ```
 $ python3 <script de résolution des liens relatifs>
 9/9 liens résolvent
+## 2026-09-25 — `protocol::{consts, types}` : revue round 2 d'OswinFreyr sur la PR #63 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/tests/vectors_v0.json`,
+`crates/dengon-core/tests/protocol_vectors.rs`
+**Lot :** US-108, Sprint 1
+
+### Fait
+- Traité le point de la revue round 2 d'Oswin : le vecteur `ack-addressed`
+  portait `flags: 1` (`ADDRESSED` seul) avec `ttl: 7`, alors que
+  `synthese/05` §6.1 classe `ACK` en *directed traffic* (relais déterministe
+  `ttl-1`, règle `RELAY_OK && ttl > 1`). Corrigé en `flags: 9`
+  (`ADDRESSED | RELAY_OK`), octet de flags `01` → `09` dans le `hex`.
+- Ajouté un test de régression `accept_vectors_with_ttl_above_1_have_relay_ok`
+  (suggestion d'Oswin) : vérifie sur **tous** les vecteurs `accept` que
+  `ttl > 1 ⇒ RELAY_OK`. Vérifié qu'il attrape bien le bug (réintroduit
+  temporairement `flags: 1`/`hex` d'origine, le nouveau test échoue avec un
+  message explicite ; restauré ensuite).
+
+### Pourquoi / décisions
+- Sans `RELAY_OK`, un ACK à TTL 7 émis par un nœud à plusieurs sauts du
+  destinataire mourrait au premier relais qui ne le concerne pas — la
+  livraison de l'accusé de réception échouerait silencieusement pour tout
+  message multi-saut.
+
+### Écarts vs conception
+- Aucun — correction d'une incohérence entre le vecteur de test et la
+  conception, pas une déviation de la conception elle-même.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core --test protocol_vectors
+running 4 tests
+test reject_vectors_each_violate_a_rule ... ok
+test inventory_a_le_type_0x0d ... ok
+test accept_vectors_with_ttl_above_1_have_relay_ok ... ok
+test accept_vectors_are_structurally_consistent ... ok
+test result: ok. 4 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+(vert, 0 warning)
 ```
 
 ---
@@ -346,6 +678,69 @@ $ python3 <script de résolution des liens relatifs>
 ### Écarts vs conception
 - Voir `03-ecarts-conception.md`, entrée 2026-09-16 (rectification des deux
   entrées du 2026-09-11 pour US-112).
+## 2026-09-16 — `protocol::{consts, types}` : revue de POWLAIR sur la PR #63 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/protocol/types.rs`,
+`crates/dengon-core/tests/{protocol_vectors.rs,vectors_v0.json}`, `Cargo.toml`
+**Lot :** Lot 0 — Fondations (issue #8, US-108). Branche `contract/US-108-protocol-types`.
+
+### Fait
+- 6 points de @POWLAIR, les 2 premiers marqués prioritaires avant le gel du
+  contrat, tous vérifiés avant correction :
+  1. **Garde de longueur fausse de 2 octets** dans `is_rejected()`
+     (`tests/protocol_vectors.rs`) — `HEADER_LEN_BROADCAST`/`_ADDRESSED`
+     incluent déjà les 2 octets de `payload_len`
+     (`tailles_den_tete_coherentes`), donc `raw.len() < hdr + 2` exigeait 2
+     octets de trop. Corrigé en `raw.len() < hdr`. Reproduit : la garde
+     buguée fait échouer `accept_vectors_are_structurally_consistent` sur un
+     paquet valide de `payload_len = 0` (confirmé après avoir ajouté un tel
+     vecteur pour le point 3, voir plus bas).
+  2. **`Flags::has_reserved()` inatteignable hors du module** — aucun
+     constructeur public ne pouvait poser un bit 5-7 (`empty()`, les
+     constantes, `union`/`from_bits_truncate` masquent tous
+     `RESERVED_MASK`). Ajouté `Flags::from_bits_raw(bits: u8) -> Self`, qui
+     préserve les bits verbatim (réservé au diagnostic — le décodage normal
+     reste `from_bits_truncate`).
+  3. **« bit réservé posé ⇒ rejet » contredit `synthese/05:80`** (« ignoré à
+     la réception »). `Header::flags_are_consistent()` ne vérifie plus
+     `!has_reserved()` ; `is_rejected()` (test) ne rejette plus sur ce bit.
+     Le vecteur `reject` `reserved-flag-set` est devenu un vecteur `accept`
+     (`noise-msg-addressed-reserved-bit-ignored`, flags bruts `0x29` →
+     masqués `0x09`). `accept`: 7→8, `reject`: 6→5 ; assertions de comptage
+     ajustées.
+  4. **`GossipPush` retiré de `is_always_signed()`** — `synthese/05:122` le
+     dit non signé (payload = paquets déjà signés individuellement).
+  5. **2 vecteurs broadcast non relayables** (`announce-broadcast-signed`,
+     `log-attest-broadcast-signed`) — `RELAY_OK` absent avec TTL 2-3,
+     incohérent avec `synthese/05:203`. Ajouté (`flags` `0x02`→`0x0a`).
+  6. **`is_addressed()` devient `Option<bool>`** (`None` = `Fragment`,
+     hérite de l'adressage du paquet transporté, `synthese/05:123`) — avant,
+     le test d'intégration court-circuitait `Fragment` avec un
+     `if pt != Fragment` pour contourner un `bool` qui ne pouvait pas
+     représenter ce troisième cas.
+- Activé `cast_possible_truncation`/`cast_sign_loss`/`cast_possible_wrap`
+  dans `[workspace.lints.clippy]` (`Cargo.toml`) : commentés « à activer avec
+  `protocol` (US-108) » — c'est cette US. Un seul site touché (`i as u8` dans
+  un test → `u8::try_from(i).unwrap()`).
+- 2 points « hors diff » de Paul **non traités cette session**, documentés
+  dans `modules/dengon-core.md` (Limites connues) : `timestamp_ms` des
+  vecteurs figé hors tolérance anti-rejeu, `expect.msg_id` absent. Décision :
+  relèvent du design du codec (US-201), pas d'un ajustement de constante —
+  mieux traités avec le décodeur qui en aura l'usage réel.
+
+### Pourquoi / décisions
+- **`has_reserved()` reste un diagnostic, pas retiré** : utile en
+  observabilité (`pkt.rejected`? à trancher en US-201), juste plus utilisé
+  pour rejeter — la doc du champ est corrigée pour ne plus prétendre le
+  contraire de la spec.
+- **`is_addressed()` en `Option<bool>` plutôt qu'un enum à 3 variantes** :
+  `Option` porte exactement la sémantique voulue (« connu » vs « hérite »)
+  sans ajouter de type.
+
+### Écarts vs conception
+- Aucun nouveau — les points 3-6 rapprochent le code de `synthese/05`, ils ne
+  s'en écartent pas.
 
 ### Appris
 - Rien de nouveau.
@@ -417,6 +812,236 @@ $ gh pr view 64 --json state,mergedAt,mergeCommit
   vérifiable — attendre aurait rouvert l'US pour un simple changement de
   formulation une fois #64 mergée. La mention « pas encore mergée » évite de
   faire passer un résultat pour définitivement acté.
+- PR #63 : les 6 points + l'activation des lints `cast_*` traités, vérifiés,
+  commit + push à faire.
+- Fiche module mise à jour : `modules/dengon-core.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                                exit 0
+$ cargo build --workspace --all-targets --locked                            exit 0
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   exit 0
+$ cargo check -p dengon-core --no-default-features --locked                 exit 0
+$ cargo test --workspace --all-features --locked
+  dengon-core (lib) : 15 passed ; protocol_vectors : 3 passed ; sœurs : OK
+$ cargo test --workspace --all-features --locked --doc                      exit 0
+```
+- Garde de longueur buguée réintroduite temporairement (`sed`) : confirmé que
+  `accept_vectors_are_structurally_consistent` échoue sur le nouveau vecteur
+  `noise-msg-addressed-reserved-bit-ignored` (30 octets, exactement `hdr`) —
+  exactement le « mirror bug » signalé par Paul (payload_len faible rejeté à
+  tort). Fichier restauré, retesté vert.
+
+---
+
+## 2026-09-10 — `protocol::{consts, types}` + vecteurs de conformité v0 (US-108)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/protocol/` (nouveau), `src/lib.rs`,
+`Cargo.toml`, `Cargo.lock`, `crates/dengon-core/tests/` (nouveau),
+`docs/suivi/{00-journal, 02-avancement, 03-ecarts, modules/dengon-core, modules/_index}`.
+**Lot :** Lot 0 — Fondations (issue #8, US-108). Branche
+`contract/US-108-protocol-types`, prise après le merge de US-104 (workspace).
+
+### Fait
+- **`protocol::consts`** — ~35 constantes transcrites de `synthese/05` §2 :
+  version, UUIDs GATT, TTL (`TTL_DEFAULT=7`, clamp densité), jitter de relais,
+  seen-set, fragmentation, `MSG_TTL_S`, `FLOOD_MAX_PER_MIN_PEER=20`, budget de
+  copies (v2), `PAD_BUCKETS`, périodes d'ANNOUNCE, tolérance d'horodatage,
+  tailles de champ d'en-tête (`HEADER_LEN_BROADCAST=22`, `_ADDRESSED=30`,
+  `PEER_ID_LEN=8`, `MSG_ID_LEN=32`, `SIGNATURE_LEN=64`). 5 tests.
+- **`protocol::types`** :
+  - `PacketType` (`#[repr(u8)]`, `0x01`–`0x0D`). **`Inventory = 0x0D`** — numéro
+    figé (AC US-108). `from_u8`/`to_u8`, `is_mvp()` (les `GOSSIP_*` `0x06`–`0x08`
+    sont v2), `is_always_signed()`, `is_addressed()`.
+  - `Flags` (newtype `u8`) : `ADDRESSED/SIGNED/FRAGMENT/RELAY_OK/PADDED` +
+    `RESERVED_MASK`. `from_bits_truncate`, `contains`, `has_reserved`, `BitOr`.
+    Pas de crate `bitflags`.
+  - `Header` (en-tête **décodé**, champs seulement) : `header_len()`,
+    `wire_len()`, `flags_are_consistent()`. La (dé)sérialisation est US-201.
+  - `AppFrameKind` (L4 : `Message`, `Ack`, `ReadReceipt` v2, `Profile` post-MVP),
+    `AckStatus` (`Delivered=2`, `Read=3` v2). Alias `PeerId`/`MsgId`/`Signature`.
+  - 7 tests (discriminants contigus, `from_u8`∘`to_u8`, périmètre MVP, bits,
+    `Header`, frames L4).
+- **`tests/vectors_v0.json`** — 7 vecteurs `accept` (announce, noise_msg, ack,
+  sealed_envelope, inventory, fragment, log_attest) + 6 vecteurs `reject`
+  (mauvaise version, type inconnu, bit réservé, `payload_len` incohérent,
+  en-tête tronqué, `SIGNED` sans signature). `tests/protocol_vectors.rs` — 3
+  tests : cohérence structurelle des `accept` via `protocol::{consts, types}`,
+  chaque `reject` viole une règle, `Inventory` = `0x0D`.
+- **`src/lib.rs`** : `PROTOCOL_VERSION` devient un **alias** de
+  `protocol::consts::PROTO_VERSION` (les crates sœurs l'utilisent comme test de
+  liaison — US-104). Doc du module `protocol` ajoutée.
+
+### Pourquoi / décisions
+- **Types livrés sans `codec`** (US-201) : c'est l'objet de l'US-108 — `sync::*`
+  (US-209) peut s'écrire contre `PacketType`/`Flags`/`Header` sans attendre la
+  sérialisation.
+- **`Header.recipient_id: Option<PeerId>`** (pas `PeerId` + booléen) → l'invariant
+  « présent ⇔ `ADDRESSED` » est vérifiable.
+- **Bitfield maison** : 5 bits, API figée, une dépendance de moins.
+- **Vecteurs en JSON neutre**, dans `crates/dengon-core/tests/` faute de
+  `contracts/` sur `main` (voir écarts). Test **structurel** seulement (pas de
+  décodeur).
+
+### Écarts vs conception
+Deux, consignés dans `03-ecarts-conception.md` (2026-09-10) :
+- vecteurs dans `crates/dengon-core/tests/` au lieu de `contracts/packet/`
+  (dossier `contracts/` pas encore sur `main`) — déplacement prévu ;
+- `serde_json` en dev-dependency de `dengon-core` (lecture des vecteurs ;
+  aucun effet `no_std`).
+
+### Appris
+- **`allow-unwrap-in-tests` / `allow-expect-in-tests` du `clippy.toml` ne
+  couvrent PAS les crates de `tests/`** (compilées à part, hors `#[cfg(test)]`) :
+  il faut un `#![allow(clippy::unwrap_used, clippy::expect_used)]` en tête du
+  fichier de test intégré.
+
+### État après cette session
+- `cargo test -p dengon-core` → 14 tests lib + 3 intégration, verts. Toutes les
+  crates sœurs passent (alias `PROTOCOL_VERSION`). `no_std` OK, `fmt` OK,
+  `clippy -D warnings` OK.
+- `protocol::codec` (US-201) peut démarrer : il branchera `decode()` sur
+  `tests/vectors_v0.json` et comparera à `expect`.
+- Fiche `modules/dengon-core.md` mise à jour ; `_index` et `02-avancement` idem.
+- **Contrat à annoncer « gelé »** au point d'équipe (DoD §7.2, type contrat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                   exit 0
+$ cargo build --workspace --all-targets --locked               exit 0
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   exit 0
+$ cargo check -p dengon-core --no-default-features --locked     exit 0
+$ cargo test --workspace --all-features --locked
+  dengon-core (lib) : 14 passed ; protocol_vectors : 3 passed ; sœurs : OK
+$ cargo test --workspace --all-features --locked --doc          exit 0
+```
+
+## 2026-09-25 — `contracts/events` : revue « round 4 » d'OswinFreyr sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/events/envelope.schema.json`,
+`contracts/events/batch.schema.json`, `contracts/tools/catalogue.py`,
+`contracts/events/payloads.schema.json` (régénéré)
+**Lot :** US-107, Sprint 1
+
+### Fait
+- **`node_id` (et `subject_node`, même motif dupliqué dans `catalogue.py`)**
+  n'avait ni `minLength` ni `maxLength` — même trou que celui déjà fermé sur
+  `event_id`/`prev_hash`/HEX16/32/64 : le moteur regex de `jsonschema`
+  (Python `re`) fait correspondre `$` juste avant un `\n` final, donc
+  `"relay-abcdef\n"` passait le pattern seul. **Premier essai insuffisant** :
+  ajouter `minLength: 12, maxLength: 40` (comme suggéré en revue) ne ferme
+  PAS le trou pour un motif à préfixes de longueurs différentes (`relay-`
+  vs `client-`) — `"relay-abcdef\n"` (13 caractères) reste dans la plage et
+  se confond avec un `node_id` `client-` valide de longueur 13. Vérifié le
+  problème avec `jsonschema` avant de corriger pour de bon : `anyOf` à deux
+  branches, chacune avec `minLength == maxLength` (12 pour `relay-`, 13 pour
+  `client-`) et partie hexadécimale fixée à 6 (tous les exemples réels en
+  utilisent exactement 6). Reverifié après coup : les deux variantes
+  `\n` sont maintenant rejetées.
+- **Champs texte libres sans borne** (`fw_version`, `reset_reason`,
+  `subsystem`, `app_version`, `ssid`×2) : ajouté `TEXT64`/`SSID` dans
+  `catalogue.py` (64 générique, 32 pour `ssid` — limite Wi-Fi réelle).
+- **`events` sans `maxItems`** dans `batch.schema.json` : ajouté `maxItems:
+  1000`, indépendant de la limite en octets de l'API (#59).
+- `payloads.schema.json` régénéré (`build_fixtures.py`), les 20 fixtures
+  restent valides sans modification (les valeurs réelles tiennent déjà dans
+  les nouvelles bornes).
+
+### Pourquoi / décisions
+- Le premier réflexe (`minLength`/`maxLength` en plage) suffit pour un motif
+  à longueur strictement fixe (HEX16/32/64) mais pas pour un motif à
+  plusieurs préfixes de longueurs différentes — leçon à retenir pour tout
+  futur champ du même genre.
+## 2026-09-20 — US-103 : correction revue PR #67 (négociation CCCD/notifications)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/spike/HelloMeshCentral.kt`,
+`HelloMeshPeripheral.kt`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Traité la revue `CHANGES_REQUESTED` de la PR #67
+  (`pullrequestreview-5178818352`) : la négociation des notifications CCCD
+  avait de bonnes chances d'échouer au test réel sur deux téléphones, pour
+  deux raisons cumulées.
+- **Central (`HelloMeshCentral.onServicesDiscovered`)** : `g.writeCharacteristic(rx)`
+  était appelé juste après `g.writeDescriptor(cccd)`, sans attendre la fin de
+  cette opération. `BluetoothGatt` ne met **pas** les opérations en file
+  d'attente : lancer une deuxième opération pendant qu'une première est en
+  vol échoue en général silencieusement. Fix : `rx` gardé en propriété de
+  classe (`rxCharacteristicRef`), écriture de `CHAR_RX` déplacée dans
+  `onDescriptorWrite(...)`, déclenchée seulement après confirmation de
+  l'écriture du CCCD.
+- **Peripheral (`HelloMeshPeripheral.serverCallback`)** : `onDescriptorWriteRequest`
+  n'était pas implémenté. Le central écrit le CCCD en `WRITE_TYPE_DEFAULT`
+  (avec accusé ATT) ; sans `sendResponse()` côté serveur, l'écriture ne se
+  termine jamais proprement (timeout ATT, notifications jamais réellement
+  activées). Fix : ajout de l'override, réponse `GATT_SUCCESS` envoyée
+  systématiquement quand `responseNeeded`.
+
+### Pourquoi / décisions
+- Fix minimal pour un spike, conforme à la suggestion du relecteur — pas de
+  refactor plus large (pas de file d'attente générique des opérations GATT,
+  ce sera à traiter proprement dans `AndroidTransport`, US-213).
+
+### Écarts vs conception
+- Aucun nouvel écart ; corrige un bug d'implémentation, pas un choix de
+  conception.
+
+### Appris
+- `BluetoothGatt` (Android) ne sérialise pas ses opérations lui-même
+  (`write*`, `read*`, `requestMtu`, `discoverServices`…) : chaque opération
+  suivante doit être déclenchée depuis le callback de fin de la précédente,
+  sous peine d'échec silencieux (`writeCharacteristic` renvoie `false` sans
+  exception). Piège BLE Android classique — noté dans
+  `docs/suivi/04-apprentissages.md`.
+
+### État après cette session
+- `./gradlew compileDebugKotlin` et `testDebugUnitTest` passent après le
+  correctif. Le protocole de mesure manuelle (`docs/suivi/modules/android-app.md`
+  « Spike C ») reste **non exécuté** — toujours aucun appareil Android
+  physique disponible dans cet environnement.
+- Correctif à pousser sur la branche de la PR #67 pour re-demande de revue.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+```
+
+---
+
+## 2026-09-11 — US-103 : correction SonarCloud (complexité cognitive `MainActivity.onCreate`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/MainActivity.kt`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Analyse SonarCloud sur la PR #67 (`feat/US-103-SpikeC-HelloMesh` → `main`) :
+  `kotlin:S3776`, « Refactor this method to reduce its Cognitive Complexity
+  from 16 to the 15 allowed. », sur `MainActivity.onCreate` (ligne 41).
+- Extrait tout le contenu du bloc `setContent { ... }` (branchement
+  Central/Peripheral, `LaunchedEffect` de démarrage auto du service,
+  bascule démarrer/arrêter) dans une nouvelle fonction `@Composable`
+  `DengonApp`, appelée depuis `onCreate` avec `permissionsGranted` et
+  des références de méthode (`::startMeshService`, `::stopMeshService`)
+  en paramètres. `onCreate` ne contient plus de branchement, seulement
+  l'appel à `setContent`.
+
+### Pourquoi / décisions
+- Complexité cognitive comptée par imbrication : les lambdas `if`/`else`
+  du bloc `setContent` (démarrage auto, bascule service, écran spike)
+  étaient toutes imbriquées **dans** `onCreate`. Les déplacer dans une
+  fonction composable dédiée les fait compter dans une complexité
+  séparée (sous le seuil), sans changer le comportement.
+- Pas de changement fonctionnel : mêmes callbacks, même état
+  (`serviceRunning`, `showSpike`), simple extraction de méthode.
 
 ### Écarts vs conception
 - Aucun.
@@ -433,6 +1058,200 @@ $ gh pr view 64 --json state,mergedAt,mergeCommit
   couverts. Reste la relecture croisée (4ᵉ critère), et le passage sans
   conditionnel du Spike A une fois #64 mergée (pas bloquant pour cette US).
 - Fiche(s) module mise(s) à jour : sans objet (documentation transverse).
+### Vérification (commandes réellement exécutées)
+```
+$ uv run python3 tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+
+$ uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check .
+All checks passed!
+
+# Vérification directe du trou refermé (script ad hoc, jsonschema réel) :
+# "relay-abcdef\n" et "client-abcdef\n" -> rejetés (avant : acceptés)
+# "relay-abcdef" / "client-abcdef" -> toujours acceptés
+### Appris
+- Rien de nouveau (extraction de méthode standard pour réduire la
+  complexité cognitive Sonar sur du code Compose).
+
+### État après cette session
+- `./gradlew compileDebugKotlin`, `assembleDebug` et `testDebugUnitTest`
+  passent après le refactor.
+- Correction poussée sur la branche de la PR #67 ; à re-vérifier sur
+  SonarCloud après ré-analyse.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+```
+
+---
+
+## 2026-09-16 — `contracts/events` : revue « round 3 » de POWLAIR sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{catalogue,validate}.py`, `contracts/events/envelope.schema.json`,
+`contracts/events/payloads.schema.json` (généré), `.github/workflows/contracts.yml`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- 5 points de @POWLAIR (revue « round 3 », 15/09 22:31), tous vérifiés avant
+  correction :
+  1. **`name` non contraint par aucun schéma** — un `name` hors catalogue
+     passait `envelope`, `batch` et `payloads.schema.json` (toutes les
+     clauses `if (name==X) then` d'un `allOf` sont vacuellement vraies pour
+     un `X` inconnu), seul le `CATALOGUE` Python le rejetait. Corrigé :
+     `payloads_json_schema()` ajoute `"properties": {"name": {"enum":
+     sorted(CATALOGUE)}}` à la racine. Reproduit : `"pkt.seeen"` (faute de
+     frappe) passait les 3 schémas avant, rejeté par `payloads.schema.json`
+     après.
+  2. **`prev_hash` absent de l'enveloppe stricte** — `integrity.chain_broken`
+     ne pouvait pas être dérivé, `synthese/09` en dépend pourtant. Ajouté en
+     `properties` (HEX64), **optionnel** (pas de producteur avant US-208, pas
+     de fixture ne le porte) — écart consigné.
+  3. **`NaN` fait planter l'outil** — `json.loads` accepte `NaN`/`Infinity`
+     par défaut, `canonical_json()` (`allow_nan=False`) les refuse. Corrigé :
+     chargement des fixtures avec `parse_constant` qui lève, capturé par
+     fixture → entrée d'`errors`, plus de traceback. Reproduit :
+     `ttl_in: NaN` tuait `main()` avant le fix (message trompeur côté
+     signature ou traceback nue selon le chemin), rapport propre après.
+  4. **`e["name"]` en accès direct → `KeyError`** dans
+     `_check_catalogue_coverage`, avant l'impression du rapport. Corrigé en
+     `e.get("name")` + filtre `isinstance(e, dict)`. Deux voisins signalés
+     dans le même commentaire, corrigés aussi : un élément non-objet dans
+     `"events"` (`AttributeError` dans `_check_event`, corrigé par un garde
+     `isinstance(event, dict)` en tête de fonction) et `sig` non-str
+     (`TypeError` non couverte dans `_check_signature`, ajoutée à la clause
+     d'exception).
+  5. **CI (`contracts.yml`) — filtre au niveau du trigger**, même piège que
+     `core.yml`/`dashboard.yml`. Corrigé : `dorny/paths-filter` + `if:` par
+     step.
+- Tous les crashs reproduits en mutant une copie de travail d'une fixture
+  réelle (jamais committée), confirmés absents avec le fix, fixture restaurée
+  (`git diff --stat` vide sur `events/fixtures/` à la fin).
+
+### Pourquoi / décisions
+- **`prev_hash` reste optionnel**, pas `required` : le rendre obligatoire
+  casserait le contrat sans qu'aucun producteur (US-208) n'existe encore pour
+  le remplir. La possibilité de transit est acquise, la vérification
+  bout-en-bout ne l'est pas — écart documenté plutôt que rendu required par
+  precaution.
+- **`name` fermé par `enum`, pas par une regex plus stricte** : une
+  comparaison de chaîne exacte contre le catalogue est plus forte qu'un motif
+  — elle referme aussi, incidemment, le trou `\n`-final resté ouvert sur
+  `name` depuis le round 2 (dette assumée, `03-ecarts-conception.md`).
+
+### Écarts vs conception
+- `prev_hash` optionnel — nouvelle entrée dans `03-ecarts-conception.md`
+  (2026-09-16).
+- Note ajoutée à l'entrée existante sur le piège `\n`-final : le trou côté
+  `name` est refermé par l'`enum`, celui côté `node_id` reste ouvert.
+
+### Appris
+- Rien de nouveau — même famille de bugs (validation défensive avant tout
+  calcul qui peut planter) que les rounds précédents, déjà consignée dans
+  `04-apprentissages.md`.
+
+### État après cette session
+- PR #60 : les 5 points traités, vérifiés, fixtures régénérées à l'identique
+  (aucun diff), commit + push + merge de `main` à faire.
+- Fiche module mise à jour : `modules/contracts-events.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run --no-build python tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+$ git diff --stat -- events/     # seuls envelope.schema.json et payloads.schema.json changent
+$ uv run --no-build ruff check .
+All checks passed!
+$ uv run --no-build python tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+```
+- Chaque bug (NaN, name inconnu, event non-objet, sig non-str, name absent)
+  reproduit en mutant `events/fixtures/01-pkt-seen.json` en place, confirmé
+  absent après restauration (`git diff` vide sur `fixtures/`).
+
+---
+
+## 2026-09-11 — `contracts/events` : relecture approfondie d'OswinFreyr sur la PR #60 (round 2)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{validate,catalogue}.py`,
+`contracts/events/{envelope,batch,payloads}.schema.json`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/04-apprentissages.md`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- @OswinFreyr a retesté la branche dans un `git worktree` séparé (Python 3.13,
+  deps installées sans `uv`) après le round 1 : les 5 premiers points sont
+  confirmés corrigés (`validate.py`/`build_fixtures.py` rejoués, régénération
+  byte-identique). En relisant plus en profondeur, il a trouvé 4 points
+  supplémentaires, tous vérifiés dans le code avant correction :
+  1. **`seq` en overflow (`>= 2**64`)** : `_valid_seq()` du round 1 ne
+     vérifiait qu'un plancher (`>= 0`), pas de plafond ;
+     `seq.to_bytes(8, "big")` lève `OverflowError` au-delà de `2**64`.
+     Reproduit (`event_id("x", 2**64)` → `OverflowError: int too big to
+     convert`), corrigé : `_valid_seq` vérifie aussi `< 2**64`.
+  2. **`node_id: null`** : `event.get("node_id", "")` ne couvre que la clé
+     **absente**, pas une clé présente à `null` — `event_id(None, seq)` lève
+     `AttributeError`. Reproduit, corrigé : `node_id` doit être une `str`
+     avant tout calcul, sinon `errors`.
+  3. **`payload` non-objet** (ex. une liste) : `_check_event` faisait
+     `payload.items()` sans vérifier le type. Reproduit
+     (`AttributeError: 'list' object has no attribute 'items'`), corrigé :
+     type vérifié avant toute manipulation.
+  4. **Motifs hex/sig ancrés avec `$`, qui matche avant un `\n` final en
+     Python** (`re`, pas `re.MULTILINE`) : `"<16 hex>\n"` (17 caractères)
+     passait `HEX16`. Reproduit en isolant le regex, puis en mutant une
+     fixture de travail (jamais committée). **Pas corrigé avec `\Z`** (la
+     suggestion du round 1) : `\Z` est une extension Python absente d'ECMA
+     262, la norme visée par `pattern` en JSON Schema — l'introduire dans
+     des schémas censés rester neutres en langage serait un contre-sens.
+     Corrigé avec `minLength`/`maxLength` à côté de `pattern` (mot-clé JSON
+     Schema standard) sur les champs de longueur **fixe** seulement
+     (`HEX16`/`32`/`64`, `event_id`, `batch_id`, `sig`). Les motifs
+     **ouverts** (`node_id`, `name`) restent vulnérables — dette assumée,
+     documentée dans `03-ecarts-conception.md`, impact jugé faible (aucun
+     calcul ne plante dessus, contrairement aux 3 points précédents).
+  - Deux nits non bloquants également corrigés : boucle manuelle sur
+    `spec["required"]` remplacée par le `required` natif du schéma ; chaque
+    fixture n'est plus lue/parsée qu'une fois par `main()` (avant : 3 fois).
+- Rebuild complet : `payloads.schema.json` régénéré (`build_fixtures.py`)
+  après les changements de `catalogue.py` — diff limité au fichier généré,
+  les 20 fixtures restent byte-identiques (régénération déterministe
+  confirmée une nouvelle fois).
+
+### Pourquoi / décisions
+- **`minLength`/`maxLength` plutôt que `\Z`** : décision structurante de
+  cette entrée. `\Z` aurait été la correction la plus rapide (celle
+  suggérée), mais elle aurait fait fuiter une dépendance Python dans un
+  artefact dont toute la raison d'être est d'être consommable par n'importe
+  quel langage. `minLength`/`maxLength` obtient le même résultat sans ce
+  compromis, au prix de ne fonctionner que sur des champs de longueur fixe.
+- **`node_id`/`name` non corrigés pareil, assumé plutôt que forcé** : pas de
+  borne haute naturelle pour ces deux motifs, et l'impact réel est nul
+  (aucun crash, juste une strictness manquante) — mieux vaut le documenter
+  explicitly que d'introduire une extension Python pour fermer un trou à
+  faible risque.
+
+### Écarts vs conception
+- Un nouveau, dans `03-ecarts-conception.md` : le piège `$`/`\n` sur
+  `node_id`/`name` non corrigé (dette assumée).
+
+### Appris
+- `$` en regex Python matche avant un `\n` final (piège pour un `pattern`
+  JSON Schema censé suivre ECMA 262) ; `required` de JSON Schema remplace une
+  vérification manuelle. Les deux ajoutés à `04-apprentissages.md`.
+
+### État après cette session
+- Les 4 nouveaux points + 2 nits de la relecture d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/contracts-events.md](modules/contracts-events.md)
 - 01-etat-du-code.md mis à jour : non.
 
 ### Vérification (commandes réellement exécutées)
@@ -527,6 +1346,322 @@ EOF
 - **Non fait** : relecture croisée par une autre personne (4ᵉ critère
   d'acceptation de l'US) — nécessite un passage de Paul ou Tanguy, hors
   périmètre de cette session.
+$ cd contracts && uv run python3 tools/build_fixtures.py
+20 fixtures écrites, 28 noms d'événements couverts.
+$ git status --short events/fixtures/        # vide : régénération byte-identique
+
+$ uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check . && uv run ruff format --check tools/catalogue.py tools/validate.py
+All checks passed!
+
+# Reproduction des 3 crashes, un par un, sur une fixture mutée (jamais
+# committée), restaurée après chaque essai :
+seq = 2**64        → rapport propre (« seq invalide »), plus de traceback
+node_id = null     → rapport propre (« node_id invalide »), plus de traceback
+payload = [...]    → rapport propre (« payload invalide (list) »), plus de traceback
+msg_log_id + "\n"  → rapport propre (« is too long »), passait avant le fix
+```
+
+---
+
+
+
+## 2026-09-11 — `contracts/events` : retours de revue d'OswinFreyr sur la PR #60
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/tools/{validate,catalogue}.py`, `contracts/events/batch.schema.json`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/04-apprentissages.md`,
+`docs/synthese/09-dashboard-et-donnees.md`
+**Lot :** US-107 (suite), Sprint 1
+
+### Fait
+- 5 points relevés en revue par @OswinFreyr, tous vérifiés dans le code avant
+  correction :
+  1. **`validate.py:118` — crash non géré sur `seq` invalide.**
+     `event_id(node_id, event.get("seq", -1))` appelle `seq.to_bytes(8,
+     "big")` : `OverflowError` si négatif, `AttributeError` si pas un entier.
+     `_check_schema` avait déjà signalé le problème dans `errors`, mais le
+     script continuait quand même et plantait avec une traceback brute au
+     lieu du rapport attendu. **Reproduit** en mettant `seq = -1` dans une
+     fixture (copie de travail, jamais committée) : confirmé le crash exact
+     décrit, puis confirmé le rapport propre une fois corrigé. `seq` validé
+     (entier, pas un bool, ≥ 0) avant tout calcul d'`event_id`.
+  2. **`catalogue.py` — `pkt.seen.rssi` optionnel alors que `powl/08` et
+     `synthese/09` le listent sans `?`.** Vérifié : c'est la doc de
+     conception qui est en retard, pas le contrat — `TransportEvent::
+     PeerConnected.rssi` (US-105) est déjà `Option<i16>` pour la même
+     raison (RSSI pas toujours fourni côté transport). Écart consigné,
+     `synthese/09` corrigé (`rssi?`).
+  3. **Apprentissages non propagés** — l'entrée de journal US-107 mentionnait
+     deux notions réelles (`referencing.Registry`, longueur de signature
+     Ed25519 en base64) sans les ajouter à `04-apprentissages.md` (règle 5,
+     `CLAUDE.md`). Ajoutées.
+  4. **Motif `node_id` dupliqué** dans `batch.schema.json`,
+     `envelope.schema.json#/$defs/node_id` et `catalogue.py`. Le premier
+     référence maintenant le second via `$ref` (draft 2020-12 autorise `$ref`
+     à côté d'autres mots-clés comme `description`). Le doublon Python
+     (`subject_node`) reste — pas de `$ref` possible entre un module Python
+     et un fichier JSON Schema — mais nommé (`NODE_ID_PATTERN`) plutôt que
+     recopié.
+  5. **Perf, non bloquant** — `_check_payload_vs_catalogue` reconstruisait un
+     `Draft202012Validator` à chaque événement. Mis en cache par nom
+     (`_payload_validators`).
+- `uv run ruff check .` propre, `validate.py` toujours vert sur les 20
+  fixtures réelles après les 5 correctifs.
+
+### Pourquoi / décisions
+- **`rssi` reste optionnel** (pas aligné sur « requis ») : je préfère corriger
+  la doc de conception plutôt que le contrat, parce que j'ai une raison
+  technique déjà actée ailleurs dans le dépôt (US-105) pour laquelle
+  l'exiger serait faux, pas juste une paresse à corriger la conception.
+- **`$ref` seulement côté JSON Schema**, pas de tentative de faire lire le
+  fichier `.json` depuis `catalogue.py` au moment de l'import pour extraire
+  le motif : ça introduirait un couplage fragile (ordre d'import, chemin
+  relatif) pour économiser une ligne dupliquée.
+
+### Écarts vs conception
+- Un nouveau, décrit dans `03-ecarts-conception.md` : `pkt.seen.rssi`
+  optionnel (point 2 ci-dessus).
+
+### Appris
+- Rien de nouveau cette session — les deux apprentissages ajoutés
+  aujourd'hui dataient de la session précédente (US-107 initiale), juste pas
+  encore propagés (point 3 ci-dessus).
+
+### État après cette session
+- Les 5 points de la revue d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/contracts-events.md](modules/contracts-events.md)
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv run python tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+
+$ uv run ruff check .
+All checks passed!
+
+# Reproduction du crash sans le fix (git stash sur validate.py, seq=-1
+# injecté dans une copie de 01-pkt-seen.json, jamais committée) :
+OverflowError: can't convert negative int to unsigned
+
+# Avec le fix, même fixture mutée :
+✗ 4 problème(s) :
+  - schéma batch — -1 is less than the minimum of 0
+  - signature invalide : Signature was forged or corrupt
+  - batch_id ≠ hex(SHA-256(canonical_json(events)))
+  - seq invalide (-1) : event_id non vérifiable
+# Fixture restaurée (git checkout --) avant de committer.
+```
+
+---
+
+## 2026-09-09 — Contrat des événements d'observabilité + 20 fixtures golden (US-107)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/` (nouveau), `.github/workflows/contracts.yml`,
+`docs/suivi/modules/contracts-events.md` (créée), `_index.md`,
+`01-etat-du-code.md`, `03-ecarts-conception.md`.
+**Lot :** Lot 0 — Fondations (issue #7, US-107). Branche
+`contract/US-107-enveloppe-evenement`, prise « en attendant les review » de la
+PR #59 (US-110).
+
+### Fait
+- **`contracts/events/`** :
+  - `envelope.schema.json`, `batch.schema.json` — JSON Schema draft 2020-12,
+    **stricts** (`additionalProperties: false`) pour l'enveloppe et le batch
+    `POST /ingest/batch`.
+  - `payloads.schema.json` — contraintes de `payload` par nom d'événement,
+    **généré** depuis `tools/catalogue.py` (un `allOf` de `if name==X then …`).
+  - `CANONICAL.md` — **fait foi** : forme canonique du JSON signé (clés triées,
+    séparateurs compacts, UTF-8) + procédure de signature Ed25519 d'un batch.
+  - `test-signing-key.json` — clé Ed25519 de test (graine déterministe,
+    publique, jamais de prod).
+  - `fixtures/*.json` — **20 batches** valides et signés, couvrant **28 noms
+    d'événements** (tout le périmètre MVP : `msg.read` / `read.observed` et les
+    `integrity.*` / `node.clock_skew` dérivés sont explicitement exclus).
+- **`contracts/tools/`** : `catalogue.py` (source lisible + helpers
+  `canonical_json` / `event_id`), `build_fixtures.py` (génère fixtures +
+  `payloads.schema.json`), `validate.py` (schéma + payload vs catalogue +
+  cohérence `event_id`/`node_id` + **signature Ed25519** + **redaction** +
+  fraîcheur du schéma généré + couverture du catalogue).
+- **`contracts/pyproject.toml` + `uv.lock`** : outillage `uv` (jsonschema,
+  pynacl, referencing ; ruff en dev), cohérent avec `dashboard/api`.
+- **`.github/workflows/contracts.yml`** : `ruff` + « fixtures régénérées à
+  l'identique » (`git diff --exit-code`) + `validate.py`, filtré
+  `paths: contracts/**`, actions épinglées au SHA, `uv --no-build`.
+
+### Pourquoi / décisions
+- **`contracts/` en dossier top-level** : artefact neutre en langage, consommé
+  par `dashboard/` (Python) **et** `crates/` (Rust) **et** le firmware (C).
+  Écart mineur au layout de `docs/synthese/04` §5 — consigné.
+- **Un seul `sig` par batch** (et non par événement) : c'est ce que montre
+  l'exemple de `docs/synthese/09` §9 ; l'intégrité fine vient du journal chaîné
+  (`seq` + `prev_hash`), `event_id` fait la déduplication.
+- **`msg_log_id` = 16 hex (8 octets)** : les docs se contredisent (`[0..16]`
+  vs « 16 o » vs `[:16]`), le seul exemple concret fait 16 hex. Réconciliation
+  consignée dans `03-ecarts-conception.md`.
+- **Fixtures générées puis committées** (pas régénérées en CI) : un diff montre
+  toute dérive ; la CI vérifie que la régénération ne bouge rien.
+- **Catalogue en module Python** (`catalogue.py`) comme source, `.schema.json`
+  dérivé : évite de maintenir un gros JSON Schema à la main, garde une source
+  unique.
+
+### Écarts vs conception
+- `contracts/` ajouté au layout du dépôt — `03-ecarts-conception.md`.
+- Longueur de `msg_log_id` tranchée à 8 octets — `03-ecarts-conception.md`.
+- Rien d'autre : les schémas transcrivent `docs/powl/08` et `docs/synthese/09`
+  §9 sans les contredire.
+
+### Appris
+- **JSON Schema `$ref` relatif + `jsonschema` Python** : depuis la 4.18, la
+  résolution passe par un `referencing.Registry` qu'il faut peupler à la main
+  (`Resource.from_contents`) — l'ancien `RefResolver` est déprécié. Enregistrer
+  la ressource **et** sous son `$id` **et** sous son nom de fichier.
+- **Ed25519 = 64 octets de signature → 88 caractères base64** terminés par
+  `==` (pattern de schéma `^[A-Za-z0-9+/]{86}==$`).
+
+### État après cette session
+- `contracts/events/` : contrat complet, `validate.py` vert, 20 fixtures
+  prêtes à être consommées par US-208 (core) et US-217 (dashboard).
+- Fiche `modules/contracts-events.md` créée ; `_index.md` et
+  `01-etat-du-code.md` à jour.
+- **Contrat à annoncer « gelé »** au point d'équipe (DoD §7.2, type contrat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd contracts && uv sync
+$ uv run python tools/build_fixtures.py
+  20 fixtures écrites, 28 noms d'événements couverts.
+$ uv run python tools/validate.py
+  ✓ 20 fixtures valides — 28 noms d'événements couverts.
+$ uv run ruff check .
+  All checks passed!
+$ uv run python tools/build_fixtures.py && git diff --stat -- events/
+  (aucun diff — régénération stable)
+```
+- La CI `contracts` n'a pas encore tourné : à l'ouverture de la PR.
+
+### Retours de revue de Paul (2026-09-10)
+
+Branche resynchronisée sur `main` (US-104 + US-115). Conflit `docs/suivi/`
+résolu à la main (idem PR #59). Cinq retours, tous traités :
+
+1. **`payloads.schema.json` généré mais jamais exercé** — `validate.py`
+   validait les `payload` contre le `CATALOGUE` en mémoire et ne vérifiait que
+   l'égalité fichier ↔ régénération. Le schéma JSON que US-217 va **consommer**
+   n'était jamais confronté aux fixtures. Ajouté : chaque `{name, payload}` de
+   fixture est aussi validé contre `payloads.schema.json`. Négatif vérifié
+   (champ requis retiré → rejeté par les deux voies).
+2. **`conv_hash` non réconcilié comme `msg_log_id`** — l'entrée
+   `03-ecarts-conception.md` ne couvrait que `msg_log_id`. Élargie à **tous les
+   identifiants pseudonymes tronqués** (`msg_log_id`, `conv_hash`,
+   `from_peer`/`peer`/`to_peer`) : règle unique = 8 premiers octets → 16 hex.
+   `CANONICAL.md` §3 mis à jour dans le même sens.
+3. **`canonical_json` sans `allow_nan=False`** — le snippet « fait foi » et
+   `catalogue.py` émettaient `NaN`/`Infinity` (JSON invalide) au lieu de lever.
+   `allow_nan=False` ajouté aux deux ; règle du tableau §1 reformulée
+   (« la sérialisation lève une erreur »).
+4. **Discipline des nombres pour Rust** — `CANONICAL.md` §1 : ajout du piège
+   `f64` (un entier resérialisé en `2.0` casse la signature) et de la consigne
+   de désérialiser les champs numériques du catalogue en entier.
+5. **Broutille : `batch_id` jamais recontrôlé** — `validate.py` recalcule
+   `hex(SHA-256(canonical_json(events)))` et le compare. Négatif vérifié.
+
+Au passage, 3 *code smells* SonarCloud sur `validate.py` (complexité cognitive
+21 > 15, `if` imbriqué, littéral `"(global)"` ×3) : la fonction est éclatée en
+petits `_check_*`, constante `GLOBAL`, `if` fusionné.
+
+```
+$ uv run ruff check .   → All checks passed!
+$ uv run python tools/build_fixtures.py && git diff --exit-code -- events/   → stable
+$ uv run python tools/validate.py   → ✓ 20 fixtures valides — 28 noms couverts.
+```
+## 2026-09-11 — US-103 : code du Spike C (« hello mesh »), non exécuté faute de matériel
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/ble/spike/` (nouveau,
+5 fichiers), `MainActivity.kt`, `docs/suivi/modules/android-app.md`
+**Lot :** US-103, Sprint 1 — jalon J0 (Go/No-Go, 14/09)
+
+### Fait
+- Implémenté le harnais de mesure du Spike C : `HelloMeshPeripheral`
+  (`BluetoothGattServer` + `BluetoothLeAdvertiser`, publie `SERVICE_UUID`,
+  expose `CHAR_RX`/`CHAR_TX`) et `HelloMeshCentral` (`BluetoothLeScanner` +
+  `BluetoothGatt` client, négocie le MTU, écrit 20 octets, mesure le
+  round-trip de l'écho), conformes aux UUID et au MTU visé de
+  `docs/powl/03-network-protocol.md` §2 et §6.
+- Écran de debug Compose `HelloMeshSpikeScreen` (bouton dédié dans
+  `MainActivity`) : bascule manuelle Central/Peripheral, journal en direct,
+  carte de résultat (MTU, temps scan→connexion, temps connexion→échange,
+  modèle d'appareil).
+- Rôle choisi manuellement plutôt que par la règle anti-boucle
+  `peerID` du protocole : `dengon-core` n'a pas encore d'identité de nœud —
+  simplification assumée et documentée dans le code et la fiche module.
+- Code marqué explicitement **jetable** (commentaires + fiche module) : à
+  supprimer après la décision go/no-go, `AndroidTransport` (US-213)
+  réimplémentera le double rôle proprement.
+- Rédigé le protocole de mesure manuelle (étapes à suivre sur 2 téléphones)
+  et un tableau de résultats à remplir dans
+  `docs/suivi/modules/android-app.md`.
+- Note d'onboarding `android/` créée dans la même fiche (build, test, 3
+  pièges réels rencontrés depuis US-109) — critère d'acceptation US-103
+  indépendant du matériel, donc réalisable ici.
+
+### Pourquoi / décisions
+- **Pas d'accès à 2 téléphones Android dans cet environnement** : contrainte
+  dure de l'issue #3 (US-103). Décidé avec l'utilisateur de préparer le code
+  + le protocole de mesure maintenant, et de **ne pas fabriquer de chiffres**
+  — les 4 critères d'acceptation qui exigent une mesure réelle restent
+  explicitement non cochés, à exécuter et consigner par l'utilisateur.
+- Écran de debug intégré à `android/app` (plutôt qu'un module Gradle séparé) :
+  plus simple à installer sur 2 appareils pour un spike d'1 jour, cohérent
+  avec la portée « code jetable » du DoD §7.2 (un dossier à supprimer plutôt
+  qu'un module à désinscrire du `settings.gradle.kts`).
+- MTU non lisible côté peripheral (API Android ne l'expose pas après coup à
+  ce niveau) : c'est le résultat côté central qui fait foi, documenté dans
+  la fiche module plutôt que de complexifier le peripheral pour le retrouver.
+
+### Écarts vs conception
+- Aucun sur la conception retenue (`docs/synthese/`) : les simplifications
+  (rôle manuel, un seul échange par lancement) sont des choix de portée du
+  **spike**, pas de l'implémentation finale `AndroidTransport` — documentées
+  comme telles dans le code et la fiche module, pas dans
+  `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau ajouté à `04-apprentissages.md` cette session (assemblage
+  d'API BLE déjà documentées par `docs/powl/03-network-protocol.md`, pas de
+  piège Gradle/Sonar inédit).
+
+### État après cette session
+- `./gradlew assembleDebug`, `testDebugUnitTest` et `assembleRelease`
+  passent avec le nouveau code (`ble/spike/`).
+- **Critères d'acceptation US-103 non satisfaits** : les 4 qui exigent une
+  mesure réelle sur 2 téléphones restent à faire — voir
+  `docs/suivi/modules/android-app.md` §« Spike C » pour le protocole exact
+  à suivre et le tableau à remplir.
+- Fiche(s) module mise(s) à jour : [modules/android-app.md](modules/android-app.md)
+  (section Onboarding + section Spike C ajoutées).
+- 01-etat-du-code.md mis à jour : non (pointeur seul, pas de changement
+  d'avancement tant que le spike n'a pas produit de résultat).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin --console=plain
+BUILD SUCCESSFUL (1 avertissement de dépréciation, corrigé ensuite avec @Suppress)
+
+$ ./gradlew assembleDebug testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+
+$ ./gradlew assembleRelease --console=plain
+BUILD SUCCESSFUL (R8/minify actifs, aucune règle proguard custom nécessaire)
+```
+- **Non vérifié, ne peut pas l'être ici** : les 4 critères d'acceptation
+  matériels (échange réel 20 octets, MTU négocié réel, timing réel, matrice
+  d'appareils). Nécessite 2 téléphones Android physiques.
 ## 2026-09-25 — US-111 : vérification visuelle à 360 px (clôture)
 
 **Auteur :** Claude (Opus 5.5)

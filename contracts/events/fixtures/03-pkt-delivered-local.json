@@ -1,0 +1,20 @@
+{
+  "batch_id": "4dda6d44f1083e94fc07757c688a7eed7c291590dff2ac1b1248d145ceb1fb6d",
+  "node_id": "client-9c1d84",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "96be9a9f4a25aa932d599aa0302e9876b67b2a1a423c8c22f2a6d11f298f9cda",
+      "node_id": "client-9c1d84",
+      "node_kind": "client",
+      "seq": 5001,
+      "ts_ms": 1725800000040,
+      "name": "pkt.delivered_local",
+      "payload": {
+        "msg_log_id": "1122334455667788",
+        "type": 3
+      }
+    }
+  ],
+  "sig": "nIdpRsR+fUfYgP3Mqs8f/oDuIGaNre5z+lQTZ9Wv0x92IVG3S/7mqW+KsneQp1Cv6PCUqCmztYryyzbJRmJ7Dg=="
+}
