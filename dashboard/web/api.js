@@ -22,7 +22,7 @@
   // (`window.location.hash`, donc modifiable par quiconque tape/partage un
   // lien), avant même d'atteindre `encodeURIComponent` — pas seulement une
   // histoire d'encodage, mais de forme attendue.
-  var MSG_LOG_ID_VALIDE = /^[0-9a-f]{16}$/;
+  const MSG_LOG_ID_VALIDE = /^[0-9a-f]{16}$/;
 
   async function fetchMessages() {
     const reponse = await fetch(baseUrl() + "/api/messages");
