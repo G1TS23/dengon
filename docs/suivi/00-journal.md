@@ -46,6 +46,247 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
   rouvrant une discussion de PR déjà fermée — le contenu est de la
   documentation de suivi, pas du code sensible, et les deux PR sources
   sont closes.
+## 2026-09-28 — US-221 : `dengon-sim`, harness N nœuds + réseau simulé déterministe
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-sim/` (`src/{alea,reseau,harness,scenario,cli}.rs`,
+`lib.rs`, `main.rs`, `scenarios/*.ron`, `tests/`), `Cargo.lock`,
+`.github/workflows/sim.yml`
+**Lot :** US-221 (#35), branche `feat/US-221-dengon-sim`
+
+### Fait
+- **`SimTransport`** (`src/reseau.rs`) : implémentation du contrat gelé
+  `dengon_ble::Transport` sur un réseau en mémoire partagé (horloge
+  virtuelle, arêtes radio avec latence / gigue / perte, partitions, files
+  d'événements datées, trace). Passe **la suite de conformité US-105**
+  (`tests/conformite_sim.rs`), comme `MockTransport`.
+- **Harness** (`src/harness.rs`) : `Simulation` avec N nœuds, chacun avec un
+  `Comportement` injecté ; `Inondation` comme relais de démonstration.
+- **Scénarios RON** (`src/scenario.rs`, `scenarios/`) : `direct`, `multihop`,
+  `partition_merge`, `lossy_mesh` ; validation (indices, pertes, pas),
+  actions datées (`Emettre`, `Partitionner`, `Reunir`, `Relier`, `Delier`),
+  attendus (`Livre`, `NonLivre`), empreinte de trace.
+- **CLI** `dengon-sim [--graine N] <scenario.ron>...` (`src/cli.rs`).
+- **Job CI `sim`** (`.github/workflows/sim.yml`) : tests du crate, puis
+  scénarios exécutés **deux fois** en release et sorties comparées (`diff`).
+
+### Pourquoi / décisions
+- **Déterminisme par construction** : horloge virtuelle, SplitMix64 maison à
+  graine fixe (pas `rand`, dont l'algorithme par défaut peut changer),
+  `BTreeMap` partout, nœuds servis par indice croissant.
+- **Conformité au contrat plutôt que simulateur « à part »** : un comportement
+  validé en simulation vaut pour tout transport conforme.
+- **Comportement injecté** : le vrai nœud `dengon-core` a besoin de
+  `sync::routing` (US-209) et de la façade `api` (US-301). Le harness n'aura
+  pas à changer pour l'accueillir.
+- Scénarios dans `crates/dengon-sim/scenarios/` (dossier créé par US-104), pas
+  `sim/scenarios/` comme l'écrit `synthese/10` §4.3.
+
+### Écarts vs conception
+- 2 entrées dans `03-ecarts-conception.md` : nœuds simulés = relais
+  `Inondation` et non `dengon-core` ; périmètre du modèle réseau et des
+  scénarios (sous-ensemble de §4.3, chemin des scénarios).
+
+### Appris
+- Ordre d'itération de `HashMap` aléatoire par processus → `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-221 : N nœuds ✅, transport scriptable (latence, perte,
+  partition) ✅, déterminisme ✅, `sim.yml` ✅ ; couverture à lire dans le job
+  CI `core`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-sim.md` (réécrite).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+Finished (0 warning)
+$ cargo fmt -p dengon-sim -- --check
+OK
+$ cargo test --workspace --all-features --locked
+dengon-sim : 24 unitaires + 1 conformité + 3 scénarios, tous verts ; workspace vert
+$ cargo run -p dengon-sim -- crates/dengon-sim/scenarios/*.ron
+✓ direct          empreinte=0xc010034361161933
+✓ lossy_mesh      empreinte=0x235037add4fc1c92
+✓ multihop        empreinte=0xeda8f6a6800aca8c
+✓ partition_merge empreinte=0xa0db2d31cbd882cb
+$ (binaire release, deux exécutions) diff run1 run2 → identiques
+```
+- `cargo fmt --all -- --check` échoue en local sur des fichiers **non
+  touchés** (`Incorrect newline style`) : copie de travail Windows en CRLF ;
+  sans objet sur la CI Linux.
+- Couverture non mesurée localement (`cargo-llvm-cov` absent).
+
+---
+
+## 2026-09-28 — US-207 : `store`, round de revue d'OswinFreyr — 2 vrais problèmes de sécurité corrigés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/store.rs`,
+`docs/suivi/modules/dengon-core.md`
+**Lot :** US-207, PR #76
+
+### Fait
+- **AAD de `messages.body` élargie à toute la ligne, pas seulement
+  `msg_uuid`.** Reproduit concrètement l'attaque : trafiquer
+  `author_peer_id` d'une ligne `messages` (via `UPDATE` direct sur le
+  `.db`) laissait le corps se déchiffrer normalement — le message se
+  réattribuait silencieusement à un autre auteur. L'AAD inclut maintenant
+  un préfixe de domaine et `conv_id`/`author_peer_id`/`direction`,
+  **recalculée à la lecture depuis les colonnes réellement stockées**
+  (`get_message_body` ne fait plus confiance à des valeurs fournies par
+  l'appelant). Même traitement pour `noise_sessions.state` (préfixe de
+  domaine ajouté). Nouveau test
+  `trafiquer_lauteur_dun_message_casse_le_dechiffrement`.
+- **`upsert_contact` : rotation de clé trace `key_changed_at` et efface
+  `verified_at`.** La version d'origine écrasait les clés publiques d'un
+  contact sans toucher son statut « vérifié » — un contact vérifié restait
+  vérifié même après qu'un pair ait annoncé le même `peer_id` avec
+  d'autres clés (rotation légitime ou usurpation, indiscernables sans
+  cette trace). Ajout d'un paramètre `now_ms` et d'un `CASE` SQL qui
+  compare les clés avant/après pour décider s'il faut effacer/horodater.
+  Corrigé au passage : `pseudo=None` n'efface plus un pseudo déjà connu.
+  Nouveaux tests
+  `changer_les_cles_d_un_contact_efface_son_statut_verifie`,
+  `upsert_contact_ne_vide_pas_un_pseudo_deja_connu`.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #76 (revue automatique, passe
+  diff unique) : 2 points, l'un « moyen », l'autre « faible » selon Oswin
+  — les deux sont de vrais problèmes de sécurité une fois qu'on a un
+  attaquant à écriture sur le fichier `.db` dans le modèle de menace (déjà
+  celui qui justifie le chiffrement champ par champ lui-même).
+## 2026-09-28 — US-206 : `ledger`, round de revue d'OswinFreyr — débordement `u64::MAX` corrigé
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/modules/dengon-core.md`
+**Lot :** US-206, PR #75
+
+### Fait
+- **Bug réel corrigé : débordement `u64::MAX` dans `append()` et
+  `verify_chain()`.** `append()` calculait `self.entries.last().seq + 1` et
+  `verify_chain()` calculait `max + 1`, tous deux en arithmétique `u64` non
+  vérifiée. Une entrée à `seq = u64::MAX` (export corrompu ou hostile) fait
+  paniquer ce calcul en debug/test (`attempt to add with overflow`,
+  confirmé en reproduisant volontairement le bug) et reboucle
+  silencieusement à 0 en release — un vérificateur qui panique ou ment sur
+  une entrée hostile est exactement ce que `verify_chain()` doit éviter.
+  `append()` corrigé avec `saturating_add` (infaillible par signature) ;
+  `verify_chain()` corrigé en comparant en `u128` (ne peut pas déborder
+  pour des opérandes `u64`). Nouveau test
+  `seq_u64_max_ne_panique_pas_et_est_detecte`.
+- **Limite documentée (pas corrigée) : `verify_chain()` ne peut pas
+  re-vérifier un export partiel.** `export(range)` renvoie n'importe quelle
+  tranche de `seq`, mais `verify_chain()` suppose toujours une chaîne
+  démarrant à `seq = 0`. Reconstruire un `Ledger` depuis un export qui ne
+  part pas de 0 (ex. `export(3..6)`) rapporte donc `Gap`/`Broken` à tort.
+  Pas corrigé cette session (aucun appelant réel d'`export()` n'existe
+  encore hors tests — `dengon-verify::main` n'est pas implémenté) : écart
+  consigné dans `03-ecarts-conception.md` avec la vraie question de design
+  à trancher (point d'ancrage en paramètre de `verify_chain`) quand un
+  appelant réel existera.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #75 (2026-09-28, passe unique) :
+  2 constats dans `ledger.rs`, l'un confirmé (débordement), l'autre
+  qualifié « plausible » par Oswin lui-même — vérifié réel (le docstring
+  de `dengon-verify` affiche déjà l'intention de vérifier un export), mais
+  proportionné en documentation plutôt qu'en redesign d'API vu l'absence
+  d'appelant réel actuel.
+
+### Écarts vs conception
+- Nouvelle entrée dans `03-ecarts-conception.md` pour la limite export
+  partiel.
+
+### État après cette session
+- `cargo test -p dengon-core` → 33 passés (29 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features` tous
+  verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core seq_u64_max
+test ledger::tests::seq_u64_max_ne_panique_pas_et_est_detecte ... ok
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+```
+- Régression confirmée : `u128::from(...)` temporairement retiré (retour à
+  `max + 1` en `u64`) → le nouveau test panique avec `attempt to add with
+  overflow`, restauré ensuite.
+
+---
+
+## 2026-09-28 — US-206 : rebase sur `main`, casts `ledger.rs` corrigés pour les lints activés par US-108
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`,
+`docs/suivi/modules/dengon-core.md`
+**Lot :** US-206, PR #75
+
+### Fait
+- Rebase de la branche sur `main` (qui a entre-temps intégré US-108,
+  `protocol::{consts, types}`, PR #63). Conflits réels sur `lib.rs`
+  (`pub mod ledger;` vs `pub mod protocol;` — fusion triviale, les deux
+  coexistent), `Cargo.toml` de la crate (`dev-dependencies` : `proptest` et
+  `serde_json` coexistent), `Cargo.lock` (régénéré via `cargo check`), et la
+  fiche `dengon-core.md` (fusion éditoriale des deux sections).
+- **Bug d'intégration trouvé en vérifiant après le merge** :
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  échouait sur 2 casts `usize as u32` dans `ledger.rs`
+  (`Entry::signing_bytes`/`to_bytes`) — PR #63 (US-108) a activé
+  `cast_possible_truncation`/`cast_sign_loss`/`cast_possible_wrap`
+  workspace-wide, un lint qui n'existait pas encore quand `ledger.rs` a été
+  écrit. Chaque PR était individuellement verte, seule la combinaison des
+  deux cassait clippy.
+- Corrigé avec `u32::try_from(...).unwrap_or(u32::MAX)` (saturant, pas de
+  panic) plutôt qu'un cast brut — même esprit que les corrections
+  équivalentes déjà faites dans `protocol` au round de revue #63.
+
+### Pourquoi / décisions
+- Saturation à `u32::MAX` plutôt qu'un `Result`/panic : un `event_name`/
+  `payload_json` de plus de 4 Go n'a aucun sens pratique dans ce contexte
+  (nom d'événement du catalogue, payload JSON d'un log) — gérer le cas
+  proprement ajouterait de la complexité pour un scénario qui ne se
+  produira jamais en pratique.
+## 2026-09-28 — Corrections factuelles sur `repartition-sprint2.md` (revue d'OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/repartition-sprint2.md`
+**Lot :** Sprint 2, PR #73
+
+### Fait
+- **§6 (approbateurs requis) corrigé** : vérifié sur les chemins réels
+  touchés (`gh pr diff --name-only`) contre `.github/CODEOWNERS` — 4 des
+  5 PR exigent **Paul spécifiquement** (owner unique hors auteur sur
+  `docs/`/`.github/`), pas « Paul ou Oswin » ; #59 exige **les deux**
+  (chemins disjoints `.github/`+`docs/` vs `dashboard/`).
+- **§5 (compte des issues d'Oswin non bloquées) corrigé** : 7 issues/21 pts,
+  pas 5/15 — US-211 et US-212 avaient été omises.
+- **§5 (règle citée) corrigée** : ce n'est pas la règle anti-dépendance
+  intra-sprint qui s'applique à US-103 → US-213 (US-103 est en S1), mais
+  la DoR (dépendance non close).
+- **§4 (dépendance US-109 manquante)** : listée dans la colonne
+  « Dépend de » de #27/#28/#29 mais absente de la colonne « État
+  dépendance » — ajoutée (🟡, PR #74 en attente).
+- **§2 (jalons)** : précisé que J2/J3/J4 sont aussi dépassés au 25/09, pas
+  seulement J1, et que J5 (28/09) tombe 3 jours après la rédaction — risque
+  pour US-223 signalé.
+- **Convention de noms** ajoutée en tête de document (Oswin = OswinFreyr =
+  Tanguy, choix explicite plutôt qu'un mélange avec `CODEOWNERS`).
+- **US-205 : dépendance sur crypto (203) rendue explicite** (« génère un
+  keypair » dans les critères d'acceptation de #19) plutôt que
+  « probablement ».
+- **Mise à jour de contenu (pas une simple correction de revue)** : le
+  Spike C (US-103) a été exécuté intégralement le 28/09 depuis la
+  rédaction de ce document — §5 mis à jour en conséquence, US-213 n'est
+  plus bloquée que par US-109.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #73 : « rien de bloquant sur la
+  répartition elle-même », mais plusieurs erreurs factuelles à corriger
+  avant merge, toutes vérifiées indépendamment (recoupement GitHub) avant
+  correction.
 
 ### Écarts vs conception
 - Aucun.
@@ -61,10 +302,1300 @@ JSON OK
 
 $ cd contracts && uv run python3 tools/validate.py
 ✓ 20 fixtures valides — 28 noms d'événements couverts.
+- `cargo test -p dengon-core` → 32 passés (28 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check` verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core --lib store
+13 passed (module store seul)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+```
+- Les deux corrections confirmées détecter leur régression respective :
+  AAD réduite à `msg_uuid` seul → le test de trafiquage échoue (le
+  déchiffrement réussit à tort) ; `CASE` SQL neutralisé →
+  `verified_at`/`key_changed_at` restent inchangés après un vrai
+  changement de clé. Les deux restaurés ensuite.
+
+---
+
+## 2026-09-28 — US-207 : rebase sur `main` (US-108 mergée), fiche fusionnée
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/lib.rs`,
+`docs/suivi/modules/dengon-core.md`, `docs/suivi/02-avancement.md`
+**Lot :** US-207, PR #76
+
+### Fait
+- Rebase de la branche sur `main` (qui a entre-temps intégré US-108,
+  `protocol::{consts, types}`, PR #63). Conflits réels sur `lib.rs`
+  (`pub mod store;` vs `pub mod protocol;` — fusion triviale, les deux
+  coexistent), `Cargo.lock` (régénéré via `cargo check`), et la fiche
+  `dengon-core.md` (fusion éditoriale des deux sections). Ligne
+  `dengon-core` dupliquée dans `02-avancement.md` par le merge union,
+  fusionnée en une seule (même piège que celui déjà signalé sur la PR #63).
+- Contrairement à la branche `ledger` (US-206), **aucun correctif de code
+  nécessaire ici** : `store.rs` ne fait aucun cast `usize as u32` du genre
+  qui a cassé `ledger.rs` sous les lints `cast_possible_truncation`/
+  `cast_sign_loss`/`cast_possible_wrap` activés par US-108 — vérifié en
+  relançant `cargo clippy --workspace --all-targets --all-features -- -D
+  warnings` après le merge, propre du premier coup.
+
+### Pourquoi / décisions
+- Aucune nouvelle décision — rebase de suivi.
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features` tous
+  verts. Fiche module fusionnée pour refléter `ledger` + `protocol`
+  ensemble.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+
+$ cargo test -p dengon-core
+32 passed (28 lib + 4 intégration)
+
+$ cargo fmt --all -- --check
+(rien — propre)
+
+$ cargo check -p dengon-core --no-default-features
+Finished
+- Toutes les corrections du round de revue sont faites. Le document reste
+  ouvert à validation par Paul et Oswin (§3, point de friction `sync::`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh pr diff 59 --repo G1TS23/dengon --name-only   # + 60, 63, 66
+(vérifié : chemins touchés recoupés avec .github/CODEOWNERS)
+
+$ gh issue view 27/28/29 --repo G1TS23/dengon --json body -q '.body' | grep Dépend
+(confirmé : US-109 listée comme dépendance sur les 3 issues)
 ```
 
 ---
 
+## 2026-09-26 — US-206 : correctif `verify_chain` (doublon de seq non adjacent)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`
+**Lot :** US-206, Sprint 2 (auto-revue de la PR #75 avant merge, demandée
+explicitement par Olivier — « refaire un tour sur ces dernières PR un peu
+en mode review »)
+
+### Fait
+- Bug trouvé en relisant `verify_chain` de manière adversariale : la
+  détection ne comparait chaque `seq` qu'à celui de l'entrée
+  **immédiatement précédente** dans le stockage. Une séquence
+  `[0, 1, 2, 1]` — un rejeu d'une entrée déjà vue, mais pas juste après
+  l'original (un scénario de fork réaliste : une vieille entrée
+  retransmise plus tard) — était donc classée à tort `Gap` au lieu de
+  `Fork` (le seq max vu était 2, sans jamais détecter le doublon adjacent).
+  Reproduit concrètement avant correction via un test temporaire
+  (`cargo test -p dengon-core scratch_review -- --nocapture` →
+  `verdict pour [0,1,2,1] = Gap`), puis supprimé une fois le correctif
+  vérifié.
+- **Rien n'était accepté à tort** (aucune entrée invalide ne passait comme
+  `Ok`) — mais le verdict précis était faux, ce qui aurait pu induire en
+  erreur un futur diagnostic (« pourquoi un trou alors qu'aucune entrée ne
+  manque vraiment ? »).
+- Réécrit `verify_chain` en deux passes : passe 1 sur un
+  `alloc::collections::BTreeSet<u64>` des `seq` (détecte `Fork`/`Gap`
+  indépendamment de l'ordre de stockage) ; passe 2 = la marche de chaîne de
+  hash originale, dans l'ordre de stockage (`Broken`).
+- Nouveau test permanent `un_doublon_non_adjacent_est_bien_un_fork` couvrant
+  exactement ce cas.
+
+### Vérification
+- `cargo test -p dengon-core` : 15 tests, tous verts (incluait déjà le
+  correctif + le nouveau test).
+- `cargo fmt --all -- --check` : propre.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` :
+  propre.
+- `cargo check -p dengon-core --no-default-features --locked` : compile
+  toujours en `no_std`.
+
+## 2026-09-26 — US-206 : `ledger` — journal chaîné append-only
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/ledger.rs}`
+(nouveau), `crates/dengon-verify/src/main.rs`, `Cargo.toml` (racine),
+`docs/suivi/modules/{dengon-core,dengon-verify}.md`,
+`docs/suivi/02-avancement.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-206, Sprint 2
+
+### Fait
+- Implémenté `ledger::{Entry, Ledger, Signer, NullSigner, Verdict}` :
+  `append`/`verify_chain`/`export`, hash chaîné SHA-256 avec longueurs
+  préfixées (pas d'ambiguïté de découpage entre champs), détection de trou
+  (`Gap`), de position dupliquée (`Fork`) et de hash incohérent (`Broken`).
+- Signature différée derrière le trait `Signer` (voir
+  `03-ecarts-conception.md`, entrée dédiée) — `crypto` (US-203) est dans le
+  même sprint, la règle du projet interdit la dépendance intra-sprint.
+- `no_std` + `alloc` : `extern crate alloc;` ajouté à `lib.rs` (jusque-là
+  absent faute d'usage), `sha2` en `default-features = false`.
+- 12 tests unitaires + 2 property tests (`proptest`) : toute séquence
+  d'appends reste vérifiable ; corrompre n'importe quelle entrée d'une
+  séquence quelconque est toujours détecté comme `Broken`, jamais accepté
+  silencieusement.
+- « Reprise après redémarrage » démontrée par un aller-retour
+  `Entry::to_bytes`/`from_bytes` (sérialiser, détruire le `Ledger` en
+  mémoire, désérialiser, revérifier la chaîne) — pas de vrai backend de
+  stockage câblé, voir l'écart consigné.
+- `dengon-verify::main` branché sur `dengon_core::ledger::Verdict` (réel)
+  au lieu de sa copie locale, comme l'annonçait déjà `04-architecture.md` §2.
+
+### Pourquoi / décisions
+- Voir `03-ecarts-conception.md`, entrée « `ledger` : signature différée
+  derrière un trait `Signer` (US-206) » pour le détail de la dépendance
+  intra-sprint évitée.
+
+### Écarts vs conception
+- Un écart, documenté : signature non vérifiée par `verify_chain()` pour
+  l'instant (voir ci-dessus).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+14 passed; 0 failed
+
+$ cargo test -p dengon-verify
+1 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(vert, 0 warning)
+
+$ cargo check -p dengon-core --no-default-features --locked
+(vert — frontière no_std)
+```
+## 2026-09-25 — Répartition Sprint 2 entre Paul, Oswin et Olivier
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/repartition-sprint2.md` (nouveau), assignation
+GitHub des 24 issues `sprint:s2`
+**Lot :** planification, pas de code
+
+### Fait
+- Extrait et croisé les 24 issues Sprint 2 (points, dépendances, jalons) :
+  80 points au total, dont **42 concentrés sur `core-rust` seul**, tous
+  `Must`/jalon J1 (déjà 7 jours de retard).
+- Décidé de répartir `core-rust` entre les 3 personnes plutôt que de le
+  laisser au seul CODEOWNER de `/crates/` (Paul) — injouable sinon.
+- Répartition posée : Paul (crypto/identity/sync routing+inventory/firmware,
+  26 pts), Oswin (Android/protocole L2-L3/sync status+courier/sim, 26 pts),
+  Olivier (dashboard/stockage+observabilité/docs, 28 pts).
+- Détail complet, y compris le raisonnement et les dépendances issue par
+  issue, dans `docs/suivi/repartition-sprint2.md`.
+
+### Pourquoi / décisions
+- `sync::routing`/`inventory` (Paul) et `sync::status`/`courier` (Oswin)
+  sont coupés entre deux personnes alors que les 4 modules s'articulent
+  étroitement — friction identifiée et documentée, **à trancher en réunion**
+  avant que chacun parte de son côté (voir le document, §3).
+- US-213 (Android, Oswin) dépend formellement de US-103, qui n'est
+  toujours pas close (voir entrée précédente du 25/09) — bloqueur transverse
+  documenté, pas caché.
+
+### Écarts vs conception
+- Aucun — décision de process, pas de conception technique.
+
+### État après cette session
+- Issues assignées sur GitHub. **À valider par Paul et Oswin**, notamment le
+  point de friction `sync::` — ce n'est pas une décision unilatérale
+  définitive.
+
+---
+
+## 2026-09-28 — US-112 : revue round 6 d'OswinFreyr sur la PR #66 + journal reconstruit après conflit avec `main`
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/00-journal.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-112, PR #66
+
+### Fait
+- **Conflit GitHub sur `00-journal.md` résolu** : fusion de `origin/main` en
+  local (le pilote `merge=union` n'est pas appliqué par le bouton de fusion
+  GitHub).
+- **Points 1 à 3 (journal abîmé)** : les fusions `union` successives avaient
+  découpé les entrées US-112 dans celles d'autres US (« Appris » / « État
+  après » d'US-112 dans une entrée contracts/fixtures, une phrase sur #64
+  dans l'entrée de la PR #63), inséré l'entrée du 2026-09-11 dans un bloc de
+  code ouvert (nombre impair de délimiteurs : tout le reste du journal
+  s'affichait en code sur GitHub) et dispersé les entrées au milieu du
+  fichier. Journal **reconstruit** : celui de `main` tel quel, et les 6
+  entrées US-112 réinsérées en tête, chacune d'un seul bloc, dans l'ordre
+  chronologique inverse, séparées par `---`. Le texte de chaque entrée est
+  repris du commit qui l'a créée (`a29cf6e`, `f22b734`, `cc9ba15`,
+  `7b0337d`, `fd67ee2`, `bbda966`), où il était encore contigu : aucun mot
+  modifié.
+- **Point 4** : `---` + ligne vide ajouté entre l'écart US-112 et celui du
+  2026-09-10 dans `03-ecarts-conception.md`.
+- **Point 5** : l'écart US-112 décrivait mal `powl/09`, qui marque déjà
+  `priv_static`/`priv_sign` « (chiffré) ». Reformulé : l'écart réel est le
+  **mécanisme** (Keystore/Keychain plutôt qu'un chiffrement logiciel
+  générique), pas le fait de chiffrer.
+
+### Pourquoi / décisions
+- Reconstruction plutôt que retouche : l'entrelacement était réparti sur
+  8 morceaux, et une correction à la main laissait un risque d'attribuer un
+  paragraphe à la mauvaise US.
+- Les entrées d'origine ne sont pas modifiées (journal append-only) : seul
+  leur emplacement change.
+
+### Écarts vs conception
+- Aucun nouveau (l'écart existant est seulement corrigé).
+
+### État après cette session
+- Les 5 constats du round 6 sont traités. Reste l'approbation de la PR.
+
+### Vérification (commandes réellement exécutées)
+```
+$ git show -U0 <commit> -- docs/suivi/00-journal.md | grep -c '^@@'
+→ 1 pour chacun des 6 commits (chaque entrée ajoutée d'un seul bloc, 0 suppression)
+$ comm -3 <lignes ajoutées vs main, avant reconstruction> <lignes des 6 entrées>
+→ aucune ligne US-112 perdue
+$ git diff origin/main --numstat -- docs/suivi/00-journal.md
+→ uniquement des ajouts
+$ grep -c '^\s*```' docs/suivi/00-journal.md
+→ nombre pair
+```
+
+---
+
+## 2026-09-28 — US-112 : round 5 de revue d'OswinFreyr — texte de `06-securite.md`/`00-contexte-global.md` aligné avec le report dans les issues
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md` (§3, §8),
+`docs/synthese/00-contexte-global.md` (ligne A-3/B-1)
+**Lot :** US-112, PR #66
+
+### Fait
+- **§3, condition 2** : « Aucune US actuelle ne porte explicitement ce
+  point […] À ajouter aux critères d'acceptation de US-307 ou US-308 »
+  remplacé par « Porté par US-308 (#46) », maintenant que le critère est
+  réellement dans l'issue (round précédent).
+- **§8 (tableau des primitives), corrigé pour ne plus contredire le §3** :
+  - Ligne « Aléa » : « OS CSPRNG » / `getrandom` seul était faux pour
+    l'ESP32 — le §3 explique juste au-dessus que `getrandom` n'a pas de
+    backend xtensa. Remplacé par « OS CSPRNG (mobile) / TRNG ESP32
+    (firmware) » / `getrandom`+`OsRng` (mobile) et `esp_fill_random()` via
+    `CryptoResolver` (firmware).
+  - Ligne « Framework de session » : `snow` sans version, alors que le
+    texte juste en dessous exige des « versions épinglées » — ajouté
+    `≥ 0.10.0`.
+- **`00-contexte-global.md`, ligne A-3/B-1** : « `CryptoResolver` sur
+  `esp_fill_random()` (non encore assigné à une US) » → référence les
+  issues réelles (#18, #46).
+
+### Pourquoi / décisions
+- Retour d'OswinFreyr, revue de suivi du 2026-09-28 : les 2 remarques du
+  round précédent étaient bien traitées (vérifiées sur GitHub), mais le
+  texte de la doc de synthèse elle-même n'avait pas suivi le report dans
+  les issues — incohérence pointée comme « à corriger avant merge » sur le
+  tableau §8 (contradiction interne avec le §3).
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- `cargo test -p dengon-core` → 29 passés (25 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features` tous
+  verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+29 passed (25 lib + 4 intégration)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+
+$ cargo fmt --all -- --check
+(rien — propre)
+- Les 2 points de ce round sont traités.
+
+### Vérification (commandes réellement exécutées)
+```
+$ grep -n "esp_fill_random\|snow" docs/synthese/06-securite.md
+(vérifié manuellement : §3 et §8 cohérents, plus de contradiction)
+```
+
+---
+
+## 2026-09-26 — US-207 : AAD manquante sur le chiffrement champ par champ
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/store.rs`
+**Lot :** US-207, Sprint 2 (auto-revue de la PR #76 avant merge, demandée
+explicitement par Olivier — « refaire un tour sur ces dernières PR un peu
+en mode review »)
+
+### Fait
+- Vulnérabilité trouvée en relisant `encrypt_field`/`decrypt_field` de
+  manière adversariale : le chiffrement XChaCha20-Poly1305 ne liait le
+  texte chiffré à **aucun contexte** (ni `msg_uuid`, ni `peer_id`, ni nom
+  de colonne). Un attaquant capable d'écrire directement dans le fichier
+  `.db` (appareil compromis, synchronisation malveillante) aurait donc pu
+  copier le blob chiffré d'une ligne vers une autre — par ex. remplacer
+  le corps chiffré d'un message par celui, chiffré, d'un autre message, ou
+  échanger l'état Noise de deux pairs — et le déchiffrement aurait quand
+  même réussi, puisque l'AEAD n'authentifiait que le texte chiffré
+  lui-même, jamais la ligne à laquelle il est censé appartenir.
+- Corrigé en ajoutant un paramètre `aad` (« additional authenticated
+  data ») à `encrypt_field`/`decrypt_field`, porté par `chacha20poly1305`
+  nativement (`aead::Payload { msg, aad }`) : `identity.priv_static`/
+  `priv_sign` liés à une constante de colonne, `messages.body` lié à
+  `msg_uuid`, `noise_sessions.state` lié à `peer_id`. Un même texte chiffré
+  présenté sous un mauvais contexte échoue désormais explicitement au
+  déchiffrement (`StoreError::Decryption`), au lieu de réussir
+  silencieusement.
+- Nouveau test permanent
+  `un_champ_dechiffre_avec_un_mauvais_contexte_echoue` couvrant ce cas.
+- Vérifié au passage (hypothèses de la revue précédente) : le fichier
+  `-wal` de SQLite ne peut jamais contenir de plaintext, puisque le
+  chiffrement a lieu côté Rust avant que les octets n'atteignent SQLite
+  (aucun risque lié à `journal_mode = WAL`) ; aucun fichier `-wal`/`-shm`
+  résiduel constaté après fermeture de la connexion dans le test sur
+  fichier réel. La clé de chiffrement partagée entre les trois colonnes
+  sensibles reste un choix de simplification documenté (espace de nonce
+  XChaCha20 assez grand), pas un bug. `#[allow(clippy::too_many_arguments)]`
+  sur `set_identity`/`insert_message` reflète 1:1 les colonnes de la
+  table — accepté tel quel.
+
+### Vérification
+- `cargo test -p dengon-core --lib store` : 10 tests, tous verts (incluait
+  déjà le test négatif de la revue précédente + le nouveau).
+- `cargo fmt --all -- --check` : propre.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` :
+  propre.
+
+## 2026-09-26 — US-207 : `store` — persistance SQLite chiffrée champ par champ
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/store.rs}`
+(nouveau), `Cargo.toml` (racine), `docs/suivi/modules/dengon-core.md`,
+`docs/suivi/02-avancement.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-207, Sprint 2
+
+### Fait
+- Implémenté `store::{Store, KeySource, FixedKeySource}` : schéma SQLite
+  complet (11 tables, repris tel quel de `docs/synthese/09` §11.1),
+  migrations versionnées et rejouables (même discipline que
+  `dashboard/api/app/migrations.py`, US-110), chiffrement XChaCha20-Poly1305
+  champ par champ (`identity.priv_static`/`priv_sign`, `messages.body`,
+  `noise_sessions.state`).
+- Clé de chiffrement différée derrière le trait `KeySource` — même schéma
+  que `ledger::Signer` (US-206) : `identity` (US-205) est dans le même
+  sprint, dépendance intra-sprint interdite par la règle du projet. Écart
+  consigné dans `03-ecarts-conception.md`.
+- `store` reste `std`-only par choix : `rusqlite` vendorise sqlite3 en C,
+  incompatible ESP32 de toute façon (l'impl ESP32 sera un module séparé,
+  NVS/flash, prévu par l'architecture).
+- 9 tests sur `store` : migrations rejouables, round-trip identité/
+  message/session Noise, nonce aléatoire (deux chiffrements du même texte
+  diffèrent), mauvaise clé / donnée modifiée / buffer tronqué échouent tous
+  proprement (pas de panique). **Test central du critère d'acceptation** :
+  écrit un message connu sur un vrai fichier `.db`, `grep` binaire sur le
+  fichier — le texte en clair n'y est pas.
+
+### Pourquoi / décisions
+- Voir `03-ecarts-conception.md`, entrée « `store` : clé de chiffrement
+  différée derrière un trait `KeySource` (US-207) ».
+
+### Écarts vs conception
+- Un écart, documenté : la clé de chiffrement est fixe (bouchon), pas
+  dérivée d'un Keystore/Keychain réel (voir ci-dessus). Le mécanisme de
+  chiffrement lui-même n'est pas un bouchon — il chiffre réellement,
+  vérifié par le test négatif sur fichier.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+11 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(vert, 0 warning)
+
+$ cargo check -p dengon-core --no-default-features --locked
+(vert — store absent de cette configuration, comme prévu)
+```
+## 2026-09-28 — US-112 : round de revue d'OswinFreyr sur la PR #66, gap `CryptoResolver` reporté dans les issues
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** description de la PR #66 (GitHub), issues #18 et #46
+(GitHub, critères d'acceptation)
+**Lot :** US-112, PR #66
+
+### Fait
+- **Gap `CryptoResolver` reporté directement dans les critères d'acceptation
+  de #46 (US-308)** : `06-securite.md` notait depuis le Spike A qu'aucune US
+  ne portait explicitement l'implémentation d'un `CryptoResolver` custom
+  branché sur `esp_fill_random()`, en laissant le choix entre #45/#46 en
+  TODO de doc. Ajouté à #46 (pas #45, qui ne couvre que le linkage C) : une
+  personne qui démarre US-308 avant S3 le verra maintenant sans avoir à
+  relire `06-securite.md`.
+- **Épinglage `snow ≥ 0.10.0` reporté dans les critères d'acceptation de #18
+  (US-204)** : même raison, US-204 est celle qui introduit réellement la
+  dépendance `snow`.
+- **Description de la PR #66 corrigée** : la puce sur l'« État du Spike A »
+  décrivait encore l'état d'avant #64 (un simple renvoi à l'issue #1) alors
+  que le résultat est intégré au §3 depuis le début de cette PR ; la case
+  « Relu par une autre personne » était cochée sans review `APPROVED` ;
+  clarifié que le « 7/7 liens » de la vérification ne compte que
+  `06-securite.md` seul, alors que le « 9/9 » de l'entrée de journal du
+  25/09 (ci-dessous) comptait aussi les liens de `00-contexte-global.md` —
+  deux périmètres différents, pas une contradiction.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #66 (commentaire GitHub daté du
+  2026-09-28) : « le plus sûr est de le reporter tout de suite dans une
+  issue, en ajoutant le critère à #45 ou #46 » — personne ne relira une doc
+  de synthèse au moment de démarrer une US deux sprints plus tard.
+
+### Écarts vs conception
+- Aucun.
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh issue view 46 --repo G1TS23/dengon --json body -q '.body' | grep CryptoResolver
+- [ ] `CryptoResolver` custom branché sur `esp_fill_random()` de l'ESP-IDF (...)
+
+$ gh issue view 18 --repo G1TS23/dengon --json body -q '.body' | grep snow
+- [ ] `snow` épinglé à **≥ 0.10.0**, jamais 0.9.x (...)
+```
+
+---
+
+## 2026-09-25 — US-112 : revue round 2 d'OswinFreyr sur la PR #66
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+description de la PR #66
+**Lot :** US-112, Sprint 1
+
+### Fait
+- **`06-securite.md` §3, condition 1** : la citation « à épingler
+  explicitement au moment d'ajouter la crypto (US-108) » était fausse —
+  US-108 ne pose que les types/constantes de trame (PR #63), sans toucher à
+  `snow`. Corrigé en **US-204**, l'US qui introduit réellement Noise `XX`/`X`.
+- **`06-securite.md` §3, condition 2** et **`00-contexte-global.md` A-3/B-1** :
+  la citation « (US-307) » pour le `CryptoResolver` sur `esp_fill_random()`
+  était également fausse — vérifié le corps complet des issues #45 (US-307,
+  ne couvre que `libdengon_core.a` + `cbindgen`) et #46 (US-308, tâches
+  FreeRTOS + `Store`) : **aucune des deux ne mentionne le resolver**. Reformulé
+  en gap explicite plutôt que de pointer une US qui ne le couvre pas, avec
+  recommandation de l'ajouter aux critères d'acceptation de l'une des deux
+  avant S3.
+- **`06-securite.md` §5.1, ligne `messages.body`** : formulation « clair une
+  fois déchiffré par l'app, jamais chiffré XChaCha20 sur le fil » pouvait se
+  lire à l'envers (comme si la colonne n'était pas chiffrée au repos, alors
+  que c'est exactement B-3). Reformulé pour lever l'ambiguïté.
+- **Description de la PR #66** : le tableau et la checklist affirmaient
+  encore « résultat du Spike A pas encore connu », alors que PR #64 (mergée
+  le 11/09) l'a intégré depuis le début de cette PR. Mis à jour.
+
+### Pourquoi / décisions
+- Les deux mauvaises citations d'US (US-108, US-307) auraient pu faire
+  manquer l'épinglage de version de `snow` et l'implémentation du
+  `CryptoResolver` au bon moment du sprint 3 — exactement le risque que ces
+  notes existent pour éviter.
+
+### Écarts vs conception
+- Aucun — corrections de citations et de formulation, pas de changement de
+  décision.
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 <script de résolution des liens relatifs>
+9/9 liens résolvent
+```
+
+---
+
+## 2026-09-16 — US-112 : revue de POWLAIR sur la PR #66
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+`docs/suivi/03-ecarts-conception.md`
+**Lot :** US-112 (suite), Sprint 1
+
+### Fait
+- 6 points de @POWLAIR sur la PR #66, tous vérifiés avant correction :
+  1. **§3 conditionnel alors que PR #64 est mergée** (2026-09-11T12:48:04Z,
+     commit `b8fae88`) — le texte « en revue, pas encore mergée » et « à
+     figer sans conditionnel dès que la PR merge » (tête de fichier, §3, et
+     C-11 dans `00-contexte-global.md`) partaient tels quels sur `main`.
+     Corrigé : conditionnel retiré partout, renvoi vers
+     `docs/suivi/spikes/US-101-cross-compile-xtensa.md`. La ligne A-3/B-1
+     (`00-contexte-global.md:50`), aussi encore au conditionnel, corrigée au
+     passage (repérée par Paul comme « hors diff » mais même cause racine).
+  2. **« tels quels » contredit le spike** — le rapport répond OUI à deux
+     conditions (`snow` ≥ 0.10.0 ; le firmware doit fournir l'aléa via un
+     `CryptoResolver` sur `esp_fill_random()`, `getrandom` étant indisponible
+     sur xtensa), §3 ne reprenait que la première. Corrigé : les deux
+     conditions citées, la seconde (qualité de l'aléa d'un handshake Noise)
+     étant la seule qui relève vraiment d'un doc sécurité.
+  3. **Ancre cassée** (`06-securite.md:9`) — le lien vers D-1 pointait
+     `#d-1-...-clés-brutes-ou-empreintes` alors que le slug GitHub réel du
+     titre `### D-1. Entrée du code de vérification : clés brutes ou
+     empreintes ?` porte un double tiret (le `:` du titre) et un tiret final
+     (le `?`) : `#d-1-...-vérification--clés-brutes-ou-empreintes-`. Corrigé
+     avec le slug exact fourni par Paul.
+  4. **§5.1 : 3 des 4 colonnes de `noise_sessions` non classées** — seule
+     `state` figurait, `peer_id`/`established_ms`/`tx_count` manquaient
+     (et `identity.id`, colonne fixe non listée non plus). Ajoutés en
+     « clair » avec justification, cohérent avec le patron des autres tables.
+  5. **`gossip_cache.packet` classé « clair » alors que 3ᵉ cas de la
+     taxonomie du §5.1** — ce sont des paquets L3 relayés donc déjà scellés,
+     même raisonnement que `outbox.packet`/`held_envelopes.packet`. Reclassé
+     en « déjà chiffré (protocole) », `msg_id`/`cached_ms` restant en clair.
+  6. **Journal : « Écarts vs conception : Aucun » mais la PR revendique deux
+     divergences vs `powl/09`** (`-- clair local uniquement` sur
+     `messages.body` superseded par B-3 ; `priv_static`/`priv_sign`
+     reclassés Keystore) — les deux entrées du 2026-09-11 pour US-112
+     disaient toutes deux « Aucun ». Le contenu de `06-securite.md` était
+     correct dès l'origine ; seul le suivi était en faute. Nouvelle entrée
+     ajoutée dans `03-ecarts-conception.md` (append-only : les deux entrées
+     du 11/09 ne sont pas modifiées, la nouvelle entrée les rectifie).
+
+### Pourquoi / décisions
+- **Deux corrections regroupées dans une seule entrée d'écart** (point 6)
+  plutôt que deux entrées séparées : même cause (US-112 antérieure à B-3),
+  même conséquence (rien à corriger dans le contenu, seulement dans le
+  journal) — les séparer aurait dupliqué le contexte sans clarifier.
+
+### Écarts vs conception
+- Voir `03-ecarts-conception.md`, entrée 2026-09-16 (rectification des deux
+  entrées du 2026-09-11 pour US-112).
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- PR #66 : les 6 points traités, vérifiés, commit + push à faire.
+- Pas de fiche module (US-112 reste un travail de documentation transverse).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 - <<'EOF'
+# résout chaque lien relatif de docs/synthese/06-securite.md vers un fichier réel
+EOF
+→ tous OK après merge de main (le lien vers docs/suivi/spikes/US-101-...
+  n'existait pas encore sur cette branche avant merge)
+$ gh pr view 64 --json state,mergedAt,mergeCommit
+→ state: MERGED, mergedAt: 2026-09-11T12:48:04Z, commit b8fae88
+```
+- Slug D-1 non vérifié par un outil (pas de renderer Markdown/GitHub local
+  disponible) — repris tel que calculé et fourni par Paul dans sa revue,
+  cohérent avec l'algorithme github-slugger documenté (minuscules, ponctuation
+  retirée hors espaces/tirets, espaces consécutifs → tirets consécutifs).
+
+---
+
+## 2026-09-11 — US-112 : rectification après un commentaire manqué de POWLAIR
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`,
+`docs/synthese/09-dashboard-et-donnees.md`
+**Lot :** US-112 (suite), Sprint 1
+
+### Fait
+- **Erreur de process** : l'entrée précédente (ci-dessous) a été écrite sans
+  vérifier les commentaires de l'issue #12 au préalable. Paul (POWLAIR) y
+  avait laissé, ~15 min avant le début de cette session de travail, un
+  commentaire détaillé signalant une branche locale non poussée
+  (`docs/trancher-sujets-ouverts`, commit `ac062fc`) qui couvrait déjà une
+  partie des critères de l'US, plus deux vraies coquilles trouvées dans
+  `09-dashboard-et-donnees.md`. Repéré seulement quand l'utilisateur a
+  demandé si ce commentaire avait été vu — réponse honnête : non.
+- Comparé le contenu déjà écrit dans la PR #66 à ce que le commentaire de
+  Paul décrit : le §5.1 (mapping des colonnes chiffrées) n'est **pas**
+  couvert par sa branche (son tableau des critères ne le mentionne pas) —
+  pas de doublon sur ce point. En revanche deux choses manquaient :
+  1. Le **résultat du Spike A** existe déjà : [PR #64](https://github.com/G1TS23/dengon/pull/64)
+     (US-101, en revue), conclusion **OUI** (`snow` 0.10 cross-compile pour
+     xtensa). §3 et l'en-tête de `06-securite.md`, et la ligne C-11 de
+     `00-contexte-global.md`, mis à jour pour pointer dessus au lieu de
+     rester sur « en cours ».
+  2. **Deux vraies incohérences** dans `09-dashboard-et-donnees.md` (prose vs
+     SQL du même fichier) : `quarantined` manquait dans la liste des
+     couleurs de statut (l. 86, présent dans le `CHECK` l. 419, D-5) ;
+     `rejected_sig` manquait dans la liste des verdicts d'intégrité (l. 93,
+     présent dans le `CHECK` l. 433, D-4). Corrigées.
+- Vérifié indépendamment ces deux points par lecture directe du fichier
+  (pas seulement sur la foi du commentaire de Paul).
+- Répondu sur l'issue #12 pour éviter le travail en double : PR #66 déjà
+  ouverte, contenu complémentaire (pas redondant) avec sa branche locale,
+  pas besoin qu'il la pousse pour ce point précis.
+
+### Pourquoi / décisions
+- Pas de retrait de la PR #66 : le contenu ajouté (mapping §5.1) est
+  original et répond au critère que la branche de Paul ne couvrait pas.
+  Seule la partie « déjà faite ailleurs » a été corrigée/complétée, pas
+  réécrite depuis zéro.
+- Référencer la PR #64 plutôt qu'attendre son merge pour écrire le résultat
+  du Spike A : la PR est ouverte, en revue, son contenu est public et
+  vérifiable — attendre aurait rouvert l'US pour un simple changement de
+  formulation une fois #64 mergée. La mention « pas encore mergée » évite de
+  faire passer un résultat pour définitivement acté.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Vérifier les **commentaires** d'une issue avant de commencer, pas
+  seulement son corps — le process suivi jusqu'ici (lire l'issue, vérifier
+  git status, démarrer) n'incluait pas cette étape. À généraliser aux
+  prochaines US : `gh issue view <n> --comments` avant tout travail.
+
+### État après cette session
+- US-112 : mapping colonnes chiffrées (nouveau, §5.1), Spike A (référencé,
+  PR #64), D-4/D-5 (corrigées dans `09-dashboard-et-donnees.md`) — tous
+  couverts. Reste la relecture croisée (4ᵉ critère), et le passage sans
+  conditionnel du Spike A une fois #64 mergée (pas bloquant pour cette US).
+- Fiche(s) module mise(s) à jour : sans objet (documentation transverse).
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh api repos/G1TS23/dengon/issues/12/comments
+→ commentaire de POWLAIR, 2026-09-11T09:29:33Z, lu en entier
+$ grep -n "online.*stale.*suspect\|ok.*broken.*fork" docs/synthese/09-dashboard-et-donnees.md
+→ confirme les deux endroits où la prose retardait sur le SQL (l. 86, 93)
+  avant correction
+```
+- **Non vérifié** : le contenu exact de la branche locale
+  `docs/trancher-sujets-ouverts` de Paul (jamais poussée, donc invisible
+  depuis cette session) — seule sa description dans le commentaire a pu
+  être exploitée.
+
+---
+
+## 2026-09-11 — US-112 : delta doc sécurité (`docs/synthese/06-securite.md`)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/synthese/06-securite.md`, `docs/synthese/00-contexte-global.md`
+**Lot :** US-112, Sprint 1
+
+### Fait
+- `docs/synthese/06-securite.md` existait déjà (créé lors de l'éclatement de
+  `docs/synthese/`) mais portait encore, en tête de fichier, la mention « il
+  ne reste qu'un delta à rédiger » — exactement le contenu que cette US doit
+  produire. Complété plutôt que dupliqué dans un nouveau fichier.
+- Vérifié l'état des trois réconciliations listées par C-11
+  (`01-sujets-a-trancher.md` §D) : D-1 et D-2 étaient **déjà** intégrées dans
+  le corps du fichier (§2, §3) ; D-4 et D-5 étaient **déjà** réconciliées dans
+  `09-dashboard-et-donnees.md` (`-- D-4`, `-- D-5` dans le SQL). Seul
+  manquait vraiment : le **mapping des colonnes chiffrées** champ par champ,
+  et un état explicite du **Spike A** (US-101, toujours ouverte).
+- Ajout §5.1 : table complète des colonnes de `dengon-core::store`
+  (`powl/09-data-model.md` §1), classées en 3 cas — Keystore/Keychain (clés
+  privées), XChaCha20 champ par champ (`messages.body`,
+  `noise_sessions.state`), déjà chiffré par le protocole donc pas de second
+  chiffrement (`outbox.packet`, `held_envelopes.packet`), ou clair
+  (métadonnées, identifiants publics).
+- Ajout d'un état explicite du Spike A en §3 (renvoi à l'issue #1) plutôt
+  qu'un TODO nu.
+- Mis à jour la ligne C-11 de `00-contexte-global.md` (le delta n'est plus
+  "à rédiger", il pointe vers `06-securite.md`).
+- Vérifié : tous les liens relatifs du fichier résolvent vers un fichier
+  existant (script Python, voir ci-dessous) ; cohérent avec B-3/C-11/A-13 de
+  la table de décisions.
+
+### Pourquoi / décisions
+- Compléter le fichier existant plutôt qu'en créer un nouveau : il se
+  présentait déjà explicitement comme le brouillon de ce delta (tête de
+  fichier), créer un second document aurait dupliqué §1-§4 sans raison et
+  cassé le lien que `00-contexte-global.md` (C-11) pointe déjà dessus.
+- Le commentaire `-- clair local uniquement` sur `messages.body` dans
+  `powl/09` (doc figée, non modifiée — `docs/powl/` reste inchangé) est
+  ambigu une fois B-3 tranché ; explicité dans le mapping comme décrivant le
+  contenu (texte déchiffré par l'app), pas l'état de chiffrement au repos —
+  pour éviter qu'un futur lecteur code `store` (US-207) sur cette phrase
+  littérale.
+- `outbox.packet` / `held_envelopes.packet` classés « déjà chiffré » plutôt
+  que « à chiffrer » : ce sont des paquets L3 déjà scellés par Noise avant
+  d'atteindre la base (session ou enveloppe) — un second chiffrement
+  XChaCha20 n'ajoute rien contre le modèle de menace local (vol d'appareil),
+  seulement du CPU. Distinction utile pour ne pas sur-spécifier US-207.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (US-112 est une synthèse de décisions déjà prises, pas une
+  découverte technique).
+
+### État après cette session
+- US-112 : les 3 volets du mapping (Spike A, `recipient_tag`, colonnes
+  chiffrées) sont traités — 2 déjà faits ailleurs, 1 ajouté ici. Ne reste que
+  le **résultat** du Spike A lui-même (dépend de la clôture de l'issue #1,
+  hors périmètre de cette US).
+- Pas de fiche module : US-112 est un travail de documentation transverse,
+  pas un composant du dépôt.
+- 01-etat-du-code.md mis à jour : non (pointeur seul, inchangé).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 - <<'EOF'
+# résout chaque lien relatif de docs/synthese/06-securite.md vers un fichier
+# réel (os.path.isfile), ignore les liens http(s)
+EOF
+→ 7/7 liens internes résolvent (00-contexte-global.md,
+  01-sujets-a-trancher.md ×3, 09-dashboard-et-donnees.md,
+  ../powl/09-data-model.md)
+```
+- **Non fait** : relecture croisée par une autre personne (4ᵉ critère
+  d'acceptation de l'US) — nécessite un passage de Paul ou Tanguy, hors
+  périmètre de cette session.
+
+---
+
+## 2026-09-28 — US-109 : revue round 2 d'OswinFreyr sur la PR #72 + résolution du conflit avec `main`
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/00-journal.md`, `docs/suivi/04-apprentissages.md`,
+`docs/suivi/modules/android-app.md`
+**Lot :** US-109, PR #72
+
+### Fait
+- **Conflit GitHub sur `00-journal.md` résolu** : fusion de `origin/main` en
+  local (le pilote `merge=union` de `.gitattributes` n'est pas appliqué par
+  le bouton de fusion GitHub). Le `union` avait entrelacé l'entrée #72 avec
+  l'entrée US-110 round 8 (« État après » / « Vérification » de #72 recollés
+  dans l'entrée US-110) : journal reconstruit à partir de celui de `main`,
+  entrée #72 réinsérée d'un seul bloc en tête, avec son séparateur `---`.
+- **Point 1** : `android-app.md` renvoyait à une entrée de journal du
+  2026-09-26 inexistante pour le calcul manuel du checksum Linux → renvoi
+  vers l'entrée du 2026-09-28 « US-109 : retours de revue d'OswinFreyr sur
+  la PR #72 ».
+- **Point 2** : le « Pour aller plus loin » de la note `aapt2` de
+  `04-apprentissages.md` pointait vers « Trois pièges rencontrés », qui ne
+  parle pas des classifiers → renvoi vers « Décisions d'implémentation »
+  (puce `aapt2`), « Trois pièges » gardé pour le piège voisin du cache chaud.
+- **Point 3** : séparateur `---` + ligne vide rétabli après l'entrée #72.
+- **Mineur** : phrase « laissant Windows … sans checksum Linux » reformulée
+  (c'est le fichier qui restait sans checksum Linux).
+
+### Pourquoi / décisions
+- Reconstruction plutôt que retouche du résultat `union` : la fusion
+  concatène sans comprendre les frontières d'entrées, corriger à la main le
+  texte entrelacé laissait un risque d'attribution erronée.
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Les 3 points + le mineur du round 2 sont traités. Reste l'approbation
+  de la PR.
+
+### Vérification (commandes réellement exécutées)
+- `git merge origin/main` puis `git diff origin/main --stat` : seuls les
+  5 fichiers de la PR diffèrent de `main`, `00-journal.md` n'a que des
+  ajouts en tête.
+- Comptage des délimiteurs de bloc de code du journal : nombre pair.
+
+---
+
+## 2026-09-28 — US-109 : retours de revue d'OswinFreyr sur la PR #72 (aapt2/gradlew)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md`,
+`docs/suivi/04-apprentissages.md`, `android/gradle/verification-metadata.xml`,
+`.gitattributes`
+**Lot :** US-109, PR #72
+
+### Fait
+- **Cause racine documentée** (`android-app.md` + nouvelle note dans
+  `04-apprentissages.md`) : `aapt2` publie un artefact Maven **par
+  plateforme** (classifier `osx`/`linux`/`windows`) ; régénérer
+  `verification-metadata.xml` ne couvre jamais que l'OS de la machine qui
+  régénère. La procédure « vider le cache + régénérer » de la PR #56 avait
+  corrigé `osx` (faite sur macOS) sans jamais pouvoir corriger `linux` —
+  reviendra identiquement à chaque montée de version d'AGP.
+- **`origin` du checksum `aapt2-...-linux.jar` corrigé** : disait
+  « Generated by Gradle » alors qu'il a été calculé à la main
+  (`sha256sum` sur le jar téléchargé depuis `dl.google.com`, aucune machine
+  Linux disponible) — l'attribut sert précisément à tracer cette
+  différence.
+- **`.gitattributes` : `android/gradlew` marqué `text eol=lf`** (point
+  optionnel) : empêche un futur commit depuis Windows
+  (`core.autocrlf=true`) de réintroduire des CRLF dans le script shell.
+- **Issue de suivi créée** (#79, `CI — job android.yml`) pour le point 3
+  (aucune CI ne construit l'app Android — c'est pour ça que le bit
+  exécutable perdu et le checksum Linux manquant ont survécu depuis la
+  PR #56 sans que personne ne les voie).
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #72 (2026-09-28) : correctif jugé
+  bon, mais cause racine non documentée (reviendrait à la prochaine montée
+  d'AGP) et `docs/suivi/` pas mis à jour.
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Points 1, 2 et 4 (mineur) traités. Point 3 reporté en issue #79 (pas
+  bloquant pour cette PR). Reste : ajouter `Refs #9` à la description de la
+  PR (point 5, fait directement sur GitHub).
+
+### Vérification (commandes réellement exécutées)
+- Relecture manuelle de `verification-metadata.xml` : les 3 classifiers
+  `aapt2-8.5.2-11315950-{osx,linux,windows}.jar` ont chacun un checksum,
+  `origin` cohérent avec la façon dont chacun a été obtenu.
+
+---
+
+## 2026-09-28 — US-106 : revue PR #69 de Paul, bouchon Kotlin aligné sur les bindings générés
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-ffi/src/{dengon.udl, lib.rs}`,
+`crates/dengon-ffi/uniffi.toml` (nouveau),
+`android/app/src/main/java/com/dengon/app/ffi/{DengonTypes.kt, DengonNodeStub.kt}`,
+`android/app/src/test/java/com/dengon/app/ffi/DengonNodeStubTest.kt`
+**Lot :** US-106, PR #69
+
+### Fait
+- **Point bloquant 1** : le bouchon Kotlin écrit à la main n'avait pas la
+  forme des bindings qu'UniFFI génèrera, donc l'UI écrite contre lui aurait
+  cassé à l'US-302. Bindings de référence générés avec `uniffi-bindgen`
+  0.28.3 (crate jetable hors dépôt) puis alignés :
+  - `.udl` : `bytes` au lieu de `sequence<u8>`, `sent_ms` en `i64` ;
+  - Kotlin : `ByteArray`, `Long`, `UInt`, `data class` à champs `var`,
+    `DengonNodeInterface`, `DengonException` scellée ;
+  - fonctions d'identité de premier niveau (écart non listé par la revue,
+    trouvé en générant) ;
+  - `uniffi.toml` : paquet `com.dengon.app.ffi`.
+- **Point bloquant 2** : `identityFromQrCode` levait
+  `IllegalArgumentException` sur un QR non dengon ; lève maintenant
+  `DengonException.Internal` comme toute autre entrée invalide. Test ajouté.
+- **Mineurs** : pseudo > 255 octets tronqué à la frontière de caractère des
+  deux côtés (Rust coupait un caractère UTF-8 en deux, Kotlin levait) ;
+  bouchon Kotlin thread-safe (un verrou), avec un test concurrent.
+- Tests « QR malformé » (commentaire non bloquant de G1TS23), écrits
+  auparavant dans la copie de travail : intégrés à ce correctif.
+- Points 3 à 5 de la revue (conception, à trancher avant le gel) : reportés
+  en commentaire sur #6.
+
+### Pourquoi / décisions
+- `i64` pour les horodatages (préférence de Paul) : `Long` en Kotlin, pas de
+  types non signés à manipuler dans l'UI pour une date.
+- Égalité d'`Identity` **non** réécrite : c'est ce que fera le code généré ;
+  mieux vaut que l'UI ne s'appuie pas sur une égalité qui disparaîtra.
+- Preuve de forme par compilation plutôt que par relecture : le fichier de
+  test inchangé est compilé contre les bindings générés.
+
+### Écarts vs conception
+- Aucun nouveau. Les points 3-4 (`constructor(Identity)` sans clés secrètes,
+  `on_peer_connected(string)` vs `on_peer_connected(transport)` de
+  `synthese/04` §3) sont des divergences possibles, **à trancher** au point
+  d'équipe (sur #6), pas encore des écarts actés.
+
+### Appris
+- UniFFI 0.28 : `sequence<u8>` → `List<UByte>` mais `bytes` → `ByteArray` ;
+  une interface UDL devient `class X` + `interface XInterface` ; un `[Error]
+  enum` devient une exception scellée. → `04-apprentissages.md`.
+
+### État après cette session
+- Points bloquants de la revue traités ; PR prête pour une nouvelle relecture.
+- Fiche(s) module mise(s) à jour : `modules/dengon-ffi.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo run -- generate crates/dengon-ffi/src/dengon.udl \
+    --config crates/dengon-ffi/uniffi.toml --language kotlin   (crate jetable, uniffi =0.28.3 + cli)
+→ out/com/dengon/app/ffi/dengon.kt : ByteArray, Long, UInt, DengonNodeInterface, DengonException scellée
+$ (copie jetable du projet Android : dengon.kt généré + classe DengonNodeStub seule + test inchangé)
+  ./gradlew :app:compileDebugUnitTestKotlin --dependency-verification=off → BUILD SUCCESSFUL
+  même chose avec l'ANCIEN fichier de test → 16 erreurs de compilation (contre-épreuve)
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings → 0 warning
+$ cargo test -p dengon-ffi --locked → 7 passed ; cargo test --workspace → vert
+$ ./gradlew testDebugUnitTest assembleDebug → BUILD SUCCESSFUL,
+  DengonNodeStubTest : tests="10" failures="0" errors="0"
+```
+- La vérification de dépendances Gradle n'a été désactivée **que** dans la
+  copie jetable (JNA ajouté pour compiler le fichier généré) ; le projet réel
+  n'est pas modifié.
+
+
+---
+
+## 2026-09-28 — US-106 : tests QR malformé (dernier retour de revue PR #69)
+
+**Auteur :** Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-ffi/src/lib.rs` (tests),
+`android/app/src/test/java/com/dengon/app/ffi/DengonNodeStubTest.kt`
+**Lot :** US-106, Sprint 1 — réponse au commentaire non bloquant de G1TS23
+(PR #69, 2026-09-25 14:13)
+
+### Fait
+- Kotlin : nouveau test `fromQrCode leve DengonException sur un payload non
+  vide mais tronque` — un octet `pseudo_len` (5) seul, puis un QR valide
+  amputé de son dernier octet. Exerce la seconde garde de `fromQrCode`
+  (taille du payload), que le test existant (payload vide) ne couvrait pas.
+- Rust : nouveau test `un_qr_code_malforme_renvoie_une_erreur_au_lieu_de_paniquer`
+  — mêmes deux cas + préfixe `dengon:v1:` absent, tous →
+  `Err(DengonError::Internal)`. Seul le cas heureux était testé.
+- Fiche `dengon-ffi` : retiré l'avertissement « Rust jamais compilé /
+  `Cargo.lock` non régénéré », périmé depuis `24cd926` (2026-09-25). Ligne
+  `dengon-ffi` de `02-avancement.md` mise à jour (elle décrivait encore le
+  squelette d'avant US-106).
+
+### Pourquoi / décisions
+- Les tests encodent le payload eux-mêmes (`encode_base64url` côté Rust,
+  `java.util.Base64` URL sans padding côté Kotlin — test JVM pur) pour
+  fabriquer des entrées qui passent le décodage base64url et atteignent
+  bien les gardes de taille.
+- Aucun code de production modifié : les gardes étaient déjà correctes, il
+  manquait seulement leur couverture.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rien de nouveau
+
+### État après cette session
+- Tous les retours de revue de la PR #69 sont traités.
+- Fiche(s) module mise(s) à jour : `modules/dengon-ffi.md`, `modules/_index.md`
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ gh issue view 2 --json title,body,labels,assignees
+US-102, assignee OswinFreyr, pas de label needs:materiel (contrairement à
+US-103/US-114) — confirme que ce spike n'exige pas de matériel spécifique,
+seulement un Linux/BlueZ, absent ici.
+
+$ grep -n "btleplug" crates/dengon-ble/Cargo.toml Cargo.toml
+aucune dépendance btleplug ajoutée à ce jour (US-105 = contrat seul) —
+terrain vierge, rien à retirer après le spike.
+
+$ wsl --list --verbose
+seul "docker-desktop" (arrêté) — pas de distro Linux utilisable ici.
+```
+- **Pas exécuté / pas possible** : compilation ou exécution de `btleplug`
+  ou `bluer` — recherche documentaire uniquement (README GitHub + docs.rs de
+  `btleplug`, citations exactes dans le rapport). Recommandation `bluer` non
+  vérifiée empiriquement, voir limites du rapport.
+
+$ cargo fmt --all
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+→ 0 warning
+$ cargo test -p dengon-ffi --locked
+→ test result: ok. 6 passed; 0 failed
+$ cd android && ./gradlew testDebugUnitTest --tests 'com.dengon.app.ffi.*'
+→ DengonNodeStubTest : tests="7" failures="0" errors="0"
+```
+
+---
+
+## 2026-09-28 — US-110 : dashboard-api, round 8 de revue (OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main.py,db.py}`,
+`dashboard/api/tests/test_api.py`
+**Lot :** US-110, PR #59
+
+### Fait
+- **Drain du fast-path `Content-Length` sauté quand `Expect: 100-continue`
+  est présent** : lire `request.stream()` avant ce point déclenche l'envoi
+  de `100 Continue` par uvicorn au premier `receive()`, invitant le client
+  à téléverser un corps qu'on s'apprête à rejeter — bande passante perdue,
+  client pouvant voir une erreur d'envoi au lieu du 413 propre (`curl`
+  envoie cet en-tête par défaut au-delà de 1 MiB). Nouveau test
+  `test_ingest_skips_drain_when_client_expects_100_continue`.
+- **`run_migrations` : `ROLLBACK` du bloc `except` gardé par
+  `conn.in_transaction`**, même garde que `LockedConnection.locked()` :
+  SQLite annule lui-même la transaction sur certaines erreurs
+  (`SQLITE_FULL`/`IOERR`/`NOMEM`), et le `ROLLBACK` explicite sans garde
+  levait alors `OperationalError: cannot rollback - no transaction is
+  active`, masquant l'erreur d'origine dans `__context__`. Reproduit
+  concrètement : `conn.execute("BEGIN IMMEDIATE"); conn.execute("COMMIT")`
+  puis une instruction invalide → `in_transaction` déjà `False`,
+  `ROLLBACK` sans garde lève. Nouveau test
+  `test_migration_error_survives_a_transaction_sqlite_already_closed`
+  (migration factice `["COMMIT", "CECI N'EST PAS DU SQL"]`).
+
+### Pourquoi / décisions
+- Round 8 de revue d'OswinFreyr sur la PR #59 (2026-09-28T08:11, passe
+  unique sur le diff) : 2 points réels, faible sévérité, tous deux traités
+  avec un test de régression qui a confirmé détecter la régression avant
+  correction.
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Les 2 points du round 8 sont traités. Fiche module mise à jour.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run --no-sync --no-build pytest
+25 passed, 2 warnings
+
+$ uv run --no-sync --no-build ruff check .
+All checks passed!
+```
+- Les deux nouveaux tests confirmés rouges sans le fix correspondant
+  (désactivé temporairement chaque garde, testé, restauré).
+
+---
+
+## 2026-09-28 — US-110 : dashboard-api, round 7 de revue (OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/main.py`, `dashboard/api/tests/test_api.py`
+**Lot :** US-110, PR #59
+
+### Fait
+- **`except (UnicodeDecodeError, json.JSONDecodeError, RecursionError)`
+  élargi à `except (ValueError, RecursionError)`** dans `ingest_batch` :
+  `UnicodeDecodeError` et `json.JSONDecodeError` héritent tous deux de
+  `ValueError`, et depuis Python 3.11 (`sys.int_max_str_digits`, garde-fou
+  anti-DoS à 4300 chiffres), `json.loads` lève un `ValueError` **générique**
+  — pas `JSONDecodeError` — sur un littéral entier de plus de 4300 chiffres.
+  Vérifié en local : `json.loads('1'*5000)` → `ValueError: Exceeds the
+  limit (4300 digits)...`. Un batch d'environ 5 Ko avec un tel littéral
+  (très en dessous de la limite de taille de 2 MiB) traversait l'ancien
+  `except` et remontait en 500 au lieu du 400 attendu — même classe de bug
+  que le `RecursionError` déjà traité au round 2.
+- Nouveau test `test_ingest_rejects_a_huge_integer_literal`.
+
+### Pourquoi / décisions
+- Retour d'OswinFreyr sur la PR #59 (revue du 2026-09-28T07:59, une seule
+  passe sur le diff, 1 constat).
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Point traité. Fiche module mise à jour.
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 -c "import json; json.loads('1'*5000)"
+ValueError: Exceeds the limit (4300 digits) for integer string conversion...
+
+$ cd dashboard/api && uv run --no-sync --no-build pytest
+23 passed, 2 warnings
+
+$ uv run --no-sync --no-build ruff check .
+All checks passed!
+```
+- Régression confirmée détectée : `except (ValueError, RecursionError)`
+  temporairement réduit à l'ancien tuple, le nouveau test échoue bien
+  (`ValueError` non rattrapée, 500), restauré ensuite.
+
+---
+
+## 2026-09-28 — US-110 : dashboard-api, round 6 de revue (OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/db.py`, `dashboard/api/tests/test_api.py`,
+`.github/workflows/dashboard.yml`
+**Lot :** US-110, PR #59
+
+### Fait
+- **`_is_retryable_lock_error` corrigé : comparait le mauvais niveau de
+  code d'erreur.** `sqlite_errorcode` est le code **étendu** (vérifié en
+  local : une violation `UNIQUE` donne `2067`, pas `19`) — masqué par
+  `& 0xFF` avant comparaison à `SQLITE_BUSY`/`SQLITE_LOCKED`. Sans ce
+  masque, le filtre du round 5 laissait passer sans re-tentative
+  `SQLITE_BUSY_RECOVERY` (261), exactement ce que SQLite renvoie quand un
+  autre process récupère le WAL — le scénario `--workers N` visé par ce
+  retry.
+- **`LockedConnection.locked()` fait un `rollback()` sur exception** si le
+  bloc `with` lève en pleine transaction, pour ne pas laisser la connexion
+  partagée dans un état « transaction ouverte » indéfiniment.
+- **Test ajouté pour le chemin de drain borné** (`_DRAIN_CAP_BYTES`) : appel
+  ASGI direct (`anyio.run(app, scope, receive, send)`) avec un `receive`
+  qui renvoie le corps en petits morceaux au-delà de la borne — `TestClient`
+  ne peut pas exercer ce chemin (il livre toujours le corps en un seul
+  message ASGI). Confirmé détecter une régression : désactivé temporairement
+  la borne, le test échoue (`1034 < 1034`), restauré.
+- **CI `dashboard.yml` : échoue maintenant si `git ls-files 'app/*.py'` ne
+  renvoie rien** (motif mal écrit, répertoire de travail changé…) — avant,
+  la boucle ne s'exécutait jamais et l'étape restait verte sans avoir rien
+  vérifié. `app/**/*.py` retiré (redondant, `*` traverse déjà les `/`).
+
+### Pourquoi / décisions
+- Round 6 de revue d'OswinFreyr sur la PR #59 (commentaire GitHub daté du
+  2026-09-28, tête `3e1e497`) : 1 point réel + 3 mineurs, tous traités dans
+  cette session plutôt que reportés en issue de suivi (proposé comme option
+  par Oswin, mais rien ne pressait).
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Les 4 points du round 6 sont traités. Fiche module mise à jour.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run --no-sync --no-build pytest
+22 passed, 2 warnings
+
+$ uv run --no-sync --no-build ruff check .
+All checks passed!
+
+$ uv build --wheel -o /tmp/dashboard-api-dist2 && \
+  while IFS= read -r m; do python3 -m zipfile -l /tmp/dashboard-api-dist2/*.whl | grep -q "$m" || echo manquant: $m; done \
+  < <(git ls-files 'app/*.py')
+n_modules=5 statut=0
+
+$ uv run --no-sync --no-build python3 -c "
+import sqlite3, tempfile, os
+path = tempfile.mktemp(); conn = sqlite3.connect(path)
+conn.execute('CREATE TABLE t (x INTEGER UNIQUE)'); conn.execute('INSERT INTO t VALUES (1)')
+try: conn.execute('INSERT INTO t VALUES (1)')
+except sqlite3.IntegrityError as e: print(e.sqlite_errorcode, e.sqlite_errorcode & 0xFF)
+"
+2067 19
+```
+
+---
+
+## 2026-09-28 — US-110 : dashboard-api, round 5 de revue (OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{db.py,main.py}`,
+`dashboard/api/tests/test_api.py`, `.github/workflows/dashboard.yml`
+**Lot :** US-110, PR #59
+
+### Fait
+- **Check CI wheel dérivé de `git ls-files`** au lieu d'une liste codée en
+  dur : la liste figée ne détectait rien de plus qu'elle-même, un
+  sous-paquet ajouté sous `app/` resterait absent des deux listes à la fois.
+- **`LockedConnection.locked()`** ajouté : `execute()` ne tient le verrou
+  que le temps d'une instruction, insuffisant pour un futur `SELECT` suivi
+  d'un `fetchall()` (US-217) ou une séquence de plusieurs instructions.
+- **Vidage du flux HTTP borné à 1 MiB (`_DRAIN_CAP_BYTES`)** avant
+  abandon, au lieu d'un vidage sans borne (qui laissait un client malveillant
+  occuper la coroutine indéfiniment). La branche de comptage réel continue
+  désormais la même boucle `async for` au lieu de rappeler
+  `request.stream()`, supprimant le `except RuntimeError` trop large.
+- **`connect()` ferme la connexion SQLite si une étape après
+  `sqlite3.connect()` échoue** — fuite sinon, même classe de bug que celle
+  corrigée au round 4 côté `lifespan`.
+- **Retry de `_set_wal_mode_with_retry` filtré sur `SQLITE_BUSY`/
+  `SQLITE_LOCKED`** au lieu de toute `OperationalError`.
+- **Test multi-process : barrière alignée avant `connect()`** (pas
+  seulement avant `run_migrations()`), `result_queue.get(timeout=5)` au lieu
+  de `get_nowait()`, `terminate()` des process restants en cas de timeout.
+
+### Pourquoi / décisions
+- Tous ces points viennent du round 5 de revue d'OswinFreyr sur la PR #59
+  (voir commentaire GitHub daté du 2026-09-28) — auto-revue non demandée
+  cette fois, retours d'un vrai reviewer externe.
+- Le vidage borné (plutôt que sans borne) accepte une connexion coupée
+  brutalement par uvicorn pour un client hors limite, plutôt qu'un 413
+  propre mais un travail non borné — compromis explicitement recommandé par
+  Oswin.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### État après cette session
+- Les 6 points du round 5 sont traités. Fiche module mise à jour
+  (`modules/dashboard-api.md`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run --no-sync --no-build pytest
+21 passed, 2 warnings
+
+$ uv run --no-sync --no-build ruff check .
+All checks passed!
+
+$ uv build --wheel -o /tmp/dashboard-api-dist && \
+  while IFS= read -r m; do python3 -m zipfile -l /tmp/dashboard-api-dist/*.whl | grep -q "$m" || echo manquant: $m; done \
+  < <(git ls-files 'app/*.py' 'app/**/*.py')
+(rien affiché — tous les modules présents)
+```
+## 2026-09-26 — US-109 : test des 5 min écran éteint, résultat de Paul (16/09) jamais reporté dans le suivi
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md`, issue #9, aucun code
+modifié
+**Lot :** US-109, Sprint 1 (correction de suivi)
+
+**Note (retour de revue d'OswinFreyr, PR #74, round du 2026-09-28) :**
+cette entrée fusionne deux entrées écrites le même jour dans la même PR —
+la première affirmait à tort que le test « n'a[vait] en réalité jamais été
+exécuté », une seconde postée peu après corrigeait cette erreur. Comme
+aucune des deux n'était encore mergée sur `main` au moment de la
+correction, les fusionner en une seule entrée exacte est plus honnête que
+garder une entrée qu'on sait fausse suivie de son propre correctif dans
+l'historique définitif — la règle append-only protège l'historique déjà
+partagé, pas les brouillons d'une même PR non encore mergée.
+
+### Fait
+- En vérifiant l'état des issues Sprint 1 le 25/09, détecté un écart :
+  l'issue #9 (US-109) avait été fermée le 16/09 avec **tous** les critères
+  d'acceptation cochés dans son corps, y compris « Mesuré : le service
+  tourne encore après ≥ 5 min écran éteint sur au moins un appareil réel »
+  — alors que la PR #56 elle-même documentait ce point comme **non fait**
+  (« aucun appareil Android disponible »), et que
+  `docs/suivi/modules/android-app.md` le confirmait encore : « Non fait ...
+  Reste à faire avant de clore l'US. » Aucune entrée de journal n'indiquait
+  que ce test avait eu lieu entre-temps.
+- Issue #9 rouverte avec un commentaire expliquant l'écart apparent.
+- **En creusant les commentaires de l'issue #9 (pas seulement
+  `docs/suivi/`), le test avait en réalité déjà été fait et documenté par
+  Paul, en commentaire, le 2026-09-16 à 08:03** (heure UTC de GitHub) —
+  sur un **Pixel 8 Pro (Android 17)** : service démarré 09:39:53 heure de
+  Paris (PID 25615, `isForeground=true`), écran éteint 5 min 25 s,
+  revérifié à 09:59:19 — même PID, notification toujours présente. Paul
+  notait lui-même une limite honnête (pas de vrai Doze, appareil en
+  charge pendant le test) et un checksum `aapt2` Linux manquant dans
+  `verification-metadata.xml`, régénéré localement mais jamais committé
+  (récupéré et committé séparément, voir PR #72).
+  **Le vrai écart n'était donc pas « le test n'a jamais eu lieu » mais
+  « le résultat de Paul n'a jamais été reporté dans `docs/suivi/` »** — un
+  problème de suivi, pas de test manquant. Correction/excuse postée sur
+  l'issue #9 pour cette erreur de diagnostic initiale.
+- Un second test a aussi été exécuté le 26/09 sur un **Samsung Galaxy A16**
+  (SM-A165F, Android 16) : APK `main` installée via `adb`, service démarré,
+  notification permanente confirmée présente. Écran éteint à 12:14:36,
+  revérifié à 12:21:06 (6 min 30) via `adb shell dumpsys activity services
+  com.dengon.app` : même `ServiceRecord`, même PID, notification
+  `ONGOING_EVENT` toujours affichée. **Connexion `adb` en USB** (comme le
+  reste de la session) : même limite que celle notée par Paul — l'appareil
+  était en charge, donc **aucun des deux tests ne couvre un vrai Doze**
+  (voir `android-app.md`, « Limites connues »).
+- Fiche `android-app.md` mise à jour : le test de Paul (16/09, Pixel 8 Pro)
+  est la preuve principale de l'US, celui du 26/09 (Galaxy A16) s'ajoute
+  comme second appareil — début de matrice (2 modèles, 2 versions Android).
+- Issue #9 refermée avec les deux preuves, créditant explicitement Paul
+  pour la sienne.
+
+### Pourquoi / décisions
+- Ne pas avoir vérifié les commentaires de l'issue avant de la rouvrir le
+  25/09 était l'erreur de fond — la doc de suivi et les commentaires
+  GitHub sont censés rester synchronisés mais ne le sont pas toujours en
+  pratique.
+
+### Écarts vs conception
+- Aucun écart de conception — écart de **process** (résultat existant non
+  reporté dans le suivi), corrigé ici.
+
+### Appris
+- Avant d'affirmer « ce n'est pas fait », vérifier les commentaires de
+  l'issue GitHub, pas seulement `docs/suivi/`.
+
+### État après cette session
+- US-109 réellement complète, avec preuve technique reproductible sur 2
+  appareils. Doze réel non testé sur aucun des deux (limite assumée,
+  au-delà du critère d'acceptation qui demande « ≥ 5 min écran éteint »,
+  pas Doze). Issue #9 refermée.
 ## 2026-09-28 — `contracts/events` : round 5 de revue (OswinFreyr) sur la PR #60
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -332,27 +1863,8 @@ aucun code modifié
   repli appelle une ratification d'équipe avant de la considérer actée).
 - Fiche(s) module mise(s) à jour : [modules/dengon-ble.md](modules/dengon-ble.md)
   (limite Spike B levée), [modules/_index.md](modules/_index.md) (dates)
-- 01-etat-du-code.md mis à jour : non
 
-### Vérification (commandes réellement exécutées)
-```
-$ gh issue view 2 --json title,body,labels,assignees
-US-102, assignee OswinFreyr, pas de label needs:materiel (contrairement à
-US-103/US-114) — confirme que ce spike n'exige pas de matériel spécifique,
-seulement un Linux/BlueZ, absent ici.
-
-$ grep -n "btleplug" crates/dengon-ble/Cargo.toml Cargo.toml
-aucune dépendance btleplug ajoutée à ce jour (US-105 = contrat seul) —
-terrain vierge, rien à retirer après le spike.
-
-$ wsl --list --verbose
-seul "docker-desktop" (arrêté) — pas de distro Linux utilisable ici.
-```
-- **Pas exécuté / pas possible** : compilation ou exécution de `btleplug`
-  ou `bluer` — recherche documentaire uniquement (README GitHub + docs.rs de
-  `btleplug`, citations exactes dans le rapport). Recommandation `bluer` non
-  vérifiée empiriquement, voir limites du rapport.
-
+---
 ---
 
 ## 2026-09-16 — US-114 : squelette firmware ESP-IDF + NimBLE, annonce du service `dengon`
@@ -498,6 +2010,77 @@ YAML valide
 
 ---
 
+## 2026-09-25 — `dashboard/api` : 8 points d'OswinFreyr (round 4) sur la PR #59
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,db}.py`, `dashboard/api/tests/test_api.py`,
+`.github/workflows/dashboard.yml`, `docs/suivi/modules/{dashboard-api,_index}.md`
+**Lot :** US-110, Sprint 1
+
+### Fait
+1. **`_read_limited_body` ne vidait pas le flux dans la branche de comptage
+   réel** (sans `Content-Length`) avant de lever `_BodyTooLarge` — seule la
+   branche `Content-Length` le faisait depuis le round 2. Corrigé
+   symétriquement, avec gestion du cas où Starlette a déjà marqué le flux
+   consommé (`RuntimeError("Stream consumed")` si tout le corps est arrivé
+   en un seul message ASGI — pas une vraie erreur dans ce cas).
+2. **Fuite de connexion si une migration échoue au démarrage** :
+   `connect()`/`run_migrations()` étaient hors du `try/finally` qui ferme la
+   connexion. Déplacés dans le `try`.
+3. **CI n'installait jamais le paquet réel** (`--no-install-project`, tests
+   important `app` via `sys.path`) : `packages = ["app"]` de `pyproject.toml`
+   n'était vérifié par rien. Ajouté une étape qui construit le wheel et
+   vérifie son contenu — testé en ajoutant volontairement un sous-module non
+   déclaré, correctement détecté comme absent.
+4. **Affirmation de sûreté multi-process non testée** (`run_migrations` sous
+   `uvicorn --workers N`) : seul un test multi-thread existait. Ajouté
+   `test_migrations_are_safe_across_processes` (5 vrais `multiprocessing.
+   Process`, `spawn`). **Ce test a révélé un vrai bug non vu en revue** :
+   `connect()` posait `busy_timeout` APRÈS `journal_mode = WAL`, et même
+   remis dans le bon ordre, `busy_timeout` ne protège pas ce PRAGMA de façon
+   fiable sous contention (piège SQLite connu, reproduit de façon fiable en
+   isolant le problème dans un script autonome). Corrigé avec
+   `_set_wal_mode_with_retry` (re-tentatives manuelles courtes). 10/10
+   exécutions stables après le fix, contre des échecs fréquents avant.
+5. **Invariant « jamais `db_conn` sans `db_lock` » seulement en commentaire** :
+   remplacé les deux attributs séparés par `LockedConnection`, qui couple
+   connexion et verrou — `execute()` est la seule façon de toucher la
+   connexion depuis l'extérieur du module.
+6. **Pas de test pour le rejet au démarrage d'un
+   `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé** : ajouté
+   `test_startup_fails_fast_on_malformed_max_batch_bytes`.
+7. **Date incohérente** entre `modules/_index.md` (2026-09-10) et
+   `dashboard-api.md` (2026-09-16) : les deux alignées sur 2026-09-25.
+8. **`max_batch_bytes()` appelée deux fois** dans `ingest_batch` : lue une
+   seule fois dans `limite`.
+
+Point examiné et écarté : remplacer le verrou de `db.py` par `INSERT OR
+IGNORE` casserait l'application unique des migrations (déjà tranché au round
+précédent, reconfirmé).
+
+### Pourquoi / décisions
+- Le point 4 illustre pourquoi Oswin a raison de demander un test qui prouve
+  l'affirmation plutôt que de l'accepter telle quelle : le test lui-même a
+  trouvé un bug que la revue de code seule n'avait pas vu.
+
+### Écarts vs conception
+- Aucun.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run ruff check .
+All checks passed!
+
+$ uv run pytest
+21 passed
+
+$ uv build --wheel -o /tmp/dashboard-api-dist  # simulation de la nouvelle étape CI
+Successfully built .../dengon_dashboard_api-0.1.0-py3-none-any.whl
+# vérifié : app/__init__.py, main.py, config.py, db.py, migrations.py tous présents
+# vérifié aussi qu'un sous-module ajouté sans déclaration est bien détecté absent
+
+$ for i in $(seq 1 10); do uv run pytest tests/test_api.py::test_migrations_are_safe_across_processes -q; done
+# 10/10 passed (échouait ~1 fois sur 3 avant le fix busy_timeout/WAL)
 ## 2026-09-25 — `protocol::{consts, types}` : revue round 2 d'OswinFreyr sur la PR #63 (US-108)
 
 **Auteur :** Claude (Sonnet 5)
@@ -546,6 +2129,158 @@ $ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 ---
 
+## 2026-09-16 — `dashboard/api` : 8 points d'OswinFreyr (round 2) + 2 de POWLAIR sur la PR #59
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,db,config}.py`, `dashboard/api/tests/test_api.py`,
+`.github/workflows/dashboard.yml`, `docs/suivi/02-avancement.md`, `docs/suivi/modules/_index.md`
+**Lot :** US-110 (suite), Sprint 1
+
+### Fait
+- Les 5 points du round 1 (11/09) étaient déjà traités (commit `92813de`),
+  mais **8 nouveaux points d'@OswinFreyr** (revue du 11/09 13:09, jamais
+  traités depuis) et **2 points de @POWLAIR** (revue du 15/09 22:33) restaient
+  ouverts sur la PR #59 — signalés par Olivier, qui avait vu le commentaire de
+  Paul sans savoir où en était la PR.
+- Les 8 points d'Oswin, tous reproduits avant correction :
+  1. **CI** — `.github/workflows/dashboard.yml` filtrait par chemin au niveau
+     du déclencheur (`on.pull_request.paths`), même piège déjà corrigé sur
+     `core.yml`. Corrigé : filtre `dorny/paths-filter` + `if:` par step,
+     comme `core.yml`.
+  2. **`max_batch_bytes()` sans garde sur `int()`** — une valeur malformée de
+     `DENGON_DASHBOARD_MAX_BATCH_BYTES` (ex. `"2MB"`) faisait planter chaque
+     `POST /ingest/batch` en 500. Corrigé : `RuntimeError` explicite, appelée
+     une fois dans `lifespan` pour échouer au démarrage plutôt qu'au premier
+     appel. Reproduit : confirmé l'échec au démarrage avec le fix.
+  3. **`RecursionError` non rattrapée** sur JSON très imbriqué — reproduit en
+     isolant `json.loads` : il faut ~10000 niveaux (pas les 2000 suggérés)
+     pour ~20 Ko de corps. Ajoutée à la clause 400.
+  4. **`sqlite3.ProgrammingError` non rattrapée** — course `conn.close()` du
+     `lifespan` vs écriture en cours sur le threadpool. Reproduit en fermant
+     `app.state.db_conn` avant un POST (500 sans le fix, 503 avec). Ajoutée à
+     la clause 503.
+  5. **`BEGIN IMMEDIATE` hors try/except**, contredisant le docstring de
+     sûreté en concurrence de `db.py`. Choix : le laisser volontairement hors
+     du `try/except` de rollback (l'y inclure lèverait une seconde erreur
+     masquant la première) et corriger le docstring plutôt que d'avaler
+     l'erreur.
+  6. **Corps trop gros non vidé du flux** avant le 413 (fast-path
+     `Content-Length`) — risque de coupure de connexion keep-alive côté
+     uvicorn/h11. Corrigé : `async for _ in request.stream(): pass` avant de
+     lever.
+  7. **`docs/02-avancement.md`** annonçait 8 tests, il y en avait 16 (19
+     après cette session). Corrigé.
+  8. **`docs/modules/_index.md`** avait deux lignes « pas encore de fiche »
+     contradictoires entre elles et avec l'index au-dessus (Android et
+     dashboard-api ont déjà leur fiche). Fusionnées en une ligne correcte.
+- Les 2 points de Paul, tous les deux sur les tests eux-mêmes :
+  1. Les deux tests de taille passaient par httpx qui pose toujours
+     `Content-Length` : seul le fast-path était exercé, jamais la boucle de
+     comptage en flux (le cas malveillant réel — `Content-Length` absent ou
+     mensonger). Ajouté : un test avec un générateur en contenu, qui force
+     l'encodage chunked chez httpx (pas de `Content-Length`).
+  2. `test_concurrent_writes_are_not_lost` ne prouvait que l'unicité d'uuid4,
+     pas l'absence de perte réelle. Ajouté : un vrai `SELECT COUNT(*)` après
+     les 20 écritures concurrentes ; même vérification ajoutée au test de
+     rejet pour taille (aucune ligne stockée).
+
+### Pourquoi / décisions
+- **`max_batch_bytes()` reste relue à chaque requête** (pas de cache) même
+  après l'ajout de la validation au démarrage : l'appel dans `lifespan` ne
+  sert qu'à valider tôt, pas à figer la valeur — cohérent avec le choix
+  documenté de `config.py`.
+- **`BEGIN IMMEDIATE` reste hors du `try/except`** plutôt que d'ajouter un
+  `except OperationalError: raise` qui n'aurait rien changé au comportement
+  — corriger la documentation était le vrai correctif, pas le code.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (même famille de bugs — validation défensive avant tout
+  calcul qui peut planter — que la relecture round 2 de la PR #60, déjà
+  consignée dans `04-apprentissages.md`).
+
+### État après cette session
+- PR #59 : les 8+2 points traités, vérifiés, commit + push à faire.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour (19 tests).
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev ruff check .
+All checks passed!
+$ uv run --extra dev pytest -q
+19 passed
+```
+- Chaque bug (config malformée, RecursionError, ProgrammingError) reproduit
+  d'abord sans le fix (import direct / monkeypatch / fermeture manuelle de la
+  connexion), confirmé absent après.
+- YAML de `dashboard.yml` validé par un parse `pyyaml` (pas de run CI réel
+  local possible pour `dorny/paths-filter`, qui dépend de l'API GitHub Actions).
+
+---
+
+## 2026-09-11 — `dashboard/api` : retours de revue d'OswinFreyr sur la PR #59
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main,db,config}.py`, `dashboard/api/tests/test_api.py`
+**Lot :** US-110 (suite), Sprint 1
+
+### Fait
+- 5 commentaires de revue en ligne d'@OswinFreyr sur la PR #59, tous vérifiés
+  dans le code avant correction (pas pris sur parole) :
+  1. **Pas de limite de taille sur le corps ingéré** (`main.py:89`) — `await
+     request.body()` charge tout en mémoire sans borne. Corrigé :
+     `_read_limited_body()` lit en flux (`request.stream()`), coupe dès que
+     `max_batch_bytes()` (config, 2 MiB par défaut, `DENGON_DASHBOARD_MAX_
+     BATCH_BYTES`) est dépassé — rejet rapide via `Content-Length` quand
+     présent, sinon comptage réel pendant la lecture. 413.
+  2. **Décodage/parsing JSON sur la boucle d'événements** (`main.py:96`) —
+     seule l'écriture SQLite passait par `run_in_threadpool`, pas
+     `decode`/`json.loads`, qui dominent le coût CPU d'un gros batch. Corrigé
+     en regroupant décodage + parsing + stockage dans un seul appel
+     threadpool (`_decode_parse_and_store`).
+  3. **Nouvelle connexion SQLite par écriture** (`main.py:75`) — `connect()`
+     rouvrait le fichier + 3 `PRAGMA` à chaque `POST`. Corrigé : une
+     connexion unique ouverte au démarrage (`lifespan`), stockée sur
+     `app.state.db_conn`, réutilisée pour toutes les écritures.
+  4. **`PRAGMA busy_timeout` redondant avec `timeout=5.0`** (`db.py:35`) —
+     les deux réglaient le même délai. Retiré `timeout=5.0` de
+     `sqlite3.connect(...)`, gardé la `PRAGMA` (déjà commentée).
+  5. **`_applied_versions(conn)` requêtée à chaque itération** (`db.py:59`)
+     — un `SELECT` par migration, y compris celles déjà appliquées. Calculée
+     une fois avant la boucle ; seule la revérification sous verrou reste
+     une lecture fraîche.
+- La connexion partagée (point 3) impose `check_same_thread=False` sur
+  `connect()`, puisqu'elle est maintenant utilisée depuis le threadpool —
+  donc un thread différent de celui qui l'a ouverte. Un `threading.Lock`
+  (`app.state.db_lock`) sérialise l'accès : `sqlite3.Connection` n'est pas
+  sûre en usage concurrent non protégé, même avec ce réglage.
+- 4 tests ajoutés (12 → 16) : rejet/acceptation par taille, connexion
+  ouverte une seule fois sur 5 écritures (compteur sur `connect()`
+  monkeypatché), 20 écritures concurrentes via `ThreadPoolExecutor` sans
+  collision ni perte.
+- Au passage : `ruff format` a signalé un défaut d'alignement préexistant
+  dans `db.py` (espaces avant les commentaires de `connect()`) — la CI ne
+  fait tourner que `ruff check`, pas `ruff format --check`, donc c'était
+  passé inaperçu depuis la PR #59. Corrigé, sans rapport avec les 5 points.
+
+### Pourquoi / décisions
+- **Connexion unique + verrou plutôt qu'un pool** : SQLite n'accepte qu'un
+  écrivain à la fois de toute façon (WAL) — un pool de connexions
+  n'apporterait rien pour l'écriture, seulement de la complexité. Le verrou
+  protège l'objet Python `Connection`, pas SQLite lui-même.
+- **Regrouper decode+parse+store en un seul appel threadpool plutôt que
+  deux `run_in_threadpool` séparés** : un aller-retour de thread au lieu de
+  deux, et ça garde `_store_raw_batch` appelable seule (le test
+  `test_ingest_returns_503_when_storage_is_locked` la monkeypatch
+  directement — signature élargie avec `conn`/`lock`, compatible puisque le
+  bouchon `_boom` accepte `*args, **kwargs`).
+- **Limite de taille configurable (2 MiB par défaut) plutôt que fixe en
+  dur** : cohérent avec le style de `config.py` (une variable d'env, lue à
+  chaque appel), et laisse la valeur ajustable si le volume réel de démo la
+  dépasse.
 ## 2026-09-16 — `protocol::{consts, types}` : revue de POWLAIR sur la PR #63 (US-108)
 
 **Auteur :** Claude (Sonnet 5)
@@ -1449,6 +3184,65 @@ SonarCloud sur du travail déjà livré
   d'un id inconnu).
 - Pas de commit/push : `CLAUDE.md` interdit de committer sans demande
   explicite. Changement laissé dans l'arbre de travail pour relecture.
+## 2026-09-25 — Réponse à la revue PR #69 (US-106) + correctifs SonarCloud PR #70 (US-111)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-ffi/src/lib.rs` (branche `feat/US-106-ffi-contract-v0`,
+PR #69), `android/app/src/main/java/com/dengon/app/ffi/DengonNodeStub.kt` +
+`android/app/src/test/java/com/dengon/app/ffi/DengonNodeStubTest.kt` (idem),
+`dashboard/web/app.js` (branche `chore/US-111-squelette-dashboard-web`, PR #70)
+**Lot :** US-106 (Sprint 1) et US-111 (Sprint 2) — pas de nouveau lot, réponse
+à des retours sur du travail déjà livré
+
+### Fait
+- Passage en revue des PR ouvertes (`gh pr list --author @me`) : PR #69
+  (`CHANGES_REQUESTED`), PR #70 et #67 (`APPROVED`).
+- **PR #69** — traité les 3 points bloquants du commentaire de revue
+  (`crates/dengon-ffi/src/lib.rs`), à la main, **sans `cargo`** (voir
+  Vérification ci-dessous) :
+  - Ajouté `#![allow(unused_qualifications, clippy::empty_line_after_doc_comments)]`
+    à côté de `#![allow(unsafe_code)]` (lints déclenchés par le scaffolding
+    généré par `uniffi::include_scaffolding!`, pas par notre code).
+  - Reformaté à la main ce que `cargo fmt` aurait changé : variante
+    `NodeEvent::StatusChanged` sur plusieurs lignes (largeur > seuil
+    `struct_variant_width` de `use_small_heuristics = "Default"`), et les
+    chaînes `.get(...).ok_or(...)?[.to_vec()]` / `match state.conversations
+    .iter_mut().find(...)` cassées sur plusieurs lignes (largeur > seuil
+    `chain_width`), conformément à `crates/rustfmt.toml`.
+  - `super::version()` → `version()` dans le test (qualification inutile,
+    `use super::*;` déjà en scope) ; `pending_events.drain(..).collect()` →
+    `std::mem::take(&mut self.lock_state().pending_events)`.
+  - **`Cargo.lock` toujours pas régénéré** : ça exige un vrai `cargo build`,
+    impossible dans cet environnement (voir Vérification). Reste le seul
+    point bloquant restant côté Rust, déjà documenté dans la description de
+    la PR #69.
+  - **Bug Kotlin réel** (`DengonNodeStub.kt`, `DengonIdentity.fromQrCode`) :
+    un payload tronqué (ex. `"dengon:v1:"`) plantait avec
+    `IndexOutOfBoundsException` au lieu de lever `DengonException` comme le
+    promet le contrat (`[Throws=DengonError] identity_from_qr_code` dans le
+    `.udl`). Ajouté un bornage explicite (`payload.isEmpty()`, puis
+    `payload.size < offset + pseudoLen + 2*KEY_LEN`) qui lève
+    `DengonException`, symétrique au `.get(...).ok_or(...)` côté Rust.
+    Test de régression ajouté (`DengonNodeStubTest.kt`) et vérifié vert.
+- **PR #70** — corrigé les 3 *code smells* SonarCloud (`MINOR`, tous dans
+  `dashboard/web/app.js`, interrogés via l'API publique
+  `sonarcloud.io/api/issues/search?componentKeys=G1TS23_dengon&pullRequest=70`) :
+  `statut.replace(/_/g, "-")` → `statut.replaceAll("_", "-")` (l.72),
+  `DATA.messages.filter(...)[0]` → `DATA.messages.find(...)` (l.163),
+  `hash.match(/^#\/message\/(.+)$/)` → `/^#\/message\/(.+)$/.exec(hash)`
+  (l.217). PR #67 : 0 issue SonarCloud ouverte.
+
+### Pourquoi / décisions
+- Corrections Rust faites à la main plutôt qu'avec `cargo fmt`/`clippy` :
+  cette machine n'a **aucun toolchain Rust installé** (déjà signalé dans la
+  description de la PR #69 comme condition de l'environnement où la PR a été
+  codée à l'origine — même limite ici). Les changements sont donc du
+  **best-effort documenté**, à confirmer par quelqu'un avec `cargo` avant de
+  considérer les points fmt/clippy réellement clos.
+- Pas de commit/push : `CLAUDE.md` interdit de committer sans demande
+  explicite. Les fichiers modifiés sont laissés dans l'arbre de travail sur
+  chacune des deux branches (`feat/US-106-ffi-contract-v0`,
+  `chore/US-111-squelette-dashboard-web`) pour relecture avant commit.
 
 ### Écarts vs conception
 - aucun
@@ -1460,6 +3254,18 @@ SonarCloud sur du travail déjà livré
 - Les 3 issues SonarCloud `MINOR` de la PR #70 corrigées dans le diff
   local ; à repousser pour qu'un nouveau scan les ferme côté SonarCloud.
 - Fiche(s) module mise(s) à jour : aucune (pas de changement de forme)
+- rien de nouveau (voir 04-apprentissages.md pour la note existante sur
+  l'absence de toolchain Rust côté US-106, toujours valable)
+
+### État après cette session
+- PR #69 : reste bloquée sur `Cargo.lock` (nécessite un `cargo build` réel)
+  et sur la vérification effective de `cargo fmt --check` /
+  `cargo clippy -D warnings` — les correctifs Rust ci-dessus n'ont pas pu
+  être compilés localement.
+- PR #70 : les 3 issues SonarCloud `MINOR` corrigées, à repousser pour
+  qu'un nouveau scan confirme.
+- Fiche(s) module mise(s) à jour : aucune (pas de changement de forme/API,
+  seulement fmt/clippy/bugfix)
 - 01-etat-du-code.md mis à jour : non
 
 ### Vérification (commandes réellement exécutées)
@@ -1566,6 +3372,146 @@ OK — aucune exception levée pendant les 5 rendus.
   visuelle — aucun navigateur disponible. **Reste à faire avant de clore
   l'US-111** : ouvrir `dashboard/web/index.html` dans un navigateur, vérifier
   à 360 px, capture d'écran dans la PR.
+$ gh pr list --author "@me" --state all --json number,reviewDecision
+PR #69 CHANGES_REQUESTED, #70 et #67 APPROVED
+
+$ curl -s "https://sonarcloud.io/api/issues/search?componentKeys=G1TS23_dengon&pullRequest=70&resolved=false"
+3 issues MINOR (javascript:S7781, S7750, S6594) — confirmées corrigées par relecture du diff
+
+$ cd android && ./gradlew testDebugUnitTest --tests "com.dengon.app.ffi.DengonNodeStubTest"
+BUILD SUCCESSFUL — 6/6 tests (dont le nouveau test de régression fromQrCode)
+
+$ cd android && ./gradlew assembleDebug
+BUILD SUCCESSFUL
+```
+- **Pas exécuté / pas possible** : `cargo fmt --all -- --check`,
+  `cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+  `cargo build --workspace`, `cargo test -p dengon-ffi` — `cargo` absent de
+  cette machine (`command not found`, pas de `rustup`/`cargo.exe` trouvé sur
+  le système). Les correctifs `lib.rs` sont donc **non compilés**, à vérifier
+  avant de merger la PR #69.
+
+---
+
+## 2026-09-20 — US-106 : contrat `dengon-ffi` v0 (UDL) + bouchon Kotlin
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-ffi/` (nouveau `dengon.udl`, `build.rs`,
+réécriture de `lib.rs`), `Cargo.toml` racine (dépendance `uniffi`),
+`android/app/src/main/java/com/dengon/app/ffi/` (nouveau package),
+`android/app/src/test/java/com/dengon/app/ffi/`
+**Lot :** US-106, Sprint 1 (S1, 08→14/09, en retard — pris le 20/09) — Must,
+bloque US-214/US-215 (UI Android, S2) et US-302 (vrai FFI, S3)
+
+### Fait
+- Écrit `crates/dengon-ffi/src/dengon.udl` : `dictionary Identity/Message/
+  Conversation`, `enum MessageStatus`, `[Enum] interface NodeEvent`,
+  `[Error] enum DengonError`, `interface DengonNode` (constructeur +
+  `send_message`/`poll_events`/`on_peer_connected`/`list_conversations`/
+  `list_messages`), fonctions libres `generate_identity`/`identity_qr_code`/
+  `identity_from_qr_code`/`verification_code`.
+- Ajouté `uniffi = "=0.28.3"` (`default-features = false`) aux
+  `[workspace.dependencies]` ; `crates/dengon-ffi/Cargo.toml` l'utilise en
+  dépendance normale, plus en dépendance de build avec la feature `"build"`
+  (seule celle nécessaire à `uniffi::generate_scaffolding`).
+- `build.rs` génère le scaffolding depuis le `.udl` ; `lib.rs` l'inclut
+  (`uniffi::include_scaffolding!("dengon")`) et implémente un bouchon
+  `DengonNode` en mémoire (`Mutex<NodeState>`) + les fonctions identité/QR
+  avec un encodeur base64url et un mélange FNV-1a écrits à la main (pas de
+  nouvelle dépendance externe pour ça seul).
+- Côté Android : `ffi/DengonTypes.kt` (miroirs Kotlin des types du contrat),
+  `ffi/DengonNodeStub.kt` (interface `DengonNode` + `DengonNodeStub` avec une
+  conversation canned pré-remplie + objet `DengonIdentity`), et
+  `DengonNodeStubTest.kt` (5 tests JVM purs).
+
+### Pourquoi / décisions
+- **UDL plutôt que macros procédurales** : imposé par la DoR de l'US-106.
+- **`uniffi` épinglé en exact `=0.28.3`, pas la dernière version
+  disponible** (`0.31`/`0.32`, 2026) : ces dernières ont changé
+  d'architecture interne (« pipeline »), et l'API que je connais avec
+  confiance (sans pouvoir compiler pour vérifier, voir plus bas) est celle
+  des versions `0.2x`/`0.28`. Choisir une version que je ne maîtrise pas
+  aurait ajouté un second axe d'incertitude en plus de l'absence de
+  compilateur.
+- **Pas de vraie cryptographie dans les placeholders** identité/QR/code de
+  vérification : `identity`/`crypto` n'existent pas encore côté
+  `dengon-core` (US-108/US-203/US-205). Écrit en toutes lettres en
+  commentaire à chaque fonction concernée, des deux côtés. Voir
+  `03-ecarts-conception.md`, entrée du 2026-09-20.
+- **`android.util.Base64` évité côté Kotlin**, remplacé par un
+  encodeur/décodeur écrit à la main : `unitTests.isReturnDefaultValues =
+  true` (pas de Robolectric) fait qu'un appel à une API `android.*` en test
+  JVM pur renvoie `null` au lieu de s'exécuter — un aller-retour QR basé sur
+  `android.util.Base64` n'aurait rien prouvé. Repéré **avant** d'écrire le
+  test, pas après un échec silencieux.
+- **`Identity` (Kotlin) n'est pas une `data class`** : elle contient des
+  `ByteArray` (égalité par identité d'objet, pas par contenu, avec l'egalité
+  générée automatiquement) ; `equals`/`hashCode` réécrits à la main
+  (`contentEquals`/`contentHashCode`).
+
+### Écarts vs conception
+- Voir `03-ecarts-conception.md`, entrée « `dengon-ffi` v0 : identité/QR/code
+  de vérification sans vraie cryptographie ».
+
+### Appris
+- L'API Kotlin `android.*` en test JVM pur avec `isReturnDefaultValues =
+  true` ne lève pas d'erreur : elle renvoie silencieusement une valeur par
+  défaut. Un test qui « passe » peut donc ne rien avoir vérifié. Ajouté à
+  `04-apprentissages.md`.
+- Contrat UniFFI en UDL (types par nom, `[Enum] interface` pour les enums à
+  données, `[Error] enum` pour les erreurs) : ajouté à `04-apprentissages.md`
+  et `05-glossaire.md` (UDL, scaffolding).
+
+### État après cette session — ⚠️ vérification partielle, à finir avant merge
+
+**Environnement sans toolchain Rust** (`cargo`/`rustc`/`rustup` absents,
+contrainte dure découverte en cours de tâche, comme l'absence d'appareil
+Android pour le Spike C/US-103) :
+
+- **`Cargo.lock` n'a PAS été régénéré.** Le job CI `core` lance
+  `cargo build --workspace --all-targets --locked` : ça va très probablement
+  échouer avec « the lock file … needs to be updated but --locked was
+  passed ». **C'est un échec attendu, documenté ici avant même le premier
+  push** — pas une régression à chasser. Étape obligatoire avant merge :
+  quelqu'un avec `cargo` lance `cargo build --workspace` une fois à la
+  racine (régénère `Cargo.lock`), commit, push.
+- `cargo fmt --check` et `cargo clippy --workspace --all-targets
+  --all-features --locked -- -D warnings` n'ont pas pu tourner sur
+  `crates/dengon-ffi/`. Le code a été écrit et relu à la main en visant
+  `crates/rustfmt.toml` (max_width 100 — vérifié ligne par ligne avec `awk`)
+  et `[workspace.lints]` (pas d'`unwrap`/`expect` hors test — `clippy.toml`
+  autorise `allow-unwrap-in-tests`/`allow-expect-in-tests`, mais je m'en suis
+  passé par choix, pas par contrainte —, `Debug` sur tout type public).
+- `cargo test -p dengon-ffi` (5 tests dans `lib.rs`) n'a pas pu être
+  exécuté. Relu à la main, raisonnement détaillé sur l'emprunteur/la
+  propriété fait ligne par ligne, mais rien ne remplace un vrai `cargo
+  build`.
+
+**Côté Kotlin, tout est réellement vérifié** (JDK + Gradle disponibles dans
+cet environnement) :
+- `./gradlew compileDebugKotlin testDebugUnitTest` → `BUILD SUCCESSFUL`,
+  `DengonNodeStubTest` : `tests="5" skipped="0" failures="0" errors="0"`.
+- `./gradlew assembleDebug` → `BUILD SUCCESSFUL` (pas de régression sur le
+  reste de l'app).
+
+Fiche module mise à jour : `modules/dengon-ffi.md` (avec le même
+avertissement en tête). `modules/_index.md` mis à jour. `02-avancement.md`
+**non touché** volontairement : il documente ce qui est sur `main`, pas les
+PR en vol (cf. son propre en-tête) — à mettre à jour au merge.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew compileDebugKotlin testDebugUnitTest --console=plain
+BUILD SUCCESSFUL
+tests="5" skipped="0" failures="0" errors="0"  (DengonNodeStubTest)
+
+$ ./gradlew assembleDebug --console=plain
+BUILD SUCCESSFUL
+```
+- **Non exécuté et non vérifiable dans cet environnement** : `cargo build`,
+  `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test -p
+  dengon-ffi` — aucun toolchain Rust installé. À faire tourner par la CI ou
+  par quelqu'un avec `cargo` avant de considérer l'US-106 close.
 
 ---
 
@@ -1718,6 +3664,188 @@ ne vaut rien. Deux sabotages temporaires de `mock.rs`, annulés ensuite :
 - Aucun.
 
 ### Appris
+- Rien de nouveau ajouté à `04-apprentissages.md` — corrections de
+  robustesse, pas de notion nouvelle.
+
+### État après cette session
+- Les 5 points de la revue d'@OswinFreyr sont traités.
+- Fiche(s) module mise(s) à jour : [modules/dashboard-api.md](modules/dashboard-api.md)
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run ruff check . && uv run ruff format --check .
+All checks passed! / 7 files already formatted
+
+$ uv run pytest
+16 passed, 2 warnings in 0.20s
+
+$ for i in 1 2 3 4 5; do uv run pytest -q -k "concurrent or reused"; done
+.. [100%]   (×5, aucune instabilité observée)
+```
+- **Non vérifié** : comportement sous charge réelle (plusieurs `uvicorn
+  --workers`) — chaque worker a son propre process donc sa propre connexion
+  et son propre verrou ; le verrou ne protège que la concurrence **intra-
+  process** (threadpool). Cohérent avec `run_migrations`, déjà conçue pour
+  la concurrence inter-process via `BEGIN IMMEDIATE`.
+
+---
+
+## 2026-09-09 — Squelette du dashboard `api` : ingestion permissive (US-110)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/` (nouveau), `.github/workflows/dashboard.yml`,
+`docs/suivi/modules/dashboard-api.md` (créée), `modules/_index.md`,
+`01-etat-du-code.md`.
+**Lot :** Lot 0 — Fondations (issue #10, US-110). Branche
+`chore/US-110-squelette-dashboard-api`.
+
+### Fait
+- `dashboard/api/` : appli FastAPI (`app/main.py`) avec deux routes —
+  `GET /healthz` → `{"status":"ok"}` ; `POST /ingest/batch` qui accepte
+  n'importe quel JSON bien formé, en devine le nombre d'événements sans
+  imposer de schéma, et l'écrit **verbatim** dans `raw_batches`.
+- `app/db.py` : `connect()` (SQLite, WAL, FK) + `run_migrations()` — système
+  maison `migrations/NNNN_*.sql` tracé dans `schema_migrations`, idempotent,
+  lancé par le `lifespan` FastAPI.
+- `migrations/0001_initial.sql` : la seule table `raw_batches` (+ index).
+- `tests/` : fixture `client` sur une base jetable par test ; 6 tests
+  (`test_api.py`).
+- `.github/workflows/dashboard.yml` : `ruff check` + `pytest`, sur
+  `pull_request` et `push` filtrés `paths: dashboard/**`, working-dir
+  `dashboard/api`, Python 3.11.
+- `dashboard/README.md`, `dashboard/api/pyproject.toml` (deps + config
+  ruff/pytest), `dashboard/api/.gitignore`.
+- Fiche module `docs/suivi/modules/dashboard-api.md` (= note d'onboarding de
+  l'area `dashboard-api`).
+
+### Pourquoi / décisions
+- **Ingestion permissive assumée** (critères de l'issue) : le format
+  d'événement est figé par US-108, pas encore mergée. Le squelette ne doit
+  pas l'attendre — proposition d'organisation §3.3. La validation, la
+  signature Ed25519 et les projections sont US-216 / US-217 (S2).
+- **`sqlite3` stdlib + migrations maison**, pas d'ORM ni d'Alembic :
+  squelette, faible volume, base effacée par session (B-4).
+- **`db_path()` relit l'env à chaque appel** → un `tmp_path` par test sans
+  rechargement de module.
+- **`202 Accepted`** plutôt que `200` : dépôt asynchrone, prépare US-216.
+- Repris le brouillon `dashboard.yml` déjà présent sur la branche (filtre
+  élargi de `dashboard/api/**` à `dashboard/**` comme demandé par l'issue,
+  ajout du déclencheur `pull_request` et du lint).
+
+### Écarts vs conception
+- Le squelette est un sous-ensemble strict de `docs/synthese/09` §3 et §11.2 ;
+  rien n'y contredit la cible fonctionnelle.
+- **Un écart de forme** consigné dans `03-ecarts-conception.md` (2026-09-09) :
+  migrations en littéral Python au lieu de fichiers `.sql`, suite au retour de
+  SonarCloud. Voir « Suite » ci-dessous.
+- Correction annexe dans `01-etat-du-code.md` : la ligne « Dashboard `api` »
+  disait encore « Axum + Postgres/Timescale » (stack `powl` d'origine,
+  écartée par A-5) → remplacée par « FastAPI + SQLite + SSE ».
+
+### Appris
+- `TestClient(app)` comme **context manager** (`with`) déclenche le
+  cycle `lifespan` de Starlette — c'est ce qui fait tourner les migrations
+  avant les tests. Sans le `with`, le lifespan ne s'exécute pas.
+
+### État après cette session
+- `dashboard/api` : `/healthz` et `/ingest/batch` fonctionnent, base migrée
+  au démarrage. Manque tout le reste (sécurité, projections, SSE, REST de
+  lecture, déploiement) — c'est le périmètre S2/S3.
+- Fiche module créée ; `_index.md` mis à jour ; `01-etat-du-code.md` mis à
+  jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && python3 -m venv .venv && . .venv/bin/activate
+$ pip install -e '.[dev]'
+$ ruff check .
+  All checks passed!
+$ pytest
+  6 passed, 2 warnings in 0.27s
+```
+- 2 `DeprecationWarning` (`httpx`/`anyio`) sous Python **3.14** en local ;
+  absents en 3.11, version de la CI. Le venv a été supprimé après coup
+  (ignoré par git de toute façon).
+- La CI `dashboard` elle-même n'a pas encore tourné : elle le fera à
+  l'ouverture de la PR.
+
+### Suite (même session) — retour de la CI sur la PR #59
+
+Le job `dashboard` (ruff + pytest) est **vert**. GitGuardian vert. **SonarCloud
+a rejeté la PR** : « Security Rating E sur le nouveau code », sur 5 findings.
+Traitement :
+
+- **BLOCKER `pythonsecurity:S3649`** (`db.py` : SQL construit depuis une donnée
+  « contrôlée par l'utilisateur ») — l'analyseur suivait le chemin
+  `Path.read_text()` → `executescript()`. La donnée n'était pas de l'entrée
+  requête mais nos propres fichiers `migrations/*.sql` versionnés. **Corrigé à
+  la racine** plutôt que suppression : le SQL de migration devient un littéral
+  de `app/migrations.py` (`MIGRATIONS`), `migrations/0001_initial.sql` supprimé.
+  Bénéfice réel : plus d'I/O disque au déploiement. Reporté dans
+  `03-ecarts-conception.md`.
+- **`githubactions:S8541` / `S8544`** (`dashboard.yml` : `pip install` sans
+  `--only-binary`, versions non figées) — CI passée en deux étapes :
+  `pip install --only-binary=:all: -r requirements-dev.txt` (versions épinglées,
+  wheels seulement, aucun script de build de dépendance) puis
+  `pip install --no-deps -e .` pour le projet local. Ajout de
+  `dashboard/api/requirements-dev.txt`.
+- **`githubactions:S8544` / `text:S8565`** (dépendances non lockées, pas de
+  `uv.lock` / `poetry.lock` / …) — le premier correctif (pin `==` dans un
+  `requirements-dev.txt`) n'a **pas** suffi : SonarCloud exige un lock
+  **transitif avec hash**. Comme le dashboard est le **seul Python** du projet
+  (Rust / Kotlin / C ailleurs) et que `uv.lock` est exactement le fichier
+  demandé, **adopté `uv`** pour `dashboard/api/` : `uv.lock` committé,
+  `requirements-dev.txt` supprimé, CI passée à `astral-sh/setup-uv` +
+  `uv sync --frozen --extra dev` + `uv run …`. Choix trivialement réversible,
+  à confirmer d'un mot en réunion.
+
+Re-vérifié en local :
+```
+$ cd dashboard/api && uv sync --frozen --extra dev
+$ uv run ruff check .   → All checks passed!
+$ uv run pytest         → 6 passed
+```
+
+### Retours de revue de Paul (2026-09-10)
+
+Branche resynchronisée sur `main` (US-104 + US-115 mergées entre-temps).
+Conflit `docs/suivi/` résolu à la main **cette fois** (`.gitattributes` de
+l'US-115 n'était pas encore actif au moment où ce merge l'introduit) :
+`01-etat-du-code.md` pris en version `main` (pointeurs), mon avancement déplacé
+dans `02-avancement.md`, ligne `_index.md` reformatée en 4 colonnes.
+
+Quatre retours de fond, tous valides, tous traités :
+
+1. **`raw.decode("utf-8", errors="replace")` cassait le contrat « verbatim »** —
+   `json.loads` accepte l'UTF-16/32, le corps était alors stocké en mojibake et
+   ne round-trip plus (US-216 y vérifiera une signature Ed25519). Corrigé :
+   décodage UTF-8 **avant** `json.loads`, un corps non-UTF-8 est rejeté (400).
+   Cohérent avec `contracts/events/CANONICAL.md` (UTF-8 imposé).
+2. **I/O SQLite bloquante sur la boucle d'événements** — la route `async` faisait
+   `connect`/`execute`/`commit` synchrones. Corrigé : l'écriture passe par
+   `starlette.concurrency.run_in_threadpool` (la route reste `async` pour
+   `await request.body()`). J'ai préféré ça au « route sync » suggéré, qui
+   interdit `await request.body()`.
+3. **Écriture concurrente → 500 non géré** — deux flush simultanés, le perdant
+   lève `sqlite3.OperationalError`. Corrigé : `except` → `503` + `Retry-After`,
+   + `PRAGMA busy_timeout = 5000`.
+4. **Migrations non atomiques / non concurrence-safe** — `executescript` en
+   autocommit : DDL committé avant l'enregistrement de version → un crash entre
+   les deux, ou `uvicorn --workers N`, cassait tous les démarrages suivants.
+   Corrigé : migrations = **liste d'instructions** (plus d'`executescript`),
+   chacune dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou
+   rien), revérification de la version sous verrou, `CREATE … IF NOT EXISTS`.
+   `connect()` passe en `isolation_level=None` (transactions explicites,
+   comportement identique 3.11→3.13).
+
+Tests : **6 → 12** (JSON non-UTF-8 → 400 ; base verrouillée → 503 ; migrations
+idempotentes après DDL partiel ; formes de payload paramétrées).
+
+```
+$ uv run ruff check .   → All checks passed!
+$ uv run pytest         → 12 passed
+```
 - Le mode `--write-verification-metadata` **n'échoue jamais** : il
   enregistre ce qui est résolu pendant le build au lieu de le vérifier. Si
   un artefact est déjà dans `caches/modules-2` (résolu lors d'un run

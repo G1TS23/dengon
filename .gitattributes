@@ -15,3 +15,11 @@ docs/suivi/03-ecarts-conception.md  merge=union
 docs/suivi/04-apprentissages.md     merge=union
 docs/suivi/05-glossaire.md          merge=union
 docs/suivi/modules/_index.md        merge=union
+
+# `gradlew` doit rester exécutable ET en fins de ligne LF : un commit fait
+# depuis Windows avec `core.autocrlf=true` réintroduirait des CRLF dans le
+# script shell (`#!/bin/sh` suivi de CRLF casse l'interpréteur sur
+# macOS/Linux) sans que rien ne le signale avant un clone frais — même
+# classe de piège d'onboarding que le bit exécutable perdu, corrigé dans la
+# PR #72 (retour de revue, point optionnel d'OswinFreyr).
+android/gradlew                     text eol=lf

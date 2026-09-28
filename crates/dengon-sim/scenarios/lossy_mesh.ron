@@ -1,0 +1,27 @@
+// Losange A — {B, C} — D avec 40 % de perte sur chaque saut.
+// Le résultat exact dépend de la graine : c'est justement ce que le job CI
+// `sim` fige, en comparant l'empreinte de trace de deux exécutions.
+// Les attendus ne portent que sur ce que la topologie garantit : l'émetteur
+// ne se livre jamais son propre message.
+Scenario(
+    nom: "lossy_mesh",
+    description: "losange à 40 % de perte, 5 messages",
+    noeuds: 4,
+    duree_ms: 2000,
+    liens: [
+        (a: 0, b: 1, latence_ms: 15, gigue_ms: 10, perte_pour_mille: 400),
+        (a: 0, b: 2, latence_ms: 15, gigue_ms: 10, perte_pour_mille: 400),
+        (a: 1, b: 3, latence_ms: 15, gigue_ms: 10, perte_pour_mille: 400),
+        (a: 2, b: 3, latence_ms: 15, gigue_ms: 10, perte_pour_mille: 400),
+    ],
+    actions: [
+        (a_ms: 10, action: Emettre(noeud: 0, charge: "m1")),
+        (a_ms: 20, action: Emettre(noeud: 0, charge: "m2")),
+        (a_ms: 30, action: Emettre(noeud: 0, charge: "m3")),
+        (a_ms: 40, action: Emettre(noeud: 0, charge: "m4")),
+        (a_ms: 50, action: Emettre(noeud: 0, charge: "m5")),
+    ],
+    attendus: [
+        NonLivre(noeud: 0, charge: "m1"),
+    ],
+)

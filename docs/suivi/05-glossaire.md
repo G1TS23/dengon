@@ -43,6 +43,8 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **`dengon-node`** | Nœud sans interface, en ligne de commande : sert aux tests et de nœud fixe. |
 | **Transport (trait)** | Interface qui cache la radio : `dengon-core` envoie/reçoit des octets sans savoir si c'est Android, un PC ou un ESP32 derrière. |
 | **UniFFI** | Outil qui génère automatiquement le « pont » pour appeler du Rust depuis Kotlin (ou Swift). |
+| **UDL** (*UniFFI Definition Language*) | Fichier (`.udl`) qui décrit le contrat FFI d'UniFFI : types, fonctions, interfaces exposées — indépendant du langage hôte. `build.rs` le lit pour générer le code Rust de pont (*scaffolding*) ; `uniffi-bindgen` (séparé) le lit pour générer les classes Kotlin/Swift. |
+| **Scaffolding (UniFFI)** | Code Rust généré depuis le `.udl` (fonctions `extern "C"`, conversions) qui relie les types Rust ordinaires au runtime UniFFI. Ne génère **pas** les bindings Kotlin — ça, c'est `uniffi-bindgen generate`, une étape séparée. |
 | **Observabilité** | Capacité à comprendre ce que fait le système de l'extérieur, via des logs/traces. Ici : le dashboard. |
 | **Dashboard / VPS** | Serveur qui **observe** le réseau (parcours des messages, santé). Ne transporte aucun message, ne voit aucun contenu. |
 | **MQTT** | Protocole léger de publication/abonnement, utilisé par les relais pour envoyer leurs logs au dashboard. |
@@ -100,3 +102,5 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Rôle central / peripheral (BLE)** | *Peripheral* : annonce sa présence et publie un service GATT (le « serveur »). *Central* : scanne, trouve, se connecte (le « client »). Un nœud `dengon` tient les **deux** rôles en permanence. |
 | **ATT_MTU** | Taille max d'un paquet BLE au niveau attribut (23 o par défaut, jusqu'à 517 si négocié à la connexion). Dimensionne la fragmentation protocole (`FRAG_SIZE`) — mesuré réellement par le Spike C (US-103). |
 | **Spike** | Tâche courte et bornée dans le temps (*timebox*) pour répondre à une question technique par l'expérimentation plutôt que par la lecture. Livrable = une décision écrite + des chiffres, pas une fonctionnalité ; le code produit est jetable. |
+| **Graine (seed) / déterminisme** | Valeur de départ du générateur pseudo-aléatoire. Même graine → mêmes tirages → même exécution. C'est ce qui rend un scénario de `dengon-sim` rejouable à l'identique (US-221). |
+| **Empreinte de trace** | Hachage (FNV-1a 64 bits) de toute la trace d'une simulation. Deux exécutions à même graine doivent avoir la même empreinte : c'est ce que compare le job CI `sim`. |
