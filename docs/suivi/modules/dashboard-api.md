@@ -260,10 +260,42 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
     `get_nowait()` (un résultat mis un peu tard faisait échouer le test sur
     un `queue.Empty` opaque plutôt que sur l'assertion), et les process
     encore vivants sont `terminate()`-és si le test échoue par timeout.
+- **Round 6 (retours d'OswinFreyr) :**
+  - **`_is_retryable_lock_error` comparait le mauvais niveau de code
+    d'erreur** : `sqlite_errorcode` est le code **étendu** (`2067` pour
+    `SQLITE_CONSTRAINT_UNIQUE`, vérifié en local), pas le code de base à
+    comparer directement à `SQLITE_BUSY`/`SQLITE_LOCKED`. Sans le masque
+    `& 0xFF`, le filtre du round 5 laissait passer sans re-tentative
+    `SQLITE_BUSY_RECOVERY` (261) — précisément ce que SQLite renvoie quand
+    un autre process récupère le WAL, le scénario `--workers N` que ce
+    retry vise en premier lieu.
+  - **`LockedConnection.locked()` fait un `rollback()` si le bloc `with`
+    lève en pleine transaction** : sans ça, une exception entre `BEGIN` et
+    `COMMIT` laissait la transaction ouverte sur la connexion **partagée** —
+    les écritures suivantes s'y seraient agrégées sans jamais être
+    commitées, et le `BEGIN` suivant aurait levé `cannot start a
+    transaction within a transaction`. Personne n'utilise encore `locked()`
+    (ajouté au round 5 pour un futur `SELECT`), mais c'est le piège qu'un
+    appelant (US-217) aurait rencontré.
+  - **Test ajouté pour le chemin de drain** (`_DRAIN_CAP_BYTES`,
+    continuation dans la boucle `async for`, `_drain_bounded`) : aucun test
+    existant ne l'exerçait, puisque `TestClient` (httpx) livre toujours le
+    corps en un seul message ASGI, y compris via un générateur chunked. Le
+    nouveau test pilote l'ASGI directement (`anyio.run(app, scope, receive,
+    send)`), avec un `receive` qui renvoie le corps en petits morceaux
+    (`more_body=True`) bien au-delà de `limit + _DRAIN_CAP_BYTES`, et
+    vérifie que la lecture s'arrête à la borne plutôt que de tout
+    consommer — confirmé détecter la régression en désactivant
+    temporairement la borne (le test échoue alors sur `1034 < 1034`).
+  - **CI `dashboard.yml` : échoue si `git ls-files 'app/*.py'` ne renvoie
+    rien** (répertoire de travail changé, motif mal écrit…) — avant, la
+    boucle ne s'exécutait jamais et l'étape restait verte sans avoir rien
+    vérifié. `app/**/*.py` retiré (redondant : `*` traverse déjà les `/`
+    dans un pathspec git).
 
 ## Tests
 
-- `tests/test_api.py` — **21 tests** : `/healthz` ; **démarrage refusé sur
+- `tests/test_api.py` — **22 tests** : `/healthz` ; **démarrage refusé sur
   `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé** (`RuntimeError` propagée par
   `lifespan`, retour de revue #59, round 4) ; objet arbitraire (202,
   `event_count` = 3) ; tableau nu ; corps **verbatim** en base ; non-JSON → 400 ;
@@ -281,14 +313,16 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   idempotentes après DDL partiel** ; **migrations sûres avec de vrais process
   OS** (5 `multiprocessing.Process`, pas juste des threads — retour de revue
   #59, round 4, point d'OswinFreyr : a révélé le bug de `busy_timeout`/`WAL`
-  documenté plus haut) ; 3 formes de payload paramétrées.
+  documenté plus haut) ; **drain borné exercé via un appel ASGI direct**
+  (round 6, voir ci-dessus) ; 3 formes de payload paramétrées.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .` et `uv run pytest` → **21 passed** (revérifié le
-  2026-09-28 après les correctifs du round 5). Chaque nouveau bug
+  `uv run ruff check .` et `uv run pytest` → **22 passed** (revérifié le
+  2026-09-28 après les correctifs du round 6). Chaque nouveau bug
   (RecursionError, ProgrammingError) reproduit d'abord en isolant le code
-  sans le fix, confirmé absent avec. Étape wheel du round 4 rejouée
-  manuellement (`uv build --wheel` + boucle sur `git ls-files 'app/*.py'
-  'app/**/*.py'`) → tous les modules présents, `statut=0`.
+  sans le fix, confirmé absent avec — de même pour le test de drain borné
+  (désactivé temporairement, confirmé rouge, restauré). Étape wheel rejouée
+  manuellement (`uv build --wheel` + boucle sur `git ls-files 'app/*.py'`)
+  → tous les modules présents, `statut=0`.
 
 ## Limites connues / TODO
 

@@ -79,10 +79,23 @@ jobs:
         run: |
           uv build --wheel -o /tmp/dashboard-api-dist
           statut=0
+          n_modules=0
+          # `*` traverse déjà les `/` dans un pathspec git : `app/*.py` suffit,
+          # `app/**/*.py` était redondant (retour de revue #59, round 6,
+          # point 4 d'OswinFreyr).
           while IFS= read -r module; do
+            n_modules=$((n_modules + 1))
             python3 -m zipfile -l /tmp/dashboard-api-dist/*.whl | grep -q "$module" || {
               echo "::error::$module absent du wheel construit — packages/pyproject.toml périmé"
               statut=1
             }
-          done < <(git ls-files 'app/*.py' 'app/**/*.py')
+          done < <(git ls-files 'app/*.py')
+          # Si git ls-files ne renvoie RIEN (répertoire de travail changé,
+          # motif mal écrit...), la boucle ne s'exécute jamais et $statut
+          # reste à 0 : l'étape passerait verte sans avoir rien vérifié
+          # (retour de revue #59, round 6, point 4 d'OswinFreyr).
+          if [ "$n_modules" -eq 0 ]; then
+            echo "::error::aucun module app/*.py trouvé par git ls-files — vérification non exécutée"
+            statut=1
+          fi
           exit "$statut"

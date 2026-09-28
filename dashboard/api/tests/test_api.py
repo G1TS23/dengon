@@ -193,6 +193,65 @@ def test_ingest_rejects_chunked_body_over_max_size(client, monkeypatch):
     assert count == 0
 
 
+def test_drain_stops_at_the_cap_instead_of_consuming_everything(client, monkeypatch):
+    # httpx (TestClient) livre toujours le corps en un seul message ASGI
+    # (`more_body=False` dès le départ), y compris via un générateur chunked
+    # — voir le commentaire de `_read_limited_body` sur `_stream_consumed`.
+    # Aucun test ci-dessus n'exerçait donc réellement `_drain_bounded` ni la
+    # continuation dans la même boucle `async for` (retour de revue #59,
+    # round 6, point 3 d'OswinFreyr, resté sans suite depuis le round 5).
+    # Ce test pilote l'ASGI directement, avec un `receive` qui renvoie le
+    # corps en petits morceaux (`more_body=True` entre chacun), bien plus
+    # loin que `limit + _DRAIN_CAP_BYTES`, et vérifie que la lecture
+    # s'arrête effectivement à la borne plutôt que de tout consommer.
+    monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "16")
+
+    import anyio
+
+    from app.main import _DRAIN_CAP_BYTES, app
+
+    chunk = b"x" * 1024
+    limit = 16
+    # Assez de morceaux pour dépasser largement limit + _DRAIN_CAP_BYTES si
+    # le drain n'était pas borné.
+    n_chunks = (limit + _DRAIN_CAP_BYTES) // len(chunk) + 10
+    produced = 0
+
+    async def receive():
+        nonlocal produced
+        if produced >= n_chunks:
+            # Ne devrait jamais être atteint si le drain est bien borné.
+            return {"type": "http.request", "body": b"", "more_body": False}
+        produced += 1
+        return {"type": "http.request", "body": chunk, "more_body": produced < n_chunks}
+
+    messages: list[dict] = []
+
+    async def send(message):
+        messages.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "POST",
+        "path": "/ingest/batch",
+        "raw_path": b"/ingest/batch",
+        "query_string": b"",
+        "headers": [(b"content-type", b"application/json")],
+        "client": ("test", 0),
+        "server": ("test", 80),
+    }
+
+    anyio.run(app, scope, receive, send)
+
+    status = next(m["status"] for m in messages if m["type"] == "http.response.start")
+    assert status == 413
+    assert produced < n_chunks, (
+        "le drain a consommé tout le flux produit au lieu de s'arrêter à la borne"
+    )
+
+
 def test_ingest_accepts_body_within_max_size(client, monkeypatch):
     # Le garde-fou ne doit pas rejeter un batch qui tient dans la limite.
     monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "4096")

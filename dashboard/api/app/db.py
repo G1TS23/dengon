@@ -47,9 +47,22 @@ def _is_retryable_lock_error(exc: sqlite3.OperationalError) -> bool:
     n'importe quelle `OperationalError` — un `disk I/O error` ou un `unable
     to open database file` ne se résoudra pas en re-tentant 1 s plus tard, et
     les rattraper masquerait un vrai problème derrière 20 tentatives inutiles
-    (retour de revue #59, round 5, point 5 d'OswinFreyr)."""
+    (retour de revue #59, round 5, point 5 d'OswinFreyr).
+
+    `sqlite_errorcode` est le code **étendu** (ex. `2067` pour
+    `SQLITE_CONSTRAINT_UNIQUE`), pas le code de base à comparer directement à
+    `SQLITE_BUSY`/`SQLITE_LOCKED` : masqué par `0xFF`, `2067 & 0xFF == 19`
+    (`SQLITE_CONSTRAINT`), pas `SQLITE_BUSY`. Sans le masque, le filtre
+    laissait passer sans re-tentative `SQLITE_BUSY_RECOVERY` (261),
+    `SQLITE_BUSY_SNAPSHOT` (517) ou `SQLITE_LOCKED_SHAREDCACHE` (262) —
+    `BUSY_RECOVERY` en particulier est précisément ce que SQLite renvoie
+    quand un autre process est en train de récupérer le WAL, le scénario de
+    démarrage `--workers N` que ce retry vise (retour de revue #59, round 6,
+    point 1 d'OswinFreyr — vérifié en local : une violation `UNIQUE` donne
+    `sqlite_errorcode == 2067`, confirmant que le round 5 comparait le
+    mauvais niveau de code)."""
     code = getattr(exc, "sqlite_errorcode", None)
-    return code in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+    return code is not None and (code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
 
 
 def _set_wal_mode_with_retry(conn: sqlite3.Connection) -> None:
@@ -147,9 +160,22 @@ class LockedConnection:
         `SELECT` suivi d'un `fetchall()`, ou une séquence d'instructions liées
         (la connexion est en autocommit, donc un `BEGIN`/`COMMIT` à plusieurs
         étapes serait sinon entrelacé entre threads).
+
+        Si le bloc lève entre un `BEGIN` et un `COMMIT`, la transaction est
+        annulée avant de propager l'exception : sans ça, elle resterait
+        ouverte sur la connexion **partagée** — les écritures suivantes
+        (ex. `_store_raw_batch`) s'y agrégeraient sans jamais être commitées,
+        et le prochain `BEGIN` lèverait `cannot start a transaction within a
+        transaction` (retour de revue #59, round 6, point 2 d'OswinFreyr :
+        piège qu'un futur appelant, US-217, aurait rencontré).
         """
         with self._lock:
-            yield self._conn
+            try:
+                yield self._conn
+            except BaseException:
+                if self._conn.in_transaction:
+                    self._conn.rollback()
+                raise
 
     def close(self) -> None:
         with self._lock:

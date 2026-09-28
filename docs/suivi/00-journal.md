@@ -10,6 +10,73 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-110 : dashboard-api, round 6 de revue (OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/db.py`, `dashboard/api/tests/test_api.py`,
+`.github/workflows/dashboard.yml`
+**Lot :** US-110, PR #59
+
+### Fait
+- **`_is_retryable_lock_error` corrigé : comparait le mauvais niveau de
+  code d'erreur.** `sqlite_errorcode` est le code **étendu** (vérifié en
+  local : une violation `UNIQUE` donne `2067`, pas `19`) — masqué par
+  `& 0xFF` avant comparaison à `SQLITE_BUSY`/`SQLITE_LOCKED`. Sans ce
+  masque, le filtre du round 5 laissait passer sans re-tentative
+  `SQLITE_BUSY_RECOVERY` (261), exactement ce que SQLite renvoie quand un
+  autre process récupère le WAL — le scénario `--workers N` visé par ce
+  retry.
+- **`LockedConnection.locked()` fait un `rollback()` sur exception** si le
+  bloc `with` lève en pleine transaction, pour ne pas laisser la connexion
+  partagée dans un état « transaction ouverte » indéfiniment.
+- **Test ajouté pour le chemin de drain borné** (`_DRAIN_CAP_BYTES`) : appel
+  ASGI direct (`anyio.run(app, scope, receive, send)`) avec un `receive`
+  qui renvoie le corps en petits morceaux au-delà de la borne — `TestClient`
+  ne peut pas exercer ce chemin (il livre toujours le corps en un seul
+  message ASGI). Confirmé détecter une régression : désactivé temporairement
+  la borne, le test échoue (`1034 < 1034`), restauré.
+- **CI `dashboard.yml` : échoue maintenant si `git ls-files 'app/*.py'` ne
+  renvoie rien** (motif mal écrit, répertoire de travail changé…) — avant,
+  la boucle ne s'exécutait jamais et l'étape restait verte sans avoir rien
+  vérifié. `app/**/*.py` retiré (redondant, `*` traverse déjà les `/`).
+
+### Pourquoi / décisions
+- Round 6 de revue d'OswinFreyr sur la PR #59 (commentaire GitHub daté du
+  2026-09-28, tête `3e1e497`) : 1 point réel + 3 mineurs, tous traités dans
+  cette session plutôt que reportés en issue de suivi (proposé comme option
+  par Oswin, mais rien ne pressait).
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Les 4 points du round 6 sont traités. Fiche module mise à jour.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run --no-sync --no-build pytest
+22 passed, 2 warnings
+
+$ uv run --no-sync --no-build ruff check .
+All checks passed!
+
+$ uv build --wheel -o /tmp/dashboard-api-dist2 && \
+  while IFS= read -r m; do python3 -m zipfile -l /tmp/dashboard-api-dist2/*.whl | grep -q "$m" || echo manquant: $m; done \
+  < <(git ls-files 'app/*.py')
+n_modules=5 statut=0
+
+$ uv run --no-sync --no-build python3 -c "
+import sqlite3, tempfile, os
+path = tempfile.mktemp(); conn = sqlite3.connect(path)
+conn.execute('CREATE TABLE t (x INTEGER UNIQUE)'); conn.execute('INSERT INTO t VALUES (1)')
+try: conn.execute('INSERT INTO t VALUES (1)')
+except sqlite3.IntegrityError as e: print(e.sqlite_errorcode, e.sqlite_errorcode & 0xFF)
+"
+2067 19
+```
+
+---
+
 ## 2026-09-28 — US-110 : dashboard-api, round 5 de revue (OswinFreyr)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
