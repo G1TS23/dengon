@@ -119,6 +119,129 @@ All checks passed!
 
 ---
 
+## 2026-09-28 — US-220 : `transport_nimble.c`, transport BLE à rôle double sur l'ESP32
+
+**Auteur :** Paul + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/{main/*, components/dengon_transport_core/**, sdkconfig.defaults}`, `.github/workflows/firmware.yml`, `.gitignore`
+**Lot :** US-220 (#34), sprint 2, jalon J4
+
+### Fait
+- **Cœur pur `components/dengon_transport_core/`** (C, sans NimBLE) : miroirs C
+  de `LinkId`, `TransportEvent`, `DisconnectReason`, `TransportError`,
+  `TransportConfig` ; table `conn_handle ↔ LinkId` (compteur monotone) ; file
+  FIFO unique de 32 événements avec réserve pour le cycle de vie ; validation
+  de `send` / `broadcast` ; mapping code HCI → motif. `dengon_adv.c` :
+  manufacturer data (format US-114 inchangé) et règle anti-boucle.
+- **Glue `main/transport_nimble.c`** + API `main/dengon_transport.h`
+  (start / poll / send / broadcast / event_free) : annonce, scan par passes de
+  10 s, connexion sortante selon l'anti-boucle, chaîne MTU → service →
+  caractéristiques → CCCD → abonnement côté central, abonnement reçu côté
+  périphérique, RX par notification ou écriture, émission hors verrou,
+  réarmement annonce + scan à chaque fin de lien.
+- `dengon_gatt.c` : les écritures sur `CHAR_RX` partent au transport (au lieu
+  d'être jetées) ; UUID RX/TX exportés pour la découverte.
+- `main.c` réduit à NVS + peerID + `dengon_transport_start()` ; annonce et
+  événements GAP déplacés dans le transport.
+- **Tâche de démo** `main/dengon_demo.c` (Kconfig `DENGON_TRANSPORT_DEMO`) :
+  trames opaques à motif vérifiable, sonde MTU-3 / MTU-2 à chaque lien,
+  `send` sur lien fermé, bouton BOOT = fermer tous les liens.
+- `sdkconfig.defaults` : `ROLE_CENTRAL=y`, `ROLE_OBSERVER=y`.
+- **Tests Unity** `components/dengon_transport_core/test_apps/` : 12 cas de
+  conformité portés 1:1 depuis `conformance.rs` + 14 cas propres au C + 6 cas
+  d'annonce = 32. Cible `linux` (hôte) et `esp32`.
+- **CI** `firmware.yml` : exécution des tests sur la cible linux, compilation
+  de leur version carte. `.gitignore` : `sdkconfig` et `build-*/` des
+  `test_apps`.
+
+### Pourquoi / décisions
+- **Cœur pur + glue** : seul ce qui touche NimBLE exige deux cartes ; tout le
+  reste est testé en CI. Alternative écartée : tests Unity sur la glue avec
+  une NimBLE simulée — trop de surface à bouchonner pour peu de preuve.
+- **1 trame = 1 PDU ATT** : `protocol::fragment` (US-202) découpe déjà à
+  MTU-3 ; pas de format de trame BLE à inventer ni à partager avec Android.
+- **`PeerConnected` à l'abonnement**, pas à la connexion GAP : sinon le premier
+  `ANNOUNCE` du cœur partirait avant que le pair écoute.
+- **Aucun appel NimBLE sous le verrou du cœur** (route prise sous verrou,
+  émission hors verrou).
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-220) : pas de
+  fragmentation BLE, `PeerConnected` à l'abonnement, quota borné à 3,
+  anti-boucle sur 4 octets, mapping des motifs HCI.
+
+### Appris
+- 3 entrées dans `04-apprentissages.md` : `conn_handle` recyclé vs `LinkId` ;
+  cœur pur + cible linux d'ESP-IDF ; ce qui s'arrête tout seul en BLE (annonce,
+  scan, filtre de doublons). Glossaire : `conn_handle`, `LinkId`, supervision
+  timeout, règle anti-boucle, cible linux.
+
+### État après cette session
+- Le firmware compile, le cœur passe ses 32 tests **sur l'hôte et sur la
+  carte**, et le rôle **périphérique** a été exercé de bout en bout contre un
+  téléphone (connexion, abonnement, trames dans les deux sens, MTU 23 puis
+  517, déconnexion propre, **coupure brutale réelle**, réannonce, `LinkId`
+  neuf sur `conn_handle` recyclé). Reste pour clore l'US : l'essai sur
+  **2 cartes** (rôle central jamais exécuté), et la revue par une personne
+  d'une autre `area:`.
+- Fiche(s) module mise(s) à jour : `modules/firmware-relay.md` (réécrite hors
+  onboarding), `modules/dengon-ble.md` (règle 3), `modules/_index.md`.
+- 01-etat-du-code.md mis à jour : non (plus à toucher, `docs/suivi/README.md`).
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker run … -w …/dengon_transport_core/test_apps $IDF sh -ec \
+    'idf.py --preview set-target linux && idf.py build && ./build/test_dengon_transport_core.elf'
+32 Tests 0 Failures 0 Ignored — OK (exit 0)
+
+# mutation : purge de la file dans dengon_tc_link_close (code restauré ensuite)
+32 Tests 2 Failures — cas_trame_recue_avant_coupure_est_livree,
+test_file_saturee_garde_la_fermeture — exit 1
+
+$ docker run … test_apps $IDF idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build
+OK
+
+$ docker run … -w /repo/firmware/dengon-relay $IDF sh -c 'idf.py fullclean; rm -f sdkconfig; idf.py build'
+Project build complete — 0 warning dans main et dengon_transport_core (-Werror)
+
+$ docker run … idf.py size
+Total image 507 865 o (bin 507 984 o, 463,5 Ko en US-114) ; DRAM 22,58 % (96 452 o libres) ; IRAM 75,08 %
+```
+- `gcc -Wall -Wextra -Werror` hôte sur le cœur : OK (avant l'image Docker).
+- **Sur carte (une seule ESP32-D0WD-V3, CH340 via `usbipd`)** :
+```
+$ idf.py -B build-esp32 … -p /dev/ttyUSB0 flash   (test_apps) + lecture série (pyserial)
+32 Tests 0 Failures 0 Ignored — OK
+
+$ idf.py -p /dev/ttyUSB0 flash   (firmware relais) + captures série de 4 et 10 min
+annonce « dengon-relay-39e1 », scan toutes les 10 s, 0 reset, 0 panic
+```
+- **Pair réel : Pixel 8 Pro (Android 17) + nRF Connect 4.29.1**, piloté par
+  `adb.exe` (winget `Google.PlatformTools`) depuis WSL : `uiautomator dump`
+  pour lire l'écran, `input tap` pour agir, `screencap` quand `uiautomator`
+  cessait de répondre. Observé sur la carte :
+  - abonnement → `PeerConnected link#1` ; sondes `20 o -> ok`, `21 o -> trame
+    trop grande` (MTU 23) ; le téléphone lit « DGN0 » + motif intact ;
+  - écriture `DEADBEEF` → `FrameReceived 4 o, crc32=7c9ca35a` (= `zlib.crc32`
+    sur PC) ;
+  - Request MTU 517 → `ATT MTU négocié = 517` ;
+  - DISCONNECT → `HCI 0x13 -> Propre` ; reconnexion → `conn=0` redonné,
+    `link#2` ;
+  - Bluetooth du téléphone désactivé → `HCI 0x15 -> Propre` (Android prévient :
+    **pas** une coupure brutale — première tentative ratée, constatée) ;
+  - `am force-stop com.google.android.bluetooth` pendant un lien annoncé →
+    ~5 s plus tard `HCI 0x08 -> Brutale -> PeerDisconnected link#1, motif
+    Brutale`, `send` → pair inconnu ; nouveau scan : carte toujours annoncée,
+    `PeerConnected link#2`.
+  - Incidents de manipulation (pas du firmware) : après un `force-stop`, la
+    pile du téléphone refusait de se reconnecter jusqu'à un `bluetooth_manager
+    disable/enable` ; une première coupure brutale a eu lieu sur un lien pas
+    encore abonné → `HCI 0x08 -> Brutale (lien jamais annoncé)`, sans
+    événement, conforme au contrat mais refaite sur un lien annoncé.
+- **Non vérifié :** le rôle **central** (scan d'un pair dengon, anti-boucle,
+  découverte GATT, `NOTIFY_RX`) et le relais **entre deux cartes** — une seule
+  carte disponible. Workflow CI pas encore exécuté au moment de l'écriture.
+---
+
 ## 2026-09-28 — US-212 : `sync::courier` — dépôt / collecte d'enveloppes scellées, expiration
 
 **Auteur :** Oswin + Claude (Opus 5.5)
