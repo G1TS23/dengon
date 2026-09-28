@@ -395,6 +395,8 @@ encore le codec (US-201).
   (`crypto/noise.rs`) et `SigningKey::to_seed()` (`crypto.rs`, rendu
   dans un `Zeroizing`) servent uniquement à `Identity::seal`. Hors de la
   crate, un secret ne sort toujours pas.
+- **Pas de `Clone` sur `Identity`** (rebase de #82) : `SigningKey` n'est plus
+  `Clone` depuis la revue de #78, et aucun appelant ne clonait une identité.
 - **Coffre sans `OsRng`** (US-205) : le nonce XChaCha20 de 24 octets vient
   de la RNG injectée, comme les éphémères Noise. `chacha20poly1305` est donc
   utilisé sans `getrandom` par `identity`, qui compile en `no_std` (seule
@@ -547,6 +549,9 @@ encore le codec (US-201).
 
 ## Limites connues / TODO
 
+- Deux rangements de l'identité au repos coexistent (`identity::Vault` et
+  `Store::set_identity`), aucun n'est appelé : à unifier (écart « Coffre
+  d'identité »).
 - `snow` 0.10.0 n'efface aucune clé : seules les copies détenues par
   `StaticKeypair` et `SigningKey` sont effacées (écart consigné).
 - `crypto::open` n'a pas d'anti-rejeu : une enveloppe `X` réinjectée s'ouvre à

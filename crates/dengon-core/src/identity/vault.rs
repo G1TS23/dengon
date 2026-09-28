@@ -9,7 +9,9 @@
 //! - La clé du coffre ([`VaultKey`], 32 octets) est fournie par l'appelant :
 //!   à terme, tirée du coffre de la plateforme (Android Keystore, Secret
 //!   Service, NVS chiffrée). C'est le même principe que `store::KeySource`
-//!   (US-207), sans en dépendre (même sprint).
+//!   (US-207), sans en dépendre : `store` range aussi les secrets de
+//!   l'identité (`Store::set_identity`), les deux rangements coexistent en
+//!   attendant l'US d'intégration (`docs/suivi/03-ecarts-conception.md`).
 //! - L'en-tête est authentifié (AAD) : changer la version ou la signature
 //!   de fichier fait échouer le déchiffrement.
 //! - Le nonce de 24 octets est tiré de la RNG injectée : XChaCha20 tolère

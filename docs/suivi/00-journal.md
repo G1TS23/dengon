@@ -29,6 +29,57 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
   deux flux d'exemple, dépendances ; la limite « pas de codec » est retirée).
 - Journal : l'ancienne version de l'entrée US-203, recopiée par
   `merge=union`, est supprimée (celle de `main`, corrigée après revue, fait foi).
+## 2026-09-28 — US-205 : rebase sur US-204 revue (#81) et sur `main` (`store`, `ledger`)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `Cargo.toml`, `crates/dengon-core/Cargo.toml`, `Cargo.lock`,
+`crates/dengon-core/src/lib.rs`, `crates/dengon-core/src/identity/{keys,vault}.rs`, `docs/suivi/`.
+**Lot :** US-205 (issue #19), PR #82. Branche `feat/US-205-identity`.
+
+### Fait
+
+- **Rebase** : `git rebase --onto feat/US-204-crypto-noise 1cb099c` (puis une
+  seconde fois après l'amendement du commit de correction US-204). Le commit
+  US-205 est rejoué sur les têtes revues de #78 et #81, donc sur `main`.
+- **`chacha20poly1305` partagé avec `store`** : `main` le déclarait avec
+  `features = ["getrandom"]` (pour `aead::OsRng` dans `store`), US-205 le voulait
+  `no_std` (`default-features = false`, `alloc`). Git a fusionné sans conflit…
+  en déclarant la clé deux fois. Résolu : une seule déclaration `no_std` dans
+  le workspace ; dans `dengon-core`, la dépendance n'est plus optionnelle et la
+  feature `std` devient `["dep:rusqlite", "chacha20poly1305/getrandom"]`.
+  Vérifié : `getrandom` absent de l'arbre `--no-default-features`, présent avec
+  `std`.
+- **`Clone` retiré de `Identity`** : `#[derive(Clone)]` ne compilait plus, car
+  `SigningKey` n'est plus `Clone` (revue #78). Aucun appelant ne clonait une
+  identité. Changement fait dans le commit rebasé, pour qu'il compile seul.
+- **Recouvrement avec `store`** : l'écart « Coffre d'identité » est complété.
+  `Store::set_identity` et `Identity::seal` + `Vault` rangent tous deux les
+  secrets de l'identité ; aucun n'est appelé, à unifier en intégration
+  (US-301/302). Doc de `vault.rs` mise à jour.
+- Fiche module et `02-avancement.md` : doublons laissés par `merge=union`
+  fusionnés, liste des tests et compte mis à jour.
+
+### Pourquoi / décisions
+
+- `chacha20poly1305/getrandom` sous `std` plutôt que deux versions de la crate :
+  une seule copie dans l'arbre, et le firmware ne tire jamais `getrandom`.
+- Pas d'unification `Vault`/`store` dans cette PR : c'est une décision
+  d'intégration (quelle source de clé plateforme), hors du périmètre d'US-205.
+
+### Écarts vs conception
+
+- Aucun nouveau ; l'écart « Coffre d'identité » est mis à jour.
+
+### Appris
+
+- Rien de nouveau (le piège `merge=union` est déjà documenté dans
+  `04-apprentissages.md`).
+
+### État après cette session
+
+- #82 est prête pour une revue, empilée sur #81 et #78.
+- Fiche module mise à jour : [`modules/dengon-core.md`](modules/dengon-core.md).
+- 01-etat-du-code.md mis à jour : non.
 
 ### Vérification (commandes réellement exécutées)
 
@@ -41,6 +92,22 @@ dengon-core : 126 unitaires + vecteurs crypto (2, 1 ignoré) + protocole, tout v
 $ cargo check -p dengon-core --no-default-features
 OK
 ```
+$ cargo clippy --workspace --all-targets -- -D warnings   # premier passage
+error[E0277]: the trait bound `crypto::SigningKey: Clone` is not satisfied (identity/keys.rs:66)
+$ cargo fmt --all -- --check
+OK
+$ cargo clippy --workspace --all-targets -- -D warnings
+OK
+$ cargo test --workspace
+OK — dengon-core : 141 unitaires + 3 vecteurs identity (1 ignoré) + 2 vecteurs crypto (1 ignoré) + 4 vecteurs protocole
+$ cargo check -p dengon-core --no-default-features
+OK
+$ cargo tree -p dengon-core -e normal --no-default-features | grep -c getrandom
+0
+$ cargo tree -p dengon-core -e normal | grep -c getrandom
+1
+```
+- Couverture non remesurée après le rebase.
 
 ---
 

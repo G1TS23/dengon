@@ -1028,6 +1028,8 @@ _(aucun écart pour l'instant)_
   §2 et `docs/synthese/09-dashboard-et-donnees.md` §11.3. `docs/powl/04`
   reste inchangé, comme matière d'origine.
 
+---
+
 ### 2026-09-28 — Coffre d'identité : trait `Vault` et clé fournie par l'appelant (US-205)
 
 - **Prévu :** `docs/synthese/06-securite.md` §2 : les clés sont stockées
@@ -1047,7 +1049,18 @@ _(aucun écart pour l'instant)_
   le blob dans `FileVault` et la clé dans le Keystore, ou bien les secrets
   dans la table `identity` de `store`. La première est la plus simple : un
   seul appel à `load_or_create`.
+  **Mise à jour (rebase de #82 sur `main`, 2026-09-28) :** `store` est
+  maintenant sur `main`, donc les **deux** rangements de l'identité au repos
+  existent dans le code : `Identity::seal` + `Vault` (blob unique, clé de
+  l'appelant) et `Store::set_identity` / `get_identity_private_keys`
+  (colonnes `priv_static`/`priv_sign` chiffrées par `KeySource`, pseudo et
+  clés publiques en clair dans la table). Aucun appelant n'utilise encore
+  l'un ou l'autre. À unifier dans l'US d'intégration (US-301/302) : garder
+  un seul chemin, et faire fournir la clé du coffre et celle de `store` par
+  la même source plateforme.
 - **Doc de conception mise à jour ?** Non (la cible plateforme reste valable).
+
+---
 
 ### 2026-09-28 — QR : base64url sans padding, pseudo de 1 à 255 octets (US-205)
 
