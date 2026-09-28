@@ -1,0 +1,196 @@
+# ---------------------------------------------------------------------------
+# Workflow `cross-vectors` — conformité core ↔ firmware ↔ dashboard sur les
+# MÊMES vecteurs. Référence : docs/synthese/10-benchmarks-mvp-tests.md §4.7,
+# docs/olivier/proposition-organisation-github.md §4.1 et §4.3 (US-222).
+#
+# C'est le job qui justifie le monorepo. Les autres prouvent que chaque
+# composant marche ; celui-ci prouve qu'ils lisent le format de la même
+# façon. Sa valeur tient entièrement au fait que les implémentations soient
+# écrites SÉPARÉMENT et lisent le MÊME fichier : si l'une était générée
+# depuis l'autre, les comparer ne dirait rien.
+#
+# Quatre lectures, sur contracts/packet/ et contracts/events/ :
+#
+#   1. Rust `std`     — dengon-core tel qu'Android, dengon-node et le
+#                       dashboard le consomment ;
+#   2. Rust `no_std`  — dengon-conformance : le MÊME décodeur, compilé sans
+#                       `std`, c'est-à-dire la configuration que le firmware
+#                       ESP32 embarquera via dengon_core_ffi (US-307). Un
+#                       PROXY, pas le firmware réel — écart consigné dans
+#                       docs/suivi/03-ecarts-conception.md ;
+#   3. Python contrat — contracts/tools/validate_packets.py (décodage de
+#                       trame écrit indépendamment du Rust) et validate.py
+#                       (canonique + signatures des 20 fixtures golden) ;
+#   4. Python dashboard — les 20 fixtures rejouées dans POST /ingest/batch,
+#                       pipeline réel compris (schéma, JWT, Ed25519, dédup).
+#
+# ⚠ MÊMES DEUX RÈGLES QUE core.yml (voir son en-tête)
+#
+# 1. Le check exigé par la protection de `main` est le nom du JOB
+#    (`cross-vectors`) : pas de `strategy.matrix`, pas de workflow
+#    réutilisable, ne pas renommer le job.
+# 2. Le filtrage par chemin est fait DANS le job, pas via
+#    `on.pull_request.paths` : sinon aucun check run n'est créé sur une PR
+#    documentaire, et elle reste bloquée sur « Expected — Waiting for status
+#    to be reported ».
+# ---------------------------------------------------------------------------
+name: cross-vectors
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-vectors-${{ github.ref }}
+  # On n'annule jamais un run sur main : il fait foi pour l'historique.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  cross-vectors:
+    name: cross-vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nécessaire au filtre de chemins sur les événements push.
+          fetch-depth: 0
+
+      - name: Détecter les changements touchant un consommateur de vecteurs
+        id: filtre
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          # Volontairement large : ce job compare des composants entre eux,
+          # donc un changement de N'IMPORTE LEQUEL peut casser l'accord.
+          # firmware/** y figure alors que la patte firmware est encore un
+          # proxy — le jour où US-307 branche dengon_core_ffi, le filtre est
+          # déjà juste.
+          filters: |
+            vecteurs:
+              - 'contracts/**'
+              - 'crates/**'
+              - 'dashboard/**'
+              - 'firmware/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.github/workflows/cross-vectors.yml'
+
+      - name: Aucun consommateur de vecteurs modifié
+        if: steps.filtre.outputs.vecteurs != 'true'
+        run: |
+          {
+            echo '### cross-vectors — ignoré'
+            echo
+            echo "Aucun fichier de contracts/, crates/, dashboard/ ni firmware/ modifié :"
+            echo "les vecteurs ne sont pas rejoués."
+            echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- Chaîne Rust -------------------------------------------------------
+      - name: Lire la toolchain figée
+        if: steps.filtre.outputs.vecteurs == 'true'
+        id: toolchain
+        run: |
+          canal=$(grep -oP '(?<=^channel\s=\s")[^"]+' rust-toolchain.toml)
+          if [ -z "$canal" ]; then
+            echo "Impossible de lire 'channel' dans rust-toolchain.toml" >&2
+            exit 1
+          fi
+          echo "canal=$canal" >> "$GITHUB_OUTPUT"
+
+      - name: Installer Rust
+        if: steps.filtre.outputs.vecteurs == 'true'
+        uses: dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # master au 2026-09-03
+        with:
+          toolchain: ${{ steps.toolchain.outputs.canal }}
+
+      - name: Cache cargo
+        if: steps.filtre.outputs.vecteurs == 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: cross-vectors
+          # N'écrire le cache que depuis main, pour qu'une PR ne le pollue pas.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: 1/4 — Rust avec std (core tel qu'Android et le dashboard le lisent)
+        if: steps.filtre.outputs.vecteurs == 'true'
+        run: |
+          cargo test -p dengon-core --locked \
+            --test protocol_vectors \
+            --test crypto_vectors \
+            --test identity_vectors \
+            --test event_fixtures
+
+      - name: 2/4 — Rust sans std (configuration embarquée par le firmware)
+        if: steps.filtre.outputs.vecteurs == 'true'
+        # `dengon-conformance` existe UNIQUEMENT pour cette configuration :
+        # `cargo test -p dengon-core --no-default-features` ne donnerait pas
+        # un build no_std, l'unification de features le réactive via la
+        # dev-dependency dengon-ble (voir crates/dengon-conformance/Cargo.toml).
+        run: cargo test -p dengon-conformance --locked
+
+      - name: 2/4 bis — le graphe sans std ne contient vraiment pas rusqlite
+        if: steps.filtre.outputs.vecteurs == 'true'
+        # Ceinture et bretelles du test `dengon_core_est_bien_lie_sans_std` :
+        # si un jour une dépendance réactivait `std`, ce grep le dirait ici
+        # avec le graphe sous les yeux, pas seulement par une assertion.
+        run: |
+          if cargo tree -p dengon-conformance -e features | grep -q rusqlite; then
+            echo "::error::dengon-conformance tire rusqlite : le build n'est plus no_std"
+            cargo tree -p dengon-conformance -e features | grep -B5 rusqlite
+            exit 1
+          fi
+
+      # --- Chaîne Python -----------------------------------------------------
+      - name: Installer uv
+        if: steps.filtre.outputs.vecteurs == 'true'
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.9.25"
+          enable-cache: true
+
+      - name: 3/4 — Python côté contrat (trame + canonique + signatures)
+        if: steps.filtre.outputs.vecteurs == 'true'
+        working-directory: contracts
+        run: |
+          uv sync --frozen --no-build
+          uv run --no-sync --no-build python tools/validate_packets.py
+          uv run --no-sync --no-build python tools/validate.py
+
+      - name: 4/4 — Python côté dashboard (les 20 fixtures dans /ingest/batch)
+        if: steps.filtre.outputs.vecteurs == 'true'
+        working-directory: dashboard/api
+        run: |
+          uv sync --frozen --extra dev --no-install-project --no-build
+          uv run --no-sync --no-build pytest tests/test_cross_vectors.py -q
+
+      - name: Récapitulatif
+        if: always() && steps.filtre.outputs.vecteurs == 'true'
+        run: |
+          {
+            echo '### cross-vectors — qui a lu quoi'
+            echo
+            echo "| Vecteurs | Implémentation | Langage / configuration |"
+            echo "| --- | --- | --- |"
+            echo "| \`contracts/packet/vectors_v0.json\` | \`dengon-core\` (protocol_vectors) | Rust, \`std\` |"
+            echo "| \`contracts/packet/vectors_v0.json\` | \`dengon-conformance\` | Rust, **sans \`std\`** — proxy firmware |"
+            echo "| \`contracts/packet/vectors_v0.json\` | \`tools/validate_packets.py\` | Python, décodeur indépendant |"
+            echo "| \`contracts/packet/{crypto,identity}_v0.json\` | \`dengon-core\` | Rust, \`std\` |"
+            echo "| \`contracts/events/fixtures/*.json\` | \`dengon-core::observability\` | Rust — canonique octet à octet, \`batch_id\`, signatures |"
+            echo "| \`contracts/events/fixtures/*.json\` | \`tools/validate.py\` | Python, côté contrat |"
+            echo "| \`contracts/events/fixtures/*.json\` | \`POST /ingest/batch\` | Python, pipeline dashboard réel |"
+            echo
+            echo "La patte firmware est un **proxy** tant que l'US-307 (\`dengon_core_ffi\`)"
+            echo "n'est pas livrée — voir \`docs/suivi/03-ecarts-conception.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"
