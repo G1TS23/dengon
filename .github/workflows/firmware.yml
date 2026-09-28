@@ -1,12 +1,18 @@
 # ---------------------------------------------------------------------------
-# Workflow `firmware` — compilation du relais ESP32 (firmware/dengon-relay).
-# Référence : US-114, docs/synthese/08-relais-esp32.md §3.
+# Workflow `firmware` — compilation du relais ESP32 (firmware/dengon-relay)
+# ET, depuis l'US-307, cross-compilation de `libdengon_core.a` (crate
+# `dengon-core-embed`) pour `xtensa-esp32-none-elf` — voir la section dédiée
+# en bas de ce fichier et le filtre `core_ffi`.
+# Référence : US-114 / US-307, docs/synthese/08-relais-esp32.md §3.
 #
-# Le build passe par l'image Docker officielle `espressif/idf`, ÉPINGLÉE PAR
-# DIGEST — exactement la même commande qu'en local (voir
+# Le build ESP-IDF passe par l'image Docker officielle `espressif/idf`,
+# ÉPINGLÉE PAR DIGEST — exactement la même commande qu'en local (voir
 # docs/suivi/modules/firmware-relay.md). Aucun ESP-IDF n'est installé sur le
 # runner : la chaîne de compilation embarquée pèse ~2 Go d'outils, et sa
-# reproductibilité vaut mieux qu'une installation script par script.
+# reproductibilité vaut mieux qu'une installation script par script. La
+# cross-compilation Rust xtensa, elle, installe sa toolchain (`espup`)
+# directement sur le runner : Spike A (US-101) a validé cette voie, pas de
+# précédent Docker équivalent côté Rust dans ce dépôt.
 #
 # Pourquoi `docker run` plutôt que `container:` au niveau du job : le checkout
 # et dorny/paths-filter tournent alors nativement (Node du runner), et surtout
@@ -76,6 +82,17 @@ jobs:
           filters: |
             firmware:
               - 'firmware/**'
+              - '.github/workflows/firmware.yml'
+            # Filtre séparé (US-307) : `dengon-core-embed` n'est pas sous
+            # firmware/, et une PR qui ne touche que dengon-core (dont
+            # dépend `libdengon_core.a`) doit aussi redéclencher la
+            # cross-compilation xtensa, sans pour autant relancer les
+            # étapes ESP-IDF ci-dessus (`idf.py build`), gardées gate par
+            # `firmware` seul.
+            core_ffi:
+              - 'crates/dengon-core/**'
+              - 'crates/dengon-core-ffi/**'
+              - 'crates/dengon-core-embed/**'
               - '.github/workflows/firmware.yml'
 
       - name: Aucun changement firmware
@@ -176,5 +193,48 @@ jobs:
             firmware/dengon-relay/build/bootloader/bootloader.bin
             firmware/dengon-relay/build/partition_table/partition-table.bin
             firmware/dengon-relay/build/flash_args
+          retention-days: 14
+          if-no-files-found: error
+
+      # --- 4. `libdengon_core.a` pour xtensa (US-307) ------------------------
+      # Gate séparé de `firmware` (voir le filtre `core_ffi` plus haut) : ne
+      # tourne PAS sur un simple changement de `firmware/**` qui ne touche
+      # pas dengon-core.
+      #
+      # `espup` (~2 Go, Spike A §3, `docs/suivi/spikes/US-101-*.md`) installe
+      # la toolchain nightly forkée `esp`, seule à connaître la cible
+      # `xtensa-esp32-none-elf` (tier 3, sans std précompilée). `dengon-core-
+      # embed` est une racine de workspace séparée du reste (voir son
+      # Cargo.toml) : son propre `Cargo.lock`, sa propre toolchain déclarée
+      # par son `rust-toolchain.toml` (nightly amont, PAS `esp` — trop lourd
+      # pour la vérification hôte du job `cross-vectors`) — d'où `cargo +esp`
+      # explicite ci-dessous, qui l'emporte sur ce fichier pour cette seule
+      # invocation.
+      #
+      # Ne produit PAS encore de composant ESP-IDF lié (US-308/309) : cette
+      # US prouve que l'archive compile pour la cible réelle, pas encore son
+      # intégration dans `firmware/dengon-relay`.
+      - name: Installer espup (toolchain xtensa)
+        if: steps.filtre.outputs.core_ffi == 'true'
+        run: |
+          cargo install espup --locked
+          espup install --targets esp32
+          rustup component add rust-src --toolchain esp
+
+      - name: Compiler libdengon_core.a pour xtensa-esp32-none-elf
+        if: steps.filtre.outputs.core_ffi == 'true'
+        working-directory: crates/dengon-core-embed
+        run: |
+          cargo +esp build --release --target xtensa-esp32-none-elf --locked
+          ls -la target/xtensa-esp32-none-elf/release/libdengon_core.a
+
+      - name: Publier libdengon_core.a (xtensa)
+        if: steps.filtre.outputs.core_ffi == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: libdengon_core-xtensa
+          path: |
+            crates/dengon-core-embed/target/xtensa-esp32-none-elf/release/libdengon_core.a
+            crates/dengon-core-ffi/include/dengon_core.h
           retention-days: 14
           if-no-files-found: error

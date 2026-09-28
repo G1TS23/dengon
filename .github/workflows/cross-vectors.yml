@@ -9,20 +9,24 @@
 # écrites SÉPARÉMENT et lisent le MÊME fichier : si l'une était générée
 # depuis l'autre, les comparer ne dirait rien.
 #
-# Quatre lectures, sur contracts/packet/ et contracts/events/ :
+# Cinq lectures, sur contracts/packet/ et contracts/events/ :
 #
 #   1. Rust `std`     — dengon-core tel qu'Android, dengon-node et le
 #                       dashboard le consomment ;
 #   2. Rust `no_std`  — dengon-conformance : le MÊME décodeur, compilé sans
 #                       `std`, c'est-à-dire la configuration que le firmware
-#                       ESP32 embarquera via dengon_core_ffi (US-307). Un
-#                       PROXY, pas le firmware réel — écart consigné dans
-#                       docs/suivi/03-ecarts-conception.md ;
+#                       ESP32 embarquera via dengon-core-ffi (US-307) ;
 #   3. Python contrat — contracts/tools/validate_packets.py (décodage de
 #                       trame écrit indépendamment du Rust) et validate.py
 #                       (canonique + signatures des 20 fixtures golden) ;
 #   4. Python dashboard — les 20 fixtures rejouées dans POST /ingest/batch,
-#                       pipeline réel compris (schéma, JWT, Ed25519, dédup).
+#                       pipeline réel compris (schéma, JWT, Ed25519, dédup) ;
+#   5. C hôte          — dengon-core-embed (`libdengon_core.a`, cible native) :
+#                       le MÊME décodeur que la lecture 2, appelé depuis un
+#                       programme C via le header `cbindgen` (US-307). Reste
+#                       un PROXY de la cible xtensa réelle (compilée à part
+#                       par le job `firmware`, avec la toolchain `esp`) —
+#                       écart consigné dans docs/suivi/03-ecarts-conception.md.
 #
 # ⚠ MÊMES DEUX RÈGLES QUE core.yml (voir son en-tête)
 #
@@ -123,7 +127,7 @@ jobs:
           # N'écrire le cache que depuis main, pour qu'une PR ne le pollue pas.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: 1/4 — Rust avec std (core tel qu'Android et le dashboard le lisent)
+      - name: 1/5 — Rust avec std (core tel qu'Android et le dashboard le lisent)
         if: steps.filtre.outputs.vecteurs == 'true'
         run: |
           cargo test -p dengon-core --locked \
@@ -132,7 +136,7 @@ jobs:
             --test identity_vectors \
             --test event_fixtures
 
-      - name: 2/4 — Rust sans std (configuration embarquée par le firmware)
+      - name: 2/5 — Rust sans std (configuration embarquée par le firmware)
         if: steps.filtre.outputs.vecteurs == 'true'
         # `dengon-conformance` existe UNIQUEMENT pour cette configuration :
         # `cargo test -p dengon-core --no-default-features` ne donnerait pas
@@ -140,7 +144,7 @@ jobs:
         # dev-dependency dengon-ble (voir crates/dengon-conformance/Cargo.toml).
         run: cargo test -p dengon-conformance --locked
 
-      - name: 2/4 bis — le graphe sans std ne contient vraiment pas rusqlite
+      - name: 2/5 bis — le graphe sans std ne contient vraiment pas rusqlite
         if: steps.filtre.outputs.vecteurs == 'true'
         # Ceinture et bretelles du test `dengon_core_est_bien_lie_sans_std` :
         # si un jour une dépendance réactivait `std`, ce grep le dirait ici
@@ -152,6 +156,31 @@ jobs:
             exit 1
           fi
 
+      # --- Chaîne C (US-307) --------------------------------------------------
+      # `dengon-core-embed` est une racine de workspace SÉPARÉE (voir son
+      # Cargo.toml) : `nightly` + `rust-src`, pas la toolchain figée du
+      # workspace principal installée plus haut. `rust-toolchain.toml` du
+      # sous-dossier la sélectionne automatiquement ; rustup l'installe au
+      # besoin (avec son composant `rust-src` déclaré), sans toucher à la
+      # toolchain 1.98.1 utilisée par le reste de ce job.
+      #
+      # C'est le remplacement de la patte firmware par la vraie chose : avant
+      # US-307, seul `dengon-conformance` (Rust `no_std`, étape 2/5) en
+      # tenait lieu de proxy. Ici, ce sont les MÊMES vecteurs, mais rejoués
+      # depuis un programme C qui lie `libdengon_core.a` — la cible native de
+      # cette étape, pas `xtensa-esp32-none-elf` (compilée séparément par le
+      # job `firmware`, qui a besoin de la toolchain `esp` d'`espup`).
+      - name: 5/5 — C hôte (dengon-core-embed, US-307)
+        if: steps.filtre.outputs.vecteurs == 'true'
+        working-directory: crates/dengon-core-embed
+        run: |
+          rustup component add rust-src
+          python3 tests/c/generate_vectors.py
+          cargo build --locked
+          cc -std=c99 -Wall -Wextra -Werror -o tests/c/host_test tests/c/host_test.c \
+            -Ltarget/debug -ldengon_core
+          ./tests/c/host_test
+
       # --- Chaîne Python -----------------------------------------------------
       - name: Installer uv
         if: steps.filtre.outputs.vecteurs == 'true'
@@ -160,7 +189,7 @@ jobs:
           version: "0.9.25"
           enable-cache: true
 
-      - name: 3/4 — Python côté contrat (trame + canonique + signatures)
+      - name: 3/5 — Python côté contrat (trame + canonique + signatures)
         if: steps.filtre.outputs.vecteurs == 'true'
         working-directory: contracts
         run: |
@@ -168,7 +197,7 @@ jobs:
           uv run --no-sync --no-build python tools/validate_packets.py
           uv run --no-sync --no-build python tools/validate.py
 
-      - name: 4/4 — Python côté dashboard (les 20 fixtures dans /ingest/batch)
+      - name: 4/5 — Python côté dashboard (les 20 fixtures dans /ingest/batch)
         if: steps.filtre.outputs.vecteurs == 'true'
         working-directory: dashboard/api
         run: |
@@ -185,12 +214,14 @@ jobs:
             echo "| --- | --- | --- |"
             echo "| \`contracts/packet/vectors_v0.json\` | \`dengon-core\` (protocol_vectors) | Rust, \`std\` |"
             echo "| \`contracts/packet/vectors_v0.json\` | \`dengon-conformance\` | Rust, **sans \`std\`** — proxy firmware |"
+            echo "| \`contracts/packet/vectors_v0.json\` | \`dengon-core-embed\` (\`host_test.c\`) | C hôte, lie \`libdengon_core.a\` (US-307) |"
             echo "| \`contracts/packet/vectors_v0.json\` | \`tools/validate_packets.py\` | Python, décodeur indépendant |"
             echo "| \`contracts/packet/{crypto,identity}_v0.json\` | \`dengon-core\` | Rust, \`std\` |"
             echo "| \`contracts/events/fixtures/*.json\` | \`dengon-core::observability\` | Rust — canonique octet à octet, \`batch_id\`, signatures |"
             echo "| \`contracts/events/fixtures/*.json\` | \`tools/validate.py\` | Python, côté contrat |"
             echo "| \`contracts/events/fixtures/*.json\` | \`POST /ingest/batch\` | Python, pipeline dashboard réel |"
             echo
-            echo "La patte firmware est un **proxy** tant que l'US-307 (\`dengon_core_ffi\`)"
-            echo "n'est pas livrée — voir \`docs/suivi/03-ecarts-conception.md\`."
+            echo "La lecture C (\`dengon-core-embed\`) reste un **proxy** de la cible"
+            echo "xtensa réelle, compilée à part par le job \`firmware\` — voir"
+            echo "\`docs/suivi/03-ecarts-conception.md\`."
           } >> "$GITHUB_STEP_SUMMARY"

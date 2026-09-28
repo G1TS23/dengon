@@ -1,0 +1,14 @@
+# `core`/`alloc` sont normalement précompilés par rustup, avec
+# `panic = "unwind"` (le choix par défaut amont) — recompiler CETTE crate en
+# `panic = "abort"` (Cargo.toml) ne suffit pas : l'éditeur de liens réclame
+# quand même `rust_eh_personality`, absent d'un binaire `no_std` sans
+# runtime `std` pour le fournir (vérifié en écrivant cette US, cible hôte
+# `x86_64-pc-windows-gnu` : `undefined reference to rust_eh_personality`).
+# `build-std` recompile `core`/`alloc` depuis les sources AVEC
+# `panic = "abort"`, ce qui élimine la référence à la source.
+#
+# Nécessite la toolchain nightly déclarée par `rust-toolchain.toml` (ici,
+# `esp`) et son composant `rust-src` — pas de `-Z build-std` à passer en
+# ligne de commande, cargo nightly lit directement `[unstable]` ici.
+[unstable]
+build-std = ["core", "alloc"]

@@ -1,0 +1,5 @@
+target/
+tests/c/vectors_generated.h
+tests/c/host_test
+tests/c/host_test.exe
+tests/c/*.o

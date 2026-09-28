@@ -38,3 +38,4 @@ de son area (proposition d'organisation §10.3 point 3).
 | `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (transport BLE réel, US-213) | 2026-09-28 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
 | `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
+| `dengon-core-ffi` + `dengon-core-embed` (`crates/dengon-core-ffi/`, `crates/dengon-core-embed/`) | [dengon-core-ffi.md](dengon-core-ffi.md) | partiel (chaîne de compilation + header + vecteurs depuis le C, US-307 ; pas encore intégré au CMake ESP-IDF) | 2026-09-29 |

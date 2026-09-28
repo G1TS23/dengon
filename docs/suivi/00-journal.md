@@ -117,6 +117,109 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ```
 $ cargo test -p dengon-verify -p dengon-core --quiet
 172 tests, 0 échec
+## 2026-09-29 — US-307 : `libdengon_core.a`, pont C de `dengon-core` (cross-compile xtensa + `cbindgen`)
+
+**Auteur :** Oswin (Tanguy) + Claude (Sonnet 5)
+**Périmètre :** nouvelles crates `crates/dengon-core-ffi/`,
+`crates/dengon-core-embed/` ; `Cargo.toml` (exclusion de workspace) ;
+`.github/workflows/{cross-vectors,firmware}.yml` ; `docs/suivi/`.
+**Lot :** US-307 (issue #45). Branche `feat/US-307-libdengon-core-ffi`, base
+`main`.
+
+### Fait
+- **`dengon-core-ffi`** (`no_std` + `alloc`, `rlib` normal) : deux fonctions
+  `#[no_mangle] extern "C"` — `dengon_decode_reencode` (décode un paquet L3
+  puis le ré-encode dans un tampon fourni par l'appelant, sans jamais
+  paniquer sur une entrée hostile — `dengon_core::protocol::decode` ne
+  panique sur aucune entrée) et `dengon_protocol_version` (preuve de
+  liaison). Header `include/dengon_core.h` généré par `cbindgen` dans
+  `build.rs`, versionné.
+- **6 tests d'intégration** (`tests/decode_reencode.rs`) : vecteurs
+  `contracts/packet/vectors_v0.json` (accept/reject) rejoués à travers la
+  frontière C **en Rust** (appel direct de la fonction `extern "C"`, mêmes
+  garanties que le C réel), plus tampon trop petit, pointeurs nuls, entrée
+  vide.
+- **`dengon-core-embed`** : assemble `libdengon_core.a` (archive
+  **autonome** — allocateur global `malloc`/`free`, panic handler `abort`,
+  tous deux de la libc, présents aussi bien côté hôte que dans le newlib
+  d'ESP-IDF). Racine de workspace **séparée** du dépôt principal (voir
+  Écarts) : `[workspace]` vide, exclue via `exclude` dans le `Cargo.toml`
+  racine, `rust-toolchain.toml` propre (nightly + `rust-src`), `panic =
+  "abort"` + `-Z build-std = ["core", "alloc"]`.
+- **Programme C hôte** (`tests/c/host_test.c`) : lie `libdengon_core.a`,
+  appelle `dengon_protocol_version()`, puis rejoue les 8 vecteurs `accept` +
+  5 `reject` de `vectors_v0.json` (traduits en tableaux C par
+  `generate_vectors.py`, généré à chaque run, jamais committé). Preuve
+  littérale du critère d'acceptation « un programme C hôte lie la
+  bibliothèque et appelle une fonction ».
+- **CI** : `cross-vectors.yml` gagne une 5ᵉ lecture (« C hôte ») — construit
+  `libdengon_core.a` pour la cible native (nightly + `build-std`, pas
+  besoin d'`espup`) et rejoue les vecteurs depuis `host_test.c`, remplaçant
+  le proxy `dengon-conformance` pour la patte firmware. `firmware.yml` gagne
+  un filtre `core_ffi` séparé (`crates/dengon-core{,-ffi,-embed}/**`) et
+  trois étapes : installer `espup` (toolchain `esp`, cible xtensa),
+  `cargo +esp build --release --target xtensa-esp32-none-elf`, publier
+  l'archive + le header en artefact CI.
+
+### Pourquoi / décisions
+- **Deux crates, pas une** : une première version avec une feature Cargo
+  `standalone` (allocateur + panic handler activables) dans la MÊME crate
+  cassait `cargo clippy --workspace --all-targets --all-features`
+  (`error[E0152]: duplicate lang item 'panic_impl'` — la feature s'active
+  pour le `rlib` testé par le harnais `std` ET pour le `staticlib`, qui a
+  chacun besoin d'un panic handler différent). Scindé en `dengon-core-ffi`
+  (jamais de panic handler/allocateur, testable normalement) et
+  `dengon-core-embed` (toujours les deux, `test = false`, jamais mêlée à un
+  binaire `std`).
+- **`dengon-core-embed` hors du workspace principal** : voir l'entrée dédiée
+  de `03-ecarts-conception.md` — `panic = "abort"` + `-Z build-std`
+  s'appliquent à toute une invocation `cargo`, incompatibles avec le reste
+  du workspace (`std`, `panic = "unwind"`).
+- **Toolchain `nightly` par défaut sur `dengon-core-embed`, `esp` seulement
+  dans le job `firmware`** : la vérification hôte n'a besoin que de
+  `build-std` ; installer `espup` (~2 Go, ~7 min, Spike A §3) à chaque run
+  de `cross-vectors` aurait été un coût inutile pour ce qu'elle vérifie.
+- **`malloc`/`free`/`abort` de la libc**, pas l'allocateur idiomatique
+  ESP-IDF (`heap_caps_*`, SPIRAM) : existent des deux côtés sans
+  `#[cfg(target_os)]`, suffisants pour cette US — à réévaluer en US-308/309
+  si un besoin mémoire spécifique apparaît.
+- **Surface C minimale** (une seule fonction utile) : US-307 est la tête du
+  chemin critique firmware, pas une US d'exposition complète de
+  `dengon-core`. Routage/journal/observabilité suivront au fil des besoins
+  réels du firmware.
+
+### Écarts vs conception
+- `dengon-core-embed` hors du workspace Cargo principal — nouvel écart,
+  détaillé dans `03-ecarts-conception.md` (entrée 2026-09-29).
+- La lecture C du job `cross-vectors` reste un **proxy** de la cible xtensa
+  réelle (compilée à part par `firmware`, jamais exécutée sur matériel) —
+  même statut que le proxy `dengon-conformance` déjà consigné (entrée
+  2026-09-28, US-222), mis à jour dans le corps du workflow.
+
+### Appris
+- Nouveaux termes glossaire : `cbindgen`, `-Z build-std`, « archive
+  `staticlib` autonome ».
+- Une archive `staticlib` `no_std` doit résoudre panic handler + allocateur
+  global **au moment de sa compilation** par rustc (pas seulement au lien
+  final comme un `rlib`) : c'est la contrainte qui a dicté toute
+  l'architecture à deux crates.
+
+### État après cette session
+- `dengon-core-ffi`/`dengon-core-embed` : fonctionnel pour la vérification
+  hôte (Rust + C, tous deux verts localement, cible `x86_64-pc-windows-gnu`
+  faute d'`espup` sur ce poste Windows). La cible xtensa réelle et la
+  toolchain `esp` ne sont exercées que par la CI (job `firmware`, non
+  observé au moment d'écrire cette entrée — à vérifier au premier run sur la
+  PR).
+- Fiche module créée : [dengon-core-ffi](modules/dengon-core-ffi.md).
+  `02-avancement.md` : nouvelle ligne dédiée (pas d'édition de la ligne
+  `Firmware dengon-relay`, qui reste correcte tant que le CMake ESP-IDF ne
+  lie pas encore l'archive).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test --workspace --quiet          # workspace principal, inchangé
+19+4+321+7+2+5+3+6+8+8+6+7+1+24+1+3+1+2 tests, 0 échec
 
 $ cargo clippy --workspace --all-targets --all-features -- -D warnings
 (aucun avertissement)
@@ -292,6 +395,34 @@ Confirme le point d'échec attendu (pas de SDK local), pas un bug du script.
   `pip install -e ".[dev]"` (système Python 3.13) pour pouvoir exécuter la
   suite après résolution des conflits — pas la méthode habituelle du projet
   (`uv run pytest`), mais résultat équivalent (mêmes fichiers, mêmes tests).
+$ cargo test -p dengon-core-ffi --quiet
+6 tests (tests/decode_reencode.rs), 0 échec
+
+# dengon-core-embed (racine de workspace séparée, nightly)
+$ cargo +nightly build --target x86_64-pc-windows-gnu   # puis --release : les deux OK
+$ cargo +nightly clippy -- -D warnings                  # PAS --all-targets (voir Cargo.toml)
+(aucun avertissement)
+$ python tests/c/generate_vectors.py
+8 vecteurs accept, 5 vecteurs reject
+$ gcc -std=c99 -Wall -Wextra -o tests/c/host_test.exe tests/c/host_test.c \
+    -Ltarget/x86_64-pc-windows-gnu/debug -ldengon_core -lws2_32 -luserenv -lbcrypt -lntdll
+$ ./tests/c/host_test.exe
+dengon_protocol_version() = 1
+vecteurs : 8 accept, 5 reject
+OK : tous les vecteurs de conformite passent depuis le C
+```
+- **Non vérifié** : `cargo +esp build --target xtensa-esp32-none-elf`
+  (nécessite `espup`, non installé sur ce poste Windows — Spike A l'a
+  exercé sous WSL2). Le mécanisme (`build-std` + `panic = "abort"`) est
+  identique à ce qui a été vérifié ci-dessus avec `nightly` amont, `esp` en
+  étant un fork ; seule la CI exerce réellement la cible xtensa et la
+  toolchain `esp`.
+- Le lien de `dengon-core-embed` échoue si `-Z build-std` est omis, même
+  avec `panic = "abort"` dans `Cargo.toml` : `undefined reference to
+  'rust_eh_personality'` (sysroot précompilé avec `panic = "unwind"`) —
+  détail consigné dans `03-ecarts-conception.md`.
+
+---
 
 ## 2026-09-28 — US-224 : corrections suite à la revue de la PR #97
 
