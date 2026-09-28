@@ -156,6 +156,29 @@ fn decrypt_field(
         .map_err(|_| StoreError::Decryption)
 }
 
+/// Construit une AAD en concaténant plusieurs champs, chacun préfixé par sa
+/// longueur (`u32` big-endian) pour qu'aucune concaténation ne soit
+/// ambiguë entre deux découpages différents (même technique que
+/// `ledger::Entry::signing_bytes`).
+///
+/// `messages.body` n'était lié qu'à `msg_uuid`, `noise_sessions.state`
+/// qu'à `peer_id` (sans nom de table/colonne) : un attaquant à écriture
+/// sur le fichier `.db` pouvait modifier `author_peer_id`/`conv_id`/
+/// `direction` d'une ligne `messages` sans que le déchiffrement du corps
+/// échoue — le message se réattribuait à un autre auteur/une autre
+/// conversation sans détection (retour de revue #76, point d'OswinFreyr).
+/// Inclure ces métadonnées dans l'AAD lie le texte chiffré à la ligne
+/// **entière**, pas seulement à sa clé primaire.
+fn field_aad(parts: &[&[u8]]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for part in parts {
+        let len = u32::try_from(part.len()).unwrap_or(u32::MAX);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(part);
+    }
+    out
+}
+
 type Migration = (i64, &'static str, &'static [&'static str]);
 
 /// Migrations versionnées et rejouables (critère d'acceptation US-207).
@@ -380,6 +403,14 @@ impl<K: KeySource> Store<K> {
     }
 
     /// Ajoute (ou remplace) un contact. Champs publics, pas de chiffrement.
+    /// `now_ms` sert à horodater un éventuel changement de clé
+    /// (`key_changed_at`) — voir « Décisions » : un simple `ON CONFLICT DO
+    /// UPDATE` sur les clés publiques, sans plus, effaçait silencieusement
+    /// le statut « vérifié » d'un contact au premier ré-appel avec les
+    /// mêmes clés, et ne l'effaçait PAS quand les clés changeaient
+    /// vraiment — exactement l'inverse de ce que `verified_at`/
+    /// `key_changed_at` sont censés garantir.
+    #[allow(clippy::too_many_arguments)]
     pub fn upsert_contact(
         &self,
         peer_id: &[u8],
@@ -387,14 +418,36 @@ impl<K: KeySource> Store<K> {
         pub_sign: &[u8],
         pseudo: Option<&str>,
         first_seen_ms: i64,
+        now_ms: i64,
     ) -> Result<(), StoreError> {
         self.conn.execute(
             "INSERT INTO contacts (peer_id, pub_static, pub_sign, pseudo, first_seen_ms)
              VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(peer_id) DO UPDATE SET
-                pub_static = excluded.pub_static, pub_sign = excluded.pub_sign,
-                pseudo = excluded.pseudo",
-            params![peer_id, pub_static, pub_sign, pseudo, first_seen_ms],
+                pub_static = excluded.pub_static,
+                pub_sign = excluded.pub_sign,
+                -- `pseudo` n'est écrasé que si le nouvel appel en fournit un :
+                -- avant, `pseudo = excluded.pseudo` effaçait un pseudo déjà
+                -- connu dès qu'on appelait avec `None` (retour de revue #76,
+                -- point d'OswinFreyr).
+                pseudo = COALESCE(excluded.pseudo, contacts.pseudo),
+                -- Une clé publique qui change EST le scénario que
+                -- `verified_at`/`key_changed_at` existent pour tracer : un
+                -- pair qui annonce le même `peer_id` avec d'autres clés doit
+                -- perdre son statut « vérifié » et laisser une trace,
+                -- jamais rester silencieusement vérifié avec les clés d'un
+                -- attaquant (retour de revue #76, point d'OswinFreyr — scénario
+                -- concret : Alice vérifie Bob, puis un pair rejoue le même
+                -- peer_id avec d'autres clés).
+                verified_at = CASE
+                    WHEN contacts.pub_static != excluded.pub_static
+                      OR contacts.pub_sign != excluded.pub_sign
+                    THEN NULL ELSE contacts.verified_at END,
+                key_changed_at = CASE
+                    WHEN contacts.pub_static != excluded.pub_static
+                      OR contacts.pub_sign != excluded.pub_sign
+                    THEN ?6 ELSE contacts.key_changed_at END",
+            params![peer_id, pub_static, pub_sign, pseudo, first_seen_ms, now_ms],
         )?;
         Ok(())
     }
@@ -423,7 +476,14 @@ impl<K: KeySource> Store<K> {
         status: &str,
         status_ms: i64,
     ) -> Result<(), StoreError> {
-        let body_enc = encrypt_field(&self.keys.field_key(), msg_uuid, body.as_bytes())?;
+        let aad = field_aad(&[
+            b"messages.body",
+            msg_uuid,
+            conv_id,
+            author_peer_id,
+            direction.as_bytes(),
+        ]);
+        let body_enc = encrypt_field(&self.keys.field_key(), &aad, body.as_bytes())?;
         self.conn.execute(
             "INSERT INTO messages
                 (msg_uuid, conv_id, direction, author_peer_id, conv_seq, body, sent_ms, status, status_ms)
@@ -437,13 +497,28 @@ impl<K: KeySource> Store<K> {
     }
 
     /// Relit et déchiffre le corps d'un message.
+    ///
+    /// L'AAD est recalculée à partir des colonnes **relues**
+    /// (`conv_id`/`author_peer_id`/`direction`), pas de valeurs fournies
+    /// par l'appelant : si l'une de ces colonnes a été modifiée depuis le
+    /// chiffrement (ligne trafiquée dans le fichier `.db`), l'AAD ne
+    /// correspond plus et le déchiffrement échoue explicitement, au lieu
+    /// de réussir sur des métadonnées incohérentes avec le corps.
     pub fn get_message_body(&self, msg_uuid: &[u8]) -> Result<String, StoreError> {
-        let body_enc: Vec<u8> = self.conn.query_row(
-            "SELECT body FROM messages WHERE msg_uuid = ?1",
-            params![msg_uuid],
-            |row| row.get(0),
-        )?;
-        let plain = decrypt_field(&self.keys.field_key(), msg_uuid, &body_enc)?;
+        let (body_enc, conv_id, author_peer_id, direction): (Vec<u8>, Vec<u8>, Vec<u8>, String) =
+            self.conn.query_row(
+                "SELECT body, conv_id, author_peer_id, direction FROM messages WHERE msg_uuid = ?1",
+                params![msg_uuid],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        let aad = field_aad(&[
+            b"messages.body",
+            msg_uuid,
+            &conv_id,
+            &author_peer_id,
+            direction.as_bytes(),
+        ]);
+        let plain = decrypt_field(&self.keys.field_key(), &aad, &body_enc)?;
         String::from_utf8(plain).map_err(|_| StoreError::InvalidUtf8)
     }
 
@@ -455,7 +530,8 @@ impl<K: KeySource> Store<K> {
         state: &[u8],
         established_ms: i64,
     ) -> Result<(), StoreError> {
-        let state_enc = encrypt_field(&self.keys.field_key(), peer_id, state)?;
+        let aad = field_aad(&[b"noise_sessions.state", peer_id]);
+        let state_enc = encrypt_field(&self.keys.field_key(), &aad, state)?;
         self.conn.execute(
             "INSERT INTO noise_sessions (peer_id, state, established_ms)
              VALUES (?1, ?2, ?3)
@@ -473,7 +549,8 @@ impl<K: KeySource> Store<K> {
             params![peer_id],
             |row| row.get(0),
         )?;
-        decrypt_field(&self.keys.field_key(), peer_id, &state_enc)
+        let aad = field_aad(&[b"noise_sessions.state", peer_id]);
+        decrypt_field(&self.keys.field_key(), &aad, &state_enc)
     }
 }
 
@@ -487,7 +564,14 @@ mod tests {
 
     fn seed_conversation(store: &Store<FixedKeySource>, peer_id: &[u8], conv_id: &[u8]) {
         store
-            .upsert_contact(peer_id, b"pub_static", b"pub_sign", Some("alice"), 1_000)
+            .upsert_contact(
+                peer_id,
+                b"pub_static",
+                b"pub_sign",
+                Some("alice"),
+                1_000,
+                1_000,
+            )
             .expect("upsert_contact");
         store
             .insert_conversation(conv_id, peer_id)
@@ -500,6 +584,108 @@ mod tests {
         // Rejoue explicitement : ne doit rien casser (IF NOT EXISTS partout,
         // et la version 1 est déjà dans schema_migrations donc re-sautée).
         store.run_migrations().expect("deuxieme passage");
+    }
+
+    #[test]
+    fn changer_les_cles_d_un_contact_efface_son_statut_verifie() {
+        // Scénario concret (retour de revue #76, point d'OswinFreyr) :
+        // Alice vérifie Bob (verified_at renseigné), puis un pair annonce
+        // le même peer_id avec d'autres clés — soit une vraie rotation de
+        // clé légitime, soit une usurpation. Dans les deux cas, le contact
+        // ne doit PAS rester « vérifié » avec des clés qu'on n'a jamais
+        // vérifiées, et le changement doit être tracé.
+        let store = Store::open_in_memory(keys()).expect("open");
+        store
+            .upsert_contact(
+                b"peerpeer",
+                b"cle-v1",
+                b"sign-v1",
+                Some("bob"),
+                1_000,
+                1_000,
+            )
+            .expect("upsert initial");
+        store
+            .conn
+            .execute(
+                "UPDATE contacts SET verified_at = ?1 WHERE peer_id = ?2",
+                params![2_000_i64, b"peerpeer".as_slice()],
+            )
+            .expect("marquer vérifié");
+
+        // Ré-appel avec les MÊMES clés : le statut vérifié doit survivre.
+        store
+            .upsert_contact(b"peerpeer", b"cle-v1", b"sign-v1", None, 1_000, 3_000)
+            .expect("upsert memes cles");
+        let (verified_at, key_changed_at): (Option<i64>, Option<i64>) = store
+            .conn
+            .query_row(
+                "SELECT verified_at, key_changed_at FROM contacts WHERE peer_id = ?1",
+                params![b"peerpeer".as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("lecture");
+        assert_eq!(
+            verified_at,
+            Some(2_000),
+            "mêmes clés : statut vérifié conservé"
+        );
+        assert_eq!(
+            key_changed_at, None,
+            "mêmes clés : pas de changement à tracer"
+        );
+
+        // Ré-appel avec des clés DIFFÉRENTES : le statut vérifié doit être
+        // effacé et le changement tracé.
+        store
+            .upsert_contact(
+                b"peerpeer",
+                b"cle-v2-attaquant",
+                b"sign-v1",
+                None,
+                1_000,
+                4_000,
+            )
+            .expect("upsert cles changees");
+        let (verified_at, key_changed_at, pub_static): (Option<i64>, Option<i64>, Vec<u8>) = store
+            .conn
+            .query_row(
+                "SELECT verified_at, key_changed_at, pub_static FROM contacts WHERE peer_id = ?1",
+                params![b"peerpeer".as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .expect("lecture");
+        assert_eq!(verified_at, None, "clés changées : statut vérifié effacé");
+        assert_eq!(
+            key_changed_at,
+            Some(4_000),
+            "clés changées : tracé à now_ms"
+        );
+        assert_eq!(pub_static, b"cle-v2-attaquant");
+    }
+
+    #[test]
+    fn upsert_contact_ne_vide_pas_un_pseudo_deja_connu() {
+        // `pseudo = COALESCE(excluded.pseudo, contacts.pseudo)` : un appel
+        // avec `pseudo=None` (ex. simple mise à jour de `last_seen`) ne
+        // doit pas effacer un pseudo déjà enregistré (retour de revue #76,
+        // point d'OswinFreyr).
+        let store = Store::open_in_memory(keys()).expect("open");
+        store
+            .upsert_contact(b"peerpeer", b"cle", b"sign", Some("bob"), 1_000, 1_000)
+            .expect("upsert avec pseudo");
+        store
+            .upsert_contact(b"peerpeer", b"cle", b"sign", None, 1_000, 2_000)
+            .expect("upsert sans pseudo");
+        let pseudo: Option<String> = store
+            .conn
+            .query_row(
+                "SELECT pseudo FROM contacts WHERE peer_id = ?1",
+                params![b"peerpeer".as_slice()],
+                |row| row.get(0),
+            )
+            .expect("lecture");
+        assert_eq!(pseudo.as_deref(), Some("bob"));
     }
 
     #[test]
@@ -546,6 +732,48 @@ mod tests {
             .get_message_body(b"msguuid16bytes!!")
             .expect("get_message_body");
         assert_eq!(body, "salut, ceci est un message secret");
+    }
+
+    #[test]
+    fn trafiquer_lauteur_dun_message_casse_le_dechiffrement() {
+        // Avant l'AAD élargie (retour de revue #76, point d'OswinFreyr) :
+        // un attaquant à écriture sur le fichier .db pouvait changer
+        // author_peer_id/conv_id/direction d'une ligne messages, et le
+        // corps se déchiffrait quand même — le message se réattribuait à
+        // un autre auteur/une autre conversation sans que rien ne le
+        // détecte. Ce test le prouve dans l'autre sens : modifier
+        // author_peer_id après coup doit faire échouer le déchiffrement.
+        let store = Store::open_in_memory(keys()).expect("open");
+        seed_conversation(&store, b"peerpeer", b"convconv");
+        store
+            .insert_message(
+                b"msguuid16bytes!!",
+                b"convconv",
+                "out",
+                b"peerpeer",
+                0,
+                "salut, ceci est un message secret",
+                1_000,
+                "queued",
+                1_000,
+            )
+            .expect("insert_message");
+
+        store
+            .conn
+            .execute(
+                "UPDATE messages SET author_peer_id = ?1 WHERE msg_uuid = ?2",
+                params![
+                    b"un-autre-auteur".as_slice(),
+                    b"msguuid16bytes!!".as_slice()
+                ],
+            )
+            .expect("trafiquer author_peer_id");
+
+        assert!(matches!(
+            store.get_message_body(b"msguuid16bytes!!"),
+            Err(StoreError::Decryption)
+        ));
     }
 
     #[test]

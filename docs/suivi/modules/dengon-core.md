@@ -139,6 +139,36 @@ est que la persistance locale, pas le protocole lui-même.
   `noise_sessions.state` à `peer_id`) — un texte chiffré présenté sous un
   mauvais contexte échoue explicitement. Voir `00-journal.md`, entrée
   dédiée du 2026-09-26.
+- **AAD de `messages.body` élargie à toute la ligne** (retour de revue #76,
+  OswinFreyr) : lier `messages.body` au seul `msg_uuid` protégeait contre
+  une substitution de blob **entre lignes différentes**, mais pas contre
+  une modification des **autres colonnes de la même ligne**
+  (`author_peer_id`, `conv_id`, `direction`) — un attaquant à écriture sur
+  le fichier `.db` pouvait réattribuer un message à un autre auteur/une
+  autre conversation sans que le déchiffrement du corps échoue. L'AAD
+  inclut maintenant un préfixe de domaine (`"messages.body"`) et ces trois
+  colonnes, recalculée à la **lecture** depuis les valeurs réellement
+  stockées (pas fournies par l'appelant) — toute incohérence entre le
+  contenu chiffré et les métadonnées de sa ligne fait échouer le
+  déchiffrement. Même préfixe de domaine ajouté à `noise_sessions.state`
+  (`"noise_sessions.state"` + `peer_id`, déjà unique par ligne). Test dédié
+  : `trafiquer_lauteur_dun_message_casse_le_dechiffrement`.
+- **`upsert_contact` : rotation de clé publique trace `key_changed_at` et
+  efface `verified_at`** (retour de revue #76, OswinFreyr) : la version
+  d'origine écrasait `pub_static`/`pub_sign` sans toucher ces deux
+  colonnes — un contact vérifié par l'utilisateur restait « vérifié »
+  après qu'un pair ait annoncé le même `peer_id` avec d'autres clés
+  (rotation légitime ou usurpation, `verified_at`/`key_changed_at` existent
+  justement pour distinguer les deux). Le `ON CONFLICT DO UPDATE` compare
+  maintenant les clés avant/après (`CASE WHEN ... THEN NULL/?6 ELSE
+  contacts.verified_at/key_changed_at END`) : mêmes clés → statut
+  inchangé, clés différentes → `verified_at` effacé et `key_changed_at`
+  horodaté (nouveau paramètre `now_ms`). Au passage, `pseudo =
+  COALESCE(excluded.pseudo, contacts.pseudo)` au lieu de `pseudo =
+  excluded.pseudo` : un appel avec `pseudo=None` n'efface plus un pseudo
+  déjà connu. Tests dédiés :
+  `changer_les_cles_d_un_contact_efface_son_statut_verifie`,
+  `upsert_contact_ne_vide_pas_un_pseudo_deja_connu`.
 - **`protocol::{consts, types}` séparé de `protocol::codec`** (US-201) : permet
   à `sync::*` de démarrer sans la sérialisation. C'est l'objet même de l'US-108.
 - **`no_std` garanti pour `protocol`** : n'importe que `core`
@@ -195,16 +225,23 @@ est que la persistance locale, pas le protocole lui-même.
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
   `PROTOCOL_VERSION`).
-- `src/store.rs`, module `tests` : 10 tests — migrations rejouables sans
+- `src/store.rs`, module `tests` : 13 tests — migrations rejouables sans
   erreur, round-trip identité/message/session Noise (chiffré puis
   déchiffré, on retrouve le texte d'origine), deux chiffrements du même
   texte donnent des octets différents (nonce aléatoire), déchiffrer avec la
   mauvaise clé échoue, déchiffrer une donnée modifiée échoue (garantie
   d'authenticité Poly1305), déchiffrer un buffer tronqué échoue sans
   paniquer, déchiffrer avec un mauvais contexte AAD échoue (protection
-  anti-substitution entre lignes), et le test central du critère
-  d'acceptation : **écrire un message connu sur un vrai fichier `.db`, puis
-  `grep` binaire sur le fichier — le texte en clair n'y est pas**.
+  anti-substitution entre lignes), **trafiquer `author_peer_id` d'un
+  message casse son déchiffrement** (nouveau, retour de revue #76 : l'AAD
+  ne liait `messages.body` qu'à `msg_uuid`, pas au reste de la ligne — voir
+  « Décisions »), **changer les clés d'un contact efface son statut
+  vérifié et trace le changement, un ré-appel avec les mêmes clés le
+  conserve** (nouveau, retour de revue #76), **`upsert_contact` avec
+  `pseudo=None` ne vide pas un pseudo déjà connu** (nouveau, retour de
+  revue #76), et le test central du critère d'acceptation : **écrire un
+  message connu sur un vrai fichier `.db`, puis `grep` binaire sur le
+  fichier — le texte en clair n'y est pas**.
 - `src/protocol/consts.rs` — 5 tests : valeurs de référence, cohérence des
   tailles d'en-tête, UUIDs GATT, sens des plages.
 - `src/protocol/types.rs` — 8 tests : discriminants contigus `0x01`–`0x0D`,
@@ -219,12 +256,13 @@ est que la persistance locale, pas le protocole lui-même.
   `Inventory` a bien le type `0x0D` ; **les 8 vecteurs `accept` ont tous
   `ttl > 1` et portent tous `RELAY_OK`**
   (`accept_vectors_with_ttl_above_1_have_relay_ok`, nouveau — retour de revue
-  #63, round 3 : garantit que l'invariant « un paquet broadcast relayable
-  porte `RELAY_OK` » (`synthese/05:203`) reste vrai vecteur par vecteur, pas
-  seulement pour les deux corrigés au round 2).
-- Commande : `cargo test -p dengon-core` → **29 passés** (25 lib + 4
-  intégration + 0 doc — 12 pour `store`/`lib.rs`, 13 pour
-  `protocol::{consts,types}`), rejoué le 2026-09-28 après la fusion des deux
+  #63, round 3 : garantit que l'invariant « `ttl > 1` ⇒ `RELAY_OK` »
+  (`synthese/05:203`) reste vrai vecteur par vecteur — y compris pour des
+  paquets adressés, pas seulement broadcast — pas seulement pour les deux
+  corrigés au round 2).
+- Commande : `cargo test -p dengon-core` → **32 passés** (28 lib + 4
+  intégration + 0 doc — 15 pour `store`/`lib.rs`, 13 pour
+  `protocol::{consts,types}`), rejoué le 2026-09-28 après le round de revue
   branches. `cargo clippy --workspace --all-targets --all-features -- -D
   warnings` et `cargo fmt --all -- --check` verts.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite

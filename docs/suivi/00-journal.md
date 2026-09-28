@@ -10,6 +10,67 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-207 : `store`, round de revue d'OswinFreyr — 2 vrais problèmes de sécurité corrigés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/store.rs`,
+`docs/suivi/modules/dengon-core.md`
+**Lot :** US-207, PR #76
+
+### Fait
+- **AAD de `messages.body` élargie à toute la ligne, pas seulement
+  `msg_uuid`.** Reproduit concrètement l'attaque : trafiquer
+  `author_peer_id` d'une ligne `messages` (via `UPDATE` direct sur le
+  `.db`) laissait le corps se déchiffrer normalement — le message se
+  réattribuait silencieusement à un autre auteur. L'AAD inclut maintenant
+  un préfixe de domaine et `conv_id`/`author_peer_id`/`direction`,
+  **recalculée à la lecture depuis les colonnes réellement stockées**
+  (`get_message_body` ne fait plus confiance à des valeurs fournies par
+  l'appelant). Même traitement pour `noise_sessions.state` (préfixe de
+  domaine ajouté). Nouveau test
+  `trafiquer_lauteur_dun_message_casse_le_dechiffrement`.
+- **`upsert_contact` : rotation de clé trace `key_changed_at` et efface
+  `verified_at`.** La version d'origine écrasait les clés publiques d'un
+  contact sans toucher son statut « vérifié » — un contact vérifié restait
+  vérifié même après qu'un pair ait annoncé le même `peer_id` avec
+  d'autres clés (rotation légitime ou usurpation, indiscernables sans
+  cette trace). Ajout d'un paramètre `now_ms` et d'un `CASE` SQL qui
+  compare les clés avant/après pour décider s'il faut effacer/horodater.
+  Corrigé au passage : `pseudo=None` n'efface plus un pseudo déjà connu.
+  Nouveaux tests
+  `changer_les_cles_d_un_contact_efface_son_statut_verifie`,
+  `upsert_contact_ne_vide_pas_un_pseudo_deja_connu`.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #76 (revue automatique, passe
+  diff unique) : 2 points, l'un « moyen », l'autre « faible » selon Oswin
+  — les deux sont de vrais problèmes de sécurité une fois qu'on a un
+  attaquant à écriture sur le fichier `.db` dans le modèle de menace (déjà
+  celui qui justifie le chiffrement champ par champ lui-même).
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- `cargo test -p dengon-core` → 32 passés (28 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check` verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core --lib store
+13 passed (module store seul)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+```
+- Les deux corrections confirmées détecter leur régression respective :
+  AAD réduite à `msg_uuid` seul → le test de trafiquage échoue (le
+  déchiffrement réussit à tort) ; `CASE` SQL neutralisé →
+  `verified_at`/`key_changed_at` restent inchangés après un vrai
+  changement de clé. Les deux restaurés ensuite.
+
+---
+
 ## 2026-09-28 — US-207 : rebase sur `main` (US-108 mergée), fiche fusionnée
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
