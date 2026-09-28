@@ -241,6 +241,177 @@ $ idf.py build && ./build/test_dengon_transport_core.elf   (test_apps, cible lin
   le chemin central ne l'a jamais été.
 
 ---
+## 2026-09-28 — US-222 : jobs CI `audit` et `cross-vectors`, vecteurs déplacés dans `contracts/packet/`
+
+**Auteur :** Paul Claverie + Claude (Opus 5)
+**Périmètre :** `.github/workflows/{audit,cross-vectors,core,contracts}.yml`,
+`deny.toml`, `crates/dengon-conformance/`, `crates/dengon-core/tests/`,
+`contracts/packet/`, `contracts/tools/validate_packets.py`,
+`dashboard/api/tests/test_cross_vectors.py`
+**Lot :** US-222 — CI, sprint S2, area `process`
+
+### Fait
+
+**Constat d'entrée.** Deux des cinq critères d'acceptation étaient déjà
+satisfaits sur `main` : le job `sim` a été livré par l'US-221
+(`.github/workflows/sim.yml`, 4 scénarios `.ron`, double exécution + `diff`),
+et le filtrage par chemin **dans le job** est appliqué par `core`, `sim`,
+`firmware`, `contracts` et `dashboard` depuis les revues #59/#60/#63. Le
+travail réel portait donc sur `audit`, `cross-vectors` et les checks requis.
+
+- **Vecteurs déplacés** vers `contracts/packet/` (`vectors_v0.json`,
+  `crypto_v0.json`, `identity_v0.json`, + `README.md`), ce que l'écart du
+  10/09 prévoyait « une fois #60 mergé ». Chemins ajustés dans les trois
+  tests Rust, `core.yml` filtre désormais aussi `contracts/packet/**` et
+  `contracts/events/**`.
+- **Crate `crates/dengon-conformance/`** : aucun code, seulement une table de
+  dépendances qui tire `dengon-core` en `default-features = false`, plus
+  `tests/packet_vectors_nostd.rs` qui rejoue les vecteurs de trame contre ce
+  build. C'est la « patte firmware » de `cross-vectors`.
+- **`crates/dengon-core/tests/event_fixtures.rs`** : les 20 fixtures golden
+  lues **depuis le disque** (les tests existants de `observability`
+  comparaient à des octets écrits en dur). Recalcul d'`event_id` et de
+  `batch_id`, JSON canonique comparé octet à octet à `serde_json`, et
+  vérification par le Rust des signatures Ed25519 produites par Python.
+- **`contracts/tools/validate_packets.py`** : décodeur de trame Python écrit
+  indépendamment, piloté par `header_layout_be` / `flag_bits` / `type_names`
+  du fichier de vecteurs. Branché dans `contracts.yml` en plus de
+  `cross-vectors.yml`.
+- **`dashboard/api/tests/test_cross_vectors.py`** : les 20 fixtures rejouées
+  dans `POST /ingest/batch` (pipeline réel : schéma, JWT, Ed25519, dédup),
+  plus l'idempotence du corpus complet et un test négatif.
+- **`deny.toml`** + **`.github/workflows/audit.yml`** : `cargo audit` et
+  `cargo deny`, bloquants, sur PR et en cron quotidien à 06:00 UTC.
+- **`.github/workflows/cross-vectors.yml`** : quatre lectures des mêmes
+  fichiers (Rust `std`, Rust `no_std`, Python contrat, Python dashboard) +
+  un récapitulatif « qui a lu quoi » dans le résumé du job.
+- **`type_names`** ajouté à `vectors_v0.json` : la table numéro → nom est
+  désormais une **donnée** lue par les deux implémentations, plus une
+  constante recopiée de chaque côté.
+
+### Pourquoi / décisions
+
+- **La patte firmware est un proxy `no_std`, pas le firmware.**
+  `firmware/dengon-relay/` ne contient que le BLE ; le pont `dengon_core_ffi`
+  est l'US-307. Compiler le même décodeur dans la configuration que l'ESP32
+  embarquera est ce qui s'en approche le plus aujourd'hui. Écart consigné.
+- **Une crate séparée, parce que `--no-default-features` ne suffit pas.**
+  `cargo test -p dengon-core --no-default-features` ne donne pas un build
+  `no_std` : la dev-dependency `dengon-ble` tire `dengon-core` avec ses
+  features par défaut, et l'unification du résolveur v2 réactive `std`.
+  Vérifié : `cargo tree -p dengon-core --no-default-features -e features`
+  montre bien `rusqlite`.
+- **Dépendance de chemin, pas `{ workspace = true }`.** Cargo l'a signalé
+  lui-même : `default-features` est **ignoré** avec l'héritage de workspace
+  tant que `[workspace.dependencies]` ne le déclare pas — et le déclarer
+  là-bas priverait `dengon-ble`/`dengon-node` de `std`.
+- **Pas d'assertion « je suis sans std » compilée dans la crate.** Essayée
+  (`const _: () = assert!(...)`), elle fait échouer `cargo clippy --workspace`
+  et donc `core.yml` : un build `--workspace` unifie les features de tout le
+  graphe, `std` revient par `dengon-node`/`dengon-ble`, et c'est normal. Le
+  garde-fou est à sa place dans `cross-vectors`, qui inspecte la résolution
+  **isolée** : `cargo tree -p dengon-conformance -e features | grep rusqlite`.
+- **`audit` bloquant dès le premier jour.** Un check requis qui ne rougit
+  jamais n'est pas un check. La soupape est `[advisories].ignore` de
+  `deny.toml`, qui exige un RUSTSEC nommé, daté et justifié.
+- **Une seule liste d'exceptions.** `cargo audit` ne lit pas `deny.toml` (son
+  fichier serait `.cargo/audit.toml`) : le workflow **dérive** ses `--ignore`
+  de `deny.toml` par un `grep`, plutôt que d'entretenir deux listes qui
+  dériveraient l'une de l'autre au premier oubli.
+- **`schedule` contourne le filtre de chemins.** `dorny/paths-filter` n'a pas
+  de base de comparaison sur un cron, et de toute façon le cron doit tout
+  exécuter — une vulnérabilité paraît sans que le dépôt bouge. D'où le
+  `github.event_name == 'schedule' ||` répété sur chaque étape réelle.
+- **Liste de licences calée sur les cibles réellement construites.**
+  `[graph].targets` limite à `x86_64-unknown-linux-gnu` et
+  `aarch64-linux-android` ; les deux entrées qui ne servaient qu'à d'autres
+  cibles ont été retirées, cargo-deny les signalait
+  (`license-not-encountered`).
+
+### Écarts vs conception
+
+- Deux entrées ajoutées à `03-ecarts-conception.md` : la patte firmware en
+  proxy `no_std`, et la **clôture** de l'écart « vecteurs dans
+  `crates/dengon-core/tests/` ».
+- SBOM : nommé par `synthese/10` §4.7 pour le job `audit`, **absent** des
+  critères d'acceptation de l'US-222 et non livré. À ouvrir en issue de
+  suite plutôt qu'à bâcler.
+
+### Appris
+
+- Unification des features de Cargo entre dépendances normales et de dev.
+- `dorny/paths-filter` sur `schedule`.
+- `cargo-deny` : `[licenses.private].ignore` pour un workspace `publish = false`.
+- `merge=union` **duplique** les lignes éditées en place quand deux branches
+  touchent la MÊME ligne : au rebase sur `main` (après #101 et #94), les lignes
+  `Workflow firmware/dashboard/contracts` de `02-avancement.md` se sont
+  retrouvées en double, et il a fallu retirer les exemplaires périmés à la
+  main. Le filet évite le conflit, il ne produit pas un texte juste.
+- **GitHub n'applique PAS `merge=union`** : les pilotes de fusion de
+  `.gitattributes` sont locaux, le serveur fusionne avec le pilote par défaut.
+  La PR #105 est donc sortie en `mergeStateStatus: DIRTY` sur le seul
+  `00-journal.md`, alors qu'un `git rebase` local passait sans un conflit.
+  Conséquence pratique : **toute** PR qui écrit dans le journal s'affichera en
+  conflit sur GitHub jusqu'à un rebase local. L'en-tête de `02-avancement.md`
+  annonce « fusion automatique ; `merge=union` sert de filet » — c'est vrai en
+  local, faux côté serveur.
+Quatre notes ajoutées à `04-apprentissages.md`, six termes à `05-glossaire.md`.
+
+### État après cette session
+
+- Les quatre workflows requis existent : `core`, `sim`, `audit`,
+  `cross-vectors`. **Les checks requis de `main` n'ont pas été élargis** —
+  la commande est documentée dans `modules/processus-github.md`, à jouer
+  **après** le merge, sinon la PR se bloque sur des checks absents de `main`.
+- La patte firmware reste un proxy jusqu'à l'US-307.
+- Fiche(s) module mise(s) à jour : `modules/processus-github.md`.
+- `02-avancement.md` mis à jour : oui (lignes outillage).
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo fmt --all -- --check                                   OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+                                                               OK (0 warning)
+$ cargo test --workspace --all-features --locked                385 passed, 2 ignored
+$ cargo test -p dengon-conformance                              3 passed
+$ cargo tree -p dengon-conformance -e features | grep -c rusqlite   0
+$ cargo tree -p dengon-ble          -e features | grep -c rusqlite   6
+$ cargo deny --all-features check                  advisories ok, bans ok, licenses ok, sources ok
+$ cargo audit --deny warnings --file Cargo.lock --ignore RUSTSEC-2024-0436 --ignore RUSTSEC-2025-0141
+                                                               exit 0
+$ cargo audit --deny warnings --file Cargo.lock                 exit 1  (prouve que les --ignore servent)
+$ cd contracts   && uv run python tools/validate_packets.py     8 accept + 5 reject
+$ cd contracts   && uv run python tools/validate.py             20 fixtures, 28 noms d'événements
+$ cd dashboard/api && uv run pytest                             85 passed
+$ cd dashboard/api && uv run ruff check .                       OK
+```
+
+Tests **négatifs**, joués à la main puis annulés — sans eux, rien ne prouve
+que les jobs détectent quoi que ce soit :
+
+```
+1 octet modifié dans contracts/packet/vectors_v0.json
+  → Rust std      échec
+  → Rust no_std   échec (exit 101)
+  → Python        échec (exit 1)          les trois lisent bien le MÊME fichier
+type_names["2"] renommé
+  → Rust          échec                   la table de types ne peut plus dériver
+1 champ modifié dans contracts/events/fixtures/01-pkt-seen.json
+  → event_fixtures.rs   échec
+  → dashboard pytest    échec
+  → contracts/validate.py échec
+"Unicode-3.0" retiré de deny.toml
+  → cargo deny check    exit 4
+```
+
+- **Pas pu vérifier :** l'état réel de la protection de `main`.
+  `gh api repos/G1TS23/dengon/branches/main/protection` renvoie 404 depuis un
+  compte non admin — ce qui, comme le rappelle `modules/processus-github.md`,
+  ne prouve rien dans un sens ni dans l'autre.
+- **Pas pu vérifier :** que les workflows tournent réellement sur GitHub. La
+  preuve demandée par l'US (« les workflows sont eux-mêmes la preuve : verts
+  sur une PR de test ») se fera sur la PR.
 
 ## 2026-09-28 — US-217 : rebase de la PR #93 sur `main` (après #91, #99)
 

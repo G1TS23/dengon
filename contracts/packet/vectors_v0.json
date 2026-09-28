@@ -3,6 +3,8 @@
   "spec": "docs/powl/03-network-protocol.md (fait foi) ; docs/synthese/05-protocole-et-trame.md",
   "header_layout_be": "version[0:1] type[1:2] ttl[2:3] flags[3:4] timestamp_ms[4:12] sender_id[12:20] recipient_id[20:28 SI ADDRESSED] payload_len[20|28 :+2] payload[22|30 :+N] signature[fin :+64 SI SIGNED]",
   "flag_bits": { "ADDRESSED": 1, "SIGNED": 2, "FRAGMENT": 4, "RELAY_OK": 8, "PADDED": 16, "RESERVED_MASK": 224 },
+  "type_names": { "1": "Announce", "2": "NoiseHs", "3": "NoiseMsg", "4": "SealedEnvelope", "5": "Ack", "6": "GossipFilter", "7": "GossipPull", "8": "GossipPush", "9": "Fragment", "10": "LogAttest", "11": "EnvelopeOffer", "12": "EnvelopeRequest", "13": "Inventory" },
+  "type_names_note": "Numero de type -> nom, tel que dengon_core::protocol::PacketType l'affiche. Decrit ici plutot que recopie dans chaque lecteur : c'est ce qui evite que le decodeur Python (contracts/tools/validate_packets.py) et le Rust divergent en silence. Les types 0x06-0x08, 0x0B et 0x0C sont hors perimetre MVP mais restent decodables (A-13).",
   "accept": [
     {
       "name": "announce-broadcast-signed",

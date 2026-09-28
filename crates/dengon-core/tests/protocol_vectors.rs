@@ -3,7 +3,7 @@
 // les modules `#[cfg(test)]`, pas les crates de `tests/`.)
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! Contrôle des vecteurs de conformité v0 (`tests/vectors_v0.json`).
+//! Contrôle des vecteurs de conformité v0 (`contracts/packet/vectors_v0.json`).
 //!
 //! Deux niveaux :
 //!
@@ -15,8 +15,11 @@
 //!   vecteur `accept` avec exactement les champs `expect`, refuse chaque
 //!   vecteur `reject`, et `encode` reproduit les octets.
 //!
-//! Le job `cross-vectors` (US-222) partagera ce fichier avec le firmware et le
-//! dashboard.
+//! Le job `cross-vectors` (US-222) rejoue le MÊME fichier contre trois
+//! lectures indépendantes : celle-ci (`dengon-core` avec `std`), celle de
+//! `dengon-conformance` (`dengon-core` **sans** `std`, la configuration que
+//! le firmware embarquera) et celle de `contracts/tools/validate_packets.py`
+//! (Python, découpage des octets écrit indépendamment).
 
 use dengon_core::protocol::{
     consts::{HEADER_LEN_ADDRESSED, HEADER_LEN_BROADCAST, PROTO_VERSION, SIGNATURE_LEN},
@@ -24,7 +27,7 @@ use dengon_core::protocol::{
 };
 use serde_json::Value;
 
-const VECTORS_JSON: &str = include_str!("vectors_v0.json");
+const VECTORS_JSON: &str = include_str!("../../../contracts/packet/vectors_v0.json");
 
 fn hex(s: &str) -> Vec<u8> {
     assert!(s.len() % 2 == 0, "hex de longueur impaire");
@@ -248,6 +251,45 @@ fn accept_vectors_with_ttl_above_1_have_relay_ok() {
             assert!(
                 flags.contains(Flags::RELAY_OK),
                 "{name}: ttl={ttl} > 1 mais RELAY_OK absent — ce paquet mourrait au premier saut"
+            );
+        }
+    }
+}
+
+/// `type_names` du fichier de vecteurs == ce que `PacketType` affiche.
+///
+/// Sans ce test, la table du décodeur Python
+/// (`contracts/tools/validate_packets.py`, qui lit `type_names`) et l'enum
+/// Rust pourraient diverger sans que rien ne le signale : un type renommé ou
+/// ajouté côté Rust laisserait le Python lire l'ancien nom, et les deux
+/// resteraient verts chacun de son côté.
+#[test]
+fn type_names_des_vecteurs_correspond_a_packet_type() {
+    let doc: Value = serde_json::from_str(VECTORS_JSON).expect("JSON invalide");
+    let table = doc["type_names"].as_object().expect("champ type_names");
+    assert_eq!(
+        table.len(),
+        13,
+        "les 13 types 0x01..0x0D doivent être listés"
+    );
+
+    for (cle, nom) in table {
+        let octet: u8 = cle.parse().expect("clé de type_names non numérique");
+        let pt = PacketType::from_u8(octet)
+            .unwrap_or_else(|| panic!("type_names liste {octet:#04x}, inconnu de PacketType"));
+        assert_eq!(
+            format!("{pt:?}"),
+            nom.as_str().unwrap(),
+            "type {octet:#04x} : nom divergent entre les vecteurs et PacketType"
+        );
+    }
+
+    // Réciproque : aucun type de l'enum ne manque à la table.
+    for octet in 0x01..=0xFF_u8 {
+        if PacketType::from_u8(octet).is_some() {
+            assert!(
+                table.contains_key(&octet.to_string()),
+                "PacketType connaît {octet:#04x} mais type_names ne le liste pas —                  le décodeur Python le rejetterait"
             );
         }
     }

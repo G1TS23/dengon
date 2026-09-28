@@ -3,7 +3,7 @@
 // les modules `#[cfg(test)]`, pas les crates de `tests/`.)
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-//! Vecteurs de conformité `crypto` v0 (US-204) : `vectors/crypto_v0.json`.
+//! Vecteurs de conformité `crypto` v0 (US-204) : `contracts/packet/crypto_v0.json`.
 //!
 //! Le fichier fixe, pour des clés et des graines connues : le padding, des
 //! `recipient_tag`, un handshake Noise `XX` complet suivi de deux messages de
@@ -28,7 +28,10 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::{RngCore, SeedableRng};
 use serde_json::{json, Value};
 
-const VECTORS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors/crypto_v0.json");
+const VECTORS_PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../contracts/packet/crypto_v0.json"
+);
 
 const ALICE_SECRET: [u8; 32] = [0xA1; 32];
 const BOB_SECRET: [u8; 32] = [0xB0; 32];
@@ -242,7 +245,7 @@ fn vecteurs_rejouables() {
 }
 
 #[test]
-#[ignore = "réécrit tests/vectors/crypto_v0.json"]
+#[ignore = "réécrit contracts/packet/crypto_v0.json"]
 fn generer_vecteurs() {
     let mut out = serde_json::to_string_pretty(&compute()).unwrap();
     out.push('\n');
