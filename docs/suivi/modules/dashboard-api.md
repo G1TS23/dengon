@@ -292,37 +292,51 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
     boucle ne s'exécutait jamais et l'étape restait verte sans avoir rien
     vérifié. `app/**/*.py` retiré (redondant : `*` traverse déjà les `/`
     dans un pathspec git).
+- **Round 7 (retour d'OswinFreyr) :** `except (UnicodeDecodeError,
+  json.JSONDecodeError, RecursionError)` élargi à `except (ValueError,
+  RecursionError)` dans `ingest_batch` — `UnicodeDecodeError` et
+  `json.JSONDecodeError` héritent tous deux de `ValueError`, et depuis
+  Python 3.11 (`sys.int_max_str_digits`, limite anti-DoS à 4300 chiffres),
+  `json.loads` lève un `ValueError` **générique** (pas `JSONDecodeError`)
+  sur un littéral entier trop long. Vérifié en local :
+  `json.loads('1'*5000)` → `ValueError: Exceeds the limit (4300 digits)...`.
+  Un batch de ~5 Ko avec un tel littéral (très en dessous de la limite de
+  taille) traversait l'ancien `except` et produisait un 500 au lieu du 400
+  attendu — même classe de bug que le `RecursionError` déjà traité au
+  round 2. Nouveau test `test_ingest_rejects_a_huge_integer_literal`.
 
 ## Tests
 
-- `tests/test_api.py` — **22 tests** : `/healthz` ; **démarrage refusé sur
+- `tests/test_api.py` — **23 tests** : `/healthz` ; **démarrage refusé sur
   `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé** (`RuntimeError` propagée par
   `lifespan`, retour de revue #59, round 4) ; objet arbitraire (202,
   `event_count` = 3) ; tableau nu ; corps **verbatim** en base ; non-JSON → 400 ;
   **JSON non-UTF-8 → 400** ; **JSON très imbriqué (10000 niveaux) → 400, pas
-  500** ; **corps trop gros → 413** (fast-path `Content-Length`, avec preuve
-  qu'aucune ligne n'est stockée) / **idem en chunked sans `Content-Length`**
-  (le cas malveillant réel — le premier test seul n'exerçait que le
-  fast-path, retour de revue #59, round 2) / **dans la limite → 202** ;
-  **une seule connexion ouverte pour 5 écritures** (compteur sur `connect()`
-  monkeypatché) ; **20 écritures concurrentes sans collision ni perte**,
-  vérifié par un vrai `SELECT COUNT(*)` (pas seulement l'unicité des
-  `batch_id`, retour de revue #59, round 2) ; **base verrouillée → 503 +
-  `Retry-After`** ; **connexion fermée sous une écriture → 503 +
-  `Retry-After`** (pas 500) ; migrations appliquées une fois ; **migrations
-  idempotentes après DDL partiel** ; **migrations sûres avec de vrais process
-  OS** (5 `multiprocessing.Process`, pas juste des threads — retour de revue
-  #59, round 4, point d'OswinFreyr : a révélé le bug de `busy_timeout`/`WAL`
-  documenté plus haut) ; **drain borné exercé via un appel ASGI direct**
-  (round 6, voir ci-dessus) ; 3 formes de payload paramétrées.
+  500** ; **littéral entier de 5000 chiffres → 400, pas 500** (round 7,
+  `sys.int_max_str_digits`) ; **corps trop gros → 413** (fast-path
+  `Content-Length`, avec preuve qu'aucune ligne n'est stockée) / **idem en
+  chunked sans `Content-Length`** (le cas malveillant réel — le premier test
+  seul n'exerçait que le fast-path, retour de revue #59, round 2) / **dans
+  la limite → 202** ; **une seule connexion ouverte pour 5 écritures**
+  (compteur sur `connect()` monkeypatché) ; **20 écritures concurrentes sans
+  collision ni perte**, vérifié par un vrai `SELECT COUNT(*)` (pas seulement
+  l'unicité des `batch_id`, retour de revue #59, round 2) ; **base
+  verrouillée → 503 + `Retry-After`** ; **connexion fermée sous une
+  écriture → 503 + `Retry-After`** (pas 500) ; migrations appliquées une
+  fois ; **migrations idempotentes après DDL partiel** ; **migrations sûres
+  avec de vrais process OS** (5 `multiprocessing.Process`, pas juste des
+  threads — retour de revue #59, round 4, point d'OswinFreyr : a révélé le
+  bug de `busy_timeout`/`WAL` documenté plus haut) ; **drain borné exercé
+  via un appel ASGI direct** (round 6, voir ci-dessus) ; 3 formes de payload
+  paramétrées.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .` et `uv run pytest` → **22 passed** (revérifié le
-  2026-09-28 après les correctifs du round 6). Chaque nouveau bug
-  (RecursionError, ProgrammingError) reproduit d'abord en isolant le code
-  sans le fix, confirmé absent avec — de même pour le test de drain borné
-  (désactivé temporairement, confirmé rouge, restauré). Étape wheel rejouée
-  manuellement (`uv build --wheel` + boucle sur `git ls-files 'app/*.py'`)
-  → tous les modules présents, `statut=0`.
+  `uv run ruff check .` et `uv run pytest` → **23 passed** (revérifié le
+  2026-09-28 après les correctifs du round 7). Chaque nouveau bug
+  (RecursionError, ProgrammingError, `ValueError` sur gros entier) reproduit
+  d'abord en isolant le code sans le fix, confirmé absent avec — de même
+  pour le test de drain borné (désactivé temporairement, confirmé rouge,
+  restauré). Étape wheel rejouée manuellement (`uv build --wheel` + boucle
+  sur `git ls-files 'app/*.py'`) → tous les modules présents, `statut=0`.
 
 ## Limites connues / TODO
 

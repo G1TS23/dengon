@@ -240,7 +240,18 @@ async def ingest_batch(request: Request) -> JSONResponse:
             request.client.host if request.client else None,
             request.headers.get("content-type"),
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+    except (ValueError, RecursionError):
+        # ValueError couvre UnicodeDecodeError et json.JSONDecodeError (les
+        # deux en héritent) — et aussi un cas oublié par le round 2 : depuis
+        # Python 3.11 (limite `sys.int_max_str_digits`, PEP 289bis-like
+        # protection DoS), un littéral entier de plus de 4300 chiffres dans
+        # le JSON fait lever json.loads avec un ValueError générique, PAS un
+        # JSONDecodeError (vérifié : `json.loads('1'*5000)` →
+        # `ValueError: Exceeds the limit (4300 digits)...`) — un `except
+        # (UnicodeDecodeError, json.JSONDecodeError, RecursionError)` laissait
+        # ce cas remonter en 500. Un batch avec un tel littéral (~5 Ko, très
+        # en dessous de la limite de taille) le déclenche (retour de revue
+        # #59, round 7, point d'OswinFreyr).
         # RecursionError : un JSON très imbriqué (ex. `"["*2000 + "]"*2000`,
         # quelques Ko) fait planter json.loads sans lever JSONDecodeError —
         # c'est un corps invalide du point de vue de l'API, pas une panne

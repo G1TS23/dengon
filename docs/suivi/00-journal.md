@@ -10,6 +10,53 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-110 : dashboard-api, round 7 de revue (OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/main.py`, `dashboard/api/tests/test_api.py`
+**Lot :** US-110, PR #59
+
+### Fait
+- **`except (UnicodeDecodeError, json.JSONDecodeError, RecursionError)`
+  élargi à `except (ValueError, RecursionError)`** dans `ingest_batch` :
+  `UnicodeDecodeError` et `json.JSONDecodeError` héritent tous deux de
+  `ValueError`, et depuis Python 3.11 (`sys.int_max_str_digits`, garde-fou
+  anti-DoS à 4300 chiffres), `json.loads` lève un `ValueError` **générique**
+  — pas `JSONDecodeError` — sur un littéral entier de plus de 4300 chiffres.
+  Vérifié en local : `json.loads('1'*5000)` → `ValueError: Exceeds the
+  limit (4300 digits)...`. Un batch d'environ 5 Ko avec un tel littéral
+  (très en dessous de la limite de taille de 2 MiB) traversait l'ancien
+  `except` et remontait en 500 au lieu du 400 attendu — même classe de bug
+  que le `RecursionError` déjà traité au round 2.
+- Nouveau test `test_ingest_rejects_a_huge_integer_literal`.
+
+### Pourquoi / décisions
+- Retour d'OswinFreyr sur la PR #59 (revue du 2026-09-28T07:59, une seule
+  passe sur le diff, 1 constat).
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Point traité. Fiche module mise à jour.
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 -c "import json; json.loads('1'*5000)"
+ValueError: Exceeds the limit (4300 digits) for integer string conversion...
+
+$ cd dashboard/api && uv run --no-sync --no-build pytest
+23 passed, 2 warnings
+
+$ uv run --no-sync --no-build ruff check .
+All checks passed!
+```
+- Régression confirmée détectée : `except (ValueError, RecursionError)`
+  temporairement réduit à l'ancien tuple, le nouveau test échoue bien
+  (`ValueError` non rattrapée, 500), restauré ensuite.
+
+---
+
 ## 2026-09-28 — US-110 : dashboard-api, round 6 de revue (OswinFreyr)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

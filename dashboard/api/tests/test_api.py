@@ -128,6 +128,24 @@ def test_ingest_rejects_deeply_nested_json(client):
     assert response.status_code == 400
 
 
+def test_ingest_rejects_a_huge_integer_literal(client):
+    # Depuis Python 3.11 (limite `sys.int_max_str_digits` = 4300),
+    # json.loads lève un ValueError générique — PAS un json.JSONDecodeError
+    # — sur un littéral entier de plus de 4300 chiffres. Un `except
+    # (UnicodeDecodeError, json.JSONDecodeError, RecursionError)` laissait
+    # ce cas remonter en 500 (retour de revue #59, round 7, point
+    # d'OswinFreyr). Corps volontairement petit (~5 Ko), bien en dessous de
+    # la limite de taille — ce n'est pas un garde-fou mémoire qui doit
+    # intervenir ici, mais la gestion d'erreur JSON.
+    body = ('{"events": [' + "1" * 5000 + "]}").encode()
+    response = client.post(
+        "/ingest/batch",
+        content=body,
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 400
+
+
 def test_ingest_rejects_non_utf8_json(client):
     # JSON valide mais encodé en UTF-16 : json.loads l'accepterait, mais le
     # stocker en texte le corromprait (retour de revue #59, point 1).
