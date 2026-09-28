@@ -9,6 +9,233 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+---
+
+## 2026-09-28 — US-204 : rebase sur `main` (US-108 mergée) et scan de secrets
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/crypto/{pad,tag}.rs`,
+`crates/dengon-core/src/protocol/types.rs` (doc de `Flags::PADDED`),
+`crates/dengon-core/tests/crypto_vectors.rs`, `tests/vectors/crypto_v0.json`,
+`docs/suivi/`.
+**Lot :** US-204 (issue #18), PR #81.
+
+### Fait
+
+- PR #81 re-ciblée sur `main` (sinon `Closes #18` est ignoré par GitHub et la
+  PR ne remonte pas sur le board) ; labels `area:core-rust`, `type:us`,
+  `sprint:s2` et assignation alignés sur #78.
+- Branche **rebasée sur `main`** (conflits avec US-108 #63 : `lib.rs`,
+  `Cargo.toml`, `Cargo.lock`, fiche `dengon-core.md` fusionnée à la main).
+- US-108 étant mergée, `crypto::pad::PAD_BUCKETS` et
+  `crypto::tag::RECIPIENT_TAG_LEN` sont maintenant des `pub use` de
+  `protocol::consts` : l'écart « constantes dupliquées » est retiré.
+- Doc de `Flags::PADDED` (`protocol/types.rs`) : « PKCS#7 » remplacé par le
+  format réel (préfixe `u16` + zéros).
+- **GitGuardian** : 3 « Generic High Entropy Secret » sur les champs
+  `*_ephemeral_secret` des vecteurs. Retirés : l'éphémère se recalcule avec
+  n'importe quel ChaCha20 (32 premiers octets du flux, clé = `rng_seed`,
+  nonce 0) — vérifié en Python (`cryptography`) sur les 3 graines. Le test
+  `vecteurs_rejouables` le recalcule au lieu de le lire. Historique réécrit
+  (rebase + push forcé) pour que ces valeurs ne figurent dans aucun commit de
+  la PR. Rectifie l'entrée précédente, qui annonçait des éphémères consignés.
+
+### Pourquoi / décisions
+
+- Retirer les champs plutôt qu'exclure un chemin dans GitGuardian ou marquer
+  des faux positifs : aucun affaiblissement du scan, et rien n'est perdu pour
+  les portages (ChaCha20 est standard).
+
+### Écarts vs conception
+
+- Aucun nouveau ; un écart retiré (constantes dupliquées).
+
+### Appris
+
+- Rien de nouveau (GitHub ne crée le lien PR → issue que si la base est la
+  branche par défaut : consigné ici pour mémoire).
+
+### État après cette session
+
+- PR #81 à jour de `main`, contient encore le commit d'US-203 tant que #78
+  n'est pas mergée.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md` (fusion US-108 +
+  US-203 + US-204).
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+voir le message de PR (mêmes commandes que l'entrée précédente, relancées
+après rebase) ; résultats reportés dans la fiche module
+```
+
+---
+
+## 2026-09-28 — US-204 : revue contre `docs/synthese/` et corrections
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/crypto/noise.rs`,
+`crates/dengon-core/tests/crypto_vectors.rs`, `tests/vectors/crypto_v0.json`,
+`docs/suivi/`.
+**Lot :** US-204 (issue #18), même branche `feat/US-204-crypto-noise`.
+
+### Fait
+
+- Revue du code US-204 contre `docs/synthese/` (référence des choix tranchés).
+- **Bug bloquant corrigé** : `Session` utilisait le transport Noise à nonce
+  implicite ; or `NOISE_MSG` est relayé (05 §6.1) et un relais peut
+  jeter/réordonner (06 §1). Test jetable : message 1 perdu → messages 2 et 3
+  en `Err(Noise)`, session morte. Remplacé par `StatelessTransportState` +
+  nonce explicite `u64 BE` en tête + `ReplayWindow` (64 nonces, bitmap
+  RFC 6479, mise à jour après authentification).
+- Doc de `noise.rs` : clair scellé `AppFrame ‖ sender_pub_static ‖ sig`
+  assemblé par l'appelant (06 §3) → `AppFrame` ≤ 1950 o ; échec de handshake
+  définitif (état `snow` inutilisable) ; rekey `2^n` hors module.
+- `StaticKeypair::from_secret` : `unreachable!` explicite au lieu d'une clé
+  publique nulle silencieuse si Curve25519 n'était pas résolu.
+- 8 nouveaux tests (perte, réordonnancement + rejeux, trop ancien, nonce
+  forgé, tronqué, nonces épuisés, nonce BE, fenêtre) ; 3 tests adaptés au
+  nouveau format.
+- Vecteurs régénérés (seul le transport `XX` change ; champ `nonce` ajouté).
+
+### Pourquoi / décisions
+
+- Fenêtre de 64 : valeur de WireGuard/IPsec, un `u64` suffit, pas d'alloc.
+- Nonce en clair : révèle au relais le rang du message dans la session, pas
+  son contenu ; coût 8 o par `NOISE_MSG`.
+
+### Écarts vs conception
+
+- `NOISE_MSG` porte un nonce explicite (absent de 05 §4) → consigné dans
+  `03-ecarts-conception.md`.
+- Deux points de conception remontés à l'équipe, **non modifiés** (choix
+  tranchés) : (1) `recipient_tag` est dérivé de `pub_static`, diffusée en clair
+  dans chaque `ANNOUNCE` → un relais qui a entendu l'`ANNOUNCE` de Bob calcule
+  tous ses tags et le suit d'un jour à l'autre ; (2) la signature Ed25519
+  extérieure de `SEALED_ENVELOPE`, vérifiée par le relais (06 §3), exige la
+  `pub_sign` de l'expéditeur, ce qui contredit « un relais ne sait pas qui
+  envoie ».
+
+### Appris
+
+- Transport Noise sur lien non fiable → `04-apprentissages.md`.
+
+### État après cette session
+
+- `crypto` tolère pertes et désordre ; tous les vecteurs sont recoupés hors
+  Rust (rectifie l'entrée précédente, qui disait le transcript `XX` non recoupé).
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non (branche non mergée).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                          → OK
+$ cargo build --workspace --all-targets --locked                      → OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings  → OK
+$ cargo check -p dengon-core --no-default-features --locked           → OK
+$ cargo test --workspace --all-features --locked                      → tout vert ; dengon-core : 62 unitaires + 2 vecteurs, 1 ignoré
+$ cargo test --workspace --all-features --locked --doc                → OK
+$ cargo llvm-cov -p dengon-core --all-features --summary-only         → lignes 99,75 %, régions 98,55 %
+$ cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs  → vecteurs régénérés
+```
+- Recoupement Python indépendant (script jetable, `cryptography`) après
+  régénération : enveloppe `X`, **messages `XX` 1, 2, 3** et **les deux
+  chiffrés de transport** (clés issues de `Split()`, nonce explicite)
+  identiques octet par octet.
+- Toujours **non vérifié** : compilation `xtensa-esp32-none-elf`.
+---
+
+## 2026-09-28 — US-204 : `crypto` — Noise `XX` et `X`, `recipient_tag`, padding `PAD_BUCKETS`
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/crypto/{noise,pad,tag,rng}.rs` (créés),
+`crates/dengon-core/src/crypto.rs`, `crates/dengon-core/src/lib.rs`,
+`crates/dengon-core/tests/crypto_vectors.rs` + `tests/vectors/crypto_v0.json`
+(créés), `crates/dengon-core/Cargo.toml`, `Cargo.toml` (racine), `Cargo.lock`,
+`docs/suivi/`.
+**Lot :** US-204 (issue #18), Sprint 2, jalon J1. Branche
+`feat/US-204-crypto-noise`, **empilée sur `feat/US-203-crypto-ed25519`** (PR #78).
+
+### Fait
+
+- **Vérification préalable des dépendances** : US-101 (#64) et US-104 mergées ;
+  mais US-203 (#78, crée `crypto.rs`) et US-108 (#63, `PAD_BUCKETS`,
+  `RECIPIENT_TAG_LEN`) **non mergées**. La formule `recipient_tag` (D-2) est
+  déjà sur `main` (06 §3), US-112 (#66) n'est donc pas bloquante. Décision
+  (Paul) : empiler sur #78, dupliquer les deux constantes de #63.
+- `crypto/noise.rs` : `StaticKeypair` (X25519), `Handshake` (Noise `XX`,
+  3 messages) → `Session` (`encrypt`/`decrypt` paddés), `seal`/`open`
+  (Noise `X`, `Opened { sender_static, plaintext }`).
+- `crypto/pad.rs` : `pad`/`unpad`, `PAD_BUCKETS`, `MAX_PADDED_PAYLOAD` = 2046.
+- `crypto/tag.rs` : `recipient_tag`, `own_tags` (J-1/J/J+1), `epoch_day`.
+- `crypto/rng.rs` : `CallerResolver` — `snow` sans `getrandom`, aléa injecté.
+- `CryptoError` étendu : `Noise`, `PayloadTooLarge`, `InvalidPadding`,
+  `HandshakeNotFinished`.
+- `snow` épinglé `>=0.10.0, <0.11` (critère d'acceptation ajouté après la revue
+  de #66) avec la configuration exacte du Spike A ; `hmac`, `sha2`,
+  `rand_core`, `zeroize` ajoutés au workspace ; dev : `rand_chacha`,
+  `proptest`, `serde_json`.
+- 37 nouveaux tests unitaires (dont 3 property tests) + 2 tests de vecteurs.
+- Vecteurs de conformité `crypto_v0.json` : padding (7 tailles), 3 tags,
+  transcript `XX` complet + 2 messages de transport, 1 enveloppe `X`, avec
+  graines RNG **et** secrets éphémères pour rejeu hors Rust.
+
+### Pourquoi / décisions
+
+- **`crypto.rs` gardé, sous-modules dans `crypto/`** au lieu de le déplacer en
+  `crypto/mod.rs` (prévu au plan) : le diff avec #78 reste additif, le rebase
+  sera trivial.
+- **Padding préfixe `u16` au lieu de PKCS#7** : PKCS#7 ne peut pas bourrer plus
+  de 255 octets, inapplicable aux buckets 1024/2048 (choix de Paul entre
+  préfixe `u16` et ISO 7816-4). Appliqué au clair avant Noise.
+- **RNG par valeur, `'static`** : `snow` veut un `Box<dyn Random>` possédé ;
+  le resolver le cède une fois (`RefCell<Option<…>>::take`).
+- **Causes d'échec Noise confondues** (`CryptoError::Noise`) : pas d'oracle
+  pour un attaquant, même logique qu'Ed25519 en US-203.
+- **Hors périmètre, laissé aux consommateurs** : signature Ed25519 de
+  l'enveloppe, décision TOFU sur `remote_static`, rekey après `2^n` messages.
+
+### Écarts vs conception
+
+- Padding préfixe `u16` vs PKCS#7 ; constantes dupliquées ; endianness BE du
+  `day_u32` précisée ; signature/TOFU/rekey hors `crypto` — les quatre dans
+  `03-ecarts-conception.md`.
+
+### Appris
+
+- Resolver `snow` + RNG injecté ; limite de 255 octets de PKCS#7 ; recouper
+  un transcript Noise à la main — ajoutés à `04-apprentissages.md`.
+
+### État après cette session
+
+- `crypto` couvre Ed25519 + Noise `XX`/`X` + `recipient_tag` + padding.
+  Manque pour exploiter : la trame (`protocol::codec`, US-201), `identity`
+  (US-205) pour les clés et la vérification, et un RNG ESP32 (US-307/308).
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non (décrit `main`, cette branche n'y est pas).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                          → OK
+$ cargo build --workspace --all-targets --locked                      → OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings  → OK, 0 warning
+$ cargo check -p dengon-core --no-default-features --locked           → OK (no_std + alloc)
+$ cargo test --workspace --all-features --locked                      → tout vert ; dengon-core : 54 unitaires + 2 vecteurs, 1 ignoré (générateur)
+$ cargo test --workspace --all-features --locked --doc                → OK
+$ cargo llvm-cov -p dengon-core --all-features --summary-only         → lignes 99,86 %, régions 98,28 % (crypto/noise.rs 100 % lignes)
+$ cargo tree -p dengon-core -e normal | grep -E 'snow|getrandom'      → snow v0.10.0 seul, getrandom absent
+$ cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs  → vecteurs générés
+```
+- Recoupement **indépendant** en Python (`hmac`, `hashlib`, `cryptography`,
+  script jetable non versionné) : les 3 `recipient_tag`, les 7 paddings, les
+  2 clés publiques X25519, et l'**enveloppe Noise `X` recalculée à la main
+  (MixHash/MixKey/EncryptAndHash) identique octet par octet** (352 o).
+- Le transcript `XX` n'a **pas** été recoupé hors `snow` (seulement rejoué par
+  `snow` côté répondeur) ; pas de vecteurs officiels cacophony.
+- `cargo-llvm-cov` 0.9.1 installé localement pour l'occasion (absent du poste).
+- **Non vérifié** : compilation pour `xtensa-esp32-none-elf` (toolchain `esp`
+  absente du poste) — seul le `no_std` hôte est vérifié.
+---
 
 ## 2026-09-28 — US-203 : `crypto`, rebase sur `main` et retours de revue de #78
 

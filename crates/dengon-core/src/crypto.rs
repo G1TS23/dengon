@@ -1,4 +1,10 @@
-//! Signature Ed25519 (RFC 8032) — brique de `crypto` (US-203).
+//! Primitives cryptographiques de dengon (`docs/synthese/06-securite.md`).
+//!
+//! - Signature Ed25519 (US-203) — ce fichier ;
+//! - Noise `XX` / `X` ([`noise`]), `recipient_tag` ([`tag`]) et padding
+//!   `PAD_BUCKETS` ([`pad`]) — US-204.
+//!
+//! # Signature Ed25519 (RFC 8032)
 //!
 //! Sert à signer le journal chaîné (`ledger`, US-206), les batchs d'événements
 //! remontés au dashboard (US-216, US-309) et, à terme, les paquets `ANNOUNCE`,
@@ -33,6 +39,15 @@ use core::fmt;
 
 use ed25519_dalek::{Signature as DalekSignature, Signer as _};
 
+pub mod noise;
+pub mod pad;
+mod rng;
+pub mod tag;
+
+pub use noise::{open, seal, Handshake, Opened, Session, StaticKeypair};
+pub use pad::{pad, unpad, PAD_BUCKETS};
+pub use tag::{epoch_day, own_tags, recipient_tag, RecipientTag, RECIPIENT_TAG_LEN};
+
 /// Longueur d'une signature Ed25519 et signature `R ‖ S` (64 octets).
 ///
 /// Réexportées depuis `protocol` (US-108), seule source de vérité : les
@@ -58,6 +73,16 @@ pub enum CryptoError {
     /// elle est rejetée par la vérification stricte (signature malléable,
     /// clé de faible ordre).
     InvalidSignature,
+    /// Échec Noise : message altéré, hors séquence, pas destiné à cette clé,
+    /// ou configuration refusée par `snow`. Les causes ne sont
+    /// volontairement pas distinguées (pas d'oracle pour un attaquant).
+    Noise,
+    /// Clair trop grand pour le plus grand bucket de padding.
+    PayloadTooLarge,
+    /// Clair déchiffré dont le padding n'est pas conforme.
+    InvalidPadding,
+    /// Passage en transport demandé avant la fin du handshake.
+    HandshakeNotFinished,
 }
 
 impl fmt::Display for CryptoError {
@@ -65,6 +90,10 @@ impl fmt::Display for CryptoError {
         match self {
             Self::InvalidPublicKey => f.write_str("clé publique Ed25519 invalide"),
             Self::InvalidSignature => f.write_str("signature Ed25519 invalide"),
+            Self::Noise => f.write_str("échec Noise (message invalide ou clé inattendue)"),
+            Self::PayloadTooLarge => f.write_str("clair trop grand pour PAD_BUCKETS"),
+            Self::InvalidPadding => f.write_str("padding invalide"),
+            Self::HandshakeNotFinished => f.write_str("handshake Noise non terminé"),
         }
     }
 }
@@ -476,5 +505,13 @@ mod tests {
             format!("{}", CryptoError::InvalidPublicKey),
             "clé publique Ed25519 invalide"
         );
+        for e in [
+            CryptoError::Noise,
+            CryptoError::PayloadTooLarge,
+            CryptoError::InvalidPadding,
+            CryptoError::HandshakeNotFinished,
+        ] {
+            assert!(!format!("{e}").is_empty());
+        }
     }
 }

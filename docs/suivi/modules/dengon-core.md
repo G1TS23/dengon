@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame).
 **Dernière mise à jour :** 2026-09-28
-**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` Ed25519 (US-203) + `protocol::codec` (US-201).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201).
 
 ## À quoi ça sert
 
@@ -22,7 +22,12 @@ charge de transporter (le trait `Transport` de `dengon-ble`).
 dengon-core/
   src/
     lib.rs              — bascule no_std, extern crate alloc, PROTOCOL_VERSION, VERSION, pub mod store (feature std)
-    crypto.rs           — Ed25519 sign/verify (US-203)
+    crypto.rs           — Ed25519 sign/verify (US-203), CryptoError, ré-exports
+    crypto/
+      noise.rs         — Noise XX (Handshake → Session) et Noise X (seal / open) (US-204)
+      pad.rs           — padding vers PAD_BUCKETS : len(u16 BE) ‖ données ‖ zéros (US-204)
+      tag.rs           — recipient_tag = HMAC-SHA256(pub_static, "dengon-tag" ‖ day)[0..16], epoch_day (US-204)
+      rng.rs           — CallerResolver : aléa de l'appelant injecté dans snow (privé) (US-204)
     ledger.rs           — journal chaîné append-only (US-206)
     store.rs            — persistance SQLite, chiffrement champ par champ (US-207)
     protocol/
@@ -34,10 +39,16 @@ dengon-core/
         mod.rs         — Packet, encode / decode L3, FrameRule, entrée de signature
         app.rs         — AppFrame (Message, Ack), encode / decode L4
   tests/
-    vectors_v0.json    — vecteurs de conformité v0 (bytes -> champs / rejet)
-    protocol_vectors.rs — contrôle structurel + décodage réel de ces vecteurs
-    codec_proptest.rs  — property tests du codec (round-trip, aucun panic)
+    vectors_v0.json        — vecteurs de conformité v0 du format de trame (US-108)
+    protocol_vectors.rs    — contrôle structurel + décodage réel de ces vecteurs
+    codec_proptest.rs      — property tests du codec (round-trip, aucun panic)
+    crypto_vectors.rs      — contrôle + régénération des vecteurs crypto (US-204)
+    vectors/crypto_v0.json — vecteurs crypto (padding, tags, transcript XX, enveloppe X)
 ```
+
+`crypto.rs` et le dossier `crypto/` coexistent (disposition Rust 2018) : le
+fichier Ed25519 de US-203 n'a pas été déplacé (pas de déplacement
+de fichier pendant que les PR #78/#81/#82 sont empilées).
 
 Modules encore absents : `identity`, `sync`,
 `observability`, `api` (sprint 2).
@@ -63,7 +74,15 @@ Modules encore absents : `identity`, `sync`,
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
 | `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
 | `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
-| `crypto::CryptoError` | `src/crypto.rs` | `InvalidPublicKey` / `InvalidSignature` — on ne distingue pas les causes d'un échec de `verify`. Implémente `core::error::Error` (aussi en `no_std`). |
+| `crypto::CryptoError` | `src/crypto.rs` | `InvalidPublicKey` / `InvalidSignature` (Ed25519) ; `Noise` (tout échec Noise, causes volontairement confondues), `PayloadTooLarge`, `InvalidPadding`, `HandshakeNotFinished` (US-204). Implémente `core::error::Error` (aussi en `no_std`). |
+| `StaticKeypair` | `src/crypto/noise.rs` | Paire X25519 statique depuis un secret de 32 o (`from_secret` ; `public`). Secret effacé au `Drop`, masqué au `Debug`. |
+| `Handshake` | `src/crypto/noise.rs` | Noise `XX` : `initiator`/`responder(clé, rng)`, `write_message`/`read_message` (payload paddé), `remote_static`, `into_session`. **Un échec de lecture est définitif** : recommencer un handshake complet. |
+| `Session` | `src/crypto/noise.rs` | Transport `XX` **sans état** (`snow::StatelessTransportState`) : `encrypt` → `nonce(u64 BE) ‖ chiffré(padded)`, soit bucket + 24 o ; `decrypt` accepte pertes et désordre, rejette altération, rejeu et nonce hors fenêtre ; `remote_static` authentifiée. |
+| `ReplayWindow` (privé) | `src/crypto/noise.rs` | Fenêtre anti-rejeu de 64 nonces (bitmap, RFC 6479) ; mise à jour **après** authentification seulement. |
+| `seal` / `open` / `Opened` | `src/crypto/noise.rs` | Noise `X` one-shot : enveloppe = bucket + 96 o ; clair opaque, dont l'appelant assemble `AppFrame ‖ sender_pub_static ‖ sig` (06 §3) → `AppFrame` ≤ 1950 o ; `open` révèle `sender_static` (transporté chiffré). Mauvaise clé → `Err(Noise)`, jamais de panic. |
+| `pad` / `unpad` / `PAD_BUCKETS` | `src/crypto/pad.rs` | Padding vers `[256, 512, 1024, 2048]`, clair max 2046 o (`MAX_PADDED_PAYLOAD`). `unpad` strict (taille, longueur, zéros). |
+| `recipient_tag` / `own_tags` / `epoch_day` | `src/crypto/tag.rs` | Tag anonyme du jour ; `own_tags` = J-1, J, J+1 à matcher contre les `ENVELOPE_OFFER`. |
+| `CallerResolver` (privé) | `src/crypto/rng.rs` | Resolver `snow` : primitives par défaut + RNG `rand_core` de l'appelant, cédé une seule fois. |
 | `protocol::Packet` | `src/protocol/codec/mod.rs` | Paquet L3 complet : `Header` + payload opaque + `Option<Signature>`. |
 | `protocol::decode` / `encode` / `encode_into` | `src/protocol/codec/mod.rs` | Octets ⇄ paquet. `decode` vérifie la forme **et** les règles type ⇄ drapeaux (`FrameRule` : colonnes `ADDRESSED`/`SIGNED` de `synthese/05` §4, `FRAGMENT` ⇔ `0x09`). Ne panique jamais. Pas de TTL, d'anti-rejeu ni de filtre MVP (→ `sync::routing`). |
 | `protocol::signing_input` / `received_signing_input` | `src/protocol/codec/mod.rs` | Octets à signer / à vérifier : en-tête + payload **avec l'octet `ttl` à 0**, car un relais le décrémente (revue #80). La réception travaille sur les octets **reçus**. À passer à `crypto::SigningKey::sign` / `VerifyingKey::verify`. |
@@ -81,6 +100,21 @@ Réception d'un paquet (partie codée aujourd'hui, US-201) :
 5. `NOISE_MSG` déchiffré → `decode_app_frame(clair)` → `Message` ou `Ack`.
 
 Le flux complet visé : `04-architecture.md` §4.
+
+Session live Noise `XX` entre Alice (initiatrice) et Bob :
+
+1. `Handshake::initiator(&alice, rng)` / `Handshake::responder(&bob, rng)`.
+2. Alice `write_message(b"")` → m1 (`e`) → Bob `read_message(m1)`.
+3. Bob `write_message(..)` → m2 (`e, ee, s, es`) → Alice `read_message(m2)` :
+   elle connaît la clé statique de Bob (`remote_static`).
+4. Alice `write_message(..)` → m3 (`s, se`) → Bob `read_message(m3)`.
+5. `into_session()` des deux côtés ; `encrypt`/`decrypt` : clair paddé au
+   bucket puis chiffré ChaCha20-Poly1305, nonce explicite en tête (le
+   `NOISE_MSG` traverse des relais qui peuvent perdre ou réordonner).
+
+Enveloppe pour Bob absent : `seal(&alice, &bob_pub, clair, rng)` ; la couche
+trame (à venir) y ajoutera `recipient_tag(&bob_pub, epoch_day(now)) ‖ epoch_day`
+et la signature Ed25519 ; Bob fait `open(&bob, env)`.
 
 `ledger`, lui, a déjà un flux exécutable :
 
@@ -100,9 +134,6 @@ Ledger::from_entries(entries_relues, signer).verify_chain() → Verdict::Ok
 `store`, lui aussi, a un flux exécutable :
 
 ```
-`store`, lui, a déjà un flux exécutable :
-
-```
 Store::open("dengon.db", key_source)
   → run_migrations() (schema_migrations, IF NOT EXISTS, une transaction par migration)
   → upsert_contact(peer_id, ...) → insert_conversation(conv_id, peer_id)
@@ -117,22 +148,30 @@ Le flux applicatif complet (Alice écrit → chiffrement → trame → diffusion
 est qu'un maillon (la traçabilité) et `store` la persistance locale, pas le
 chemin des messages.
 
+Côté trame : US-108 livre les **types** (`PacketType`, `Flags`, `Header`), pas
+encore le codec (US-201).
+
 ## Dépendances
 
 - **Internes :** aucune. C'est la racine du graphe — les cinq autres crates
   dépendent d'elle, elle ne dépend de personne. C'est volontaire : une
   dépendance sortante de `dengon-core` serait une dépendance imposée au
   firmware ESP32.
-- **Externes (runtime) :** `sha2` (`default-features = false`, no_std) pour
-  `ledger` ; `ed25519-dalek` 2.2 (`default-features = false`, feature
-  `zeroize`) pour `crypto`. `protocol` n'utilise que `core`.
+- **Externes (runtime) :** `sha2` 0.10 (`default-features = false`, no_std)
+  pour `ledger` et `recipient_tag` ; `ed25519-dalek` 2.2 (`default-features =
+  false`, feature `zeroize`) ; **`snow` 0.10.0** (`>=0.10.0, <0.11`, jamais 0.9.x ;
+  `default-features = false` + `default-resolver`, `use-curve25519`,
+  `use-chacha20poly1305`, `use-sha2` — config du Spike A, **sans**
+  `use-getrandom`) ; `hmac` 0.12 ; `rand_core` 0.6 (trait du RNG injecté) ;
+  `zeroize` 1. `protocol` n'utilise que `core`.
 - **Externes (crates), `store` seulement (feature `std`) :** `rusqlite`
   (`features = ["bundled"]` — sqlite3 vendorisé en C, pas de dépendance
   système) et `chacha20poly1305` (`features = ["getrandom"]`, pour
-  `aead::OsRng`). Viendront encore `snow`, `x25519-dalek`, `serde`.
-- **Externes (dev) :** `proptest` (property tests de `ledger` et du codec) ; `serde_json`
-  — lecture de `tests/vectors_v0.json` via `Value` (pas de derive, donc
-  `serde` n'est pas tiré comme dépendance de proc-macro). N'affecte pas la
+  `aead::OsRng`) : `getrandom` n'est donc tiré que par la feature `std`.
+  Viendront encore `serde`.
+- **Externes (dev) :** `rand_chacha` 0.3 (RNG déterministe des vecteurs),
+  `proptest` 1 (property tests de `ledger`, `crypto` et du codec), `serde_json` 1
+  (lecture des vecteurs via `Value`, sans derive). N'affectent pas la
   compilation `no_std` (`cargo check` ne compile pas les dev-deps).
 
 ## Décisions d'implémentation
@@ -311,6 +350,20 @@ chemin des messages.
   dans `Cargo.toml` racine (retour de revue #63, point de Paul) : commentés
   « à activer avec `protocol` (US-108) » — c'est cette US. Un seul site
   touché (`i as u8` dans un test → `u8::try_from(i).unwrap()`).
+- **Bascule `no_std`** : `#![cfg_attr(not(feature = "std"), no_std)]` dans
+  `src/lib.rs`, avec une feature `std` activée par défaut. Retirer la feature
+  active `#![no_std]` **sur la cible hôte**, ce qui suffit à détecter tout usage
+  involontaire de `std` sans avoir à installer une cible bare metal. La CI le
+  vérifie à chaque PR (`cargo check -p dengon-core --no-default-features`).
+- **`extern crate alloc;`** ajouté par US-204 (`snow` et `crypto::noise`
+  allouent des `Vec`). Tant qu'`alloc` n'était pas utilisé, il était absent :
+  `unused_extern_crates` (groupe `rust_2018_idioms`) l'aurait refusé.
+- **Aléa injecté** (US-204) : chaque fonction Noise qui tire une clé
+  éphémère prend un `R: RngCore + CryptoRng + Send + Sync + 'static` par
+  valeur. Pas de `getrandom` : sur ESP32, l'appelant fournira un RNG sur
+  `esp_fill_random` (US-307/308).
+- **Padding dans le chiffré** (US-204) : appliqué au clair, avant Noise, y
+  compris aux payloads de handshake (`NOISE_HS` padded, conformément à 06 §3).
 
 ## Tests
 
@@ -378,13 +431,35 @@ chemin des messages.
   paquet, pas seulement broadcast) garantit que cet invariant
   (`synthese/05:203`) reste vrai vecteur par vecteur, pas seulement pour
   les deux corrigés au round 2).
-- Commande : `cargo test -p dengon-core` → **62 passés** (58 lib + 4
-  intégration + 0 doc — 16 pour `crypto`, 16 pour `ledger`, 13 pour `store`,
-  13 pour `protocol::{consts,types}` et `lib.rs`), rejoué le 2026-09-28 après
-  le rebase de `crypto` (US-203, #78) sur `ledger` (#75) et `store` (#76). `cargo
-  clippy --workspace --all-targets --all-features -- -D warnings` et `cargo
-  fmt --all -- --check` verts. `cargo check -p dengon-core
-  --no-default-features` (frontière `no_std`) vert.
+- `src/crypto/{noise,pad,tag,rng}.rs` (US-204) : handshake `XX` complet,
+  authentification mutuelle, échange bidirectionnel, message de handshake
+  altéré, hors séquence, session avant fin, chiffré altéré, **rejeu**, trop
+  grand ; **perte tolérée**, **réordonnancement toléré** (puis rejeux
+  refusés), nonce trop ancien, nonce forgé qui ne fait pas avancer la fenêtre,
+  chiffré tronqué, nonces épuisés, nonce big-endian ; fenêtre anti-rejeu
+  (glissement, grand saut) ; `X` aller-retour, expéditeur absent du clair, **mauvaise clé →
+  erreur propre**, enveloppe altérée/tronquée/vide ; **deux messages de 2 et
+  200 octets → trames de même taille** (session et enveloppe) ; clé publique
+  X25519 = RFC 7748 §6.1 ; padding aux bornes des buckets ; tags stables sur la
+  journée, différents le lendemain et par destinataire, conformes à la formule.
+- **Property tests** (`proptest`) : `unpad(pad(x)) == x`, `decrypt(encrypt(x))
+  == x` (64 cas), `open(seal(x)) == x` (64 cas).
+- `tests/crypto_vectors.rs` : `vecteurs_conformes` (recalcul == fichier),
+  `vecteurs_rejouables` (Bob rejoue le handshake, déchiffre, ouvre
+  l'enveloppe ; clés éphémères recalculées depuis `rng_seed` — flux ChaCha20
+  standard — et vérifiées contre `e.pub` des messages ; elles ne sont pas
+  écrites dans le fichier, GitGuardian les signalant comme secrets).
+  Régénération volontaire :
+  `cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs`.
+- Commande : `cargo test -p dengon-core` → **103 unitaires + 2 (vecteurs crypto) + 4 (vecteurs
+  protocole) passés**, 1 ignoré (générateur), 0 échec — 2026-09-28, après rebase
+  sur `main` (`ledger`, `store`) et sur la nouvelle tête de US-203 (#78).
+  `cargo clippy --workspace --all-targets -- -D warnings` et `cargo fmt --all
+  -- --check` verts. `cargo check -p dengon-core --no-default-features`
+  (frontière `no_std`) vert.
+- Couverture (`cargo llvm-cov -p dengon-core --all-features`, mesurée avant le
+  rebase sur `ledger`/`store`) : **99,14 % des lignes** ; `crypto` : 98,3 à
+  100 % selon le fichier.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
   temporairement fait échouer `accept_vectors_are_structurally_consistent`
   sur le nouveau vecteur `noise-msg-addressed-reserved-bit-ignored` (30
@@ -397,10 +472,6 @@ chemin des messages.
 
 ## Limites connues / TODO
 
-- `crypto` : pas de génération de clé, pas de séparation de domaine ; vecteur
-  RFC 8032 « TEST 1024 » non repris. Cross-compilation xtensa prouvée par le
-  Spike A sur une crate jouet, pas sur `crypto` (vérifié à la main sur
-  `thumbv7em-none-eabi`, 2026-09-28).
 - `verify_chain()` ne vérifie pas la signature (voir « Décisions »). La
   brique existe depuis US-203 (`crypto::SigningKey` implémente
   `ledger::Signer`) mais la vérification n'est pas câblée.
@@ -442,6 +513,24 @@ chemin des messages.
   avec US-201 qui en aura l'usage réel. Idem pour `expect.msg_id` (absent des
   vecteurs — seul endroit où une divergence d'endianness serait visible entre
   Rust/C/Python).
+- L'objectif de couverture ≥ 85 % (`10-benchmarks-mvp-tests.md` §4.2) est
+  mesuré à la main, pas imposé par la CI.
+- `crypto::noise` ne signe pas l'enveloppe, ne compare pas `remote_static` au
+  contact (TOFU/vérifié) et ne compte pas les messages pour re-négocier
+  (`2^n`) : à faire par `identity` / `sync` / la couche trame.
+- Pas de vecteurs Noise officiels (cacophony) : les vecteurs sont maison,
+  mais **tout** le fichier (enveloppe `X`, handshake `XX` en 3 messages, 2
+  chiffrés de transport) a été recalculé par une implémentation Python
+  indépendante — identique octet par octet.
+- Handshake relayé sur plusieurs sauts : une perte d'un `NOISE_HS` fait échouer
+  le handshake, sans reprise automatique (à gérer par `sync`).
+- Le mode `no_std` est vérifié sur cible hôte (CI) et sur `thumbv7em-none-eabi`
+  (à la main, 2026-09-28). La cross-compilation `xtensa-esp32-none-elf` n'a été
+  prouvée que par le Spike A (US-101), sur une crate jouet, pas sur `crypto`
+  (ni sur `snow` tel qu'utilisé ici : toolchain `esp` absente du poste le
+  2026-09-28).
+- `crypto` : pas de génération de clé, pas de séparation de domaine ; vecteur
+  RFC 8032 « TEST 1024 » non repris.
 
 ## Pour l'oral
 

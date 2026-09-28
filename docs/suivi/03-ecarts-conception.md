@@ -865,3 +865,76 @@ _(aucun écart pour l'instant)_
   désormais un **écart** entre le code et `powl/03`, dans ce sens : la zone
   signée exclut le TTL. Le TTL n'est plus protégé contre un relais
   malveillant, ce que borne la dédup du seen-set.
+
+### Padding : préfixe de longueur `u16` au lieu de PKCS#7 (US-204)
+
+- **Conception :** `05-protocole-et-trame.md` §3.1 (flag `PADDED`) et
+  `06-securite.md` §3 : payload « complété par du PKCS#7 » vers la borne
+  supérieure de `PAD_BUCKETS = [256, 512, 1024, 2048]`.
+- **Code :** `crypto::pad` (`crates/dengon-core/src/crypto/pad.rs`) :
+  `len(u16 BE) ‖ données ‖ 0x00…` jusqu'au plus petit bucket ≥ `len + 2`.
+  Clair utile maximal = 2046 octets. Le padding est appliqué au **clair,
+  avant** chiffrement Noise (donc authentifié et invisible pour un relais) ;
+  chiffré de session = bucket + 16, enveloppe `X` = bucket + 96.
+- **Pourquoi :** PKCS#7 code la longueur du bourrage sur **un** octet
+  (1 à 255). Passer de 513 à 1024 octets demande jusqu'à 511 octets de
+  bourrage, de 1025 à 2048 jusqu'à 1023 : impossible à encoder. La spec était
+  donc inapplicable pour les deux derniers buckets. Choix validé par Paul
+  (2026-09-28) contre l'alternative ISO/IEC 7816-4 (`0x80` puis zéros).
+- **Conséquences :** toute autre implémentation (firmware, vecteurs
+  `cross-vectors`) doit suivre ce format — il est figé dans
+  `crates/dengon-core/tests/vectors/crypto_v0.json`. La signification exacte du
+  flag `PADDED` dans l'en-tête (le padding étant à l'intérieur du chiffré, il
+  est toujours présent sur `NOISE_*`/`SEALED_ENVELOPE`) reste à préciser par
+  `protocol::codec` (US-201).
+- **Doc de conception mise à jour ?** Non — à reporter dans `06-securite.md` §3
+  et `05-protocole-et-trame.md` §3.1 (PR doc séparée ou #66).
+
+### `recipient_tag` : `epoch_day` manipulé en `u16`, encodé `u32` BE dans le HMAC (US-204)
+
+- **Conception :** `06-securite.md` §3 écrit `"dengon-tag" ‖ day_u32` sans
+  préciser l'endianness ; le champ `epoch_day` de `SEALED_ENVELOPE` fait
+  2 octets.
+- **Code :** `crypto::tag::recipient_tag(pub_static, day: u16)` encode
+  `u32::from(day)` en **big-endian** (endianness de toute la trame, 05 §3).
+  `epoch_day(ts_ms)` sature à `u16::MAX` (an 2149).
+- **Pourquoi :** précision nécessaire pour l'interopérabilité ; big-endian est
+  la convention du protocole.
+- **Conséquences :** recoupé en Python (`hmac` + `hashlib`) sur les vecteurs.
+- **Doc de conception mise à jour ?** Non — à préciser dans 06 §3.
+
+### Hors module `crypto` : signature d'enveloppe, décision TOFU, `2^n` rekey (US-204)
+
+- **Conception :** `06-securite.md` §3 : l'enveloppe est signée Ed25519 ; la
+  `pub_static` reçue en `XX` doit correspondre au contact (sinon rejet +
+  alerte) ; re-négociation après `2^n` messages.
+- **Code :** `crypto::noise` expose `seal`/`open` (Noise `X` brut) et
+  `Session::remote_static()`, mais **ne signe pas** l'enveloppe, **ne compare
+  pas** la clé au contact et **ne compte pas** les messages pour re-négocier.
+- **Pourquoi :** ce sont des décisions de trame (US-201/US-208) et de
+  confiance (`identity`, US-205 ; `sync`), qui ont besoin d'un état que
+  `crypto` n'a pas.
+- **Conséquences :** les US consommatrices doivent le faire ; noté dans la
+  fiche `dengon-core`.
+- **Doc de conception mise à jour ?** Sans objet.
+
+### `NOISE_MSG` : nonce explicite de 8 octets et fenêtre anti-rejeu (US-204, revue)
+
+- **Conception :** `05-protocole-et-trame.md` §4 : `NOISE_MSG` = « ciphertext
+  Noise (transport) », sans champ nonce ; §6.1 : `NOISE_MSG` est du trafic
+  dirigé **relayé** (`ttl-1`) ; `06-securite.md` §1 : un relais peut
+  « jeter/dupliquer/réordonner ».
+- **Code :** `crypto::noise::Session` utilise `snow::StatelessTransportState` ;
+  chiffré = `nonce(u64 BE) ‖ ChaCha20-Poly1305(padded)` (bucket + 24 o au lieu
+  de bucket + 16) ; fenêtre anti-rejeu de 64 nonces, mise à jour après
+  authentification.
+- **Pourquoi :** avec le transport Noise standard (nonce implicite), une seule
+  perte ou inversion désynchronise la session pour toujours — constaté par test
+  lors de la revue (message 1 perdu → messages 2 et 3 en `Err`). Incompatible
+  avec un transport multi-sauts. Même solution que WireGuard / DTLS.
+- **Conséquences :** 8 octets de plus par `NOISE_MSG` ; la fenêtre tolère
+  jusqu'à 64 messages de désordre, au-delà le message est perdu (le protocole
+  a de toute façon des ACK et des retransmissions, 07). Le nonce en clair
+  révèle à un relais le rang du message dans la session (pas son contenu).
+- **Doc de conception mise à jour ?** Non — à reporter dans 05 §4 (format du
+  payload `NOISE_MSG`).

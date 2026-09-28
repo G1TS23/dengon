@@ -109,3 +109,10 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Graine (seed) / déterminisme** | Valeur de départ du générateur pseudo-aléatoire. Même graine → mêmes tirages → même exécution. C'est ce qui rend un scénario de `dengon-sim` rejouable à l'identique (US-221). |
 | **Empreinte de trace** | Hachage (FNV-1a 64 bits) de toute la trace d'une simulation. Deux exécutions à même graine doivent avoir la même empreinte : c'est ce que compare le job CI `sim`. |
 | **Property test** | Test qui vérifie une **propriété** (ex. « décoder(encoder(p)) = p ») sur des centaines d'entrées générées au hasard, plutôt que sur quelques exemples écrits à la main. En cas d'échec, l'outil (`proptest`) réduit l'entrée au plus petit contre-exemple. Utilisé pour le codec (US-201). |
+| **Bucket de padding (`PAD_BUCKETS`)** | Tailles fixes (256, 512, 1024, 2048 o) auxquelles tout clair est complété avant chiffrement : deux messages de longueurs différentes dans le même bucket sont indistinguables par la taille. |
+| **epoch_day** | Numéro du jour depuis le 1er janvier 1970 (2 octets sur le fil) ; paramètre du `recipient_tag`, qui change donc chaque jour. |
+| **Clé éphémère** | Clé X25519 jetable tirée pour un seul handshake Noise ; c'est elle qui apporte la *forward secrecy*. |
+| **CryptoResolver** | Dans `snow`, l'objet qui fournit les primitives (DH, hash, chiffrement, aléa). Le nôtre injecte l'aléa de l'appelant. |
+| **Vecteur de conformité** | Entrée/sortie figée (octets exacts) qu'une implémentation doit reproduire ; sert de test de non-régression et d'interopérabilité entre plateformes. |
+| **Fenêtre anti-rejeu** | Mémoire des N derniers numéros de message reçus (ici 64) : un message déjà vu ou trop ancien est refusé, un message en retard mais récent est accepté. |
+| **Nonce** | Numéro à usage unique qui accompagne chaque chiffrement ; ne doit jamais se répéter avec la même clé. Dans une session dengon, c'est un compteur envoyé en clair devant le chiffré. |
