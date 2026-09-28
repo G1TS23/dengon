@@ -93,6 +93,83 @@ All checks passed!
 - Fiche(s) module mise(s) à jour : `dashboard-api.md` (résolution du conflit)
 
 ---
+## 2026-09-28 — US-218 : `GET /api/stream` en SSE, rattrapage + diffusion live
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{stream,ingest,main}.py`,
+`dashboard/api/tests/test_stream.py`, `docs/suivi/`.
+**Lot :** US-218 (issue #32). Branche `feat/US-218-sse-stream`, basée sur
+`feat/US-217-dashboard-projections` (PR #93, pas encore mergée — dépendance
+formelle de l'issue = US-110 seulement, déjà mergée).
+
+### Fait
+- `app/stream.py` — `StreamEvent` (formatage SSE, `rowid` comme identifiant
+  de reprise) et `Broadcaster` (ensemble d'abonnés `asyncio.Queue`,
+  `publish()` thread-safe via `loop.call_soon_threadsafe`, pont entre le
+  threadpool d'ingestion et la boucle asyncio qui sert les connexions SSE).
+- `app/ingest.py::_insert_events()` — capture désormais les lignes
+  RÉELLEMENT insérées (avec leur `rowid`, via `cur.lastrowid` gardé
+  seulement quand `cur.rowcount`) ; `ingest_batch()` publie ces événements
+  sur le `Broadcaster` après le `COMMIT`.
+- `app/main.py` — `lifespan` capture la boucle asyncio courante et pose un
+  `Broadcaster` sur `app.state` ; nouvelle route `GET /api/stream`
+  (`StreamingResponse`) : abonnement avant rattrapage (`_events_since`,
+  `rowid > Last-Event-ID` ou 0), puis boucle live bornée par un timeout de
+  15 s (`asyncio.wait_for`) doublé d'un heartbeat SSE.
+- Tests : 7 nouveaux (`test_stream.py`). 2 purs (formatage `StreamEvent`,
+  `Broadcaster.publish`). 5 sur un **vrai serveur `uvicorn`** (fixture
+  `live_server`, port OS, thread dédié) : rattrapage, reconnexion
+  (`Last-Event-ID` ne refait pas revoir l'événement déjà vu),
+  `Last-Event-ID` illisible → depuis le début, et **diffusion live réelle**
+  (client connecté avant l'ingestion, attente bornée sur
+  `subscriber_count()`, événement reçu via `Broadcaster.publish`).
+
+### Pourquoi / décisions
+- `docs/suivi/modules/dashboard-api.md` §Décisions (US-218) : `rowid`
+  SQLite comme identifiant SSE plutôt qu'une colonne dédiée ; abonnement
+  avant rattrapage (pas l'inverse) pour ne perdre ni dupliquer un événement
+  publié pendant la lecture de rattrapage ; timeout sur la boucle live pour
+  détecter une déconnexion sans nouvel événement et doubler comme
+  heartbeat anti-reverse-proxy (US-224) ; `Last-Event-ID` illisible traité
+  comme absent plutôt que rejeté (c'est le navigateur qui le fournit
+  automatiquement à la RECONNEXION, jamais à la connexion initiale).
+- **Piège de test découvert en cours de route** : `starlette.testclient.
+  TestClient` fait tourner la coroutine ASGI complète avant de rendre la
+  main (bufferise toute la réponse), incompatible avec un flux qui ne se
+  termine jamais — `client.stream(...)` restait bloqué indéfiniment.
+  Confirmé avec un script de reproduction + `faulthandler.dump_traceback()`
+  avant de changer d'approche pour un vrai serveur `uvicorn` en thread.
+
+### Écarts vs conception
+- `GET /api/stream` sans authentification opérateur — consigné dans
+  `03-ecarts-conception.md` (même famille que l'écart déjà noté pour
+  `POST /api/nodes`, US-216).
+
+### Appris
+- `docs/suivi/04-apprentissages.md` : à enrichir sur le piège
+  `TestClient`/ASGI streaming (voir ci-dessus) — utile pour toute future US
+  qui testerait un endpoint SSE/streaming.
+
+### État après cette session
+- Les 4 critères d'acceptation de l'US-218 sont couverts : SSE sur
+  `GET /api/stream`, reconnexion gérée (`Last-Event-ID`), test d'intégration
+  batch → SSE (via un vrai serveur), `pytest` vert.
+- Manque encore avant de fermer l'issue : ouvrir la PR (vers
+  `feat/US-217-dashboard-projections`, tant que #93 n'est pas mergée),
+  revue par une personne d'une autre `area:`.
+- Fiche module mise à jour : `modules/dashboard-api.md`.
+- `02-avancement.md` mis à jour : oui.
+
+### Vérification (commandes réellement exécutées)
+```
+$ uv run --extra dev pytest -q
+65 passed
+
+$ uv run --extra dev ruff check app tests
+All checks passed!
+```
+- CI GitHub (`core`) pas encore exercée sur cette branche (PR pas encore
+  ouverte au moment de cette entrée).
 
 ## 2026-09-28 — US-217 : projections dashboard — reconstruction de statut par message
 

@@ -1,11 +1,15 @@
-"""Pipeline de validation + ingestion d'un batch (US-216) + projections (US-217).
+"""Pipeline de validation + ingestion d'un batch (US-216) + projections
+(US-217) + diffusion SSE (US-218).
 
 `POST /ingest/batch` → décoder/parser JSON → valider contre le schéma
 (`contracts/events/batch.schema.json`) → `node_id` du batch == `node_id` du
 jeton JWT → nœud whitelisté, `pub_sign` connu → signature Ed25519 du batch
 → `event_id` recalculé par événement → insertion idempotente dans
 `events` (déduplication sur `event_id`, clé primaire) → statut par message
-(`messages`) recalculé pour chaque `msg_log_id` touché par ce batch.
+(`messages`) recalculé pour chaque `msg_log_id` touché par ce batch → les
+événements RÉELLEMENT nouveaux sont publiés sur `Broadcaster` (après le
+`COMMIT`, jamais avant : un abonné ne doit jamais voir un événement que la
+base elle-même ne contient pas encore).
 
 Réf : `docs/synthese/09-dashboard-et-donnees.md` §3 (pipeline complet — la
 vérification de journal chaîné via `dengon-verify` n'est PAS dans le
@@ -28,6 +32,7 @@ from .canonical import canonical_json, event_id
 from .db import LockedConnection
 from .projections import project_message
 from .schemas import batch_validator
+from .stream import Broadcaster, StreamEvent
 
 
 class IngestError(Exception):
@@ -183,15 +188,16 @@ def _refresh_message_projection(conn: sqlite3.Connection, msg_log_id: str) -> No
     )
 
 
-def _insert_events(db: LockedConnection, body: dict) -> int:
+def _insert_events(db: LockedConnection, body: dict) -> list[StreamEvent]:
     """Insère les événements du batch, idempotent (`INSERT OR IGNORE` sur
     `event_id`, clé primaire de `events`), puis recalcule la projection
     `messages` de chaque `msg_log_id` touché — dans la **même transaction**
     (une projection ne doit jamais refléter un batch partiellement inséré).
-    Renvoie le nombre de lignes RÉELLEMENT insérées dans `events` (nouvelles)
-    — un rejeu du même batch renvoie 0.
+    Renvoie les lignes RÉELLEMENT insérées dans `events` (nouvelles, avec
+    leur `rowid`) — un rejeu du même batch renvoie une liste vide, c'est la
+    preuve d'idempotence demandée par le critère d'acceptation de l'US-216.
     """
-    new_count = 0
+    inserted: list[StreamEvent] = []
     with db.locked() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
@@ -209,7 +215,23 @@ def _insert_events(db: LockedConnection, body: dict) -> int:
                         json.dumps(event["payload"], sort_keys=True, separators=(",", ":")),
                     ),
                 )
-                new_count += cur.rowcount
+                # `cur.lastrowid` n'est fiable que si CETTE instruction a
+                # inséré une ligne (`rowcount == 1`) : sur un `INSERT OR
+                # IGNORE` ignoré (conflit sur `event_id`), sqlite3 laisse
+                # `lastrowid` à sa valeur précédente plutôt que de le mettre
+                # à jour — le lire sans garder `rowcount` republierait un
+                # événement déjà vu sous l'identité SSE d'un autre.
+                if cur.rowcount:
+                    inserted.append(
+                        StreamEvent(
+                            rowid=cur.lastrowid,
+                            event_id=event["event_id"],
+                            ts_ms=event["ts_ms"],
+                            node_id=event["node_id"],
+                            name=event["name"],
+                            payload=event["payload"],
+                        )
+                    )
             for msg_log_id in _touched_msg_log_ids(body):
                 _refresh_message_projection(conn, msg_log_id)
             conn.execute("COMMIT")
@@ -217,12 +239,22 @@ def _insert_events(db: LockedConnection, body: dict) -> int:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
-    return new_count
+    return inserted
 
 
-def ingest_batch(db: LockedConnection, jwt_node_id: str, raw_body: bytes) -> IngestResult:
+def ingest_batch(
+    db: LockedConnection,
+    jwt_node_id: str,
+    raw_body: bytes,
+    broadcaster: Broadcaster | None = None,
+) -> IngestResult:
     """Le pipeline complet — voir la docstring de module pour l'ordre des
     étapes. Lève [`IngestError`] à la première étape qui échoue.
+
+    `broadcaster` est optionnel (`None` dans les tests qui appellent
+    `ingest_batch` sans passer par l'app FastAPI — voir `test_projections.py`
+    de l'US-217, écrit avant que ce paramètre n'existe) : sans lui, les
+    événements sont insérés normalement, simplement pas diffusés en SSE.
     """
     parsed = _parse_json(raw_body)
     body = _validate_schema(parsed)
@@ -234,11 +266,13 @@ def ingest_batch(db: LockedConnection, jwt_node_id: str, raw_body: bytes) -> Ing
     _verify_signature(body, pub_sign)
     _verify_event_ids(body, node_kind)
 
-    new_count = _insert_events(db, body)
+    inserted = _insert_events(db, body)
+    if broadcaster is not None:
+        broadcaster.publish(inserted)
 
     return IngestResult(
         batch_id=body["batch_id"],
         node_id=body["node_id"],
         event_count=len(body["events"]),
-        new_event_count=new_count,
+        new_event_count=len(inserted),
     )
