@@ -8,6 +8,14 @@
 //
 // GELÉ une fois annoncé en point d'équipe (DoR US-106) : ajouter un champ
 // après coup demande une réunion, pas un commit.
+//
+// Types choisis pour que les bindings Kotlin GÉNÉRÉS (uniffi-bindgen 0.28.3)
+// aient la même forme que le bouchon écrit à la main
+// (android/.../ffi/DengonTypes.kt), revue PR #69 de Paul :
+//   bytes → ByteArray (sequence<u8> donnerait List<UByte>),
+//   i64   → Long pour les horodatages (u64 donnerait ULong),
+//   u32   → UInt pour les compteurs.
+// Paquet Kotlin fixé par ../uniffi.toml (com.dengon.app.ffi).
 
 namespace dengon {
     // Identité + QR (docs/synthese/06-securite.md).
@@ -25,8 +33,8 @@ namespace dengon {
 dictionary Identity {
     string peer_id;
     string pseudo;
-    sequence<u8> pub_static;
-    sequence<u8> pub_sign;
+    bytes pub_static;
+    bytes pub_sign;
 };
 
 enum MessageStatus {
@@ -44,7 +52,7 @@ dictionary Message {
     string author_peer_id;
     string body;
     boolean outgoing;
-    u64 sent_ms;
+    i64 sent_ms;
     MessageStatus status;
 };
 

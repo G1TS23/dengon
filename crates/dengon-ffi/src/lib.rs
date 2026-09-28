@@ -83,7 +83,7 @@ pub struct Message {
     pub author_peer_id: String,
     pub body: String,
     pub outgoing: bool,
-    pub sent_ms: u64,
+    pub sent_ms: i64,
     pub status: MessageStatus,
 }
 
@@ -266,10 +266,15 @@ pub fn generate_identity(pseudo: String) -> Identity {
 /// `dengon:v1:<base64url(pseudo_len:u8 ‖ pseudo ‖ pub_static:32 ‖ pub_sign:32)>`.
 pub fn identity_qr_code(identity: Identity) -> String {
     let pseudo_bytes = identity.pseudo.as_bytes();
-    // Clampé à 255 o : longueur encodée sur un seul octet. Un pseudo aussi
-    // long n'a pas de sens produit ; la vraie validation viendra avec
+    // Tronqué à 255 o (longueur encodée sur un seul octet), en reculant
+    // jusqu'à une frontière de caractère : couper un caractère UTF-8 en deux
+    // rendait le QR indécodable (revue PR #69, Paul). Même règle que
+    // `identityQrCode` côté Kotlin. La vraie validation du pseudo viendra avec
     // `identity` (US-205).
-    let pseudo_len = pseudo_bytes.len().min(255);
+    let mut pseudo_len = pseudo_bytes.len().min(255);
+    while !identity.pseudo.is_char_boundary(pseudo_len) {
+        pseudo_len -= 1;
+    }
 
     let capacity = 1 + pseudo_len + identity.pub_static.len() + identity.pub_sign.len();
     let mut payload = Vec::with_capacity(capacity);
@@ -453,6 +458,46 @@ mod tests {
 
         let decodee = identity_from_qr_code(qr)?;
         assert_eq!(decodee, identite);
+        Ok(())
+    }
+
+    #[test]
+    fn un_qr_code_malforme_renvoie_une_erreur_au_lieu_de_paniquer() {
+        // Payload non vide mais tronqué : un octet `pseudo_len` (5) sans rien
+        // derrière — exerce les bornes `.get(...)` et pas seulement `first()`.
+        let pseudo_len_seul = format!("dengon:v1:{}", encode_base64url(&[5]));
+        assert_eq!(
+            identity_from_qr_code(pseudo_len_seul),
+            Err(DengonError::Internal)
+        );
+
+        // QR valide dont on retire le dernier octet (clé `pub_sign` incomplète).
+        let qr = identity_qr_code(generate_identity("alice".to_owned()));
+        let mut payload = decode_base64url(&qr["dengon:v1:".len()..]).unwrap_or_default();
+        payload.pop();
+        let tronque = format!("dengon:v1:{}", encode_base64url(&payload));
+        assert_eq!(identity_from_qr_code(tronque), Err(DengonError::Internal));
+
+        // Pas un QR dengon du tout.
+        assert_eq!(
+            identity_from_qr_code("https://example.org".to_owned()),
+            Err(DengonError::Internal)
+        );
+    }
+
+    #[test]
+    fn un_pseudo_trop_long_est_tronque_sans_couper_un_caractere() -> Result<(), DengonError> {
+        // 130 « é » = 260 octets UTF-8. Couper brutalement à 255 laissait un
+        // demi-caractère et rendait le QR indécodable (revue PR #69, Paul).
+        let long = "é".repeat(130);
+        let qr = identity_qr_code(generate_identity(long.clone()));
+        let decodee = identity_from_qr_code(qr)?;
+        assert_eq!(
+            decodee.pseudo.len(),
+            254,
+            "recul à la frontière de caractère"
+        );
+        assert!(long.starts_with(&decodee.pseudo));
         Ok(())
     }
 

@@ -703,3 +703,30 @@ Kotlin écrit à la main, pas une génération réelle (ça viendra avec l'US-30
 `src/lib.rs`.
 **Pour aller plus loin :** doc officielle UniFFI, section « UDL » vs
 « Procedural macros ».
+
+---
+
+### UniFFI 0.28 : la forme Kotlin générée ne se devine pas depuis le `.udl`
+
+**C'est quoi :** UniFFI traduit le `.udl` en Kotlin avec des choix qui ne
+sont pas évidents : `sequence<u8>` devient `List<UByte>` (et non
+`ByteArray`, réservé au type `bytes`), `u64`/`u32` deviennent
+`ULong`/`UInt`, une `interface X` devient `open class X` **plus**
+`interface XInterface`, un `[Error] enum` devient une exception **scellée**
+avec une sous-classe par variante, les fonctions d'un `namespace` sont de
+premier niveau, et un `dictionary` devient une `data class` à champs `var`.
+
+**Pourquoi dans dengon :** l'UI Android est écrite contre un bouchon Kotlin
+écrit à la main (US-106), censé être remplacé par les bindings générés à
+l'US-302 sans casser l'UI. Écrit « de tête », il divergeait sur six points
+(revue PR #69).
+
+**Piège / surprise :** une `data class` avec des champs `ByteArray` n'a
+**pas** d'égalité par contenu (tableaux comparés par référence). Le bouchon
+qui corrigeait ça « proprement » créait une égalité que le code généré ne
+fournira pas. Seul remède fiable : **générer** les bindings de référence et
+compiler le code client contre eux.
+
+**Où c'est utilisé :** `crates/dengon-ffi/src/dengon.udl`,
+`crates/dengon-ffi/uniffi.toml`, `android/.../ffi/DengonTypes.kt`.
+
