@@ -1,0 +1,75 @@
+{
+  "batch_id": "6cfb4b5293fff84c65eb9606f3f682b10ea8f50a28474142c7ef7cd57c0f5378",
+  "node_id": "relay-3f2a9c",
+  "schema_version": 1,
+  "events": [
+    {
+      "event_id": "462cfcced07c9246fe68b62a8bdd4aa7056ccde487a2cc2bc47c3dfafb95e5de",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1017,
+      "ts_ms": 1725800001400,
+      "name": "relay.boot",
+      "payload": {
+        "fw_version": "0.1.0",
+        "reset_reason": "power_on",
+        "secure_boot": false,
+        "flash_enc": false
+      }
+    },
+    {
+      "event_id": "5232cbc8bac073cfd1e7b8fcb882f1f568d69b84dc9c17c89ecd2f196bbc09ec",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1018,
+      "ts_ms": 1725800061400,
+      "name": "relay.health",
+      "payload": {
+        "uptime_s": 60,
+        "rssi_avg": -61,
+        "peers": 2,
+        "cache_size": 128,
+        "envelope_store": 3,
+        "log_buffer_pct": 12,
+        "logs_dropped": 0,
+        "heap_free": 190000
+      }
+    },
+    {
+      "event_id": "0c7d00953793fde2ae25470f6c20e8dfd8547eaa4a727dda398badefeb33b046",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1019,
+      "ts_ms": 1725800062000,
+      "name": "relay.wifi_up",
+      "payload": {
+        "ssid": "campus-ap",
+        "duration_s": 0
+      }
+    },
+    {
+      "event_id": "14db3d87674ba10a9f757ec5b4294e395324a3e5a778d8a99918d32b10f23547",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1020,
+      "ts_ms": 1725800092000,
+      "name": "relay.wifi_down",
+      "payload": {
+        "duration_s": 30
+      }
+    },
+    {
+      "event_id": "456ce7fdbafae9248fc7c3f9c7b4df6e07f3220ae2056ac9e994895341bf3870",
+      "node_id": "relay-3f2a9c",
+      "node_kind": "relay",
+      "seq": 1021,
+      "ts_ms": 1725800092100,
+      "name": "relay.overloaded",
+      "payload": {
+        "subsystem": "envelope_store",
+        "action": "refuse_envelope"
+      }
+    }
+  ],
+  "sig": "NfKKWAQPfkLRc5pnh/eQ4+OCdGIN3xphpBHZYNmBSVCrOuWc6L4pTiZqUN8Xa8lyIPGp+Xl76q+l6MMPD3OUDA=="
+}
