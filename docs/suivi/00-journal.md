@@ -10,6 +10,106 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-202 : rebase de la PR #88 sur `main` (après #84, #85, #87)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/protocol/mod.rs`, `docs/suivi/`
+**Lot :** US-202 (#16), PR #88 — branche `feat/US-202-fragmentation`
+
+### Fait
+- `git rebase origin/main` du commit de la PR. Deux conflits :
+  - `protocol/mod.rs` : doc du module (`codec` de `main` + `fragment`) —
+    les deux lignes gardées ; `pub mod fragment` à côté de `pub mod codec`.
+  - `modules/dengon-core.md` : ligne « État » et arborescence — fusionnées
+    (`codec/`, `fragment.rs`, `sync/`).
+- Fusion automatique fautive corrigée à la main : entrée US-202 remise en
+  haut du journal (séparateur `---` manquant) ; ligne `dengon-core` en
+  double dans `02-avancement.md` et lignes obsolètes dans `modules/_index.md`
+  → une ligne par module.
+
+### Vérifications
+- `cargo fmt --all --check` : OK.
+- `cargo clippy -p dengon-core --all-targets -- -D warnings` : OK.
+- `cargo test -p dengon-core` : 260 tests unitaires + tests d'intégration
+  (7, 2, 3, 7, 8) passés, 0 échec, 2 ignorés (régénération de vecteurs).
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : `dengon-core.md` (résolution du conflit)
+
+---
+
+## 2026-09-28 — US-202 : `protocol::fragment` — fragmentation / réassemblage L2, MTU paramétrable
+
+**Auteur :** Oswin + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/protocol/{mod.rs, fragment.rs, fragment/tests.rs}`
+**Lot :** US-202 (#16), sprint 2, jalon J1
+
+### Fait
+- **Format du payload de fragment** (`synthese/05` §5) : `Fragment { frag_id,
+  index, total, chunk }`, `encode` / `decode` (big-endian, décodage sans
+  panic), `validate` (`total ≥ 1`, `index < total`, chunk `1..=FRAG_SIZE`).
+- **`frag_id(packet)`** = `SHA-256(paquet)[0..8]` (crate `sha2`, déjà
+  dépendance de `dengon-core` depuis US-206).
+- **Découpe selon un MTU paramétrable** : `chunk_capacity(att_mtu)` =
+  `min(FRAG_SIZE, ATT_MTU − 3 − 30 − 12)` ; `split(packet, chunk_len)`,
+  `split_for_mtu(packet, att_mtu)`, `needs_fragmentation(len, att_mtu)`.
+- **`Reassembler`** : accepte les fragments dans n'importe quel ordre, ignore
+  les doublons, abandonne un réassemblage inactif depuis `FRAG_TIMEOUT_S`,
+  vérifie le paquet reconstruit contre son `frag_id`, et borne sa mémoire
+  (`FRAG_MAX_CONCURRENT` réassemblages, éviction du plus ancien ;
+  `PACKET_MAX_LEN` par paquet ; budget global `max_bytes`, 128 Kio par
+  défaut ; mémoire des `frag_id` terminés bornée à 64 entrées).
+
+### Pourquoi / décisions
+- **Payload seulement** : l'habillage en paquet L3 `0x09` relève du codec
+  (US-201, PR #80, pas encore mergée). La fragmentation opère sur les octets
+  d'un paquet déjà encodé, donc ne dépend pas du codec.
+- **En-tête L3 compté en forme adressée (30 o)** dans `chunk_capacity` : un
+  fragment hérite de l'adressage du paquet transporté ; on prend le pire cas.
+- **Intégrité par le `frag_id`** : pas de somme de contrôle par fragment
+  (`synthese/05` §5), mais le `frag_id` est un condensat SHA-256 du paquet ;
+  le vérifier après réassemblage détecte un fragment altéré ou un mélange.
+- **Budget en octets + coût forfaitaire par chunk (`CHUNK_OVERHEAD = 32`)** :
+  sans lui, un pair enverrait des chunks d'1 octet et ferait croître la
+  mémoire bien au-delà des octets comptés.
+- **Mémoire des `frag_id` terminés** : ajoutée après que le property test
+  `reassemblage_mtu_et_ordre_aleatoires` a trouvé qu'un paquet d'un seul
+  fragment, dupliqué, sortait **deux fois** (cas minimal : `p = [0]`, un
+  doublon). Même cause côté multi-fragments : un doublon tardif rouvrait un
+  réassemblage « zombie » qui occupait la mémoire jusqu'au timeout.
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-202) : MTU
+  minimal utilisable 46 (le minimum BLE 23 ne porte pas un fragment) ; budget
+  mémoire global et mémoire des terminés non prévus par la conception.
+
+### Appris
+- Note « Un property test trouve le cas que l'exemple rate » dans
+  `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-202 : MTU paramétrable ✅, property test MTU aléatoire ✅,
+  manquants / dupliqués / désordonnés sans corruption ni panic ✅, mémoire
+  bornée ✅, `no_std` ✅, couverture ≥ 85 % ✅.
+- Pas encore appelé : le branchement (émission par `Transport`, réception
+  avant `sync::routing`) viendra avec le codec et le pipeline.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check
+(vert)
+$ cargo clippy --workspace --all-targets -- -D warnings
+(vert)
+$ cargo test -p dengon-core
+194 passed (lib) ; 7 + 2 + 3 + 7 passed (intégration, 2 ignorés) ; 0 failed
+$ cargo check -p dengon-core --no-default-features
+(vert — frontière no_std)
+```
+
+---
+
 ## 2026-09-28 — US-214 : rebase de la PR #87 sur `main` (après #84, #85)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
@@ -185,75 +285,6 @@ $ cargo check -p dengon-core --no-default-features         → OK
 
 ### État après cette session
 - PR #84 à jour de `main`, sans conflit.
-## 2026-09-28 — US-202 : `protocol::fragment` — fragmentation / réassemblage L2, MTU paramétrable
-
-**Auteur :** Oswin + Claude (Opus 5.5)
-**Périmètre :** `crates/dengon-core/src/protocol/{mod.rs, fragment.rs, fragment/tests.rs}`
-**Lot :** US-202 (#16), sprint 2, jalon J1
-
-### Fait
-- **Format du payload de fragment** (`synthese/05` §5) : `Fragment { frag_id,
-  index, total, chunk }`, `encode` / `decode` (big-endian, décodage sans
-  panic), `validate` (`total ≥ 1`, `index < total`, chunk `1..=FRAG_SIZE`).
-- **`frag_id(packet)`** = `SHA-256(paquet)[0..8]` (crate `sha2`, déjà
-  dépendance de `dengon-core` depuis US-206).
-- **Découpe selon un MTU paramétrable** : `chunk_capacity(att_mtu)` =
-  `min(FRAG_SIZE, ATT_MTU − 3 − 30 − 12)` ; `split(packet, chunk_len)`,
-  `split_for_mtu(packet, att_mtu)`, `needs_fragmentation(len, att_mtu)`.
-- **`Reassembler`** : accepte les fragments dans n'importe quel ordre, ignore
-  les doublons, abandonne un réassemblage inactif depuis `FRAG_TIMEOUT_S`,
-  vérifie le paquet reconstruit contre son `frag_id`, et borne sa mémoire
-  (`FRAG_MAX_CONCURRENT` réassemblages, éviction du plus ancien ;
-  `PACKET_MAX_LEN` par paquet ; budget global `max_bytes`, 128 Kio par
-  défaut ; mémoire des `frag_id` terminés bornée à 64 entrées).
-
-### Pourquoi / décisions
-- **Payload seulement** : l'habillage en paquet L3 `0x09` relève du codec
-  (US-201, PR #80, pas encore mergée). La fragmentation opère sur les octets
-  d'un paquet déjà encodé, donc ne dépend pas du codec.
-- **En-tête L3 compté en forme adressée (30 o)** dans `chunk_capacity` : un
-  fragment hérite de l'adressage du paquet transporté ; on prend le pire cas.
-- **Intégrité par le `frag_id`** : pas de somme de contrôle par fragment
-  (`synthese/05` §5), mais le `frag_id` est un condensat SHA-256 du paquet ;
-  le vérifier après réassemblage détecte un fragment altéré ou un mélange.
-- **Budget en octets + coût forfaitaire par chunk (`CHUNK_OVERHEAD = 32`)** :
-  sans lui, un pair enverrait des chunks d'1 octet et ferait croître la
-  mémoire bien au-delà des octets comptés.
-- **Mémoire des `frag_id` terminés** : ajoutée après que le property test
-  `reassemblage_mtu_et_ordre_aleatoires` a trouvé qu'un paquet d'un seul
-  fragment, dupliqué, sortait **deux fois** (cas minimal : `p = [0]`, un
-  doublon). Même cause côté multi-fragments : un doublon tardif rouvrait un
-  réassemblage « zombie » qui occupait la mémoire jusqu'au timeout.
-
-### Écarts vs conception
-- Consignés dans `03-ecarts-conception.md` (2026-09-28, US-202) : MTU
-  minimal utilisable 46 (le minimum BLE 23 ne porte pas un fragment) ; budget
-  mémoire global et mémoire des terminés non prévus par la conception.
-
-### Appris
-- Note « Un property test trouve le cas que l'exemple rate » dans
-  `04-apprentissages.md`.
-
-### État après cette session
-- Critères US-202 : MTU paramétrable ✅, property test MTU aléatoire ✅,
-  manquants / dupliqués / désordonnés sans corruption ni panic ✅, mémoire
-  bornée ✅, `no_std` ✅, couverture ≥ 85 % ✅.
-- Pas encore appelé : le branchement (émission par `Transport`, réception
-  avant `sync::routing`) viendra avec le codec et le pipeline.
-- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
-- 01-etat-du-code.md mis à jour : non (n'est plus à toucher)
-
-### Vérification (commandes réellement exécutées)
-```
-$ cargo fmt --all -- --check
-(vert)
-$ cargo clippy --workspace --all-targets -- -D warnings
-(vert)
-$ cargo test -p dengon-core
-194 passed (lib) ; 7 + 2 + 3 + 7 passed (intégration, 2 ignorés) ; 0 failed
-$ cargo check -p dengon-core --no-default-features
-(vert — frontière no_std)
-```
 
 ---
 
