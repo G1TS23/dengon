@@ -42,39 +42,6 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
   unique sur le diff) : 2 points réels, faible sévérité, tous deux traités
   avec un test de régression qui a confirmé détecter la régression avant
   correction.
-## 2026-09-26 — US-109 : rectification — le test des 5 min avait déjà été fait par Paul
-
-**Auteur :** Olivier Falahi + Claude (Sonnet 5)
-**Périmètre :** `docs/suivi/modules/android-app.md`, issue #9, commentaire
-GitHub
-**Lot :** correction de l'entrée du même jour ci-dessous, pas une nouvelle
-manip
-
-### Fait
-- L'entrée ci-dessous (« US-109 : test réel des 5 min écran éteint »)
-  affirme que le test « n'a en réalité jamais été exécuté » avant le 26/09.
-  **C'est faux.** Paul l'a réellement fait et documenté en commentaire de
-  l'issue #9 le **2026-09-16 à 08:03**, sur un **Pixel 8 Pro (Android 17)** :
-  service démarré 09:39:53 (PID 25615), écran éteint 5 min 25 s, revérifié
-  à 09:59:19 — même PID, notification toujours présente. Il notait même une
-  limite honnête (pas de vrai Doze, l'appareil était en charge) et un
-  checksum `aapt2` Linux manquant dans `verification-metadata.xml` (même
-  cause que le checksum macOS trouvé indépendamment le 25/09, PR #72) —
-  régénéré localement par lui mais jamais committé.
-- **Mon erreur** : avant de rouvrir l'issue le 25/09, je n'avais vérifié que
-  `docs/suivi/` (journal + fiche module), pas les **commentaires de l'issue
-  elle-même**, où l'information existait déjà. Le vrai écart n'était donc
-  pas « le test n'a jamais eu lieu » mais « le résultat n'a jamais été
-  reporté dans `docs/suivi/` », un problème bien plus modeste.
-- Fiche `android-app.md` corrigée : le test de Paul (16/09, Pixel 8 Pro) est
-  maintenant la preuve principale ; le mien (26/09, Galaxy A16) s'ajoute
-  comme second appareil plutôt que remplacer le sien — ça donne même un
-  début de matrice d'appareils.
-- Commentaire de correction/excuse posté sur l'issue #9.
-
-### Pourquoi / décisions
-- Cette entrée ne remplace pas la précédente (append-only) — elle la
-  corrige, comme le prescrit l'en-tête de ce fichier.
 
 ### Écarts vs conception
 - Aucun.
@@ -266,6 +233,82 @@ $ uv build --wheel -o /tmp/dashboard-api-dist && \
   < <(git ls-files 'app/*.py' 'app/**/*.py')
 (rien affiché — tous les modules présents)
 ```
+## 2026-09-26 — US-109 : test des 5 min écran éteint, résultat de Paul (16/09) jamais reporté dans le suivi
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md`, issue #9, aucun code
+modifié
+**Lot :** US-109, Sprint 1 (correction de suivi)
+
+**Note (retour de revue d'OswinFreyr, PR #74, round du 2026-09-28) :**
+cette entrée fusionne deux entrées écrites le même jour dans la même PR —
+la première affirmait à tort que le test « n'a[vait] en réalité jamais été
+exécuté », une seconde postée peu après corrigeait cette erreur. Comme
+aucune des deux n'était encore mergée sur `main` au moment de la
+correction, les fusionner en une seule entrée exacte est plus honnête que
+garder une entrée qu'on sait fausse suivie de son propre correctif dans
+l'historique définitif — la règle append-only protège l'historique déjà
+partagé, pas les brouillons d'une même PR non encore mergée.
+
+### Fait
+- En vérifiant l'état des issues Sprint 1 le 25/09, détecté un écart :
+  l'issue #9 (US-109) avait été fermée le 16/09 avec **tous** les critères
+  d'acceptation cochés dans son corps, y compris « Mesuré : le service
+  tourne encore après ≥ 5 min écran éteint sur au moins un appareil réel »
+  — alors que la PR #56 elle-même documentait ce point comme **non fait**
+  (« aucun appareil Android disponible »), et que
+  `docs/suivi/modules/android-app.md` le confirmait encore : « Non fait ...
+  Reste à faire avant de clore l'US. » Aucune entrée de journal n'indiquait
+  que ce test avait eu lieu entre-temps.
+- Issue #9 rouverte avec un commentaire expliquant l'écart apparent.
+- **En creusant les commentaires de l'issue #9 (pas seulement
+  `docs/suivi/`), le test avait en réalité déjà été fait et documenté par
+  Paul, en commentaire, le 2026-09-16 à 08:03** (heure UTC de GitHub) —
+  sur un **Pixel 8 Pro (Android 17)** : service démarré 09:39:53 heure de
+  Paris (PID 25615, `isForeground=true`), écran éteint 5 min 25 s,
+  revérifié à 09:59:19 — même PID, notification toujours présente. Paul
+  notait lui-même une limite honnête (pas de vrai Doze, appareil en
+  charge pendant le test) et un checksum `aapt2` Linux manquant dans
+  `verification-metadata.xml`, régénéré localement mais jamais committé
+  (récupéré et committé séparément, voir PR #72).
+  **Le vrai écart n'était donc pas « le test n'a jamais eu lieu » mais
+  « le résultat de Paul n'a jamais été reporté dans `docs/suivi/` »** — un
+  problème de suivi, pas de test manquant. Correction/excuse postée sur
+  l'issue #9 pour cette erreur de diagnostic initiale.
+- Un second test a aussi été exécuté le 26/09 sur un **Samsung Galaxy A16**
+  (SM-A165F, Android 16) : APK `main` installée via `adb`, service démarré,
+  notification permanente confirmée présente. Écran éteint à 12:14:36,
+  revérifié à 12:21:06 (6 min 30) via `adb shell dumpsys activity services
+  com.dengon.app` : même `ServiceRecord`, même PID, notification
+  `ONGOING_EVENT` toujours affichée. **Connexion `adb` en USB** (comme le
+  reste de la session) : même limite que celle notée par Paul — l'appareil
+  était en charge, donc **aucun des deux tests ne couvre un vrai Doze**
+  (voir `android-app.md`, « Limites connues »).
+- Fiche `android-app.md` mise à jour : le test de Paul (16/09, Pixel 8 Pro)
+  est la preuve principale de l'US, celui du 26/09 (Galaxy A16) s'ajoute
+  comme second appareil — début de matrice (2 modèles, 2 versions Android).
+- Issue #9 refermée avec les deux preuves, créditant explicitement Paul
+  pour la sienne.
+
+### Pourquoi / décisions
+- Ne pas avoir vérifié les commentaires de l'issue avant de la rouvrir le
+  25/09 était l'erreur de fond — la doc de suivi et les commentaires
+  GitHub sont censés rester synchronisés mais ne le sont pas toujours en
+  pratique.
+
+### Écarts vs conception
+- Aucun écart de conception — écart de **process** (résultat existant non
+  reporté dans le suivi), corrigé ici.
+
+### Appris
+- Avant d'affirmer « ce n'est pas fait », vérifier les commentaires de
+  l'issue GitHub, pas seulement `docs/suivi/`.
+
+### État après cette session
+- US-109 réellement complète, avec preuve technique reproductible sur 2
+  appareils. Doze réel non testé sur aucun des deux (limite assumée,
+  au-delà du critère d'acceptation qui demande « ≥ 5 min écran éteint »,
+  pas Doze). Issue #9 refermée.
 ## 2026-09-28 — `contracts/events` : round 5 de revue (OswinFreyr) sur la PR #60
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -553,56 +596,6 @@ seul "docker-desktop" (arrêté) — pas de distro Linux utilisable ici.
   ou `bluer` — recherche documentaire uniquement (README GitHub + docs.rs de
   `btleplug`, citations exactes dans le rapport). Recommandation `bluer` non
   vérifiée empiriquement, voir limites du rapport.
-### Appris
-- Avant d'affirmer « ce n'est pas fait », vérifier les commentaires de
-  l'issue GitHub, pas seulement `docs/suivi/` — les deux sont censés être
-  synchronisés mais ne le sont pas toujours en pratique.
-
----
-
-## 2026-09-26 — US-109 : test réel des 5 min écran éteint (correction d'un écart de suivi)
-
-**Auteur :** Olivier Falahi + Claude (Sonnet 5)
-**Périmètre :** `docs/suivi/modules/android-app.md`, issue #9, aucun code
-modifié
-**Lot :** US-109, Sprint 1 (correction de suivi)
-
-### Fait
-- En vérifiant l'état des issues Sprint 1 le 25/09, détecté un écart : l'issue
-  #9 (US-109) avait été fermée le 16/09 avec **tous** les critères
-  d'acceptation cochés dans son corps, y compris « Mesuré : le service tourne
-  encore après ≥ 5 min écran éteint sur au moins un appareil réel » — alors
-  que la PR #56 elle-même documentait clairement ce point comme **non fait**
-  (« aucun appareil Android disponible », listé comme TODO bloquant sans
-  issue de suite), et que `docs/suivi/modules/android-app.md` le confirmait
-  encore : « Non fait ... Reste à faire avant de clore l'US. » Aucune entrée
-  de journal ultérieure n'indiquait que ce test avait eu lieu entre-temps.
-- Issue #9 rouverte avec un commentaire expliquant l'écart.
-- Test réellement exécuté le 26/09 sur un Samsung Galaxy A16 (SM-A165F,
-  Android 16) : APK `main` installée via `adb`, service démarré (démarrage
-  automatique à l'octroi des permissions), notification permanente
-  « dengon actif » confirmée présente (`adb shell dumpsys notification`).
-  Écran éteint à 12:14:36, revérifié à 12:21:06 (6 min 30 plus tard) via
-  `adb shell dumpsys activity services com.dengon.app` : **même
-  `ServiceRecord`, même PID de process, notification `ONGOING_EVENT`
-  toujours affichée avec le même contenu** — le service n'a pas été tué par
-  le système.
-- Issue #9 refermée avec cette preuve.
-
-### Pourquoi / décisions
-- Ne pas éditer l'entrée du 16/09 (append-only) : celle-ci n'existe pas
-  telle quelle dans le journal (la fermeture avait été faite directement sur
-  l'issue GitHub, sans entrée de journal correspondante) — c'est justement
-  l'absence d'entrée qui a permis de repérer l'écart en confrontant l'issue
-  à `docs/suivi/`.
-
-### Écarts vs conception
-- Aucun écart de conception — écart de **process** (case cochée sans preuve),
-  corrigé ici.
-
-### État après cette session
-- US-109 réellement complète, avec preuve technique reproductible
-  (commandes `adb` ci-dessus). Issue #9 refermée.
 
 ---
 
