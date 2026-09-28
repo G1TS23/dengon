@@ -10,6 +10,40 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-204 : rebase sur `main` après le merge de #78 (US-203) et #80 (US-201)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs}`, `docs/suivi/`.
+**Lot :** US-204 (issue #18), PR #81. Branche `feat/US-204-crypto-noise`.
+
+### Fait
+
+- #78 a été **squash-mergée** : la branche portait encore les commits US-203
+  d'origine. `git rebase --onto origin/main a9c549a` ne rejoue que les deux
+  commits US-204. Pendant ce temps, #80 (codec, US-201) a été mergée : second
+  `git rebase origin/main`. Push en `--force-with-lease`.
+- Conflits résolus en gardant les deux côtés : dev-dependencies de
+  `dengon-core` (versions du workspace, commentaire mentionnant le codec),
+  commentaire `extern crate alloc` (`ledger`, codec, `crypto::noise`), fiche
+  `modules/dengon-core.md` (état, arborescence des tests, table des types,
+  deux flux d'exemple, dépendances ; la limite « pas de codec » est retirée).
+- Journal : l'ancienne version de l'entrée US-203, recopiée par
+  `merge=union`, est supprimée (celle de `main`, corrigée après revue, fait foi).
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo fmt --all -- --check
+$ cargo clippy --workspace --all-targets -- -D warnings
+OK
+$ cargo test --workspace
+dengon-core : 126 unitaires + vecteurs crypto (2, 1 ignoré) + protocole, tout vert
+$ cargo check -p dengon-core --no-default-features
+OK
+```
+
+---
+
 ## 2026-09-28 — US-204 : rebase sur la nouvelle tête de US-203 et retours de revue de #81
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
