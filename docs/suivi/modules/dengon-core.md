@@ -137,6 +137,18 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
   un `BTreeSet<u64>` des `seq` (détecte `Fork`/`Gap` indépendamment de
   l'ordre de stockage), passe 2 = la marche de chaîne de hash d'origine
   (`Broken`). Voir `00-journal.md`, entrée du 2026-09-26 dédiée.
+- **Arithmétique `seq` sécurisée contre le débordement `u64::MAX`** (retour
+  de revue #75, OswinFreyr) : `append()` calculait `e.seq + 1` et
+  `verify_chain()` calculait `max + 1`, tous deux en `u64` non vérifié — un
+  export corrompu ou hostile portant `seq = u64::MAX` faisait paniquer le
+  calcul en debug/test et reboucler silencieusement à 0 en release, un
+  vérificateur qui panique ou ment sur une entrée hostile étant exactement
+  ce qu'il ne faut pas. `append()` utilise maintenant `saturating_add`
+  (infaillible par signature — au pire deux entrées consécutives
+  partageraient `seq = u64::MAX`, détecté comme `Fork`) ; `verify_chain()`
+  compare en arithmétique `u128`, qui ne peut pas déborder pour des
+  opérandes `u64`. Test dédié :
+  `seq_u64_max_ne_panique_pas_et_est_detecte`.
 - **`protocol::{consts, types}` séparé de `protocol::codec`** (US-201) : permet
   à `sync::*` de démarrer sans la sérialisation. C'est l'objet même de l'US-108.
 - **`no_std` garanti pour `protocol`** : n'importe que `core`
@@ -193,9 +205,11 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
 
 - `src/lib.rs`, module `tests` : deux tests fumigènes (version de crate,
   `PROTOCOL_VERSION`).
-- `src/ledger.rs`, module `tests` : 13 tests unitaires (chaîne vide valide,
+- `src/ledger.rs`, module `tests` : 14 tests unitaires (chaîne vide valide,
   append→verify_chain toujours Ok, seq consécutives, trou détecté, doublon
   de seq détecté comme fork (adjacent **et** non adjacent — voir
+  « Décisions »), **`seq = u64::MAX` détecté comme `Gap` sans paniquer**
+  (nouveau, retour de revue #75 : `max + 1` en `u64` débordait — voir
   « Décisions »), entrée modifiée détectée comme broken, `prev_hash`
   incohérent détecté, export par plage, reprise après redémarrage par
   sérialisation, désérialisation d'un buffer tronqué sans panique) +
@@ -216,13 +230,15 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
   `Inventory` a bien le type `0x0D` ; **les 8 vecteurs `accept` ont tous
   `ttl > 1` et portent tous `RELAY_OK`**
   (`accept_vectors_with_ttl_above_1_have_relay_ok`, nouveau — retour de revue
-  #63, round 3 : garantit que l'invariant « un paquet broadcast relayable
-  porte `RELAY_OK` » (`synthese/05:203`) reste vrai vecteur par vecteur, pas
+  #63, round 3 : garantit que l'invariant « `ttl > 1` ⇒ `RELAY_OK` »
+  (`synthese/05:203`) reste vrai vecteur par vecteur — y compris pour des
+  paquets **adressés** comme `ack-addressed`, pas seulement broadcast,
+  contrairement à une formulation précédente de cette fiche — pas
   seulement pour les deux corrigés au round 2).
-- Commande : `cargo test -p dengon-core` → **32 passés** (28 lib + 4
-  intégration + 0 doc — 15 pour `ledger`/`lib.rs`, 13 pour
-  `protocol::{consts,types}`), rejoué le 2026-09-28 après la fusion des deux
-  branches. `cargo clippy --workspace --all-targets --all-features -- -D
+- Commande : `cargo test -p dengon-core` → **33 passés** (29 lib + 4
+  intégration + 0 doc — 16 pour `ledger`/`lib.rs`, 13 pour
+  `protocol::{consts,types}`), rejoué le 2026-09-28 après le round 8 de
+  revue. `cargo clippy --workspace --all-targets --all-features -- -D
   warnings` et `cargo fmt --all -- --check` verts. `cargo check -p
   dengon-core --no-default-features` (frontière `no_std`) vert.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
@@ -239,6 +255,10 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
 
 - `verify_chain()` ne vérifie pas la signature (voir « Décisions » —
   dépend de `crypto`, US-203).
+- **`verify_chain()` ne peut pas re-vérifier un export partiel** (`seq` ne
+  commençant pas à 0) — voir le docstring d'`export()` et l'écart consigné
+  dans `03-ecarts-conception.md` (retour de revue #75). Pas encore
+  bloquant : aucun appelant réel d'`export()` n'existe en dehors des tests.
 - Pas de vrai backend de persistance câblé (SQLite/littlefs) — `to_bytes`/
   `from_bytes` prouvent le format, pas l'écriture disque réelle.
 - **Pas de codec** : aucun `encode`/`decode` — c'est US-201. Le test des

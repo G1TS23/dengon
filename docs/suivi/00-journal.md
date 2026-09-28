@@ -10,6 +10,68 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-206 : `ledger`, round de revue d'OswinFreyr — débordement `u64::MAX` corrigé
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/ledger.rs`,
+`docs/suivi/03-ecarts-conception.md`, `docs/suivi/modules/dengon-core.md`
+**Lot :** US-206, PR #75
+
+### Fait
+- **Bug réel corrigé : débordement `u64::MAX` dans `append()` et
+  `verify_chain()`.** `append()` calculait `self.entries.last().seq + 1` et
+  `verify_chain()` calculait `max + 1`, tous deux en arithmétique `u64` non
+  vérifiée. Une entrée à `seq = u64::MAX` (export corrompu ou hostile) fait
+  paniquer ce calcul en debug/test (`attempt to add with overflow`,
+  confirmé en reproduisant volontairement le bug) et reboucle
+  silencieusement à 0 en release — un vérificateur qui panique ou ment sur
+  une entrée hostile est exactement ce que `verify_chain()` doit éviter.
+  `append()` corrigé avec `saturating_add` (infaillible par signature) ;
+  `verify_chain()` corrigé en comparant en `u128` (ne peut pas déborder
+  pour des opérandes `u64`). Nouveau test
+  `seq_u64_max_ne_panique_pas_et_est_detecte`.
+- **Limite documentée (pas corrigée) : `verify_chain()` ne peut pas
+  re-vérifier un export partiel.** `export(range)` renvoie n'importe quelle
+  tranche de `seq`, mais `verify_chain()` suppose toujours une chaîne
+  démarrant à `seq = 0`. Reconstruire un `Ledger` depuis un export qui ne
+  part pas de 0 (ex. `export(3..6)`) rapporte donc `Gap`/`Broken` à tort.
+  Pas corrigé cette session (aucun appelant réel d'`export()` n'existe
+  encore hors tests — `dengon-verify::main` n'est pas implémenté) : écart
+  consigné dans `03-ecarts-conception.md` avec la vraie question de design
+  à trancher (point d'ancrage en paramètre de `verify_chain`) quand un
+  appelant réel existera.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #75 (2026-09-28, passe unique) :
+  2 constats dans `ledger.rs`, l'un confirmé (débordement), l'autre
+  qualifié « plausible » par Oswin lui-même — vérifié réel (le docstring
+  de `dengon-verify` affiche déjà l'intention de vérifier un export), mais
+  proportionné en documentation plutôt qu'en redesign d'API vu l'absence
+  d'appelant réel actuel.
+
+### Écarts vs conception
+- Nouvelle entrée dans `03-ecarts-conception.md` pour la limite export
+  partiel.
+
+### État après cette session
+- `cargo test -p dengon-core` → 33 passés (29 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features` tous
+  verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core seq_u64_max
+test ledger::tests::seq_u64_max_ne_panique_pas_et_est_detecte ... ok
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+```
+- Régression confirmée : `u128::from(...)` temporairement retiré (retour à
+  `max + 1` en `u64`) → le nouveau test panique avec `attempt to add with
+  overflow`, restauré ensuite.
+
+---
+
 ## 2026-09-28 — US-206 : rebase sur `main`, casts `ledger.rs` corrigés pour les lints activés par US-108
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

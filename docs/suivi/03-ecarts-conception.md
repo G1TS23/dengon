@@ -573,3 +573,35 @@ _(aucun écart pour l'instant)_
   réelle (signature Ed25519 vérifiée). Le point est documenté ici et dans
   `modules/dengon-core.md` (« Décisions d'implémentation » et « Limites
   connues »).
+
+---
+
+### `ledger::verify_chain()` ne peut pas re-vérifier un export partiel (US-206, retour de revue #75)
+
+- **Conception :** `04-architecture.md` §2 dit `ledger : ... export(range)`
+  et `dengon-verify` (`crates/dengon-verify/src/main.rs`, doc de module)
+  affiche l'intention de « lire un export de journal ... et rendre l'un des
+  quatre verdicts ».
+- **Code :** `Ledger::export(range)` renvoie n'importe quelle tranche
+  `seq ∈ range` des entrées en mémoire. `Ledger::verify_chain()`, lui,
+  suppose toujours que la chaîne fournie démarre à `seq = 0` avec
+  `prev_hash == GENESIS_HASH` : reconstruire un `Ledger` via
+  `from_entries()` à partir d'un export dont `range` ne commence pas à 0
+  (ex. `export(3..6)`) fait donc rapporter `Gap` ou `Broken` par
+  `verify_chain()`, même si la tranche exportée est parfaitement intègre.
+- **Pourquoi :** au moment d'écrire `ledger`, il n'existait aucun appelant
+  réel de `export()` en dehors des tests (`dengon-verify::main` n'est pas
+  encore implémenté) — la question « comment vérifier une tranche qui ne
+  part pas de la genèse » n'avait donc pas de cas d'usage concret pour
+  trancher la bonne API (un point d'ancrage en paramètre de
+  `verify_chain` ? un `export` qui redémarre sa propre chaîne de hash
+  depuis l'ancre ?).
+- **Conséquences :** tant que `dengon-verify` (ou tout autre appelant) n'a
+  besoin que de vérifier un export **complet** depuis `seq = 0` (le cas
+  couvert par les tests actuels), rien n'est cassé. Le jour où un besoin
+  réel de vérifier un export partiel apparaît (ex. le dashboard ne
+  redemande que les entrées manquantes plutôt que tout le journal),
+  `verify_chain()` devra être étendu avant de pouvoir servir tel quel.
+- **Doc de conception mise à jour ?** Non — documenté ici et dans le
+  docstring d'`export()` (`src/ledger.rs`), à trancher quand
+  `dengon-verify` aura un vrai appelant.

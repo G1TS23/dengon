@@ -277,7 +277,15 @@ impl<S: Signer> Ledger<S> {
     /// `seq` est calculé automatiquement (dernière `seq` + 1, ou 0 pour la
     /// première entrée) : l'appelant ne peut pas se tromper de numéro.
     pub fn append(&mut self, event_name: &str, payload_json: &str, ts_ms: u64) -> &Entry {
-        let seq = self.entries.last().map_or(0, |e| e.seq + 1);
+        // `saturating_add` plutôt que `+ 1` (retour de revue #75,
+        // OswinFreyr) : `e.seq + 1` panique en debug/test et reboucle
+        // silencieusement à 0 en release quand `seq == u64::MAX` — un cas
+        // physiquement inatteignable par un usage légitime (2⁶⁴ appends),
+        // mais `append()` est infaillible par signature (retourne `&Entry`,
+        // pas `Result`), donc saturer est le choix le moins mauvais : au
+        // pire, deux entrées consécutives partageraient `seq = u64::MAX`,
+        // ce que `verify_chain()` détecte déjà comme `Fork`.
+        let seq = self.entries.last().map_or(0, |e| e.seq.saturating_add(1));
         let prev_hash = self.last_hash();
         let entry_hash = Entry::compute_hash(seq, ts_ms, event_name, payload_json, &prev_hash);
         let sig = self.signer.sign(&entry_hash);
@@ -333,7 +341,13 @@ impl<S: Signer> Ledger<S> {
             max_seq = Some(max_seq.map_or(entry.seq, |m| core::cmp::max(m, entry.seq)));
         }
         if let Some(max) = max_seq {
-            if seen.len() as u64 != max + 1 {
+            // Arithmétique en `u128` plutôt que `max + 1` en `u64` (retour
+            // de revue #75, OswinFreyr) : un export corrompu ou hostile
+            // portant `seq = u64::MAX` faisait paniquer ce calcul en
+            // debug/test et le faisait reboucler silencieusement à 0 en
+            // release — un vérificateur qui panique ou ment sur une entrée
+            // hostile est exactement ce que `verify_chain()` doit éviter.
+            if u128::from(seen.len() as u64) != u128::from(max) + 1 {
                 return Verdict::Gap;
             }
         }
@@ -357,6 +371,24 @@ impl<S: Signer> Ledger<S> {
     }
 
     /// Les entrées dont `seq` tombe dans `range`, dans l'ordre du journal.
+    ///
+    /// # Limite connue : un export dont `range` ne commence pas à 0 n'est
+    /// pas re-vérifiable tel quel
+    ///
+    /// `verify_chain()` suppose toujours que la chaîne démarre à `seq = 0`
+    /// avec `prev_hash == GENESIS_HASH` (retour de revue #75, OswinFreyr,
+    /// point plausible). Reconstruire un `Ledger` à partir d'un export
+    /// `range` qui ne commence pas à 0 (ex. `export(3..6)`) et appeler
+    /// `verify_chain()` dessus rapportera donc `Gap` ou `Broken` même si la
+    /// tranche exportée est intègre — il manque un point d'ancrage (le
+    /// `seq` de départ attendu et son `prev_hash`) que `verify_chain()`
+    /// n'accepte pas aujourd'hui. Écart consigné dans
+    /// `03-ecarts-conception.md` : `dengon-verify`, dont la vocation
+    /// affichée est justement de vérifier un export de journal, n'est pas
+    /// encore implémenté — la bonne API (un `verify_chain` paramétré par un
+    /// ancrage, ou un `export` qui redémarre sa propre chaîne de hash
+    /// depuis l'ancre) sera tranchée quand ce binaire aura un vrai
+    /// appelant.
     pub fn export(&self, range: core::ops::Range<u64>) -> Vec<&Entry> {
         self.entries
             .iter()
@@ -441,6 +473,28 @@ mod tests {
         entries.push(doublon);
         let l2 = Ledger::from_entries(entries, NullSigner);
         assert_eq!(l2.verify_chain(), Verdict::Fork);
+    }
+
+    #[test]
+    fn seq_u64_max_ne_panique_pas_et_est_detecte() {
+        // Retour de revue #75 (OswinFreyr) : un export corrompu ou hostile
+        // portant `seq = u64::MAX` faisait paniquer `verify_chain()` en
+        // debug/test (`max + 1` déborde) et rebouclait silencieusement à 0
+        // en release. Une seule entrée à `seq = u64::MAX` doit être
+        // détectée comme `Gap` (il manque les positions 0..u64::MAX-1),
+        // sans jamais paniquer.
+        let entry_hash = Entry::compute_hash(u64::MAX, 1, "a", "{}", &GENESIS_HASH);
+        let entry = Entry {
+            seq: u64::MAX,
+            ts_ms: 1,
+            event_name: String::from("a"),
+            payload_json: String::from("{}"),
+            prev_hash: GENESIS_HASH,
+            entry_hash,
+            sig: [0u8; SIG_LEN],
+        };
+        let l = Ledger::from_entries(alloc::vec![entry], NullSigner);
+        assert_eq!(l.verify_chain(), Verdict::Gap);
     }
 
     #[test]
