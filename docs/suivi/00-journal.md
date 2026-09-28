@@ -10,6 +10,71 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-305 : corrections suite à la revue de la PR #92
+
+**Auteur :** Oswin (Tanguy) + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-verify/src/main.rs`, `crates/dengon-core/src/ledger.rs`,
+`docs/suivi/`.
+**Lot :** US-305 (issue #43). Branche `feat/US-305-dengon-verify` (PR #92), base
+`main`.
+
+### Fait
+- **Retour bloquant potentiel de Paul (revue non bloquante mais corrigée)** :
+  `main.rs` utilisait `std::env::args()`, qui panique (code de sortie 101, pas
+  de message exploitable) sur un argument non UTF-8 (chemin de fichier
+  exotique). Remplacé par `std::env::args_os()` + conversion explicite ;
+  un argument non convertible rend maintenant `EXIT_USAGE` (64) avec un
+  message sur stderr, conforme au contrat de sortie documenté dans le module.
+- **Commentaire obsolète signalé par Paul** : `ledger.rs::verify_entries`,
+  le commentaire de la passe 1 parlait encore de « trou dans `0..=max` » (avant
+  l'introduction de `Anchor`) et la passe 2 de `self.entries` (avant
+  l'extraction en fonction libre). Mis à jour en `anchor.first_seq..=max` et
+  `entries`.
+- La branche locale avait divergé de `origin` (rebase déjà effectué côté
+  origin sur `main` à jour, incluant tout le Sprint 2/3 mergé depuis) : `git
+  reset --hard origin/feat/US-305-dengon-verify` pour repartir de l'état
+  poussé, sans perdre les deux corrections (appliquées après le reset).
+- PR sortie du brouillon, revue demandée à Paul (`POWLAIR`, codeowner
+  `/crates/`), commentaire posté récapitulant les corrections, checklist DoD
+  §7.1 items 3 (CI verte) et 4 (revue demandée) cochés dans le corps de la PR.
+
+### Pourquoi / décisions
+- Correction ciblée des deux points « non bloquants » de la revue plutôt que
+  de les laisser en dette : ce sont des corrections d'une ligne chacune, sans
+  risque, et elles lèvent tout doute avant la seconde revue.
+
+### Écarts vs conception
+- Aucun nouvel écart ; ceux déjà consignés (JSON canonique vs binaire,
+  `Signer` Ed25519 non branché) restent inchangés, cf. `03-ecarts-conception.md`
+  (entrée 2026-09-28, US-305).
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- `dengon-verify` (US-305) : implémentation inchangée sur le fond, corrections
+  de revue appliquées. En attente de l'approbation de Paul avant merge.
+- Fiche(s) module mise(s) à jour : aucune (pas de changement de comportement
+  ni de contrat à documenter au-delà du journal).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-verify -p dengon-core --quiet
+172 tests, 0 échec
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(aucun avertissement)
+
+$ rustfmt --check (sur copie LF des deux fichiers touchés, contournant le
+  faux positif CRLF de `core.autocrlf=true` en local)
+OK après un point de format corrigé (eprintln! multi-lignes)
+```
+- `cargo fmt --check` direct sur le dépôt local signale une CRLF sur
+  l'ensemble des fichiers du dépôt (artefact `core.autocrlf=true` local,
+  préexistant, sans lien avec cette PR) — non retenu comme signal fiable ici.
+
+---
+
 ## 2026-09-28 — US-224 : corrections suite à la revue de la PR #97
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
