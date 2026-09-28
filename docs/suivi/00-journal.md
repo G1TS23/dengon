@@ -10,6 +10,58 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-110 : dashboard-api, round 8 de revue (OswinFreyr)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{main.py,db.py}`,
+`dashboard/api/tests/test_api.py`
+**Lot :** US-110, PR #59
+
+### Fait
+- **Drain du fast-path `Content-Length` sauté quand `Expect: 100-continue`
+  est présent** : lire `request.stream()` avant ce point déclenche l'envoi
+  de `100 Continue` par uvicorn au premier `receive()`, invitant le client
+  à téléverser un corps qu'on s'apprête à rejeter — bande passante perdue,
+  client pouvant voir une erreur d'envoi au lieu du 413 propre (`curl`
+  envoie cet en-tête par défaut au-delà de 1 MiB). Nouveau test
+  `test_ingest_skips_drain_when_client_expects_100_continue`.
+- **`run_migrations` : `ROLLBACK` du bloc `except` gardé par
+  `conn.in_transaction`**, même garde que `LockedConnection.locked()` :
+  SQLite annule lui-même la transaction sur certaines erreurs
+  (`SQLITE_FULL`/`IOERR`/`NOMEM`), et le `ROLLBACK` explicite sans garde
+  levait alors `OperationalError: cannot rollback - no transaction is
+  active`, masquant l'erreur d'origine dans `__context__`. Reproduit
+  concrètement : `conn.execute("BEGIN IMMEDIATE"); conn.execute("COMMIT")`
+  puis une instruction invalide → `in_transaction` déjà `False`,
+  `ROLLBACK` sans garde lève. Nouveau test
+  `test_migration_error_survives_a_transaction_sqlite_already_closed`
+  (migration factice `["COMMIT", "CECI N'EST PAS DU SQL"]`).
+
+### Pourquoi / décisions
+- Round 8 de revue d'OswinFreyr sur la PR #59 (2026-09-28T08:11, passe
+  unique sur le diff) : 2 points réels, faible sévérité, tous deux traités
+  avec un test de régression qui a confirmé détecter la régression avant
+  correction.
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Les 2 points du round 8 sont traités. Fiche module mise à jour.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run --no-sync --no-build pytest
+25 passed, 2 warnings
+
+$ uv run --no-sync --no-build ruff check .
+All checks passed!
+```
+- Les deux nouveaux tests confirmés rouges sans le fix correspondant
+  (désactivé temporairement chaque garde, testé, restauré).
+
+---
+
 ## 2026-09-28 — US-110 : dashboard-api, round 7 de revue (OswinFreyr)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

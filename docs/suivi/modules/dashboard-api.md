@@ -304,37 +304,62 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
   taille) traversait l'ancien `except` et produisait un 500 au lieu du 400
   attendu — même classe de bug que le `RecursionError` déjà traité au
   round 2. Nouveau test `test_ingest_rejects_a_huge_integer_literal`.
+- **Round 8 (retour d'OswinFreyr) :**
+  - **Le drain du fast-path `Content-Length` saute désormais quand le
+    client envoie `Expect: 100-continue`** (curl le fait par défaut
+    au-delà de 1 MiB) : lire `request.stream()` avant ce point déclenche
+    l'envoi de `100 Continue` par uvicorn, invitant le client à téléverser
+    un corps qu'on s'apprête à rejeter — bande passante perdue, et le
+    client peut voir une erreur d'envoi au lieu du 413 propre. Nouveau test
+    `test_ingest_skips_drain_when_client_expects_100_continue` (espionne
+    `_drain_bounded`, vérifie qu'il n'est pas appelé avec l'en-tête, l'est
+    sans).
+  - **`run_migrations` : le `ROLLBACK` du bloc `except` est maintenant
+    gardé par `conn.in_transaction`**, même garde que
+    `LockedConnection.locked()` : SQLite annule lui-même la transaction sur
+    certaines erreurs (`SQLITE_FULL`, `SQLITE_IOERR`, `SQLITE_NOMEM`), et un
+    `ROLLBACK` explicite sans garde levait alors `OperationalError: cannot
+    rollback - no transaction is active`, masquant l'erreur d'origine dans
+    `__context__`. Nouveau test
+    `test_migration_error_survives_a_transaction_sqlite_already_closed`,
+    qui simule le cas avec une migration dont une instruction fait
+    `COMMIT` avant qu'une instruction invalide ne lève — confirmé détecter
+    la régression (sans la garde, l'erreur `cannot rollback` remonte à la
+    place de la vraie erreur).
 
 ## Tests
 
-- `tests/test_api.py` — **23 tests** : `/healthz` ; **démarrage refusé sur
+- `tests/test_api.py` — **25 tests** : `/healthz` ; **démarrage refusé sur
   `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé** (`RuntimeError` propagée par
   `lifespan`, retour de revue #59, round 4) ; objet arbitraire (202,
   `event_count` = 3) ; tableau nu ; corps **verbatim** en base ; non-JSON → 400 ;
   **JSON non-UTF-8 → 400** ; **JSON très imbriqué (10000 niveaux) → 400, pas
   500** ; **littéral entier de 5000 chiffres → 400, pas 500** (round 7,
   `sys.int_max_str_digits`) ; **corps trop gros → 413** (fast-path
-  `Content-Length`, avec preuve qu'aucune ligne n'est stockée) / **idem en
-  chunked sans `Content-Length`** (le cas malveillant réel — le premier test
-  seul n'exerçait que le fast-path, retour de revue #59, round 2) / **dans
-  la limite → 202** ; **une seule connexion ouverte pour 5 écritures**
+  `Content-Length`, avec preuve qu'aucune ligne n'est stockée) / **drain
+  sauté avec `Expect: 100-continue`** (round 8) / **idem en chunked sans
+  `Content-Length`** (le cas malveillant réel — le premier test seul
+  n'exerçait que le fast-path, retour de revue #59, round 2) / **dans la
+  limite → 202** ; **une seule connexion ouverte pour 5 écritures**
   (compteur sur `connect()` monkeypatché) ; **20 écritures concurrentes sans
   collision ni perte**, vérifié par un vrai `SELECT COUNT(*)` (pas seulement
   l'unicité des `batch_id`, retour de revue #59, round 2) ; **base
   verrouillée → 503 + `Retry-After`** ; **connexion fermée sous une
   écriture → 503 + `Retry-After`** (pas 500) ; migrations appliquées une
-  fois ; **migrations idempotentes après DDL partiel** ; **migrations sûres
-  avec de vrais process OS** (5 `multiprocessing.Process`, pas juste des
-  threads — retour de revue #59, round 4, point d'OswinFreyr : a révélé le
-  bug de `busy_timeout`/`WAL` documenté plus haut) ; **drain borné exercé
-  via un appel ASGI direct** (round 6, voir ci-dessus) ; 3 formes de payload
-  paramétrées.
+  fois ; **migrations idempotentes après DDL partiel** ; **erreur de
+  migration survit à une transaction déjà close par SQLite** (round 8) ;
+  **migrations sûres avec de vrais process OS** (5 `multiprocessing.Process`,
+  pas juste des threads — retour de revue #59, round 4, point d'OswinFreyr :
+  a révélé le bug de `busy_timeout`/`WAL` documenté plus haut) ; **drain
+  borné exercé via un appel ASGI direct** (round 6, voir ci-dessus) ; 3
+  formes de payload paramétrées.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .` et `uv run pytest` → **23 passed** (revérifié le
-  2026-09-28 après les correctifs du round 7). Chaque nouveau bug
-  (RecursionError, ProgrammingError, `ValueError` sur gros entier) reproduit
-  d'abord en isolant le code sans le fix, confirmé absent avec — de même
-  pour le test de drain borné (désactivé temporairement, confirmé rouge,
+  `uv run ruff check .` et `uv run pytest` → **25 passed** (revérifié le
+  2026-09-28 après les correctifs du round 8). Chaque nouveau bug
+  (RecursionError, ProgrammingError, `ValueError` sur gros entier, drain
+  100-continue, ROLLBACK masquant) reproduit d'abord en isolant le code
+  sans le fix, confirmé absent avec — de même pour le test de drain borné
+  (désactivé temporairement, confirmé rouge,
   restauré). Étape wheel rejouée manuellement (`uv build --wheel` + boucle
   sur `git ls-files 'app/*.py'`) → tous les modules présents, `statut=0`.
 

@@ -123,7 +123,18 @@ async def _read_limited_body(request: Request, limit: int) -> bytes:
             # Borné à `_DRAIN_CAP_BYTES` (round 5, point 3) : le flux n'a pas
             # encore été touché ici, donc un nouvel appel à `request.stream()`
             # est sûr.
-            await _drain_bounded(request.stream())
+            #
+            # Sauf si le client attend `100 Continue` (curl l'envoie par
+            # défaut au-delà de 1 MiB) : lire `request.stream()` ici
+            # déclenche l'envoi de `100 Continue` par uvicorn au premier
+            # `receive()`, ce qui *invite* le client à téléverser un corps
+            # qu'on s'apprête à rejeter — bande passante perdue, et le
+            # client peut voir une erreur d'envoi au lieu du 413 propre.
+            # Sans `Expect: 100-continue`, rien n'a encore été envoyé côté
+            # client à ce stade, donc rien à drainer (retour de revue #59,
+            # round 8, point 1 d'OswinFreyr).
+            if "100-continue" not in request.headers.get("expect", "").lower():
+                await _drain_bounded(request.stream())
             raise _BodyTooLarge
 
     morceaux: list[bytes] = []

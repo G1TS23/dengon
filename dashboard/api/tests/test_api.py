@@ -181,6 +181,41 @@ def test_ingest_rejects_body_over_max_size(client, monkeypatch):
     assert count == 0, "un corps rejeté pour taille ne doit laisser aucune ligne"
 
 
+def test_ingest_skips_drain_when_client_expects_100_continue(client, monkeypatch):
+    # Avec `Expect: 100-continue`, lire `request.stream()` ici déclencherait
+    # l'envoi de `100 Continue` par uvicorn, invitant le client à téléverser
+    # un corps qu'on s'apprête à rejeter — bande passante perdue (retour de
+    # revue #59, round 8, point 1 d'OswinFreyr). Vérifié en espionnant
+    # `_drain_bounded` : appelé sans l'en-tête, jamais avec.
+    import app.main as main_module
+
+    calls: list[bool] = []
+    original = main_module._drain_bounded
+
+    async def spy(stream):
+        calls.append(True)
+        return await original(stream)
+
+    monkeypatch.setattr(main_module, "_drain_bounded", spy)
+    monkeypatch.setenv("DENGON_DASHBOARD_MAX_BATCH_BYTES", "16")
+
+    response = client.post(
+        "/ingest/batch",
+        content=b'{"events": [1, 2, 3, 4, 5, 6, 7, 8, 9]}',
+        headers={"content-type": "application/json", "expect": "100-continue"},
+    )
+    assert response.status_code == 413
+    assert calls == [], "le drain ne doit pas être appelé quand le client attend 100 Continue"
+
+    response = client.post(
+        "/ingest/batch",
+        content=b'{"events": [1, 2, 3, 4, 5, 6, 7, 8, 9]}',
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert calls == [True], "le drain doit être appelé normalement sans l'en-tête Expect"
+
+
 def test_ingest_rejects_chunked_body_over_max_size(client, monkeypatch):
     # Cas malveillant réel : Content-Length absent (chunked) ou mensonger, la
     # seule protection est alors le comptage dans `async for morceau in
@@ -381,6 +416,31 @@ def test_migrations_idempotent_after_partial_apply(tmp_path, monkeypatch):
 
     assert run_migrations(conn) == [1]  # se termine proprement grâce à IF NOT EXISTS
     assert [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")] == [1]
+    conn.close()
+
+
+def test_migration_error_survives_a_transaction_sqlite_already_closed(tmp_path, monkeypatch):
+    # SQLite annule lui-même la transaction sur certaines erreurs
+    # (SQLITE_FULL/IOERR/NOMEM, difficiles à déclencher de façon portable en
+    # test) : simulé ici avec une migration dont une instruction termine
+    # explicitement la transaction (COMMIT) avant qu'une instruction
+    # invalide ne lève. Sans la garde `in_transaction`, le `ROLLBACK`
+    # explicite du bloc `except` lèverait à son tour ("cannot rollback - no
+    # transaction is active"), masquant l'erreur d'origine — retour de revue
+    # #59, round 8, point 2 d'OswinFreyr.
+    monkeypatch.setenv("DENGON_DASHBOARD_DB", str(tmp_path / "rollback.db"))
+    from app import db as db_module
+
+    monkeypatch.setattr(
+        db_module,
+        "MIGRATIONS",
+        [(1, "cassee", ["COMMIT", "CECI N'EST PAS DU SQL"])],
+    )
+
+    conn = db_module.connect()
+    with pytest.raises(sqlite3.OperationalError) as exc_info:
+        db_module.run_migrations(conn)
+    assert "cannot rollback" not in str(exc_info.value)
     conn.close()
 
 

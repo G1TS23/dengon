@@ -236,7 +236,16 @@ def run_migrations(conn: sqlite3.Connection) -> list[int]:
             )
             conn.execute("COMMIT")
         except Exception:
-            conn.execute("ROLLBACK")
+            # SQLite annule lui-même la transaction sur certaines erreurs
+            # (`SQLITE_FULL`, `SQLITE_IOERR`, `SQLITE_NOMEM`) : un `ROLLBACK`
+            # explicite sans garde lèverait alors `OperationalError: cannot
+            # rollback - no transaction is active`, qui remonterait à la
+            # place de l'erreur d'origine (« database or disk is full »),
+            # reléguée dans `__context__`. Même garde que
+            # `LockedConnection.locked()` (retour de revue #59, round 8,
+            # point 2 d'OswinFreyr).
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
             raise
 
         newly_applied.append(version)
