@@ -196,21 +196,39 @@ plateforme, pas de l'app ou de la manipulation. nRF Connect pour iOS n'a donc
 pas l'écran « Request MTU » présent sur sa version Android. Cette mesure
 suppose deux appareils **Android**, comme prévu par le protocole d'origine.
 
-**Donc, sur les 4 critères d'acceptation de l'issue #3 :**
-- [x] « 2 appareils échangent 20 octets » — **démontré**, avec la réserve
-  qu'un des deux appareils (iPhone) n'exécute pas notre code
-  (`HelloMeshCentral`), seulement un scanner BLE générique.
-- [ ] « MTU réel négocié mesuré » — toujours pas fait, bloqué par la
-  limitation iOS ci-dessus. Nécessite un second Android.
-- [ ] « Temps scan → connexion → échange mesuré » — non chronométré lors de
-  ce test (fait à la main, sans instrumentation).
-- [ ] « Matrice d'appareils testés » — un seul couple, et un des deux n'est
-  pas dans la plateforme cible (iOS, pas Android).
+**🟢 Exécuté intégralement** le 2026-09-28, sur 2 appareils Android réels :
+Samsung Galaxy A16 (SM-A165F, Android 16/SDK 36) en **Peripheral**, Pixel 8
+Pro (Android 17/SDK 37) en **Central**, les deux exécutant réellement
+`ble/spike/` (contrairement au test de repli du 25/09, où l'iPhone
+n'exécutait qu'un scanner générique). Build installé via
+`./gradlew assembleDebug` + `adb install` (branche
+`feat/US-103-SpikeC-HelloMesh`, tête `bdf2b95`).
+
+Séquence suivie : app lancée + permissions accordées sur les deux
+appareils → écran « Spike C : hello mesh (debug) » ouvert sur les deux →
+**Peripheral** sur le Samsung (confirmé par `BLE_GAP: ADV_SET_START` dans
+`logcat`) → **Central** sur le Pixel dans la minute qui suit → résultat lu
+directement sur l'écran du Pixel (seul côté où le MTU est lisible, voir
+« Simplifications volontaires » ci-dessus).
+
+**Donc, sur les 4 critères d'acceptation de l'issue #3, tous démontrés :**
+- [x] « 2 appareils échangent 20 octets » — **démontré**, cette fois avec les
+  deux appareils exécutant réellement `HelloMeshPeripheral`/`HelloMeshCentral`.
+- [x] « MTU réel négocié mesuré » — **517** (le MTU visé, voir
+  `HelloMeshConstants.kt`), négociation aboutie côté central.
+- [x] « Temps scan → connexion → échange mesuré » — **354 ms** (scan →
+  connexion), **1308 ms** (connexion → échange, MTU compris — la négociation
+  MTU fait partie de cet intervalle avant l'écriture de `CHAR_RX`).
+- [x] « Matrice d'appareils testés » — 1 couple réel (Samsung Galaxy A16 ×
+  Pixel 8 Pro), deux fabricants et deux versions Android différentes
+  (16 et 17). Un second couple améliorerait la confiance mais n'est pas
+  requis pour la décision go/no-go ci-dessous (aucun signal ne suggère un
+  comportement dépendant du fabricant sur ce test).
 
 | Date | Appareil (central) | Appareil (peripheral) | Android | MTU négocié | Scan→connexion | Connexion→échange |
 |---|---|---|---|---|---|---|
 | 2026-09-25 | iPhone 13 Pro Max (iOS 27.2 beta, nRF Connect) — *pas notre code, scanner générique* | Samsung Galaxy A16 (SM-A165F) | 16 (SDK 36) | non mesurable (limitation iOS) | non chronométré | non chronométré |
-| _à remplir_ | *(Android central réel)* | | | | | |
+| 2026-09-28 | **Pixel 8 Pro** — exécute `HelloMeshCentral` | **Samsung Galaxy A16** (SM-A165F) — exécute `HelloMeshPeripheral` | Central : 17 (SDK 37) · Peripheral : 16 (SDK 36) | **517** | **354 ms** | **1308 ms** |
 
 ## Flux principal (exemple)
 

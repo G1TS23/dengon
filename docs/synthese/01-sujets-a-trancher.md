@@ -79,9 +79,12 @@ résolution.
   depuis ~4 ans, `olivier/etude-stack §1.2`). L'ouverture iOS est préservée par
   le **cœur Rust + le `trait Transport`**, pas par le framework d'UI. Le
   **Spike C** reste le go/no-go.
-- **Statut** : `à confirmer`. `powl` a tranché **Kotlin natif** ; l'orientation
-  proposée ci-dessus le confirme et écarte Flutter/RN, sous réserve du Spike C et
-  d'une validation en réunion. Note : `oswin/07 §1` indique que l'app Android
+- **Statut** : `tranché techniquement` (2026-09-28) — le Spike C, dernière
+  réserve explicite, est maintenant réussi (voir ci-dessus, 4/4 critères
+  démontrés sur 2 vrais Android). `powl` avait tranché **Kotlin natif** ;
+  l'orientation proposée ci-dessus le confirme et écarte Flutter/RN. Reste
+  une confirmation orale en réunion d'équipe, par cohérence avec le reste du
+  process (pas un blocage technique). Note : `oswin/07 §1` indique que l'app Android
   (.apk) et Flutter sont « décidés par l'équipe » — à reconfirmer au vu de `powl`.
   **Spike C (2026-09-11)** : le code du harnais de mesure (`android/app/.../ble/spike/`)
   est écrit et compile, mais **non exécuté** — aucun appareil Android
@@ -100,6 +103,16 @@ résolution.
   manque un vrai second appareil Android pour les 3 critères restants (MTU,
   timing, matrice). Détail dans `docs/suivi/00-journal.md`, entrée du
   2026-09-25.
+  **Spike C, exécuté intégralement (2026-09-28)** : 2 vrais appareils
+  Android (Samsung Galaxy A16 en Peripheral, Pixel 8 Pro en Central, tous
+  deux exécutant réellement `HelloMeshPeripheral`/`HelloMeshCentral`).
+  **Les 4 critères d'acceptation de l'issue #3 sont démontrés** : 20 octets
+  échangés avec écho reçu, **MTU négocié = 517**, **scan→connexion =
+  354 ms**, **connexion→échange = 1308 ms**, matrice d'un couple
+  d'appareils réels (deux fabricants, deux versions Android). **Spike C
+  réussi — GO pour Kotlin natif (A-1) confirmé.** Détail et tableau complet
+  dans `docs/suivi/modules/android-app.md` §« Spike C », entrée de journal
+  du 2026-09-28.
 
 ### A-2. Un seul moteur `dengon-core` ou deux implémentations ?
 

@@ -10,6 +10,95 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-103 : Spike C exécuté intégralement (2 Android réels), GO pour A-1
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/modules/android-app.md`,
+`docs/synthese/01-sujets-a-trancher.md` (§A-1). Aucun code applicatif
+modifié — exécution du protocole de mesure déjà écrit sur
+`feat/US-103-SpikeC-HelloMesh` (PR #67).
+**Lot :** US-103 (issue #3), Sprint 1
+
+### Fait
+- Suivi le protocole de mesure manuelle de `docs/suivi/modules/android-app.md`
+  §« Spike C » avec deux appareils Android réels, tous deux détectés par
+  `adb` puis installés avec l'APK debug de la branche `feat/US-103-SpikeC-HelloMesh`
+  (tête `bdf2b95`) : **Samsung Galaxy A16** (SM-A165F, Android 16/SDK 36) et
+  **Pixel 8 Pro** (Android 17/SDK 37).
+- Pixel 8 Pro avait déjà une installation de `com.dengon.app` signée
+  différemment (probablement un build antérieur d'un autre poste de
+  l'équipe) — `adb uninstall` puis réinstallation nécessaires
+  (`INSTALL_FAILED_UPDATE_INCOMPATIBLE`), sans conséquence : l'app squelette
+  n'a aucune donnée utilisateur réelle.
+- Rôle **Peripheral** lancé sur le Samsung (confirmé par `BLE_GAP:
+  ADV_SET_START` dans `logcat`), rôle **Central** lancé sur le Pixel dans la
+  minute qui suit. Résultat lu à l'écran du Pixel (seul côté où le MTU est
+  lisible côté API Android).
+- **Les 4 critères d'acceptation de l'issue #3 sont démontrés** : 20 octets
+  échangés avec écho reçu ; **MTU négocié = 517** ; **scan→connexion =
+  354 ms** ; **connexion→échange = 1308 ms** (MTU compris) ; matrice d'un
+  couple d'appareils réels (2 fabricants, 2 versions Android : 16 et 17).
+- `docs/suivi/modules/android-app.md` (tableau de résultats + section
+  « Résultats mesurés ») et `docs/synthese/01-sujets-a-trancher.md` (§A-1 :
+  statut du Spike C, statut global passé à `tranché techniquement`) mis à
+  jour.
+
+### Pourquoi / décisions
+- Le test du 25/09 (Android + iPhone via nRF Connect) avait démontré
+  l'échange bout-en-bout mais pas le MTU (limitation iOS/CoreBluetooth,
+  documentée à l'époque) ni les timings. Ce test-ci referme les 3 critères
+  restants avec du vrai matériel Android des deux côtés, exécutant
+  réellement notre code (`HelloMeshPeripheral`/`HelloMeshCentral`), pas un
+  scanner générique tiers.
+- **Le Spike C étant réussi, la décision A-1 (Kotlin natif + Compose) est
+  techniquement confirmée** — dernière réserve explicite (« le Spike C reste
+  le go/no-go », `01-sujets-a-trancher.md` §A-1) levée. Reste une
+  confirmation orale en réunion d'équipe pour la forme, cohérente avec le
+  reste du process, mais plus un blocage technique.
+- Ceci lève aussi la question de gouvernance en suspens sur la PR #67
+  (merger avec un écart consigné vs attendre une vraie mesure 2-Android) :
+  la vraie mesure existe maintenant, plus besoin d'écart à consigner.
+
+### Écarts vs conception
+- Aucun nouveau — un seul couple d'appareils testé (pas plusieurs), jugé
+  suffisant pour la décision go/no-go (aucun signal de comportement
+  dépendant du fabricant sur ce test simple).
+
+### Appris
+- Rien de nouveau pour `04-apprentissages.md` — confirme un point déjà
+  documenté (séquencement CCCD/écriture du round de revue #67).
+
+### État après cette session
+- Spike C **terminé**, les 4 critères de l'issue #3 sont vérifiés. Reste à
+  décider : merger la PR #67 (le code du spike, jetable par nature, DoD
+  §7.2), fermer l'issue #3, et planifier la suppression de `ble/spike/`
+  avant `AndroidTransport` (US-213).
+- Fiche module mise à jour : `docs/suivi/modules/android-app.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ adb devices -l
+3C181FDJG0024V    device  ... model:Pixel_8_Pro
+R58Y10M1W8A       device  ... model:SM_A165F
+
+$ cd android && ./gradlew assembleDebug --console=plain
+BUILD SUCCESSFUL
+
+$ adb -s R58Y10M1W8A install -r app/build/outputs/apk/debug/app-debug.apk
+Success
+$ adb -s 3C181FDJG0024V uninstall com.dengon.app && adb -s 3C181FDJG0024V install -r app/build/outputs/apk/debug/app-debug.apk
+Success
+
+$ adb -s R58Y10M1W8A logcat -d | grep BLE_GAP
+09-28 09:42:55.828  ... W BLE_GAP : ADV_SET_START :: appName: com.dengon.app, id: 0, isLegacy: true
+```
+- Résultat lu manuellement à l'écran du Pixel (le code du spike n'écrit pas
+  dans `logcat`, seulement dans l'UI Compose — `HelloMeshSpikeScreen`) :
+  MTU 517, scan→connexion 354 ms, connexion→échange 1308 ms, échange
+  réussi.
+
+---
+
 ## 2026-09-25 — US-103 : Spike C exécuté partiellement (Android + iPhone)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
