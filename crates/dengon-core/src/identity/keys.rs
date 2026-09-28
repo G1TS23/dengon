@@ -32,7 +32,15 @@ pub(crate) fn check_pseudo(pseudo: &str) -> Result<(), IdentityError> {
 }
 
 /// `peerID = SHA-256(pub_static)[0..8]`.
-fn peer_id_of(pub_static: &[u8; DH_LEN]) -> PeerId {
+///
+/// `pub(crate)` (pas privée) : `api.rs` en a besoin pour dériver le `PeerId`
+/// de l'expéditeur d'une enveloppe scellée, connu seulement par sa clé
+/// statique (voir `api::handle_sealed_envelope`). Avant ce correctif (revue
+/// PR #102), `api.rs` réimplémentait cette formule à la main
+/// (`peer_id_of_pub_static`) faute d'accès à celle-ci — deux copies à tenir
+/// manuellement synchronisées, sans qu'un futur changement de l'une déclenche
+/// une erreur de compilation dans l'autre.
+pub(crate) fn peer_id_of(pub_static: &[u8; DH_LEN]) -> PeerId {
     let digest = Sha256::digest(pub_static);
     let mut id = [0u8; PEER_ID_LEN];
     id.copy_from_slice(&digest[..PEER_ID_LEN]);

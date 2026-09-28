@@ -160,6 +160,55 @@ et le mentionner dans l'entrée de journal.
 
 ---
 
+### 2026-09-28 — `api` (US-301) : construction, extensions hors `.udl`, périmètre réduit
+
+- **Prévu :** `.udl` v0 gelé (US-106) : `DengonNode` construit à partir du
+  dictionnaire `Identity` (sans secrets), `send_message`/`poll_events`/
+  `on_peer_connected`/`list_conversations`/`list_messages` seules méthodes,
+  quatre variantes de `NodeEvent`, `DengonError` à 3 variantes.
+- **Réel :**
+  1. `Node::new` prend `identity::Identity` (avec secrets) : le `.udl` n'a
+     pas de méthode pour fournir des secrets, et l'en-tête du `.udl` dit
+     lui-même que la construction est différée à cette US.
+  2. Deux méthodes Rust hors `.udl` : `on_bytes_received(from, bytes, now)`
+     et `take_outgoing() -> Vec<(PeerId, Vec<u8>)>`, plus
+     `on_peer_disconnected` (le `.udl` v0 ne modélise pas la déconnexion).
+  3. Messagerie en session (`Noise XX`) câblée de bout en bout ; messagerie
+     par enveloppe (`Noise X`) câblée seulement pour « on est déjà connecté à
+     qui on écrit » (avant même la fin du handshake `XX`, l'enveloppe n'en
+     dépend pas) ; `ENVELOPE_OFFER`/`ENVELOPE_REQUEST` avec un porteur tiers
+     pas câblés.
+  4. `sync::courier` câblé en réception pour un pair tiers (dépôt), pas en
+     remise de ce qu'on porte à son propriétaire.
+  5. `sync::inventory` (US-210) pas câblé du tout.
+  6. Aucun accusé de réception émis (seulement reçu/traité côté
+     `apply_ack`) : `MessageStatus::Delivered` n'est jamais atteint par
+     cette façade, `InFlight` est le statut final observable.
+  7. Module `api` entier `#[cfg(feature = "std")]`.
+  8. `PeerId` utilisé directement comme identifiant de lien pour
+     `sync::routing::Router`, au lieu de `dengon-ble::LinkId`.
+- **Raison :** (1) le `.udl`'s `Identity` sans secrets rendrait la
+  construction impossible autrement — écart voulu, pas subi ; (2)
+  `dengon-core` n'a aucune dépendance non-test à `dengon-ble::Transport`,
+  donc `Node` ne peut pas piloter un transport lui-même : l'appelant (futur
+  `dengon-ffi`/`dengon-node`) doit lui donner la main ; (3)/(4)/(5)/(6)
+  garder le périmètre de cette US tractable — chacun de ces points est soit
+  bloqué par une autre PR pas encore mergée (5), soit plus proche du rôle
+  d'un relais dédié (US-308) que d'une façade client (3, 4), soit
+  simplement pas encore fait (6) ; (7) aucun consommateur `no_std` de cette
+  façade n'existe (le firmware câble `sync::*` directement) ; (8) un nœud n'a
+  qu'une connexion active par pair dans cette implémentation.
+- **Impact :** un message envoyé par enveloppe à un pair jamais rencontré
+  directement (uniquement via un porteur) n'arrive pas — acceptable pour
+  cette US, à lever quand le porteur tiers sera câblé. Le statut d'un
+  message sortant plafonne à `InFlight`, jamais `Delivered`, tant qu'aucune
+  façade n'émet d'accusé de réception.
+- **À surveiller :** si `sync::inventory` (US-210, PR #96) est mergée avant
+  la clôture du sprint, envisager de la câbler dans cette façade dans une US
+  de suivi plutôt que d'attendre US-302.
+
+---
+
 ### 2026-09-28 — `sync::courier` (US-212) : échéance bornée par l'origine, remise en deux temps, test négatif sur AEAD de substitution
 
 - **Prévu :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §7 : une

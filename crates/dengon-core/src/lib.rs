@@ -40,6 +40,8 @@
 // reste identique dans les deux configurations.
 extern crate alloc;
 
+#[cfg(feature = "std")]
+pub mod api;
 pub mod crypto;
 pub mod identity;
 pub mod ledger;

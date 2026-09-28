@@ -23,6 +23,28 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### Noise `XX` : c'est l'**écriture**, pas la lecture, qui termine le handshake côté initiateur
+
+**C'est quoi :** dans le patron `XX` (3 messages : `e` / `e,ee,s,es` /
+`s,se`), le répondeur finit son échange en **lisant** le dernier message,
+mais l'initiateur, lui, finit en **écrivant** ce même dernier message — il
+n'y a rien à lire après. `is_finished()` (côté `snow`) ne devient vrai
+qu'après l'opération qui clôt réellement l'échange, lecture ou écriture selon
+le rôle.
+**Pourquoi dans dengon :** `Node::handle_handshake_message` (`api.rs`,
+US-301) est appelée sur **réception**, donc elle appelle toujours
+`read_message` d'abord. Le réflexe naturel est de ne vérifier
+`is_finished()` qu'après cette lecture — correct pour le répondeur, faux
+pour l'initiateur, qui doit encore **écrire** avant que ce soit vraiment fini.
+**Piège / surprise :** le bug ne casse rien de visible côté initiateur (il
+envoie son dernier message sans erreur) — c'est le **répondeur** qui, plus
+tard, rejette silencieusement tout ce que l'initiateur lui envoie en
+session, parce que côté initiateur `PeerCrypto` est resté en `Handshaking`.
+Sans test de bout en bout à deux nœuds réels, ça serait passé inaperçu :
+chaque relecture du code semblait correcte isolément.
+**Où c'est utilisé :** `crates/dengon-core/src/api.rs`,
+`handle_handshake_message` ; découvert via `crates/dengon-core/tests/api_mock.rs`.
+**Pour aller plus loin :** [spécification Noise, patron `XX`](https://noiseprotocol.org/noise.html#interactive-handshake-patterns-fundamental).
 ### `conn_handle` NimBLE vs `LinkId` : un identifiant recyclé n'est pas une identité
 
 **C'est quoi :** NimBLE désigne chaque connexion par un `conn_handle`

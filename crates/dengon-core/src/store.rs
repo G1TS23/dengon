@@ -496,6 +496,27 @@ impl<K: KeySource> Store<K> {
         Ok(())
     }
 
+    /// Reflète une transition de statut (`QUEUED`→`IN_FLIGHT`→
+    /// `DELIVERED`/`EXPIRED`/...) sur la ligne déjà persistée par
+    /// [`Self::insert_message`]. Avant cette méthode, `status`/`status_ms`
+    /// n'étaient jamais réécrits après la création du message : le store
+    /// restait figé sur son statut initial (trouvé en revue de la PR #102).
+    /// Silencieuse si `msg_uuid` est inconnu (message jamais persisté, ex.
+    /// `store` attaché après coup) — cohérent avec [`Self::insert_message`],
+    /// dont les échecs sont eux aussi ignorés par l'appelant (`api::Node`).
+    pub fn update_message_status(
+        &self,
+        msg_uuid: &[u8],
+        status: &str,
+        status_ms: i64,
+    ) -> Result<(), StoreError> {
+        self.conn.execute(
+            "UPDATE messages SET status = ?1, status_ms = ?2 WHERE msg_uuid = ?3",
+            params![status, status_ms, msg_uuid],
+        )?;
+        Ok(())
+    }
+
     /// Relit et déchiffre le corps d'un message.
     ///
     /// L'AAD est recalculée à partir des colonnes **relues**
@@ -774,6 +795,44 @@ mod tests {
             store.get_message_body(b"msguuid16bytes!!"),
             Err(StoreError::Decryption)
         ));
+    }
+
+    #[test]
+    fn update_message_status_reflete_la_transition_sur_la_ligne_persistee() {
+        // Avant cette méthode (revue PR #102), rien n'écrivait plus jamais
+        // status/status_ms après insert_message : un message passé
+        // QUEUED -> IN_FLIGHT en mémoire restait "queued" en base pour
+        // toujours.
+        let store = Store::open_in_memory(keys()).expect("open");
+        seed_conversation(&store, b"peerpeer", b"convconv");
+        store
+            .insert_message(
+                b"msguuid16bytes!!",
+                b"convconv",
+                "out",
+                b"peerpeer",
+                0,
+                "salut",
+                1_000,
+                "queued",
+                1_000,
+            )
+            .expect("insert_message");
+
+        store
+            .update_message_status(b"msguuid16bytes!!", "in_flight", 2_000)
+            .expect("update_message_status");
+
+        let (status, status_ms): (String, i64) = store
+            .conn
+            .query_row(
+                "SELECT status, status_ms FROM messages WHERE msg_uuid = ?1",
+                params![b"msguuid16bytes!!".as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("relecture status");
+        assert_eq!(status, "in_flight");
+        assert_eq!(status_ms, 2_000);
     }
 
     #[test]

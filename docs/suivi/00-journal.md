@@ -10,6 +10,62 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-301 : corrections suite à la revue de la PR #102
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/{api.rs,store.rs,identity/keys.rs}`,
+`crates/dengon-core/tests/api_mock.rs`, `docs/suivi/`.
+**Lot :** US-301 (issue #39). Branche `feat/US-301-api-facade` (PR #102), base
+`main`.
+
+### Fait
+- Revue automatisée postée par OswinFreyr sur la PR #102 : 5 constats,
+  vérifiés un par un contre le code réel (lecture directe, pas de confiance
+  aveugle) avant correction — tous confirmés.
+1. **`redeliver_pending_envelopes` (`api.rs`) pouvait relayer un message vers
+   le mauvais pair** — `Outbox::replay_candidates` ne filtre délibérément pas
+   par destinataire (sa doc : « le filtre "peer est destinataire ou bon
+   candidat relais" relève de `sync::routing` », US-209, pas câblé ici).
+   Ajout d'un `.filter(|r| r.dest_peer_id == peer_id)`. Test de régression
+   ajouté et vérifié manuellement en échec sans le correctif (le filtre
+   retiré temporairement, le test échoue bien, puis restauré).
+2. **`persist_message` ne reflétait jamais les transitions de statut, et
+   confondait `sent_ms`/`status_ms`** — `store::Store` n'avait aucune méthode
+   de mise à jour de statut. Ajout de `Store::update_message_status`
+   (`UPDATE ... SET status, status_ms`), branchée aux 4 points de transition.
+   `persist_message` prend maintenant `status_ms` séparément de `sent_ms`
+   (l'horloge locale de réception, pas celle — distante — de l'expéditeur).
+3. **`send_message` échouait avec `UnknownPeer` malgré une session établie**
+   — `handle_handshake_message` ne peuplait jamais `peer.identity`.
+   Vérification faite que reconstruire un `PublicIdentity` complet depuis la
+   seule clé statique X25519 du handshake n'est pas possible (il manque la
+   clé de signature Ed25519, jamais échangée en `XX`) : plutôt qu'élargir le
+   protocole, `send_message` n'exige plus qu'une des deux sources (contact
+   **ou** session) soit connue.
+4. **`handle_sealed_envelope` ouvrait systématiquement une session Noise X**
+   (coûteux) au lieu de filtrer d'abord sur `recipient_tag` —
+   `own_tags`/`recipient_tag` existaient déjà mais n'étaient jamais appelés.
+   Filtre HMAC ajouté avant l'ouverture.
+5. **`peer_id_of_pub_static` dupliquait `identity::keys::peer_id_of` à la
+   main** (privée à son module) — exposée `pub(crate)`, copie supprimée.
+- 2 tests de régression ajoutés (`api.rs::tests::
+  redeliver_pending_envelopes_ne_fuite_pas_vers_un_autre_pair`,
+  `tests/api_mock.rs::send_message_reussit_avec_une_session_etablie_sans_add_contact`)
+  + 1 test pour la nouvelle méthode `Store::update_message_status`.
+
+### Pourquoi / décisions
+- Correctifs appliqués directement sur `feat/US-301-api-facade` (branche de
+  la PR #102), pas sur une branche séparée — même raisonnement que pour les
+  PR #100/#97 : ce sont des correctifs de revue sur une PR déjà ouverte.
+- Point 3 : décision explicite de ne PAS étendre le protocole Noise `XX`
+  pour transporter une identité complète (pseudo + clé de signature) — hors
+  scope d'un correctif de revue, et l'US-306 (branchement de la vraie
+  identité) rendra la question différente de toute façon. La relaxation de
+  `send_message` (accepter contact OU session) est le correctif minimal
+  cohérent avec le comportement déjà documenté par la fonction elle-même.
+
+### Écarts vs conception
+- Aucun nouveau — écarts déjà consignés pour US-301 inchangés.
 ## 2026-09-29 — US-305 : corrections suite à la revue de la PR #92
 
 **Auteur :** Oswin (Tanguy) + Claude (Sonnet 5)
@@ -241,6 +297,8 @@ OK après un point de format corrigé (eprintln! multi-lignes)
 - Rien de nouveau pour `04-apprentissages.md`.
 
 ### État après cette session
+- Les 5 constats de la revue de la PR #102 sont corrigés et testés.
+- Fiche module mise à jour : `modules/dengon-core.md` (section `api`).
 - Les 3 constats de la revue de la PR #100 sont corrigés. Toujours en
   attente avant de fermer l'issue : vérification visuelle réelle en
   navigateur (voir entrée précédente), revue humaine.
@@ -332,6 +390,112 @@ l'issue = US-110/US-111 seulement, tous deux mergés).
 
 ### Vérification (commandes réellement exécutées)
 ```
+$ cargo test -p dengon-core
+300 passed (lib) + 4 passed (api_mock) + tests annexes — 0 failed
+
+$ cargo clippy -p dengon-core --all-targets --all-features -- -D warnings
+(rien — propre)
+
+$ cargo fmt -p dengon-core -- --check
+(rien — propre, après un `cargo fmt` pour reformater les nouveaux blocs)
+
+$ cargo check -p dengon-core --no-default-features
+(rien — contrainte no_std respectée)
+
+$ cargo build --workspace
+(rien — build complet ok)
+```
+- Test de régression #1 vérifié activement en échec sans le correctif (voir
+  Fait ci-dessus) — pas seulement écrit et supposé correct.
+
+## 2026-09-28 — US-301 : façade `dengon-core::api`, test de bout en bout, deux bugs trouvés
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/api.rs` (nouveau), `crates/dengon-core/src/lib.rs`, `crates/dengon-core/tests/api_mock.rs` (nouveau)
+**Lot :** US-301 (issue #39), `dengon-core::api`
+
+### Fait
+- Écrit `api.rs` : `struct Node` (façade unique sur le protocole), types
+  `Identity`/`Message`/`Conversation`/`NodeEvent`/`DengonError`/`MessageStatus`
+  miroir du `.udl` v0 gelé (US-106), plus deux extensions Rust hors `.udl`
+  (`on_bytes_received`, `take_outgoing`) nécessaires puisque `dengon-core` n'a
+  pas de dépendance non-test à `dengon-ble::Transport`.
+- Câblé : messagerie en session (`Noise XX`, handshake orchestré), messagerie
+  par enveloppe (`Noise X`, cas « déjà connecté »), dépôt en `sync::courier`
+  d'une enveloppe reçue pour un autre pair, journal chaîné (`Ledger`,
+  deuxième `SigningKey` dérivée de la même graine), persistance `store`
+  best-effort.
+- Écrit `tests/api_mock.rs` : deux `Node` (Alice, Bob), chacun avec son
+  `dengon_ble::MockTransport`, fil recopié à la main entre les deux
+  transports (même principe que `tests/routing_mock.rs`, US-209, réduit à
+  deux nœuds). 3 tests : message de bout en bout en session, envoi vers un
+  pair inconnu refusé, statut `InFlight` après envoi.
+- Ajouté 11 tests unitaires dans `src/api.rs` (conv_id symétrique, mapping de
+  statut, messages d'erreur, enveloppe hors ligne mise en file, enveloppe
+  ouverte par son vrai destinataire, enveloppe gardée en courrier pour un
+  tiers, déconnexion, persistance `store`) pour atteindre le seuil de
+  couverture de l'AC (85 %).
+
+### Pourquoi / décisions
+- `Node::new` prend `identity::Identity` (avec secrets), pas le dictionnaire
+  `Identity` du `.udl` (qui n'en a pas) : la construction est explicitement
+  hors périmètre du `.udl` v0 (son en-tête le dit), donc pas une violation.
+- `rng` toujours fourni par l'appelant à chaque méthode, jamais stocké dans
+  `Node` (cohérent avec `Identity::generate`/`Handshake::initiator` etc.
+  ailleurs dans la crate).
+- Initiateur/répondeur du handshake déterminé par `self.peer_id < peer_id`
+  (déterministe des deux côtés, sans coordination).
+
+### Écarts vs conception
+- `sync::inventory` (US-210) pas câblé : PR #96 pas encore mergée sur `main`
+  au démarrage de cette US.
+- Porteur tiers (`ENVELOPE_OFFER`/`ENVELOPE_REQUEST`) pas câblé — plus proche
+  du rôle d'un relais dédié (US-308).
+- Remise de ce que `sync::courier` porte à son vrai propriétaire pas câblée.
+- Aucun accusé de réception émis par cette façade (seulement reçu/traité) :
+  `Delivered` n'est jamais atteint ici, `InFlight` est le statut final
+  observable.
+- Module `api` entier gated `#[cfg(feature = "std")]` : le firmware ESP32
+  câblera `sync::*`/`ledger` directement, pas par cette façade.
+- `PeerId` utilisé directement comme identifiant de lien pour `Router`
+  (simplification vs `dengon-ble::LinkId`).
+- Détail et justification complète dans `03-ecarts-conception.md`.
+
+### Appris
+- **Bug réel trouvé en écrivant le test de bout en bout** :
+  `handle_handshake_message` ne revérifiait `is_finished()` qu'après une
+  *lecture* de message, jamais après une *écriture* — or dans `Noise XX`,
+  c'est l'initiateur qui **termine par une écriture** (message 3). Résultat :
+  l'initiateur restait bloqué en `PeerCrypto::Handshaking` alors que le
+  répondeur passait bien à `Established` en lisant ce même message, et tout
+  ciphertext ultérieur de l'initiateur était silencieusement rejeté côté
+  répondeur (`handle_session_ciphertext` exige `Established`). Trouvé en
+  instrumentant temporairement `on_bytes_received` avec un `eprintln!` de
+  diagnostic (retiré ensuite) pour comparer la progression des deux côtés
+  tick par tick.
+- **Deuxième bug, de conception** : `SEALED_ENVELOPE` n'étant jamais adressé
+  (`recipient_id` toujours absent, décision A-8, pour ne pas révéler le
+  destinataire), le routeur ne peut **jamais** rendre `Decision::Deliver`
+  pour ce type de paquet — y compris pour le vrai destinataire.
+  `handle_sealed_envelope` n'était donc appelée que sur `Decision::Deliver`,
+  autrement dit jamais : toute enveloppe reçue finissait en courrier même
+  quand elle nous était destinée. Corrigé en tentant l'ouverture (avec notre
+  propre clé) sur `Decision::Store`, avant le dépôt en courrier.
+- Utile pour la suite : un test d'intégration contre `MockTransport` avec
+  deux instances est un bon outil de diagnostic pour ce genre de désynchro
+  d'état — le bug n'était pas visible en relisant le code, seulement en le
+  faisant tourner tick par tick.
+
+### État après cette session
+- `cargo fmt -p dengon-core` appliqué, `cargo clippy -p dengon-core
+  --all-targets --all-features -- -D warnings` : aucun avertissement,
+  `cargo test -p dengon-core` : 328 tests passent (2 ignorés, pré-existants),
+  `cargo check -p dengon-core --no-default-features` (contrainte `no_std`) :
+  ok, `cargo build --workspace` : ok. Couverture `api.rs` (`cargo llvm-cov`) :
+  88 % des lignes (seuil AC : 85 %).
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md` (nouvelle section
+  « Sous-module `api` (US-301) »).
+- 01-etat-du-code.md mis à jour : non (pas de changement de statut global).
 $ git merge origin/main --no-edit   # sur feat/US-224-deploy-vps
 (fusion sans conflit — 46 fichiers, voir détail dans le diff)
 
