@@ -1,12 +1,14 @@
 # Module : `dashboard/api` (FastAPI)
 
 **Rôle en une phrase :** recevoir les batchs d'événements que les nœuds poussent
-en HTTPS, et servir plus tard le parcours + l'état de chaque message.
+en HTTPS, les valider, et servir plus tard le parcours + l'état de chaque
+message.
 **Correspond à la conception :** [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §2 (architecture), §3 (ingestion), §11.2 (schéma cible).
-**Dernière mise à jour :** 2026-09-25
-**État :** esquisse — squelette **permissif** (US-110). `/healthz` + `/ingest/batch`
-qui stocke le JSON brut. Aucune validation, aucune signature, aucune projection.
+**Dernière mise à jour :** 2026-09-28
+**État :** `/healthz` + `/ingest/batch` **validé** (schéma + JWT + signature
+Ed25519 + dédup, US-216) + `/api/nodes` (enregistrement, US-216). Pas encore
+de projections (`messages`/`links`/`message_hops`), pas de SSE.
 
 Cette fiche tient aussi lieu de **note d'onboarding de l'area `dashboard-api`**
 (proposition d'organisation §10.3 point 3).
@@ -16,14 +18,13 @@ Cette fiche tient aussi lieu de **note d'onboarding de l'area `dashboard-api`**
 Le dashboard **observe**, il n'agit pas : il ne route rien, n'injecte rien, ne
 déchiffre rien. Les nœuds (relais ESP32, `dengon-node`) lui envoient des
 **événements** — « message X relayé par le nœud N à telle heure » — quand ils
-ont une fenêtre Wi-Fi. L'API les ingère, les dédup, reconstruit un statut par
+ont une fenêtre Wi-Fi. L'API les valide, les dédup, reconstruit un statut par
 message et pousse le tout aux opérateurs connectés en SSE.
 
-Au **squelette** (cette version), seule l'ingestion existe, et elle est
-**volontairement permissive** : elle accepte n'importe quel JSON et le range
-tel quel. Le format d'événement n'est pas encore figé (US-108, en cours) ; le
-dashboard ne doit pas l'attendre pour démarrer — cf. proposition d'organisation
-§3.3.
+Le squelette permissif de l'US-110 (accepter n'importe quel JSON, le stocker
+tel quel) a servi le temps que le format d'événement se stabilise (US-107/
+US-108) ; l'US-216 le remplace par un pipeline qui **rejette** ce qui ne
+respecte pas le contrat.
 
 ## Structure
 
@@ -32,13 +33,17 @@ dashboard/api/
   pyproject.toml         — deps (fastapi, uvicorn) + extra `dev` (pytest, httpx, ruff) + config ruff/pytest
   uv.lock                — lock des deps (transitives + hash) ; géré par uv, fait foi en CI
   app/
-    config.py            — db_path(), max_batch_bytes() : lisent l'env à chaque appel
-    migrations.py        — MIGRATIONS : liste (version, nom, [instructions SQL]), littéraux du module
+    config.py            — db_path(), max_batch_bytes(), jwt_secret() : lisent l'env à chaque appel (jwt_secret sans défaut)
+    migrations.py        — MIGRATIONS : liste (version, nom, [instructions SQL]), littéraux du module ; v2 = nodes + events
     db.py               — connect() ; run_migrations() : atomique + sûr en concurrence
-    main.py             — app FastAPI ; lifespan → migrations + connexion partagée ; routes /healthz et /ingest/batch
+    canonical.py         — canonical_json()/event_id() : copie volontaire de contracts/tools/catalogue.py (voir décisions)
+    schemas.py            — batch_validator() : jsonschema Draft202012Validator contre contracts/events/batch.schema.json
+    auth.py               — create_token()/node_id_from_authorization_header() : JWT HS256 courts (24h)
+    ingest.py             — pipeline complet de validation (voir Flux principal)
+    main.py             — app FastAPI ; lifespan → migrations + connexion partagée + jwt_secret() ; routes /healthz, /ingest/batch, /api/nodes
   tests/
-    conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan
-    test_api.py          — 21 tests (voir plus bas)
+    conftest.py          — fixture `client` : base SQLite jetable par test, migrée par le lifespan, secret JWT de test
+    test_api.py          — 39 tests (voir plus bas)
 ```
 
 ## Concepts / types importants
@@ -47,49 +52,63 @@ dashboard/api/
 |---|---|---|
 | `db_path()` | `app/config.py` | chemin du fichier SQLite, lu depuis l'env à chaque appel (pas de cache → tests simples) |
 | `max_batch_bytes()` | `app/config.py` | taille max acceptée pour `/ingest/batch`, lue depuis l'env à chaque appel (défaut 2 MiB) |
-| `MIGRATIONS` | `app/migrations.py` | liste `(version, nom, [instructions])` ; littéraux du module (pas de fichier lu), versionnés, embarqués, sans I/O disque ; chaque `CREATE` en `IF NOT EXISTS` |
+| `jwt_secret()` | `app/config.py` | secret HMAC pour les JWT courts des nœuds ; **pas de défaut** (contrairement à `max_batch_bytes()`) — un défaut serait une clé maîtresse publique ; validé au démarrage (`lifespan`) |
+| `MIGRATIONS` | `app/migrations.py` | liste `(version, nom, [instructions])` ; littéraux du module (pas de fichier lu), versionnés, embarqués, sans I/O disque ; chaque `CREATE` en `IF NOT EXISTS` ; v2 ajoute `nodes`/`events` + index |
+| `canonical_json()`/`event_id()` | `app/canonical.py` | sérialisation canonique + `event_id = SHA-256(node_id ‖ seq_be_u64)` ; copie intentionnelle de `contracts/tools/catalogue.py` (`CANONICAL.md` : deux implémentations doivent converger indépendamment) |
+| `batch_validator()` | `app/schemas.py` | `Draft202012Validator` sur `batch.schema.json`, résolution du `$ref` vers `envelope.schema.json` via `referencing.Registry` (lu par chemin filesystem, pas d'import cross-paquet — voir décisions) ; `lru_cache` |
+| `create_token()`/`node_id_from_authorization_header()` | `app/auth.py` | JWT HS256, TTL par défaut 24h ; la seconde lève `InvalidToken` sur tout échec (en-tête absent/malformé, expiré, signature invalide, claim `node_id` manquant) |
+| `ingest_batch()` | `app/ingest.py` | pipeline complet : parse JSON → schéma → `node_id` batch == `node_id` JWT → nœud whitelisté → signature Ed25519 → `event_id` recalculé → insertion idempotente (`INSERT OR IGNORE`) |
+| `IngestError` | `app/ingest.py` | exception portant `status_code`/`detail`, traduite en réponse HTTP par la route |
 | `connect()` | `app/db.py` | connexion SQLite : `isolation_level=None` (transactions explicites), `check_same_thread=False` (réutilisée depuis le threadpool), `busy_timeout=5000` **posé avant** `WAL` (voir décisions), `foreign_keys=ON` |
 | `_set_wal_mode_with_retry()` | `app/db.py` | bascule en WAL avec re-tentatives manuelles courtes — `busy_timeout` seul ne protège pas ce PRAGMA de façon fiable (voir décisions) |
 | `LockedConnection` | `app/db.py` | couple connexion SQLite et verrou dans un seul objet (`execute()`/`close()`) — remplace les attributs séparés `db_conn`/`db_lock` (voir décisions) |
 | `run_migrations(conn)` | `app/db.py` | applique les migrations manquantes ; ensemble déjà-appliquées calculé une fois avant la boucle ; chaque migration dans un `BEGIN IMMEDIATE` (DDL + `INSERT schema_migrations` = tout ou rien), revérification **fraîche** de la version sous verrou → sûr avec `uvicorn --workers N`, **vérifié avec de vrais process OS** (voir Tests) ; idempotent |
-| `lifespan` | `app/main.py` | au démarrage : ouvre **une** connexion (dans le `try`, voir décisions), migre, la garde sur `app.state.db` (`LockedConnection`, fermée à l'arrêt) |
+| `lifespan` | `app/main.py` | au démarrage : `jwt_secret()` + `max_batch_bytes()` validés tôt, ouvre **une** connexion (dans le `try`, voir décisions), migre, la garde sur `app.state.db` (`LockedConnection`, fermée à l'arrêt) |
 | `GET /healthz` | `app/main.py` | route **sync** → threadpool FastAPI ; renvoie `{"status": "ok"}` |
-| `_guess_event_count()` | `app/main.py` | devine le nombre d'événements (`[...]` ou `{"events": [...]}`) sans imposer de schéma ; `None` sinon, jamais de rejet |
 | `_read_limited_body()` | `app/main.py` | lit `request.stream()` par morceaux, coupe dès que `max_batch_bytes()` est dépassé (`Content-Length` en fast-path, comptage réel sinon) ; vide le flux restant avant de lever dans les **deux** branches |
-| `_store_raw_batch()` | `app/main.py` | insertion via `LockedConnection.execute()` |
-| `_decode_parse_and_store()` | `app/main.py` | décode UTF-8 + `json.loads` + stockage, **en un seul aller-retour threadpool** — le décodage/parsing est le travail CPU dominant d'un gros batch, pas juste l'INSERT |
-| `POST /ingest/batch` | `app/main.py` | lit le corps borné (413 si trop gros) → `run_in_threadpool(_decode_parse_and_store, …)` → `202` ; `400` si UTF-8/JSON invalide, `503` + `Retry-After` si la base est verrouillée |
+| `POST /ingest/batch` | `app/main.py` | JWT vérifié **avant** de lire le corps (voir décisions) → corps borné (413 si trop gros) → `run_in_threadpool(ingest.ingest_batch, …)` → `202` avec `new_event_count` ; `ingest.IngestError` → `exc.status_code`/`exc.detail` ; `503` + `Retry-After` si la base est verrouillée |
+| `POST /api/nodes` | `app/main.py` | enregistre un nœud (`node_id`/`kind`/`pub_sign` hex 32 octets), upsert dans `nodes` (`whitelisted=1` — pas d'auth opérateur, voir Limites), renvoie `{"node_id", "token"}` (201) |
 
 ## Flux principal (exemple)
 
 ```
-un nœud : POST /ingest/batch   body = {"events":[{...},{...}]}
-  main.ingest_batch (async)
-    raw = await _read_limited_body(request, limite)   → 413 si trop gros
-    await run_in_threadpool(_decode_parse_and_store, db, raw, ...)
-       text = raw.decode("utf-8")          → UnicodeDecodeError → 400
-       parsed = json.loads(text)           → JSONDecodeError → 400
-       event_count = 2                     (_guess_event_count)
-       batch_id = uuid4()
-       _store_raw_batch(db, ...)           → INSERT via LockedConnection (verrou + connexion couplés)
-          └─ sqlite3.OperationalError ?    → 503 + Retry-After: 1
-  → 202  {"stored": true, "batch_id": "...", "event_count": 2}
+un nœud : POST /ingest/batch   Authorization: Bearer <jwt>   body = {batch signé}
+  main.ingest_batch_route (async)
+    jwt_node_id = node_id_from_authorization_header(...)   → InvalidToken → 401 (corps PAS encore lu)
+    raw = await _read_limited_body(request, limite)        → 413 si trop gros
+    await run_in_threadpool(ingest.ingest_batch, db, jwt_node_id, raw)
+       parsed = _parse_json(raw)                → 400 si UTF-8/JSON invalide
+       body = _validate_schema(parsed)          → 400 si hors du schéma batch.schema.json
+       body["node_id"] == jwt_node_id ?         → 401 sinon
+       pub_sign, node_kind = _lookup_node(...)   → 401 si nœud inconnu/non whitelisté
+       _verify_signature(body, pub_sign)        → 401 si signature Ed25519 invalide
+       _verify_event_ids(body, node_kind)       → 400 si event_id recalculé != envoyé,
+                                                    ou si node_id/node_kind d'un événement
+                                                    diffère du batch/de node_kind enregistré
+       new_count = _insert_events(...)          → INSERT OR IGNORE par event_id, idempotent
+          └─ sqlite3.OperationalError ?          → 503 + Retry-After: 1
+  → 202  {"batch_id": "...", "node_id": "...", "event_count": 2, "new_event_count": 2}
 ```
 
-La table `raw_batches` est une **zone d'atterrissage**. US-216 (S2) ajoutera la
-table `events` normalisée, la validation de schéma et la vérification de
-signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
-`links` / `message_hops`.
+`raw_batches` (US-110) n'est plus écrite depuis l'US-216 — `/ingest/batch`
+valide et route directement vers `events`. La table reste dans le schéma
+(vide) plutôt qu'un `DROP TABLE` risqué sur une table déjà déployée. US-217
+ajoutera les projections `messages` / `links` / `message_hops`.
 
 ## Dépendances
 
-- **Internes :** aucune pour l'instant. À terme : le binaire Rust `dengon-verify`
-  (vérif de journal chaîné), appelé en sous-processus.
-- **Externes :** `fastapi` (routes + lifespan), `uvicorn` (serveur ASGI local),
-  `httpx` (client de test via `TestClient`), `pytest`, `ruff`. Gérées par
-  **`uv`** (`uv.lock` = lock transitif + hash, fait foi en CI). Base :
-  `sqlite3` de la stdlib — pas d'ORM, cohérent avec un squelette et avec le
-  faible volume (démo de 5-8 appareils, base effacée par session, B-4).
+- **Internes :** `contracts/events/{batch,envelope}.schema.json` — lus par
+  chemin filesystem relatif (`contracts/` n'est pas un paquet Python
+  installable, voir décisions), pas d'import cross-paquet. À terme : le
+  binaire Rust `dengon-verify` (vérif de journal chaîné), appelé en
+  sous-processus (hors périmètre US-216, voir Limites).
+- **Externes :** `fastapi`, `uvicorn`, `httpx`/`pytest`/`ruff` (dev). Ajoutées
+  pour l'US-216 : `jsonschema`+`referencing` (validation de schéma, mêmes
+  bornes de version que `contracts/pyproject.toml`), `pynacl` (signature
+  Ed25519, idem `contracts/tools/validate.py`), `pyjwt` (JWT HS256). Gérées
+  par **`uv`** (`uv.lock` = lock transitif + hash, fait foi en CI). Base :
+  `sqlite3` de la stdlib — pas d'ORM, cohérent avec le faible volume (démo de
+  5-8 appareils, base effacée par session, B-4).
 
 ## Décisions d'implémentation
 
@@ -326,50 +345,136 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
     `COMMIT` avant qu'une instruction invalide ne lève — confirmé détecter
     la régression (sans la garde, l'erreur `cannot rollback` remonte à la
     place de la vraie erreur).
+- **US-216 (ingestion validée) :**
+  - **JWT vérifié avant lecture du corps** : une requête non authentifiée
+    n'atteint jamais `_read_limited_body` — évite de déclencher un
+    `100 Continue`/le streaming du corps pour un batch qui sera rejeté de
+    toute façon. A obligé à ajouter un en-tête `Authorization` valide aux
+    tests de limite de taille hérités des rounds précédents (413/drain/
+    100-continue/chunked), qui vérifiaient jusque-là seulement le comportement
+    de lecture du corps, pas l'auth.
+  - **`contracts/` lu par chemin filesystem plutôt qu'importé** :
+    restructurer `contracts/pyproject.toml` en paquet installable aurait été
+    un changement plus large et plus risqué que de lire les fichiers JSON du
+    schéma directement (`Path(__file__).resolve().parents[3] / "contracts" /
+    "events"`). Seules les petites fonctions `canonical_json`/`event_id` sont
+    dupliquées (`app/canonical.py`), pas le schéma — la partie la plus
+    volumineuse et la plus sujette à divergence reste une source unique.
+  - **`jwt_secret()` sans valeur par défaut**, contrairement à
+    `max_batch_bytes()` : un secret par défaut serait une clé maîtresse
+    connue de tous les déploiements, exactement ce qu'un jeton court est
+    censé empêcher. Échoue au démarrage (`lifespan`), même logique que
+    `max_batch_bytes()`.
+  - **`event_id` recalculé côté serveur**, pas seulement validé en format
+    (64 hex) par le schéma : un `event_id` forgé mais bien formé pourrait
+    empoisonner la déduplication (masquer un vrai événement derrière un faux
+    `event_id` qui collisionne). Vérifié indépendamment de la signature —
+    `test_ingest_rejects_tampered_event_id` tamper l'`event_id` **avant** de
+    signer, pour prouver que la vérification ne se contente pas de la
+    signature.
+  - **Message identique pour "nœud inconnu" et "nœud existant mais non
+    whitelisté"** (401 générique) : distinguer les deux ne renseignerait
+    qu'un attaquant essayant de deviner des `node_id` valides. Écart vs
+    conception : `docs/synthese/09` §3 prévoit une quarantaine + alerte
+    opérateur pour un nœud inconnu, traité ici comme un rejet direct — pas
+    d'écran opérateur pour lever une quarantaine dans ce périmètre (voir
+    `03-ecarts-conception.md`).
+  - **`POST /api/nodes` non authentifié** (pas d'auth opérateur) : correspond
+    à la description de déploiement de `docs/synthese/09-dashboard-et-donnees.md`
+    §7, mais documenté dans le docstring de la route et dans
+    `03-ecarts-conception.md` comme un vrai manque avant déploiement réel —
+    aucune US du backlog actuel ne couvre l'auth opérateur/admin.
+  - **`raw_batches` gardée mais plus écrite** plutôt que supprimée par
+    migration : une table déjà déployée qu'on `DROP` est un risque de plus
+    pour un gain nul (elle est vide et inoffensive).
+- **Revue de la PR #91 (US-216) — trois correctifs avant merge :**
+  - **`node_id`/`node_kind` de chaque événement vérifiés contre le batch**
+    (point **bloquant**) : `_verify_event_ids` recalculait l'`event_id` avec
+    le `node_id` du **batch**, mais `_insert_events` stockait celui de
+    l'**événement** sans que rien ne vérifie qu'ils correspondent — un nœud
+    whitelisté pouvait signer un batch valide tout en attribuant ses
+    événements à un **autre** `node_id` enregistré, ce qui annule la
+    garantie « signé par le nœud émetteur ». `_lookup_node` renvoie
+    désormais aussi `kind` (en plus de `pub_sign`), et `_verify_event_ids`
+    rejette en 400 tout événement dont `node_id` ≠ `node_id` du batch ou
+    `node_kind` ≠ `kind` enregistré pour ce nœud.
+  - **`POST /api/nodes` n'upsert plus** (point **important**) :
+    `ON CONFLICT(node_id) DO UPDATE` remplaçait la clé publique d'un nœud
+    déjà enregistré et le re-whitelistait — y compris un nœud qu'un
+    opérateur aurait retiré — sans authentification opérateur sur cette
+    route, n'importe qui pouvait ainsi prendre le contrôle d'un `node_id`
+    existant. Correctif minimal en attendant l'auth opérateur (écart déjà
+    consigné dans `03-ecarts-conception.md`, inchangé par ailleurs) : un
+    `node_id` déjà pris renvoie **409**, pas d'upsert.
+  - **`jwt_secret()` refuse un secret < 32 octets** (point mineur) : PyJWT
+    lève `InsecureKeyLengthWarning` en dessous de cette taille pour HS256 ;
+    vérifié au démarrage plutôt que laissé comme avertissement ignorable à
+    chaque requête, même logique « échouer tôt » que le reste du module.
 
 ## Tests
 
-- `tests/test_api.py` — **25 tests** : `/healthz` ; **démarrage refusé sur
-  `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé** (`RuntimeError` propagée par
-  `lifespan`, retour de revue #59, round 4) ; objet arbitraire (202,
-  `event_count` = 3) ; tableau nu ; corps **verbatim** en base ; non-JSON → 400 ;
-  **JSON non-UTF-8 → 400** ; **JSON très imbriqué (10000 niveaux) → 400, pas
-  500** ; **littéral entier de 5000 chiffres → 400, pas 500** (round 7,
-  `sys.int_max_str_digits`) ; **corps trop gros → 413** (fast-path
-  `Content-Length`, avec preuve qu'aucune ligne n'est stockée) / **drain
-  sauté avec `Expect: 100-continue`** (round 8) / **idem en chunked sans
-  `Content-Length`** (le cas malveillant réel — le premier test seul
-  n'exerçait que le fast-path, retour de revue #59, round 2) / **dans la
-  limite → 202** ; **une seule connexion ouverte pour 5 écritures**
-  (compteur sur `connect()` monkeypatché) ; **20 écritures concurrentes sans
-  collision ni perte**, vérifié par un vrai `SELECT COUNT(*)` (pas seulement
-  l'unicité des `batch_id`, retour de revue #59, round 2) ; **base
-  verrouillée → 503 + `Retry-After`** ; **connexion fermée sous une
-  écriture → 503 + `Retry-After`** (pas 500) ; migrations appliquées une
-  fois ; **migrations idempotentes après DDL partiel** ; **erreur de
-  migration survit à une transaction déjà close par SQLite** (round 8) ;
-  **migrations sûres avec de vrais process OS** (5 `multiprocessing.Process`,
-  pas juste des threads — retour de revue #59, round 4, point d'OswinFreyr :
-  a révélé le bug de `busy_timeout`/`WAL` documenté plus haut) ; **drain
-  borné exercé via un appel ASGI direct** (round 6, voir ci-dessus) ; 3
-  formes de payload paramétrées.
+- `tests/test_api.py` — **39 tests**. Hérités et adaptés (auth ajoutée aux
+  tests de taille/drain) : `/healthz` ; démarrage refusé sur
+  `DENGON_DASHBOARD_MAX_BATCH_BYTES` malformé ; **démarrage refusé si
+  `DENGON_DASHBOARD_JWT_SECRET` absent** (nouveau) ; corps trop gros → 413
+  (fast-path `Content-Length`) / drain sauté avec `Expect: 100-continue` /
+  idem en chunked sans `Content-Length` / dans la limite → 202 ; une seule
+  connexion ouverte pour 5 écritures ; 20 écritures concurrentes sans
+  collision ni perte (vérifié sur `events`, plus `raw_batches`) ; base
+  verrouillée → 503 ; connexion fermée sous une écriture → 503 ; migrations
+  appliquées une fois / idempotentes après DDL partiel / sûres avec de vrais
+  process OS (`versions == [1, 2]` désormais) ; drain borné via appel ASGI
+  direct.
+  Nouveaux pour l'US-216 : `test_register_node_returns_a_usable_token` ;
+  `test_register_node_rejects_malformed_bodies` (5 cas paramétrés) ;
+  `test_ingest_rejects_missing_authorization` /
+  `_malformed_authorization_header` / `_expired_or_forged_jwt` ;
+  `test_ingest_rejects_unregistered_node` (node_id bien formé mais absent de
+  `nodes` — piège trouvé en rédigeant le test : un `node_id` mal formé
+  déclenche le rejet de schéma avant même d'atteindre la whitelist,
+  corrigé) ; `test_ingest_rejects_node_id_mismatch_between_jwt_and_batch` ;
+  `test_ingest_rejects_forged_signature` ;
+  `test_ingest_rejects_batch_failing_schema_validation` ;
+  `test_ingest_rejects_non_json_body` ;
+  `test_ingest_rejects_a_huge_integer_literal` ;
+  `test_ingest_rejects_tampered_event_id` (tamper **avant** signature, pour
+  prouver que la vérification d'`event_id` est indépendante de celle de la
+  signature) ; `test_ingest_accepts_a_valid_signed_batch_and_stores_it` ;
+  `test_ingest_is_idempotent_on_exact_replay` (`new_event_count` = 0 au
+  rejeu, vérifié aussi par `SELECT COUNT(*)`) ;
+  `test_ingest_accepts_multiple_events_in_one_batch`.
+  Ajoutés en revue de la PR #91 : `test_ingest_rejects_event_node_id_different_from_batch_node_id`
+  (reproduit le point bloquant — un événement spoofé sur un autre `node_id`
+  enregistré, vérifie aussi qu'aucune ligne n'est stockée) ;
+  `test_ingest_rejects_event_node_kind_different_from_registered_kind` ;
+  `test_register_node_rejects_re_registration_of_an_existing_node_id`
+  (reproduit le point important — ré-enregistrer un `node_id` existant avec
+  une autre clé renvoie 409, pas un upsert) ;
+  `test_startup_fails_fast_when_jwt_secret_is_too_short`.
 - Commande : depuis `dashboard/api/`, `uv sync --extra dev` puis
-  `uv run ruff check .` et `uv run pytest` → **25 passed** (revérifié le
-  2026-09-28 après les correctifs du round 8). Chaque nouveau bug
-  (RecursionError, ProgrammingError, `ValueError` sur gros entier, drain
-  100-continue, ROLLBACK masquant) reproduit d'abord en isolant le code
-  sans le fix, confirmé absent avec — de même pour le test de drain borné
-  (désactivé temporairement, confirmé rouge,
-  restauré). Étape wheel rejouée manuellement (`uv build --wheel` + boucle
-  sur `git ls-files 'app/*.py'`) → tous les modules présents, `statut=0`.
+  `uv run ruff check .` (« All checks passed! ») et `uv run pytest` →
+  **39 passed** (vérifié le 2026-09-28, `uv` indisponible dans cet
+  environnement — exécuté via un venv `pip install -e ".[dev]"` équivalent
+  à `uv sync --extra dev`). Bug trouvé en écrivant les tests :
+  `test_ingest_rejects_unregistered_node` utilisait d'abord un `node_id` au
+  mauvais format (`relay-inconnu`), qui échoue la validation de schéma (400)
+  avant d'atteindre le code testé (401 attendu) — corrigé en utilisant un
+  `node_id` bien formé mais non enregistré (`relay-9a9a9a`).
 
 ## Limites connues / TODO
 
-- **Aucune sécurité** : ni JWT, ni liste blanche, ni signature Ed25519, ni rejet
-  d'un `msgID` non haché. → US-216.
 - **Aucune projection** : on ne sait pas encore reconstruire un statut de
   message. → US-217.
 - **Pas de SSE**, pas de routes REST de lecture. → US-218, US-219.
+- **`POST /api/nodes` sans auth opérateur** : n'importe qui peut enregistrer
+  un `node_id` **inédit** et obtenir un JWT valide (**re**-enregistrer un
+  `node_id` déjà pris est bloqué depuis la revue de la PR #91 — 409, plus
+  d'upsert). Aucune US actuelle ne couvre l'auth admin/opérateur — écart
+  consigné dans `03-ecarts-conception.md`.
+- **Pas de vérification de journal chaîné** : `dengon-verify` n'est pas
+  appelé, `integrity` reste toujours `'unverified'`. → hors périmètre US-216.
+- **Nœud inconnu traité comme un 401 direct**, pas comme la quarantaine +
+  alerte décrite par la conception (`docs/synthese/09` §3) — écart consigné.
 - **Pas de déploiement** : tourne en local via `uvicorn`. Les migrations
   tournent dans le `lifespan` — US-224 pourra les sortir en étape explicite. →
   US-224 (VPS + TLS).
@@ -378,8 +483,11 @@ signature Ed25519 ; US-217 ajoutera les projections `messages` / `nodes` /
 ## Pour l'oral
 
 Le dashboard est un **témoin**, pas un maillon : on peut l'éteindre, le réseau
-de messages continue exactement pareil. Ce squelette montre le point d'entrée —
-les nœuds y déposent des lots d'événements — et il est **exprès trop gentil** :
-il gobe n'importe quoi. C'est un choix d'organisation : il pouvait démarrer
-avant que l'équipe ait figé le format exact des événements, ce qui a permis de
-travailler les trois parties du projet en parallèle.
+de messages continue exactement pareil. Le point d'entrée — `/ingest/batch` —
+est passé d'un squelette **exprès trop gentil** (US-110, qui gobait n'importe
+quoi pour démarrer avant que le format d'événement soit figé) à un pipeline
+qui **rejette** tout ce qui ne respecte pas le contrat : schéma JSON, double
+authentification (JWT court + signature Ed25519 — le JWT est un filtre
+rapide, la signature est la vraie preuve cryptographique), et un
+`event_id` recalculé côté serveur pour empêcher qu'un `event_id` forgé
+n'empoisonne la déduplication.

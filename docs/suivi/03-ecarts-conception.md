@@ -1387,3 +1387,53 @@ _(aucun écart pour l'instant)_
 - **Doc de conception mise à jour ?** Non — le mécanisme correspond déjà à
   la conception, seule l'intégration reste à faire quand son code appelant
   existera.
+
+---
+
+### 2026-09-28 — `POST /api/nodes` sans authentification opérateur (US-216)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §7 décrit
+  l'enregistrement d'un relais via `POST /api/nodes` comme une étape du
+  déploiement, sans préciser qui a le droit de l'appeler.
+- **Réel :** la route enregistre n'importe quel `node_id`/`pub_sign` reçu
+  sans vérifier l'identité de l'appelant, et renvoie un JWT valide en
+  retour — quiconque atteint l'API peut se créer un nœud whitelisté.
+- **Raison :** l'US-216 couvre l'authentification des **nœuds** pour
+  `/ingest/batch` (JWT + signature Ed25519), pas l'authentification d'un
+  **opérateur humain** (session/cookie/admin). Aucune US du backlog actuel
+  ne couvre ce second cas.
+- **Conséquences :** acceptable pour une démo locale (B-4), mais c'est un
+  vrai trou avant tout déploiement exposé (US-224, VPS) : n'importe qui sur
+  le réseau peut fabriquer un nœud de confiance. À couvrir par une future US
+  (auth admin) avant toute exposition publique.
+- **Doc de conception mise à jour ?** non — signalé ici, dans le docstring
+  de la route (`app/main.py`) et dans `modules/dashboard-api.md` (Limites).
+- **Mise à jour 2026-09-28 (revue de la PR #91) :** le trou était en réalité
+  plus grave que « se créer un nœud » — l'`ON CONFLICT(node_id) DO UPDATE`
+  remplaçait la clé publique d'un nœud **déjà enregistré** et le
+  re-whitelistait, y compris un nœud qu'un opérateur aurait retiré
+  (prise de contrôle, pas seulement création). Corrigé : un `node_id` déjà
+  pris renvoie désormais **409**, plus d'upsert. L'écart lui-même (pas
+  d'auth opérateur sur `POST /api/nodes`, donc n'importe qui peut encore
+  enregistrer un `node_id` **inédit**) reste entier et n'a pas de US pour
+  le couvrir.
+
+---
+
+### 2026-09-28 — Nœud inconnu : rejet direct 401, pas la quarantaine décrite par la conception (US-216)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §3 décrit, pour un
+  batch venant d'un `node_id` inconnu, une mise en **quarantaine** avec
+  alerte opérateur (donc un état intermédiaire, pas un rejet).
+- **Réel :** `app/ingest.py::_lookup_node_pub_sign` rejette directement avec
+  un 401, message identique à « nœud connu mais non whitelisté » (pour ne
+  pas renseigner un attaquant qui devine des `node_id`).
+- **Raison :** aucun écran opérateur pour lever une quarantaine n'existe
+  dans le périmètre de l'US-216 (ni d'aucune US actuelle) — une quarantaine
+  sans moyen de la lever serait un état mort.
+- **Conséquences :** un relais légitime pas encore enregistré via
+  `/api/nodes` voit ses batchs rejetés (401) plutôt que mis en attente —
+  l'opérateur doit enregistrer le nœud avant qu'il ne pousse des données,
+  pas après coup.
+- **Doc de conception mise à jour ?** non — à trancher si une US future
+  ajoute un écran opérateur de gestion des nœuds.
