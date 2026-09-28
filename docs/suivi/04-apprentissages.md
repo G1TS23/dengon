@@ -531,7 +531,8 @@ Reviendra identiquement à chaque montée de version d'AGP tant que
 **Où c'est utilisé :** `android/gradle/verification-metadata.xml`, entrées
 `com.android.tools.build:aapt2`.
 **Pour aller plus loin :** `docs/suivi/modules/android-app.md`, section
-« Trois pièges rencontrés » et « Décisions d'implémentation ».
+« Décisions d'implémentation » (puce `aapt2`) ; la section « Trois pièges
+rencontrés » (onboarding) couvre le piège voisin du cache chaud.
 
 ---
 

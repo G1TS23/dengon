@@ -10,6 +10,52 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-109 : revue round 2 d'OswinFreyr sur la PR #72 + résolution du conflit avec `main`
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/00-journal.md`, `docs/suivi/04-apprentissages.md`,
+`docs/suivi/modules/android-app.md`
+**Lot :** US-109, PR #72
+
+### Fait
+- **Conflit GitHub sur `00-journal.md` résolu** : fusion de `origin/main` en
+  local (le pilote `merge=union` de `.gitattributes` n'est pas appliqué par
+  le bouton de fusion GitHub). Le `union` avait entrelacé l'entrée #72 avec
+  l'entrée US-110 round 8 (« État après » / « Vérification » de #72 recollés
+  dans l'entrée US-110) : journal reconstruit à partir de celui de `main`,
+  entrée #72 réinsérée d'un seul bloc en tête, avec son séparateur `---`.
+- **Point 1** : `android-app.md` renvoyait à une entrée de journal du
+  2026-09-26 inexistante pour le calcul manuel du checksum Linux → renvoi
+  vers l'entrée du 2026-09-28 « US-109 : retours de revue d'OswinFreyr sur
+  la PR #72 ».
+- **Point 2** : le « Pour aller plus loin » de la note `aapt2` de
+  `04-apprentissages.md` pointait vers « Trois pièges rencontrés », qui ne
+  parle pas des classifiers → renvoi vers « Décisions d'implémentation »
+  (puce `aapt2`), « Trois pièges » gardé pour le piège voisin du cache chaud.
+- **Point 3** : séparateur `---` + ligne vide rétabli après l'entrée #72.
+- **Mineur** : phrase « laissant Windows … sans checksum Linux » reformulée
+  (c'est le fichier qui restait sans checksum Linux).
+
+### Pourquoi / décisions
+- Reconstruction plutôt que retouche du résultat `union` : la fusion
+  concatène sans comprendre les frontières d'entrées, corriger à la main le
+  texte entrelacé laissait un risque d'attribution erronée.
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Les 3 points + le mineur du round 2 sont traités. Reste l'approbation
+  de la PR.
+
+### Vérification (commandes réellement exécutées)
+- `git merge origin/main` puis `git diff origin/main --stat` : seuls les
+  5 fichiers de la PR diffèrent de `main`, `00-journal.md` n'a que des
+  ajouts en tête.
+- Comptage des délimiteurs de bloc de code du journal : nombre pair.
+
+---
+
 ## 2026-09-28 — US-109 : retours de revue d'OswinFreyr sur la PR #72 (aapt2/gradlew)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -43,6 +89,22 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 - Retour de revue d'OswinFreyr sur la PR #72 (2026-09-28) : correctif jugé
   bon, mais cause racine non documentée (reviendrait à la prochaine montée
   d'AGP) et `docs/suivi/` pas mis à jour.
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- Points 1, 2 et 4 (mineur) traités. Point 3 reporté en issue #79 (pas
+  bloquant pour cette PR). Reste : ajouter `Refs #9` à la description de la
+  PR (point 5, fait directement sur GitHub).
+
+### Vérification (commandes réellement exécutées)
+- Relecture manuelle de `verification-metadata.xml` : les 3 classifiers
+  `aapt2-8.5.2-11315950-{osx,linux,windows}.jar` ont chacun un checksum,
+  `origin` cohérent avec la façon dont chacun a été obtenu.
+
+---
+
 ## 2026-09-28 — US-110 : dashboard-api, round 8 de revue (OswinFreyr)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -80,14 +142,6 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 - Aucun.
 
 ### État après cette session
-- Points 1, 2 et 4 (mineur) traités. Point 3 reporté en issue #79 (pas
-  bloquant pour cette PR). Reste : ajouter `Refs #9` à la description de la
-  PR (point 5, fait directement sur GitHub).
-
-### Vérification (commandes réellement exécutées)
-- Relecture manuelle de `verification-metadata.xml` : les 3 classifiers
-  `aapt2-8.5.2-11315950-{osx,linux,windows}.jar` ont chacun un checksum,
-  `origin` cohérent avec la façon dont chacun a été obtenu.
 - Les 2 points du round 8 sont traités. Fiche module mise à jour.
 
 ### Vérification (commandes réellement exécutées)
