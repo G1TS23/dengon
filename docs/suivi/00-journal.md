@@ -10,6 +10,61 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — Nettoyage post-merge : retours de revue arrivés après le merge de #60 et #63
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/00-journal.md`, `docs/suivi/modules/dengon-core.md`,
+`docs/suivi/03-ecarts-conception.md`, `contracts/events/envelope.schema.json`
+**Lot :** suivi (US-107/US-108 déjà livrées), pas de nouvelle US
+
+### Fait
+- Les PR #60 et #63 ont été mergées (2026-09-28, 08:00 et 08:05) avant
+  qu'Oswin ne poste ses derniers rounds de revue (08:51 et 08:52) — les
+  retours portaient donc sur du code déjà intégré dans `main`. Aucun bug
+  de code signalé dans ces deux rounds (Oswin : « aucun problème côté
+  code » / « bon pour moi »), seulement des inexactitudes de suivi,
+  reprises ici en petit commit direct plutôt qu'en PR de plus.
+- **`00-journal.md`** : séparateur `---` manquant entre l'entrée US-103
+  (Spike C) et l'entrée US-111 — même dégât de merge union que celui déjà
+  corrigé plus haut dans le fichier.
+- **`modules/dengon-core.md`** : « un paquet broadcast relayable porte
+  `RELAY_OK` » précisé — le test couvre aussi des paquets **adressés**.
+- **`03-ecarts-conception.md`** : deux valeurs de collision corrigées
+  (~0,03 % pour 100 nœuds, pas ~0,003 % ; ~66 % pour 6 000 nœuds, pas
+  ~63 % — la valeur à 1 000 nœuds, ~2,9 %, était déjà correcte). Entrée
+  « Piège JSON Schema… partiellement corrigé (dette assumée) » : nouvelle
+  mise à jour datée expliquant que le round 4 avait *aussi* fermé le trou
+  côté `node_id` (pas seulement `name`), rendant le titre et le corps de
+  l'entrée obsolètes pour les deux champs — corps d'origine conservé par
+  discipline append-only, la mise à jour dit où est l'état réel.
+- **`contracts/events/envelope.schema.json`** : description de `name`
+  corrigée — « même trou que node_id ci-dessous » n'est plus vrai
+  (`node_id` n'a plus ce trou depuis le round 4).
+
+### Pourquoi / décisions
+- Corrections en petit commit direct sur une branche dédiée plutôt qu'en
+  rouvrant une discussion de PR déjà fermée — le contenu est de la
+  documentation de suivi, pas du code sensible, et les deux PR sources
+  sont closes.
+
+### Écarts vs conception
+- Aucun.
+
+### État après cette session
+- `python3 tools/validate.py` → 20 fixtures toujours valides.
+  `cargo test -p dengon-core` inchangé (aucun code touché).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 -c "import json; json.load(open('contracts/events/envelope.schema.json'))"
+JSON OK
+
+$ cd contracts && uv run python3 tools/validate.py
+✓ 20 fixtures valides — 28 noms d'événements couverts.
+```
+
+---
+
 ## 2026-09-28 — `contracts/events` : round 5 de revue (OswinFreyr) sur la PR #60
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -1307,6 +1362,9 @@ BUILD SUCCESSFUL (R8/minify actifs, aucune règle proguard custom nécessaire)
 - **Non vérifié, ne peut pas l'être ici** : les 4 critères d'acceptation
   matériels (échange réel 20 octets, MTU négocié réel, timing réel, matrice
   d'appareils). Nécessite 2 téléphones Android physiques.
+
+---
+
 ## 2026-09-25 — US-111 : vérification visuelle à 360 px (clôture)
 
 **Auteur :** Claude (Opus 5.5)

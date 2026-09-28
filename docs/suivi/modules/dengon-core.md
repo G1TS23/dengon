@@ -130,9 +130,12 @@ codec (US-201). Le flux visé : `04-architecture.md` §4.
   `Inventory` a bien le type `0x0D` ; **les 8 vecteurs `accept` ont tous
   `ttl > 1` et portent tous `RELAY_OK`**
   (`accept_vectors_with_ttl_above_1_have_relay_ok`, nouveau — retour de revue
-  #63, round 3 : garantit que l'invariant « un paquet broadcast relayable
-  porte `RELAY_OK` » (`synthese/05:203`) reste vrai vecteur par vecteur, pas
-  seulement pour les deux corrigés au round 2).
+  #63, round 3, précisé au round 4 : le test couvre les 8 vecteurs
+  `accept`, adressés (`ack-addressed`, `noise-msg-addressed`) compris — la
+  règle réelle est « `ttl > 1` ⇒ `RELAY_OK` », quel que soit le type de
+  paquet, pas seulement broadcast) garantit que cet invariant
+  (`synthese/05:203`) reste vrai vecteur par vecteur, pas seulement pour
+  les deux corrigés au round 2).
 - `src/lib.rs` — 2 tests fumigènes (inchangés).
 - Commande : `cargo test -p dengon-core` → **19 passés** (15 lib + 4 intégration
   + 0 doc), vérifié le 2026-09-28 (round 3 de revue). `clippy -D warnings`

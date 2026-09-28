@@ -426,6 +426,22 @@ _(aucun écart pour l'instant)_
   {"pattern": "\n"}` sur la propriété `name`. Le motif `node_id` reste seul
   concerné par ce piège ; voir l'entrée dédiée ci-dessous sur la longueur de
   `node_id`, qui documente pourquoi il n'a pas reçu le même traitement.
+- **Mise à jour 2026-09-28 (retour de revue #60, round de suivi
+  d'OswinFreyr) :** cette mise à jour n'était déjà plus exacte au moment où
+  elle a été écrite — le round 4 (avant elle) avait **aussi** fermé le trou
+  côté `node_id` : `$defs/node_id` est passé d'un motif ouvert `{6,}` à un
+  `anyOf` de deux branches à longueur exacte
+  (`^relay-[0-9a-f]{6}$`/`minLength=maxLength=12` et
+  `^client-[0-9a-f]{6}$`/`minLength=maxLength=13`), qui ferme le trou du `$`
+  par construction (une longueur exacte élimine tout suffixe, `\n` compris)
+  — revérifié avec `jsonschema` : `relay-abcdef\n` et `client-abcdef\n`
+  sont bien rejetés. **Le titre de cette entrée (« partiellement corrigé »,
+  « dette assumée ») et son corps (qui décrit encore le motif `{6,}`
+  d'origine) sont donc obsolètes pour les deux champs** — conservés
+  tels quels par discipline append-only, mais à ne plus lire comme l'état
+  réel : `node_id` a une longueur fixe (6 hex, voir l'entrée dédiée
+  ci-dessous) et `name` a deux protections indépendantes, plus rien de
+  « partiel » ni « assumé » comme dette pour aucun des deux champs.
 
 ---
 
@@ -444,11 +460,14 @@ _(aucun écart pour l'instant)_
   appareil (A-7). Une collision entre deux nœuds mélangerait leurs deux
   chaînes côté dashboard et produirait de faux `integrity.chain_broken`.
 - **Risque quantifié (approximation des anniversaires,
-  `p ≈ 1 - exp(-n²/2N)`, `N = 16 777 216` pour 24 bits) :** ~0,003 % pour
-  100 nœuds, ~2,9 % pour 1 000 nœuds, ~63 % pour 6 000 nœuds. Le MVP vise
-  une démo de 5-8 appareils (B-4) — risque négligeable à cette échelle,
-  mais 6 caractères ne passerait pas à l'échelle d'un déploiement réel de
-  plusieurs centaines de nœuds sans revoir la longueur.
+  `p ≈ 1 - exp(-n²/2N)`, `N = 16 777 216` pour 24 bits) :** ~0,03 % pour
+  100 nœuds, ~2,9 % pour 1 000 nœuds, ~66 % pour 6 000 nœuds (valeurs
+  corrigées au round de suivi d'OswinFreyr, 2026-09-28 — les deux premières
+  citées à tort comme ~0,003 % et ~63 % dans la version initiale de cette
+  entrée). Le MVP vise une démo de 5-8 appareils (B-4) — risque
+  négligeable à cette échelle, mais 6 caractères ne passerait pas à
+  l'échelle d'un déploiement réel de plusieurs centaines de nœuds sans
+  revoir la longueur.
 - **Décision : garder 6 hex (24 bits) pour le MVP**, plutôt que de rouvrir le
   motif en longueur variable (`{6,}` + `"not": {"pattern": "\n"}` + une borne
   haute explicite, ex. `maxLength: 40`, qui aurait aussi fermé le trou sans
