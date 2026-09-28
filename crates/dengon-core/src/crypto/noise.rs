@@ -11,8 +11,12 @@
 //!   absent ([`seal`] / [`open`]). La clé statique de l'expéditeur voyage
 //!   **chiffrée** dans le message : un relais ne sait pas qui envoie.
 //!
-//! Tout clair (payloads de handshake compris) est paddé vers `PAD_BUCKETS`
-//! avant chiffrement ([`super::pad`]).
+//! Les clairs du transport ([`Session`]) et des enveloppes ([`seal`]) sont
+//! paddés vers `PAD_BUCKETS` avant chiffrement ([`super::pad`]). Les messages
+//! de handshake **ne le sont pas** : avec des payloads vides, leur taille est
+//! déjà fixée par le motif (32, 96 et 64 octets pour `XX`), et le padding
+//! faisait passer un handshake de 192 à 960 octets, soit plusieurs fragments
+//! BLE de plus. Un payload de handshake non vide a donc une taille visible.
 //!
 //! # Transport tolérant aux pertes
 //!
@@ -43,6 +47,15 @@
 //! - **Pas de tirage de clé statique.** Comme pour Ed25519 (US-203), le
 //!   secret X25519 est fourni par l'appelant. L'aléa des clés **éphémères**
 //!   vient d'un RNG passé en argument ([`super::rng`]).
+//! - **Pas d'anti-rejeu pour les enveloppes `X`.** C'est inhérent au one-shot :
+//!   un relais peut réinjecter la même `SEALED_ENVELOPE` indéfiniment, et
+//!   [`open`] l'ouvrira à chaque fois. La déduplication se fait par `msg_id`
+//!   dans `sync` / `store`.
+//! - **Pas d'effacement des copies faites par `snow`.** `snow` 0.10.0 n'efface
+//!   aucune clé (ni `Drop`, ni `zeroize`) : le secret statique recopié dans
+//!   chaque `HandshakeState`, et les clés des `CipherState`, restent en mémoire
+//!   après destruction. Seule la copie détenue par [`StaticKeypair`] est
+//!   effacée (voir `docs/suivi/03-ecarts-conception.md`).
 
 use alloc::boxed::Box;
 use alloc::vec;
@@ -50,13 +63,13 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::num::NonZeroU32;
 
+use curve25519_dalek::montgomery::MontgomeryPoint;
 use rand_core::{CryptoRng, RngCore};
-use snow::params::{DHChoice, NoiseParams};
-use snow::resolvers::{CryptoResolver, DefaultResolver};
+use snow::params::NoiseParams;
 use snow::{Builder, HandshakeState, StatelessTransportState};
 use zeroize::Zeroize;
 
-use super::pad::{pad, unpad};
+use super::pad::{pad, unpad, MAX_PADDED_PAYLOAD};
 use super::rng::CallerResolver;
 use super::CryptoError;
 
@@ -82,13 +95,17 @@ pub const SESSION_OVERHEAD: usize = NONCE_LEN + AEAD_TAG_LEN;
 /// de 64 messages de retard est rejeté.
 pub const REPLAY_WINDOW: u64 = 64;
 
-/// Marge de tampon pour un message de handshake (`e`, `s` chiffrée, tags).
+/// Surcoût maximal d'un message de handshake `XX` (message 2 : `e`, `s`
+/// chiffrée, tag de `s`, tag du payload). Le payload n'est pas paddé : les
+/// messages font 32, 96 et 64 octets + la taille du payload.
 const HANDSHAKE_OVERHEAD: usize = DH_LEN + DH_LEN + AEAD_TAG_LEN + AEAD_TAG_LEN;
 
 /// Paire de clés statiques X25519 (`static` de `06-securite.md` §2).
 ///
-/// Le secret est effacé à la destruction ; `Debug` n'affiche que la clé
-/// publique.
+/// Le secret **de cette structure** est effacé à la destruction ; `Debug`
+/// n'affiche que la clé publique. Attention : `snow` recopie le secret dans
+/// chaque état de handshake et ne l'efface pas (voir la note de module).
+/// `Clone` ajoute lui aussi une copie, effacée à sa propre destruction.
 #[derive(Clone)]
 pub struct StaticKeypair {
     secret: [u8; DH_LEN],
@@ -100,15 +117,10 @@ impl StaticKeypair {
     /// appliqué par la primitive).
     #[must_use]
     pub fn from_secret(secret: [u8; DH_LEN]) -> Self {
-        // `default-resolver` + `use-curve25519` sont figés dans Cargo.toml :
-        // Curve25519 est toujours résolu. Une clé publique nulle silencieuse
-        // serait pire qu'un arrêt net.
-        let mut dh = DefaultResolver
-            .resolve_dh(&DHChoice::Curve25519)
-            .unwrap_or_else(|| unreachable!("snow compilé sans use-curve25519"));
-        dh.set(&secret);
-        let mut public = [0u8; DH_LEN];
-        public.copy_from_slice(dh.pubkey());
+        // Calcul direct avec `curve25519-dalek` (celui que `snow` utilise) :
+        // passer par un `Dh` de `snow` recopiait le secret dans une structure
+        // qu'il n'efface pas.
+        let public = MontgomeryPoint::mul_base_clamped(secret).to_bytes();
         Self { secret, public }
     }
 
@@ -161,12 +173,27 @@ fn to_array(bytes: Option<&[u8]>) -> Option<[u8; DH_LEN]> {
 /// message 2, l'initiateur le lit et écrit le message 3, le répondeur le lit.
 /// Ensuite [`Handshake::into_session`] des deux côtés.
 ///
+/// **Garanties de chaque message** (Noise §7.7) :
+///
+/// | Message | Payload | Garantie |
+/// |---|---|---|
+/// | 1 (`-> e`) | **interdit** ([`CryptoError::PayloadNotAllowed`]) | aucune : émis avant tout DH, donc en clair |
+/// | 2 (`<- e, ee, s, es`) | autorisé, non paddé | chiffré, mais vers un initiateur **pas encore authentifié** |
+/// | 3 (`-> s, se`) | autorisé, non paddé | chiffré et authentifié dans les deux sens |
+/// | transport ([`Session`]) | paddé | garanties complètes |
+///
+/// Un payload de handshake n'est pas paddé : sa taille est visible. Ce qui
+/// doit rester confidentiel passe par la [`Session`].
+///
 /// **Un échec est définitif** : après une erreur de [`Handshake::read_message`]
 /// (message altéré par un relais, perdu, hors séquence), l'état `snow` n'est
 /// plus utilisable. L'appelant (`sync`) doit jeter ce `Handshake` et en
 /// recommencer un complet, avec un nouveau RNG.
 pub struct Handshake {
     state: HandshakeState,
+    /// Nombre de messages déjà écrits ou lus : 0 tant que le message 1 n'a
+    /// pas été traité.
+    messages: u8,
 }
 
 impl Handshake {
@@ -207,24 +234,32 @@ impl Handshake {
             b.build_responder()
         }
         .map_err(|_| CryptoError::Noise)?;
-        Ok(Self { state })
+        Ok(Self { state, messages: 0 })
     }
 
-    /// Écrit le prochain message de handshake, portant `payload` (paddé).
+    /// Écrit le prochain message de handshake, portant `payload` (non paddé,
+    /// voir le tableau de [`Handshake`]).
     ///
     /// # Errors
     ///
-    /// [`CryptoError::PayloadTooLarge`] si `payload` ne tient pas dans le
-    /// plus grand bucket ; [`CryptoError::Noise`] si ce n'est pas notre tour
-    /// ou si le handshake est terminé.
+    /// [`CryptoError::PayloadNotAllowed`] si `payload` n'est pas vide au
+    /// message 1 ; [`CryptoError::PayloadTooLarge`] au-delà de
+    /// `MAX_PADDED_PAYLOAD` ; [`CryptoError::Noise`] si ce n'est pas notre
+    /// tour ou si le handshake est terminé.
     pub fn write_message(&mut self, payload: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let padded = pad(payload)?;
-        let mut out = vec![0u8; padded.len() + HANDSHAKE_OVERHEAD];
+        if self.messages == 0 && !payload.is_empty() {
+            return Err(CryptoError::PayloadNotAllowed);
+        }
+        if payload.len() > MAX_PADDED_PAYLOAD {
+            return Err(CryptoError::PayloadTooLarge);
+        }
+        let mut out = vec![0u8; payload.len() + HANDSHAKE_OVERHEAD];
         let n = self
             .state
-            .write_message(&padded, &mut out)
+            .write_message(payload, &mut out)
             .map_err(|_| CryptoError::Noise)?;
         out.truncate(n);
+        self.messages += 1;
         Ok(out)
     }
 
@@ -233,15 +268,20 @@ impl Handshake {
     /// # Errors
     ///
     /// [`CryptoError::Noise`] si le message est altéré, hors séquence ou mal
-    /// formé ; [`CryptoError::InvalidPadding`] si le clair n'est pas paddé.
-    /// Dans les deux cas, le handshake est perdu (voir [`Handshake`]).
+    /// formé ; [`CryptoError::PayloadNotAllowed`] si le message 1 porte un
+    /// payload. Dans tous les cas, le handshake est perdu (voir [`Handshake`]).
     pub fn read_message(&mut self, message: &[u8]) -> Result<Vec<u8>, CryptoError> {
         let mut buf = vec![0u8; message.len()];
         let n = self
             .state
             .read_message(message, &mut buf)
             .map_err(|_| CryptoError::Noise)?;
-        Ok(unpad(&buf[..n])?.to_vec())
+        if self.messages == 0 && n != 0 {
+            return Err(CryptoError::PayloadNotAllowed);
+        }
+        self.messages += 1;
+        buf.truncate(n);
+        Ok(buf)
     }
 
     /// `true` une fois les 3 messages échangés.
@@ -601,6 +641,70 @@ mod tests {
         rb.read_message(&ia.write_message(b"").unwrap()).unwrap();
         let m2 = rb.write_message(b"coucou").unwrap();
         assert_eq!(ia.read_message(&m2).unwrap(), b"coucou");
+    }
+
+    /// Revue #81 : le message 1 part en clair, il ne doit rien transporter.
+    #[test]
+    fn xx_payload_interdit_au_message_1() {
+        let mut ia = Handshake::initiator(&alice(), rng(1)).unwrap();
+        assert_eq!(
+            ia.write_message(b"SECRETPAYLOAD").unwrap_err(),
+            CryptoError::PayloadNotAllowed
+        );
+        // Le refus n'a rien consommé : le message 1 vide passe ensuite.
+        assert_eq!(ia.write_message(b"").unwrap().len(), DH_LEN);
+    }
+
+    #[test]
+    fn xx_message_1_avec_payload_rejete_a_la_lecture() {
+        // Un initiateur qui ne passe pas par `write_message` (autre
+        // implémentation, relais malveillant) : on écrit directement dans
+        // l'état `snow`.
+        let mut ia = Handshake::initiator(&alice(), rng(1)).unwrap();
+        let mut m1 = vec![0u8; 64];
+        let n = ia.state.write_message(b"fuite", &mut m1).unwrap();
+        m1.truncate(n);
+        assert!(
+            m1.windows(5).any(|w| w == b"fuite"),
+            "le message 1 est en clair"
+        );
+
+        let mut rb = Handshake::responder(&bob(), rng(2)).unwrap();
+        assert_eq!(
+            rb.read_message(&m1).unwrap_err(),
+            CryptoError::PayloadNotAllowed
+        );
+    }
+
+    /// Revue #81 : le handshake n'est plus paddé, 192 octets au total.
+    #[test]
+    fn xx_tailles_de_handshake_sans_padding() {
+        let (a, b) = (alice(), bob());
+        let mut ia = Handshake::initiator(&a, rng(1)).unwrap();
+        let mut rb = Handshake::responder(&b, rng(2)).unwrap();
+        let m1 = ia.write_message(b"").unwrap();
+        rb.read_message(&m1).unwrap();
+        let m2 = rb.write_message(b"").unwrap();
+        ia.read_message(&m2).unwrap();
+        let m3 = ia.write_message(b"").unwrap();
+        rb.read_message(&m3).unwrap();
+        assert_eq!((m1.len(), m2.len(), m3.len()), (32, 96, 64));
+        // Un payload de handshake a une taille visible.
+        let mut ia = Handshake::initiator(&a, rng(1)).unwrap();
+        let mut rb = Handshake::responder(&b, rng(2)).unwrap();
+        rb.read_message(&ia.write_message(b"").unwrap()).unwrap();
+        assert_eq!(rb.write_message(b"abc").unwrap().len(), 96 + 3);
+    }
+
+    #[test]
+    fn xx_payload_de_handshake_trop_grand_rejete() {
+        let mut ia = Handshake::initiator(&alice(), rng(1)).unwrap();
+        let mut rb = Handshake::responder(&bob(), rng(2)).unwrap();
+        rb.read_message(&ia.write_message(b"").unwrap()).unwrap();
+        assert_eq!(
+            rb.write_message(&[0; MAX_PADDED_PAYLOAD + 1]).unwrap_err(),
+            CryptoError::PayloadTooLarge
+        );
     }
 
     #[test]

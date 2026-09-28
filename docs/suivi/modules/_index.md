@@ -21,6 +21,8 @@ d'organisation §10.3 point 3).
 
 | Module | Fiche | État | Dernière mise à jour |
 |---|---|---|---|
+| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |
+| `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-25 |
 | `dengon-core` | [dengon-core.md](dengon-core.md) | en cours | 2026-09-28 |
 | `dengon-ble` | [dengon-ble.md](dengon-ble.md) | **contrat gelé** (US-105) | 2026-09-25 |
 | `dengon-ble` | [dengon-ble.md](dengon-ble.md) | esquisse | 2026-09-09 |

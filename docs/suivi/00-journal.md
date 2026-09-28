@@ -9,6 +9,109 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 ---
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
+
+## 2026-09-28 — US-204 : rebase sur la nouvelle tête de US-203 et retours de revue de #81
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/crypto.rs`, `crates/dengon-core/src/crypto/noise.rs`,
+`crates/dengon-core/tests/crypto_vectors.rs`, `crates/dengon-core/tests/vectors/crypto_v0.json`,
+`Cargo.toml`, `crates/dengon-core/Cargo.toml`, `Cargo.lock`, `docs/suivi/`.
+**Lot :** US-204 (issue #18), PR #81. Branche `feat/US-204-crypto-noise`.
+
+### Fait
+
+- **Rebase** : `git rebase --onto feat/US-203-crypto-ed25519 7b752b3` — l'ancienne
+  copie du commit US-203 est abandonnée, seul le commit US-204 est rejoué sur
+  la tête revue de #78 (elle-même sur `main`). Conflits : `crates/dengon-core/Cargo.toml`
+  (le `std` de `store` est gardé), `crypto.rs` (le réexport de `SIGNATURE_LEN`
+  depuis `protocol` remplace la constante locale), `lib.rs`, fiche module.
+  `sha2` se retrouvait déclaré deux fois dans `[workspace.dependencies]` (une
+  fois par `ledger`, une fois par US-204) : doublon retiré.
+- **`merge=union` sur `docs/suivi/`** : la fusion a dupliqué l'entrée de journal
+  US-203 (le commit US-204 l'avait remontée), la ligne `dengon-core` de
+  `02-avancement.md` et les lignes `dengon-core` de `modules/_index.md`.
+  Nettoyé à la main.
+- **Message 1 de `XX` (point 1 de la revue)** : nouvelle variante
+  `CryptoError::PayloadNotAllowed`. `Handshake::write_message` refuse un payload
+  non vide au message 1 ; `read_message` rejette un message 1 qui en porte un
+  (test : message forgé directement dans l'état `snow`, payload visible en clair).
+  La doc de `Handshake` donne la garantie de chaque message (Noise §7.7).
+- **Handshake non paddé** (question liée au point 1, décision de Paul) :
+  32 + 96 + 64 = 192 octets au lieu de 960. `PayloadTooLarge` reste renvoyé
+  au-delà de `MAX_PADDED_PAYLOAD`. Section `noise_xx.handshake` de
+  `crypto_v0.json` régénérée ; transport et enveloppe `X` inchangés.
+- **`snow` n'efface pas ses clés (point 2)** : la doc du module et de
+  `StaticKeypair` le dit. `StaticKeypair::from_secret` calcule la clé
+  publique avec `curve25519-dalek` (`MontgomeryPoint::mul_base_clamped`) au
+  lieu d'un `Dh` de `snow`, ce qui retire une copie du secret. Nouvelle
+  dépendance directe `curve25519-dalek = { version = "4.1", default-features = false }`,
+  déjà dans l'arbre via `snow` (4.1.3).
+- **Rejeu des enveloppes `X` (point 3)** : documenté dans « Ce que ce module ne
+  fait pas » et dans l'écart « Hors module `crypto` ».
+- **Doc de suivi (point 4)** : « bucket + 16 » → « bucket + 24 » ; séparateurs
+  `---` ajoutés autour des écarts US-204. Le numéro de ligne `crypto.rs:143` a
+  été corrigé dans #78.
+
+### Pourquoi / décisions
+
+- `curve25519-dalek` plutôt que `x25519-dalek` (proposé en revue) : c'est la
+  crate que `snow` 0.10 utilise réellement, `x25519-dalek` n'est pas dans
+  l'arbre. Aucune crate de plus.
+- Refus au message 1 plutôt que simple documentation : une doc ne protège pas
+  d'un appelant pressé (`sync`), une erreur si.
+- Compteur `messages` propre à `Handshake` plutôt qu'un index `snow` : l'API
+  publique de `snow` 0.10 n'expose pas le rang du message courant.
+
+### Écarts vs conception
+
+- Nouveau : **handshake non paddé**, contre `06-securite.md` §3 (l.164) qui liste
+  `NOISE_HS` parmi les paquets paddés. Consigné.
+- Nouveau : **`snow` n'efface aucune clé**, contre la règle d'effacement des
+  secrets. Consigné.
+
+### Appris
+
+- Reporté dans `04-apprentissages.md` : garanties message par message de `XX`,
+  et pourquoi les clés de transport ne dépendent pas des payloads de handshake
+  (seuls les 3 messages de handshake des vecteurs ont changé).
+
+### État après cette session
+
+- Tous les points de la revue de #81 sont traités. Points de conception
+  (traçabilité par `recipient_tag`, `pub_sign` au relais, rang révélé par le
+  nonce) laissés à l'équipe, comme convenu dans la revue.
+- Fiche module mise à jour : [`modules/dengon-core.md`](modules/dengon-core.md).
+- 01-etat-du-code.md mis à jour : non (commandes déjà ajoutées avec #78).
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo test -p dengon-core          # avant régénération des vecteurs
+107 unitaires OK ; vecteurs_conformes et vecteurs_rejouables FAILED (attendu)
+$ cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs
+OK — diff JSON : seuls noise_xx.handshake[0..3].message changent (288→32, 352→110, 320→64)
+$ uv run --with noiseprotocol --with cryptography python xcheck.py   # script jetable
+msg1 32 IDENTIQUE / msg2 110 IDENTIQUE / msg3 64 IDENTIQUE
+$ cargo fmt --all -- --check
+OK
+$ cargo clippy --workspace --all-targets -- -D warnings
+OK
+$ cargo test --workspace
+OK — dengon-core : 107 unitaires + 2 vecteurs crypto (1 ignoré) + 4 vecteurs protocole
+$ cargo check -p dengon-core --no-default-features
+OK
+$ cargo tree -p dengon-core -e normal --no-default-features | grep -c getrandom
+0
+```
+- Le recoupement Python rejoue le handshake avec `noiseprotocol` en injectant
+  les éphémères (32 premiers octets du flux ChaCha20 de chaque graine) : c'est
+  la **première** vérification du transcript `XX` hors `snow` (l'entrée US-204
+  plus bas notait qu'elle manquait).
+- Couverture non remesurée après ces changements.
+- Oubli rattrapé : cette entrée n'avait pas été insérée dans le premier push
+  du commit de correction (le marqueur du journal n'avait pas la forme
+  attendue par le script d'insertion) ; ajoutée par `commit --amend`.
+
 ---
 
 ## 2026-09-28 — US-204 : rebase sur `main` (US-108 mergée) et scan de secrets
@@ -235,6 +338,7 @@ $ cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs 
 - `cargo-llvm-cov` 0.9.1 installé localement pour l'occasion (absent du poste).
 - **Non vérifié** : compilation pour `xtensa-esp32-none-elf` (toolchain `esp`
   absente du poste) — seul le `no_std` hôte est vérifié.
+
 ---
 
 ## 2026-09-28 — US-203 : `crypto`, rebase sur `main` et retours de revue de #78

@@ -74,9 +74,9 @@ Modules encore absents : `identity`, `sync`,
 | `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
 | `crypto::SigningKey` | `src/crypto.rs` | Clé privée Ed25519, construite depuis une graine de 32 octets (`from_seed`). `sign` est déterministe. `Debug` masque le secret. |
 | `crypto::VerifyingKey` | `src/crypto.rs` | Clé publique. `from_bytes` rejette un point invalide ; `verify` utilise `verify_strict`. |
-| `crypto::CryptoError` | `src/crypto.rs` | `InvalidPublicKey` / `InvalidSignature` (Ed25519) ; `Noise` (tout échec Noise, causes volontairement confondues), `PayloadTooLarge`, `InvalidPadding`, `HandshakeNotFinished` (US-204). Implémente `core::error::Error` (aussi en `no_std`). |
-| `StaticKeypair` | `src/crypto/noise.rs` | Paire X25519 statique depuis un secret de 32 o (`from_secret` ; `public`). Secret effacé au `Drop`, masqué au `Debug`. |
-| `Handshake` | `src/crypto/noise.rs` | Noise `XX` : `initiator`/`responder(clé, rng)`, `write_message`/`read_message` (payload paddé), `remote_static`, `into_session`. **Un échec de lecture est définitif** : recommencer un handshake complet. |
+| `crypto::CryptoError` | `src/crypto.rs` | `InvalidPublicKey` / `InvalidSignature` (Ed25519) ; `Noise` (tout échec Noise, causes volontairement confondues), `PayloadTooLarge`, `InvalidPadding`, `HandshakeNotFinished`, `PayloadNotAllowed` (US-204). Implémente `core::error::Error` (aussi en `no_std`). |
+| `StaticKeypair` | `src/crypto/noise.rs` | Paire X25519 statique depuis un secret de 32 o (`from_secret`, clé publique calculée par `curve25519-dalek` ; `public`). **Sa** copie du secret est effacée au `Drop` ; les copies faites par `snow` ne le sont pas (écart). Masqué au `Debug`. |
+| `Handshake` | `src/crypto/noise.rs` | Noise `XX` : `initiator`/`responder(clé, rng)`, `write_message`/`read_message` (payload **non paddé**, **interdit au message 1** → `PayloadNotAllowed`), `remote_static`, `into_session`. Handshake = 32 + 96 + 64 = 192 o. La doc du type donne la garantie de chaque message. **Un échec de lecture est définitif** : recommencer un handshake complet. |
 | `Session` | `src/crypto/noise.rs` | Transport `XX` **sans état** (`snow::StatelessTransportState`) : `encrypt` → `nonce(u64 BE) ‖ chiffré(padded)`, soit bucket + 24 o ; `decrypt` accepte pertes et désordre, rejette altération, rejeu et nonce hors fenêtre ; `remote_static` authentifiée. |
 | `ReplayWindow` (privé) | `src/crypto/noise.rs` | Fenêtre anti-rejeu de 64 nonces (bitmap, RFC 6479) ; mise à jour **après** authentification seulement. |
 | `seal` / `open` / `Opened` | `src/crypto/noise.rs` | Noise `X` one-shot : enveloppe = bucket + 96 o ; clair opaque, dont l'appelant assemble `AppFrame ‖ sender_pub_static ‖ sig` (06 §3) → `AppFrame` ≤ 1950 o ; `open` révèle `sender_static` (transporté chiffré). Mauvaise clé → `Err(Noise)`, jamais de panic. |
@@ -362,8 +362,10 @@ encore le codec (US-201).
   éphémère prend un `R: RngCore + CryptoRng + Send + Sync + 'static` par
   valeur. Pas de `getrandom` : sur ESP32, l'appelant fournira un RNG sur
   `esp_fill_random` (US-307/308).
-- **Padding dans le chiffré** (US-204) : appliqué au clair, avant Noise, y
-  compris aux payloads de handshake (`NOISE_HS` padded, conformément à 06 §3).
+- **Padding dans le chiffré** (US-204) : appliqué au clair, avant Noise, pour
+  le transport et les enveloppes `X`. **Pas** pour le handshake (revue #81) :
+  le message 1 part en clair et refuse tout payload, et avec des payloads vides
+  les tailles sont fixées par le motif. Écart vs 06 §3, consigné.
 
 ## Tests
 
@@ -440,7 +442,9 @@ encore le codec (US-201).
   (glissement, grand saut) ; `X` aller-retour, expéditeur absent du clair, **mauvaise clé →
   erreur propre**, enveloppe altérée/tronquée/vide ; **deux messages de 2 et
   200 octets → trames de même taille** (session et enveloppe) ; clé publique
-  X25519 = RFC 7748 §6.1 ; padding aux bornes des buckets ; tags stables sur la
+  X25519 = RFC 7748 §6.1 ; **payload refusé au message 1** (à l'écriture, et à
+  la lecture d'un message 1 forgé directement dans `snow`) ; **tailles de
+  handshake 32/96/64** ; payload de handshake trop grand ; padding aux bornes des buckets ; tags stables sur la
   journée, différents le lendemain et par destinataire, conformes à la formule.
 - **Property tests** (`proptest`) : `unpad(pad(x)) == x`, `decrypt(encrypt(x))
   == x` (64 cas), `open(seal(x)) == x` (64 cas).
@@ -451,7 +455,7 @@ encore le codec (US-201).
   écrites dans le fichier, GitGuardian les signalant comme secrets).
   Régénération volontaire :
   `cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs`.
-- Commande : `cargo test -p dengon-core` → **103 unitaires + 2 (vecteurs crypto) + 4 (vecteurs
+- Commande : `cargo test -p dengon-core` → **107 unitaires + 2 (vecteurs crypto) + 4 (vecteurs
   protocole) passés**, 1 ignoré (générateur), 0 échec — 2026-09-28, après rebase
   sur `main` (`ledger`, `store`) et sur la nouvelle tête de US-203 (#78).
   `cargo clippy --workspace --all-targets -- -D warnings` et `cargo fmt --all
@@ -472,6 +476,10 @@ encore le codec (US-201).
 
 ## Limites connues / TODO
 
+- `snow` 0.10.0 n'efface aucune clé : seules les copies détenues par
+  `StaticKeypair` et `SigningKey` sont effacées (écart consigné).
+- `crypto::open` n'a pas d'anti-rejeu : une enveloppe `X` réinjectée s'ouvre à
+  nouveau ; dédupliquer par `msg_id` dans `sync` / `store`.
 - `verify_chain()` ne vérifie pas la signature (voir « Décisions »). La
   brique existe depuis US-203 (`crypto::SigningKey` implémente
   `ledger::Signer`) mais la vérification n'est pas câblée.

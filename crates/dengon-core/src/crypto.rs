@@ -83,6 +83,9 @@ pub enum CryptoError {
     InvalidPadding,
     /// Passage en transport demandé avant la fin du handshake.
     HandshakeNotFinished,
+    /// Payload non vide au message 1 de Noise `XX` : ce message part en
+    /// clair (aucun DH n'a encore eu lieu), il ne doit rien transporter.
+    PayloadNotAllowed,
 }
 
 impl fmt::Display for CryptoError {
@@ -94,6 +97,9 @@ impl fmt::Display for CryptoError {
             Self::PayloadTooLarge => f.write_str("clair trop grand pour PAD_BUCKETS"),
             Self::InvalidPadding => f.write_str("padding invalide"),
             Self::HandshakeNotFinished => f.write_str("handshake Noise non terminé"),
+            Self::PayloadNotAllowed => {
+                f.write_str("payload interdit au message 1 de Noise XX (émis en clair)")
+            }
         }
     }
 }

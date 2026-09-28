@@ -859,3 +859,37 @@ légitimes (test `xx_nonce_forge_ne_fait_pas_avancer_la_fenetre`).
 **Où c'est utilisé :** `crates/dengon-core/src/crypto/noise.rs` (`Session`,
 `ReplayWindow`).
 **Pour aller plus loin :** RFC 6479 ; WireGuard whitepaper §5.4.6.
+
+---
+
+### Garanties message par message d'un handshake Noise `XX` (§7.7 de la spec)
+
+**C'est quoi :** dans `XX` (`-> e` / `<- e, ee, s, es` / `-> s, se`), chaque
+message n'a pas les mêmes garanties. Le message 1 est émis **avant tout DH** :
+son payload part en clair. Le message 2 est chiffré, mais vers un initiateur
+qu'on n'a pas encore authentifié. Seuls le message 3 et le transport ont les
+garanties complètes (confidentialité + authentification mutuelle).
+**Pourquoi dans dengon :** `sync` sera tenté de glisser des métadonnées
+(version, capacités, inventaire) dans le handshake. `Handshake::write_message`
+refuse donc tout payload au message 1 (`PayloadNotAllowed`).
+**Piège / surprise :** padder le message 1 donnait l'illusion d'une
+protection : un `b"SECRETPAYLOAD"` se retrouvait tel quel dans les 288 octets
+émis (constaté en revue de #81). Et comme les tailles de handshake sont fixées
+par le motif quand les payloads sont vides, le padding ne cachait rien : il
+coûtait 768 octets par handshake.
+**Où c'est utilisé :** `crates/dengon-core/src/crypto/noise.rs`, doc de `Handshake`.
+**Pour aller plus loin :** <https://noiseprotocol.org/noise.html#payload-security-properties>.
+
+---
+
+### Les clés de transport Noise ne dépendent pas des payloads de handshake
+
+**C'est quoi :** `Split()` dérive les clés de transport de la *chaining key*
+`ck`, qui n'est mise à jour que par les DH (`MixKey`). Les payloads de handshake
+n'entrent que dans le *handshake hash* `h` (`MixHash`).
+**Pourquoi dans dengon :** en retirant le padding du handshake (revue #81), seuls
+les trois messages de handshake de `crypto_v0.json` ont changé ; les chiffrés de
+transport sont restés identiques octet par octet.
+**Piège / surprise :** on s'attendait à devoir régénérer tout le transcript.
+**Où c'est utilisé :** `crates/dengon-core/tests/vectors/crypto_v0.json`.
+**Pour aller plus loin :** spec Noise §5.2 (`MixKey`, `MixHash`, `Split`).

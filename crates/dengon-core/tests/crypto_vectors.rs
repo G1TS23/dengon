@@ -192,10 +192,12 @@ fn vecteurs_rejouables() {
     let bob = StaticKeypair::from_secret(arr32(&keys["bob_secret"]));
     assert_eq!(hex(&bob.public()), keys["bob_public"].as_str().unwrap());
 
-    // Noise XX : le premier message est `e` de l'initiateur (clair) ‖ payload
-    // paddé — l'éphémère consigné est donc vérifiable indépendamment de snow.
+    // Noise XX : le premier message est exactement `e` de l'initiateur, en
+    // clair (payload interdit, handshake non paddé) — l'éphémère consigné est
+    // donc vérifiable indépendamment de snow.
     let xx = &v["noise_xx"];
     let m1 = unhex(xx["handshake"][0]["message"].as_str().unwrap());
+    assert_eq!(m1.len(), 32);
     let e_i = StaticKeypair::from_secret(first_ephemeral(arr32(&xx["initiator_rng_seed"])));
     assert_eq!(&m1[..32], &e_i.public()[..]);
 
