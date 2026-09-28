@@ -1,20 +1,41 @@
 //! `dengon-sim` — simulateur multi-nœuds.
 //!
-//! N instances de `dengon-core` reliées par un `Transport` **en mémoire**,
-//! avec un modèle réseau scriptable : latence, perte, bande passante,
-//! partition, churn, horloges désynchronisées
-//! (`docs/synthese/10-benchmarks-mvp-tests.md` §4.3).
+//! N nœuds reliés par un `Transport` **en mémoire**, avec un modèle réseau
+//! scriptable : latence, gigue, perte, partition
+//! (`docs/synthese/10-benchmarks-mvp-tests.md` §4.3). Sert à démontrer le
+//! maillage **sans matériel**, et à le tester en CI.
 //!
-//! Les scénarios sont versionnés dans `scenarios/*.ron` (`direct`, `multihop`,
-//! `recipient_offline`, `partition_merge`, `flood`, `tamper`…) et **rejouables** :
-//! la graine du générateur aléatoire est fixe, sans quoi un échec de CI ne
-//! serait pas reproductible.
+//! # Modules
 //!
-//! Implémentation réelle : P1.12. Job CI dédié `sim` : US-222.
+//! - [`reseau`] — le réseau simulé (horloge virtuelle, topologie, partitions,
+//!   files d'événements) et [`SimTransport`], qui implémente le contrat gelé
+//!   `dengon_ble::Transport` et passe **la même suite de conformité** que
+//!   `MockTransport` (`tests/conformite_sim.rs`).
+//! - [`harness`] — [`Simulation`] : N nœuds, chacun avec un [`Comportement`]
+//!   injecté, avancés pas à pas. [`Inondation`] est le comportement de
+//!   démonstration, en attendant le vrai nœud `dengon-core` (US-209, US-301).
+//! - [`scenario`] — scénarios `scenarios/*.ron` rejouables, avec attendus.
+//! - [`alea`] — SplitMix64, le seul hasard du simulateur.
+//! - [`cli`] — la ligne de commande `dengon-sim`.
 //!
-//! # État
+//! # Déterminisme
 //!
-//! Squelette livré par l'US-104.
+//! Aucune source de non-déterminisme : horloge virtuelle, aléa à graine fixe,
+//! collections ordonnées (`BTreeMap`), nœuds servis par indice croissant. Deux
+//! exécutions à même graine produisent la **même trace**, donc la même
+//! [`empreinte`] — c'est ce que vérifient les tests et le job CI `sim`.
+
+pub mod alea;
+pub mod cli;
+pub mod harness;
+pub mod reseau;
+pub mod scenario;
+
+pub use harness::{Comportement, Contexte, Inondation, Simulation};
+pub use reseau::{
+    empreinte, EntreeTrace, Horodate, NoeudId, ParametresLien, ReseauPartage, SimTransport,
+};
+pub use scenario::{ErreurScenario, Rapport, Scenario};
 
 /// Graine par défaut du générateur aléatoire.
 ///

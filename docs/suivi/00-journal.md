@@ -10,6 +10,78 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-221 : `dengon-sim`, harness N nœuds + réseau simulé déterministe
+
+**Auteur :** OswinFreyr + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-sim/` (`src/{alea,reseau,harness,scenario,cli}.rs`,
+`lib.rs`, `main.rs`, `scenarios/*.ron`, `tests/`), `Cargo.lock`,
+`.github/workflows/sim.yml`
+**Lot :** US-221 (#35), branche `feat/US-221-dengon-sim`
+
+### Fait
+- **`SimTransport`** (`src/reseau.rs`) : implémentation du contrat gelé
+  `dengon_ble::Transport` sur un réseau en mémoire partagé (horloge
+  virtuelle, arêtes radio avec latence / gigue / perte, partitions, files
+  d'événements datées, trace). Passe **la suite de conformité US-105**
+  (`tests/conformite_sim.rs`), comme `MockTransport`.
+- **Harness** (`src/harness.rs`) : `Simulation` avec N nœuds, chacun avec un
+  `Comportement` injecté ; `Inondation` comme relais de démonstration.
+- **Scénarios RON** (`src/scenario.rs`, `scenarios/`) : `direct`, `multihop`,
+  `partition_merge`, `lossy_mesh` ; validation (indices, pertes, pas),
+  actions datées (`Emettre`, `Partitionner`, `Reunir`, `Relier`, `Delier`),
+  attendus (`Livre`, `NonLivre`), empreinte de trace.
+- **CLI** `dengon-sim [--graine N] <scenario.ron>...` (`src/cli.rs`).
+- **Job CI `sim`** (`.github/workflows/sim.yml`) : tests du crate, puis
+  scénarios exécutés **deux fois** en release et sorties comparées (`diff`).
+
+### Pourquoi / décisions
+- **Déterminisme par construction** : horloge virtuelle, SplitMix64 maison à
+  graine fixe (pas `rand`, dont l'algorithme par défaut peut changer),
+  `BTreeMap` partout, nœuds servis par indice croissant.
+- **Conformité au contrat plutôt que simulateur « à part »** : un comportement
+  validé en simulation vaut pour tout transport conforme.
+- **Comportement injecté** : le vrai nœud `dengon-core` a besoin de
+  `sync::routing` (US-209) et de la façade `api` (US-301). Le harness n'aura
+  pas à changer pour l'accueillir.
+- Scénarios dans `crates/dengon-sim/scenarios/` (dossier créé par US-104), pas
+  `sim/scenarios/` comme l'écrit `synthese/10` §4.3.
+
+### Écarts vs conception
+- 2 entrées dans `03-ecarts-conception.md` : nœuds simulés = relais
+  `Inondation` et non `dengon-core` ; périmètre du modèle réseau et des
+  scénarios (sous-ensemble de §4.3, chemin des scénarios).
+
+### Appris
+- Ordre d'itération de `HashMap` aléatoire par processus → `04-apprentissages.md`.
+
+### État après cette session
+- Critères US-221 : N nœuds ✅, transport scriptable (latence, perte,
+  partition) ✅, déterminisme ✅, `sim.yml` ✅ ; couverture à lire dans le job
+  CI `core`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-sim.md` (réécrite).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+Finished (0 warning)
+$ cargo fmt -p dengon-sim -- --check
+OK
+$ cargo test --workspace --all-features --locked
+dengon-sim : 24 unitaires + 1 conformité + 3 scénarios, tous verts ; workspace vert
+$ cargo run -p dengon-sim -- crates/dengon-sim/scenarios/*.ron
+✓ direct          empreinte=0xc010034361161933
+✓ lossy_mesh      empreinte=0x235037add4fc1c92
+✓ multihop        empreinte=0xeda8f6a6800aca8c
+✓ partition_merge empreinte=0xa0db2d31cbd882cb
+$ (binaire release, deux exécutions) diff run1 run2 → identiques
+```
+- `cargo fmt --all -- --check` échoue en local sur des fichiers **non
+  touchés** (`Incorrect newline style`) : copie de travail Windows en CRLF ;
+  sans objet sur la CI Linux.
+- Couverture non mesurée localement (`cargo-llvm-cov` absent).
+
+---
+
 ## 2026-09-28 — US-110 : dashboard-api, round 8 de revue (OswinFreyr)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

@@ -1,0 +1,21 @@
+// A → D par une chaîne de 2 relais : A — B — C — D.
+// A et D ne sont jamais à portée l'un de l'autre.
+Scenario(
+    nom: "multihop",
+    description: "chaîne de 4 nœuds, latence et gigue par saut",
+    noeuds: 4,
+    duree_ms: 1000,
+    liens: [
+        (a: 0, b: 1, latence_ms: 30, gigue_ms: 20),
+        (a: 1, b: 2, latence_ms: 30, gigue_ms: 20),
+        (a: 2, b: 3, latence_ms: 30, gigue_ms: 20),
+    ],
+    actions: [
+        (a_ms: 10, action: Emettre(noeud: 0, charge: "de A pour D")),
+    ],
+    attendus: [
+        Livre(noeud: 1, charge: "de A pour D"),
+        Livre(noeud: 2, charge: "de A pour D"),
+        Livre(noeud: 3, charge: "de A pour D"),
+    ],
+)
