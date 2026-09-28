@@ -116,6 +116,10 @@ dengon-sim/
   `lossy_mesh` (et pertes réellement tirées).
 - Commande : `cargo test -p dengon-sim` → **28 passés** (24 unitaires + 1
   conformité + 3 scénarios), 2026-09-28.
+- Couverture (job CI `core`, run 36404136592, lcov) : **96,5 %** des lignes de
+  `dengon-sim` ; `reseau.rs` 97,1 %, `harness.rs` 96,4 %, `scenario.rs`
+  96,8 %, `cli.rs` 99 %, `alea.rs` 100 % ; `main.rs` 0 % (8 lignes, délègue
+  à `cli`).
 
 ## Limites connues / TODO
 
@@ -126,8 +130,6 @@ dengon-sim/
 - Modèle réseau **sans bande passante, churn ni dérive d'horloge** (prévus
   par §4.3) : latence, gigue, perte et partition seulement — ce que demande
   US-221.
-- Couverture : mesurée par le job CI `core` (`cargo-llvm-cov` absent du poste
-  de dev).
 
 ## Pour l'oral
 
