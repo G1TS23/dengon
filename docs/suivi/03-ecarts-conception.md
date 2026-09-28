@@ -1306,3 +1306,53 @@ _(aucun écart pour l'instant)_
   (`Instant`/uptime + heure système sur desktop, `esp_timer_get_time` +
   heure SNTP sur ESP32).
 - **Doc de conception mise à jour ?** non.
+
+---
+
+### `observability` : aucun site d'appel réel, catalogue Rust non vérifié automatiquement contre `catalogue.py` (US-208)
+
+- **Conception :** `docs/synthese/04-architecture.md` §2 et
+  `docs/powl/08-observability-events.md` décrivent `observability` comme le
+  module qui **produit** les événements aux « bons endroits » —
+  implicitement, depuis le code qui gère le trafic (`sync::routing`,
+  `sync::inventory`, etc.) et la santé du nœud.
+- **Code :** `crates/dengon-core/src/observability/` livre le
+  **mécanisme** — `Envelope`, la redaction structurelle (`msg_log_id`), la
+  sérialisation JSON canonique (vérifiée octet à octet contre 3 fixtures
+  golden réelles de l'US-107) — et 4 constructeurs de payload
+  représentatifs (`pkt_seen`, `pkt_relayed`, `msg_queued`,
+  `peer_connected`) sur les 28 du catalogue. **Aucun appelant réel
+  n'existe** : `sync::routing`/`sync::inventory` (US-209/US-210), qui
+  produiraient réellement du trafic `pkt.*`, ne sont pas encore livrés à
+  l'heure où ce module est écrit.
+- **Pourquoi :** `observability` (US-208) n'a de dépendance formelle
+  qu'envers `US-104`/`US-107` (sprint antérieur) — rien n'empêchait de
+  l'écrire avant `sync`, et attendre `sync` (même sprint, US-209/US-210)
+  aurait été une dépendance intra-sprint interdite par la règle du projet.
+  Le module est donc écrit en **fournisseur de mécanisme**, prêt à être
+  appelé dès que `sync` existe, plutôt qu'en essayant de deviner par
+  avance la forme exacte des appels depuis un code qui n'existe pas
+  encore.
+- **Deuxième écart, apparenté :** `observability::catalog::EVENT_NAMES`
+  (28 noms) a été comparé **manuellement** à
+  `contracts/tools/catalogue.py::CATALOGUE` (28 clés des deux côtés,
+  vérifié à l'écriture de ce module) — aucun outil ne garantit que les
+  deux listes resteront synchronisées si l'une des deux évolue sans
+  l'autre. Le job CI `cross-vectors` (US-222, pas encore livré) est
+  l'endroit naturel pour l'automatiser, sur le même principe que
+  `tests/protocol_vectors.rs` (comparaison structurelle contre des
+  vecteurs partagés).
+- **Conséquences :** aucun risque immédiat — la **forme** du contrat
+  (l'enveloppe, la redaction, le JSON canonique) est déjà correcte et
+  testée contre le vrai contrat Python. Ce qui manque est la
+  **couverture** (24 événements sur 28 sans constructeur dédié) et
+  l'**intégration** (aucun code ne les émet encore). Les deux sont des
+  suites mécaniques une fois `sync` livré, pas des inconnues de conception.
+- **Condition de levée :** quand `sync::routing`/`sync::inventory`
+  arriveront (US-209/US-210), câbler les appels réels à
+  `observability::*` et écrire les constructeurs manquants au fil de l'eau
+  ; envisager la vérification cross-langage automatique au moment de
+  US-222 (CI `cross-vectors`).
+- **Doc de conception mise à jour ?** Non — le mécanisme correspond déjà à
+  la conception, seule l'intégration reste à faire quand son code appelant
+  existera.

@@ -10,6 +10,123 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-208 : rebase de la PR #89 sur `main` (après #84, #85, #87, #88)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/lib.rs`, `docs/suivi/`
+**Lot :** US-208, PR #89 — branche `feat/US-208-observability`
+
+### Fait
+- `git rebase origin/main` du commit de la PR. Deux conflits :
+  - `lib.rs` : doc de crate et commentaire d'`extern crate alloc` —
+    fusionnés (`crypto`, `sync` de `main` + `observability`) ; `pub mod
+    observability` gardé à côté de `crypto` / `identity` / `sync`.
+  - `modules/dengon-core.md` : ligne « État », arborescence, « Modules
+    encore absents » (`observability` retiré), tableau des types,
+    décisions, tests, résumé oral — les deux côtés gardés.
+- Fusion automatique fautive corrigée à la main : entrée US-208 remise en
+  haut du journal (elle était tombée au milieu, sans séparateur `---`) ;
+  ligne `dengon-core` en double dans `02-avancement.md` → une seule ligne ;
+  `modules/_index.md` complété.
+
+### Vérifications
+- `cargo fmt --all -- --check` : OK.
+- `cargo clippy --workspace --all-targets -- -D warnings` : OK.
+- `cargo check -p dengon-core --no-default-features` : OK.
+- `cargo test -p dengon-core` : 272 tests unitaires + tests d'intégration
+  (7 `codec_proptest`, 2 `crypto_vectors`, 3 `identity_vectors`,
+  7 `protocol_vectors`, 8 `routing_mock`) = 299 passés, 0 échec,
+  2 ignorés (régénération de vecteurs).
+
+### État après cette session
+- Fiche(s) module mise(s) à jour : `dengon-core.md` (résolution du conflit)
+
+---
+
+## 2026-09-28 — US-208 : `observability` — catalogue, JSON canonique, redaction
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/observability/{mod.rs,catalog.rs,canonical.rs}`
+(nouveaux), `crates/dengon-core/src/lib.rs`, `docs/suivi/modules/dengon-core.md`,
+`docs/suivi/03-ecarts-conception.md`
+**Lot :** US-208, Sprint 2
+
+### Fait
+- `observability::canonical::Value` : JSON canonique maison (`Bool`/`Int`/
+  `Str`/`Array`/`Object`), `BTreeMap<String, Value>` pour le tri des clés
+  — pas de dépendance `serde_json` en runtime, pas de flottant
+  représentable (élimine par construction les deux pièges que
+  `contracts/events/CANONICAL.md` documente lui-même côté Rust : tri
+  manquant par défaut, `f64` qui casse la signature).
+- `observability::catalog::EVENT_NAMES` : les 28 noms d'événements du
+  périmètre MVP, miroir de `contracts/tools/catalogue.py::CATALOGUE`
+  (comparé manuellement, pas d'outillage cross-langage — écart consigné).
+- `observability::{Envelope, msg_log_id, pkt_seen, pkt_relayed, msg_queued,
+  peer_connected}` : construction d'enveloppe, redaction structurelle
+  (les constructeurs n'acceptent que des identifiants déjà redactés,
+  `MsgLogId` 8 o — pas de `MsgId` brut 32 o), 4 constructeurs de payload
+  représentatifs sur les 28 du catalogue.
+- **Vérifié octet à octet contre 3 fixtures golden réelles de l'US-107**
+  (`01-pkt-seen.json`, `10-msg-queued.json`,
+  `16-peer-connected-disconnected.json`) : `event_id` et JSON canonique
+  complet calculés indépendamment avec
+  `contracts/tools/catalogue.py::canonical_json`, codés en dur comme
+  octets attendus dans les tests Rust — critère d'acceptation explicite de
+  l'US.
+- **Test négatif de redaction** : construit 3 événements distincts à
+  partir du même `msg_uuid` « secret », vérifie que ni les octets bruts ni
+  leur forme hex n'apparaissent dans la sortie canonique — sur les 3
+  événements, pas seulement un.
+- 12 tests au total (5 `canonical`, 3 `catalog`, 4 `mod`).
+
+### Pourquoi / décisions
+- Redaction imposée par le **typage**, pas par convention : impossible
+  d'appeler un constructeur de payload avec un `MsgId` brut, ça ne
+  compile pas. Directement motivé par le critère d'acceptation
+  « aucun msg_uuid ... ne peut sortir, quelle que soit l'entrée ».
+- JSON canonique écrit à la main plutôt que `serde_json` + config : les
+  deux pièges documentés dans `CANONICAL.md` (tri des clés, flottants)
+  sont éliminés par la forme du type (`BTreeMap`, pas de variante
+  `Float`), pas par une configuration qu'un futur changement pourrait
+  défaire silencieusement.
+- 4 constructeurs sur 28, aucun site d'appel réel : `sync::routing`/
+  `sync::inventory` (US-209/US-210) ne sont pas livrés — écrire le
+  mécanisme maintenant (dépendances US-104/US-107 satisfaites) plutôt que
+  d'attendre une dépendance intra-sprint interdite par la règle du projet.
+  Écart consigné.
+
+### Écarts vs conception
+- Deux écarts consignés dans `03-ecarts-conception.md` : absence de site
+  d'appel réel, et absence de vérification cross-langage automatique du
+  catalogue.
+
+### État après cette session
+- `cargo test -p dengon-core` → 58 passés (54 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features`
+  (`observability` compris) tous verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core observability
+12 passed (0 failed)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+
+$ cargo fmt --all -- --check
+(rien — propre)
+
+$ cargo check -p dengon-core --no-default-features
+Finished (observability compile en no_std + alloc)
+```
+- Octets attendus des 3 tests de fixtures calculés indépendamment avec
+  `python3 -c "import json; json.dumps(..., sort_keys=True,
+  separators=(',',':'), ...)"` sur les mêmes champs que les fixtures
+  `contracts/events/fixtures/`, avant d'écrire le test Rust — pas déduits
+  a posteriori du code Rust lui-même.
+
+---
+
 ## 2026-09-28 — US-202 : rebase de la PR #88 sur `main` (après #84, #85, #87)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
