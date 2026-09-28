@@ -80,11 +80,12 @@ todo          = "warn"
 unimplemented = "warn"
 dbg_macro     = "warn"
 mem_forget    = "warn"
-# Pertinents pour un codec binaire (TTL, longueurs, offsets) mais bruyants
-# tant qu'il n'y a pas de code : à activer avec `protocol` (US-108).
-# cast_possible_truncation = "warn"
-# cast_sign_loss           = "warn"
-# cast_possible_wrap       = "warn"
+# Pertinents pour un codec binaire (TTL, longueurs, offsets). Activés avec
+# `protocol` (US-108, retour de revue #63, point de Paul : ce commentaire
+# annonçait l'activation à cette US précise, restée commentée dans la PR).
+cast_possible_truncation = "warn"
+cast_sign_loss           = "warn"
+cast_possible_wrap       = "warn"
 
 [profile.release]
 lto           = "thin"

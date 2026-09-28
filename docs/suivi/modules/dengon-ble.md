@@ -2,7 +2,7 @@
 
 **Rôle en une phrase :** la couche qui cache la radio Bluetooth au reste du programme.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §3.
-**Dernière mise à jour :** 2026-09-16
+**Dernière mise à jour :** 2026-09-25
 **État :** **contrat livré et gelé** (US-105) ; aucune implémentation radio.
 
 ## À quoi ça sert
@@ -142,9 +142,15 @@ et remplit la file en arrière-plan.
   encore, et chacune devra fournir son `BancDEssai` sur **matériel réel** :
   provoquer une vraie coupure brutale demande de couper l'alimentation d'une
   carte. C'est US-213, US-220 et US-303.
-- Le Spike B (US-102, `btleplug` en rôle GATT *peripheral* sous Linux) n'est pas
-  fait : on ne sait toujours pas si la bibliothèque le permet. Si la réponse est
-  non, c'est l'implémentation US-303 qui change, pas ce contrat.
+- **Spike B fait (US-102, 2026-09-25)** : `btleplug` ne tient le rôle GATT
+  *peripheral* sur **aucune** plateforme (pas seulement Linux — bibliothèque
+  *central-only* par conception, confirmé par recherche documentaire, pas
+  d'exécution réelle possible ici). Comme anticipé ci-dessus, **le contrat
+  `Transport` n'est pas affecté** ; c'est le futur backend desktop de
+  l'US-303 qui change : `bluer` (BlueZ/D-Bus, Linux uniquement) recommandé à
+  la place de `btleplug`, à ratifier en réunion. Détail :
+  [`suivi/spikes/US-102-btleplug-peripheral.md`](../spikes/US-102-btleplug-peripheral.md),
+  décision consignée en [B-6](../../synthese/01-sujets-a-trancher.md).
 - Pas de méthode `stop()` ni de reconfiguration à chaud : hors périmètre de
   `04-architecture.md` §3. À rouvrir si `dengon-node` en a besoin.
 - Couverture non mesurée localement (`cargo-llvm-cov` n'est pas installé sur le

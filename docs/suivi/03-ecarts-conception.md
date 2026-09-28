@@ -79,6 +79,55 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-09 — Dossier `contracts/` ajouté au layout du dépôt (US-107)
+
+- **Prévu :** `docs/synthese/04` §5 dessine le dépôt sans dossier pour les
+  artefacts de contrat inter-langages ; les « vecteurs de conformité » y sont
+  seulement évoqués (`synthese/10` §4.7, job `cross-vectors`).
+- **Réel :** un dossier **`contracts/`** à la racine, contenant `events/`
+  (schémas JSON + `CANONICAL.md` + 20 fixtures signées) et `tools/` (générateur
+  + validateur, outillés `uv`).
+- **Raison :** ces artefacts sont **neutres en langage** et consommés par trois
+  composants (`dashboard/` Python, `crates/` Rust, `firmware/` C). Les mettre
+  sous l'un d'eux créerait une dépendance de build inversée ; sous `docs/` ils
+  ne seraient pas exécutables par la CI.
+- **Conséquences :** un `paths: contracts/**` de plus en CI
+  (`.github/workflows/contracts.yml`). Le job `cross-vectors` de `synthese/10`
+  §4.7, quand il existera, consommera `contracts/events/fixtures/`.
+- **Doc de conception mise à jour ?** non (layout indicatif). À mentionner au
+  prochain rafraîchissement de `synthese/04` §5.
+
+---
+
+### 2026-09-09 — Identifiants pseudonymes tronqués : tous à 8 octets / 16 hex (US-107)
+
+- **Prévu :** notations incohérentes selon le document —
+  `msg_log_id` : `docs/powl/08` §1.3 `hex(SHA-256(msgID)[0..16])`,
+  `docs/synthese/04` §7 `SHA-256(msgID)[:16]`, `docs/synthese/09` §11.2
+  « hex 16 o » ;
+  `conv_hash` : `docs/synthese/09` §9 `SHA-256(min‖max)[0..8]` ;
+  `from_peer` / `peer` / `to_peer` : « `peerID` tronqué à 8 o » (`docs/synthese/09`
+  §9). « 16 », « 8 » = octets ou caractères hex ? Les trois se lisent dans les
+  deux sens.
+- **Réel :** le contrat US-107 fixe **une seule règle pour tous les
+  identifiants pseudonymes tronqués : 8 octets → 16 caractères hex**
+  (`^[0-9a-f]{16}$`). `recipient_tag` reste à 16 octets / 32 hex (déjà défini
+  ainsi, `docs/synthese/06`).
+- **Raison :** le **seul exemple concret** du corpus (`docs/synthese/09` §9,
+  `msg_log_id` = `"4d5e6f7a8b9c0d1e"` et `from_peer` = `"a1b2c3d4e5f60718"`)
+  fait 16 hex dans les deux cas. Uniformiser évite d'avoir des largeurs
+  différentes pour des objets de même nature (empreintes SHA-256 tronquées).
+  Plus court = moins corrélable, suffisant pour dédupliquer / grouper de
+  l'observabilité.
+- **Conséquences :** `docs/powl/08`, `docs/synthese/04` §7 et `docs/synthese/09`
+  (§9 pour `conv_hash`, §11.2 pour `messages.msg_log_id` : `TEXT` de 16
+  caractères) doivent être alignés sur « 8 octets / 16 hex » pour **tous** ces
+  champs. `dengon-core` (US-208) et l'ingest (US-216) tronquent à 8 octets.
+- **Doc de conception mise à jour ?** pas encore — à répercuter dans
+  `docs/powl/` et `docs/synthese/`. Résumé dans `contracts/events/CANONICAL.md` §3.
+
+---
+
 ### 2026-09-09 — Le label est `good first issue`, pas `good-first-issue`
 
 - **Prévu :** §5.3 liste le label `good-first-issue`, avec des traits d'union.
@@ -302,6 +351,168 @@ _(aucun écart pour l'instant)_
 
 ---
 
+### 2026-09-10 — Vecteurs de conformité v0 dans `crates/dengon-core/tests/`, pas `contracts/packet/` (US-108)
+
+- **Prévu :** l'US-108 demande « un fichier partagé, consommé par le core, le
+  firmware et le dashboard (base du job CI `cross-vectors`) ». Le dossier
+  `contracts/` (créé par US-107) est l'emplacement naturel, neutre en langage.
+- **Réel :** les vecteurs sont dans `crates/dengon-core/tests/vectors_v0.json`,
+  contrôlés par `tests/protocol_vectors.rs`.
+- **Raison :** `contracts/` **n'est pas encore sur `main`** (PR #60 en revue).
+  Y déposer `contracts/packet/` depuis cette branche entraînerait un conflit sur
+  `contracts/pyproject.toml` / `uv.lock` / `.github/workflows/contracts.yml` au
+  rebase. Le fichier reste consommable par le firmware (C) et le dashboard
+  (Python) à ce chemin ; il est juste rangé dans la crate qui le produit.
+- **Conséquences :** déplacement vers `contracts/packet/` prévu une fois #60
+  mergé (refactor localisé : `git mv` + ajout d'un `validate_packets.py` +
+  ligne dans `contracts.yml`). Le job `cross-vectors` (US-222) pointera sur
+  l'emplacement final.
+- **Doc de conception mise à jour ?** sans objet.
+
+---
+
+### 2026-09-10 — `serde_json` en dev-dependency de `dengon-core` (US-108)
+
+- **Prévu :** `docs/suivi/…` (entrée US-104) : « on ajoute une dépendance
+  externe au moment où une PR l'utilise réellement ».
+- **Réel :** `serde_json = "1"` en `[dev-dependencies]` de `dengon-core`.
+- **Raison :** `tests/protocol_vectors.rs` lit `vectors_v0.json`. Via
+  `serde_json::Value` (pas de `#[derive]`), donc `serde` n'est pas tiré comme
+  dépendance de proc-macro. `cargo check` ne compile pas les dev-deps → **aucun
+  effet sur `no_std`** ni sur l'artefact firmware.
+- **Conséquences :** `Cargo.lock` gagne `serde_json`, `itoa`, `memchr`, `ryu`,
+  `serde` (dev uniquement). `dengon-core` en dépendra de toute façon en runtime
+  pour `observability` (US-208) — JSON canonique des événements.
+- **Doc de conception mise à jour ?** non — usage attendu.
+### 2026-09-11 — `pkt.seen.rssi` reste optionnel dans le catalogue (US-107)
+
+- **Prévu :** `docs/powl/08-observability-events.md:43` et
+  `docs/synthese/09-dashboard-et-donnees.md:181` listent le payload de
+  `pkt.seen` comme `{ msg_log_id, type, ttl_in, size_bucket, from_peer, rssi }`
+  — sans `?` sur `rssi`, contrairement à `pseudo?` (`peer.announce_seen`) ou
+  `ssid?`/`duration_s?` (`relay.wifi_up`/`down`) dans les mêmes tableaux. Par
+  la convention du document, `rssi` y est donc **requis**.
+- **Réel :** `contracts/tools/catalogue.py`, l'entrée `pkt.seen` ne liste pas
+  `rssi` dans `"required"` — seulement dans `"props"`. Un événement `pkt.seen`
+  sans `rssi` passe `validate.py`.
+- **Raison :** signalé en **revue de la PR #60** par `OswinFreyr`. Le RSSI
+  n'est pas toujours disponible à la couche transport : `TransportEvent::
+  PeerConnected.rssi` (US-105, `crates/dengon-ble/src/transport.rs`) est déjà
+  typé `Option<i16>`, avec la même raison documentée en rustdoc — Android ne
+  fournit le RSSI qu'à la demande, NimBLE pas du tout sur une connexion
+  entrante. Rendre `rssi` requis dans le contrat d'événement obligerait à
+  inventer une valeur sur les chemins où le transport n'en a pas, ce qui
+  serait plus trompeur qu'un champ absent.
+- **Conséquences :** c'est la **doc de conception** qui est en retard, pas le
+  contrat. `docs/synthese/09-dashboard-et-donnees.md:181` mis à jour avec
+  `rssi?` pour refléter ce que `powl/03-network-protocol.md`/US-105 ont déjà
+  établi côté transport ; `docs/powl/08` non touché (dossier figé, cf.
+  `CLAUDE.md`).
+- **Doc de conception mise à jour ?** oui — `docs/synthese/09-dashboard-et-donnees.md`.
+
+---
+
+### Piège JSON Schema repéré mais **partiellement corrigé** (dette assumée) — `node_id`/`name`
+
+- Les motifs `^(relay|client)-[0-9a-f]{6,}$` (`node_id`) et `^[a-z]+\.[a-z_]+$`
+  (`name`) dans `contracts/events/envelope.schema.json` restent vulnérables
+  au même piège que `HEX16`/`HEX32`/`HEX64`/`sig`/`batch_id` (un `$` Python
+  matche juste avant un `\n` final — retour de revue #60) : ces deux-là n'ont
+  **pas** reçu de `minLength`/`maxLength` correctif, contrairement aux
+  champs de longueur fixe.
+- **Raison de ne pas corriger pareil :** ces deux motifs sont **ouverts**
+  (`{6,}` sans borne haute, `name` sans longueur fixe) — `minLength` seul ne
+  fermerait pas le trou. La seule fermeture complète serait `\Z` au lieu de
+  `$`, une extension **Python**, absente d'ECMA 262 (la norme visée par
+  `pattern` en JSON Schema) — l'introduire irait à l'encontre de l'objectif
+  même de `contracts/` (neutre en langage, potentiellement validé un jour par
+  un moteur non-Python).
+- **Impact réel :** faible. Un `node_id`/`name` avec un `\n` final ne casse
+  rien silencieusement : `name` sert de clé dans `CATALOGUE`, donc un nom
+  suffixé échouerait de toute façon au lookup (`événement hors catalogue`) ;
+  `node_id` n'entre dans aucun calcul qui plante dessus (contrairement à
+  `seq`/`payload`, corrigés). C'est une strictness manquante, pas un chemin
+  de crash.
+- **Condition de levée :** si `contracts/` gagne un jour un second
+  consommateur non-Python qui a besoin d'une validation stricte de ces deux
+  champs, ou si le motif `node_id` gagne une borne haute naturelle.
+- **Mise à jour 2026-09-16 (retour de revue #60, round 3) :** le trou côté
+  `name` est refermé, mais pas par ce mécanisme — `payloads_json_schema()`
+  contraint désormais `name` à `{"enum": sorted(CATALOGUE)}` (comparaison de
+  chaîne exacte, pas une regex). Un `name` avec un `\n` final, ou toute autre
+  valeur hors catalogue, échoue à l'égalité de chaîne peu importe la regex du
+  champ dans `envelope.schema.json`. Le trou décrit ci-dessus ne s'applique
+  donc plus qu'à `node_id`.
+- **Mise à jour 2026-09-28 (retour de revue #60, round 5, point 1
+  d'OswinFreyr) :** `name` a en réalité toujours deux protections
+  indépendantes maintenant — l'`enum` ci-dessus côté `payloads.schema.json`,
+  **et** `envelope.schema.json` lui-même ferme le trou avec `"not":
+  {"pattern": "\n"}` sur la propriété `name`. Le motif `node_id` reste seul
+  concerné par ce piège ; voir l'entrée dédiée ci-dessous sur la longueur de
+  `node_id`, qui documente pourquoi il n'a pas reçu le même traitement.
+
+---
+
+### 2026-09-28 — `node_id` : longueur hexadécimale gelée à 6 caractères (24 bits), risque de collision assumé pour le MVP (retour de revue #60, round 5, point 2 d'OswinFreyr)
+
+- **Constat :** `docs/synthese/09-dashboard-et-donnees.md:64` décrit
+  `node_id` comme « un hash », sans fixer de longueur. Le contrat
+  (`contracts/events/envelope.schema.json`, `$defs/node_id`) fige la partie
+  hexadécimale à exactement 6 caractères (`relay-[0-9a-f]{6}` /
+  `client-[0-9a-f]{6}`) — un choix fait au round 4 pour fermer le trou du
+  `$`/`\n` avec une longueur exacte par branche (`minLength == maxLength`),
+  mais jamais tranché comme décision de contrat en tant que telle : ce
+  round 4 corrigeait un piège regex, pas la taille de l'espace de noms.
+- **`node_id` sert de clé primaire** (`nodes.node_id`), entre dans le calcul
+  d'`event_id` (`SHA-256(node_id ‖ seq)`) et identifie le journal chaîné par
+  appareil (A-7). Une collision entre deux nœuds mélangerait leurs deux
+  chaînes côté dashboard et produirait de faux `integrity.chain_broken`.
+- **Risque quantifié (approximation des anniversaires,
+  `p ≈ 1 - exp(-n²/2N)`, `N = 16 777 216` pour 24 bits) :** ~0,003 % pour
+  100 nœuds, ~2,9 % pour 1 000 nœuds, ~63 % pour 6 000 nœuds. Le MVP vise
+  une démo de 5-8 appareils (B-4) — risque négligeable à cette échelle,
+  mais 6 caractères ne passerait pas à l'échelle d'un déploiement réel de
+  plusieurs centaines de nœuds sans revoir la longueur.
+- **Décision : garder 6 hex (24 bits) pour le MVP**, plutôt que de rouvrir le
+  motif en longueur variable (`{6,}` + `"not": {"pattern": "\n"}` + une borne
+  haute explicite, ex. `maxLength: 40`, qui aurait aussi fermé le trou sans
+  figer la longueur). Une longueur fixe est plus simple à documenter et à
+  tester (les fixtures golden et `docs/powl/08` utilisent déjà tous 6 hex),
+  et le MVP ne dépassera pas quelques appareils physiques.
+- **Condition de levée :** avant tout déploiement au-delà de quelques
+  centaines de nœuds simultanés, augmenter la longueur hexadécimale de
+  `node_id` (le format `relay-`/`client-` + longueur exacte reste le même
+  mécanisme, seule la borne change) et régénérer les fixtures golden en
+  conséquence.
+- **Doc de conception mise à jour ?** non — `docs/synthese/09` reste
+  volontairement vague (« un hash ») ; ce fichier est la référence pour la
+  longueur réellement figée par le contrat.
+
+---
+
+### 2026-09-16 — `prev_hash` ajouté à l'enveloppe, optionnel (US-107, retour de revue #60 round 3)
+
+- **Prévu :** `docs/synthese/09-dashboard-et-donnees.md` §D (`integrity.chain_broken`
+  → `{expected_prev, got_prev}`) et `:430` (colonne `events.prev_hash`)
+  supposent qu'un événement porte le hash de l'événement précédent du même
+  nœud.
+- **Réel :** `envelope.schema.json` était strict (`additionalProperties: false`)
+  sans déclarer `prev_hash` — aucun consommateur ne pouvait le faire
+  transiter. `prev_hash` (HEX64) a été ajouté aux `properties`, **sans** le
+  mettre dans `required` : optionnel.
+- **Raison :** fermer la possibilité de transit avant le gel du contrat plutôt
+  que de découvrir après coup qu'`integrity.chain_broken` est indérivable
+  pour de bon. Rester optionnel (au lieu de required) parce qu'aucun
+  producteur (`dengon-core`, US-208) n'existe encore pour le remplir, et
+  qu'aucune des 20 fixtures ne le porte — le rendre requis casserait le
+  contrat sans qu'un vrai producteur en bénéficie.
+- **Conséquences :** `chain_broken` reste **non exercé** par les fixtures
+  (`got_prev` n'apparaît dans aucun batch golden) — seule la possibilité de
+  transit est acquise, pas la vérification bout-en-bout. À revisiter quand
+  US-208 (journal chaîné côté nœud) existera : soit une 21ᵉ fixture porteuse
+  de `prev_hash`, soit le passage en `required`.
+- **Doc de conception mise à jour ?** non — `synthese/09` décrivait déjà ce
+  besoin, c'est le contrat qui le rattrape.
 ### `TransportEvent::PeerDisconnected` porte un **motif**, absent de la conception
 
 - **Conception :** [`docs/synthese/04-architecture.md`](../synthese/04-architecture.md)
