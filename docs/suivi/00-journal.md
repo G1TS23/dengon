@@ -10,6 +10,43 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-28 — US-207 : `store`, round de revue d'OswinFreyr — 2 vrais problèmes de sécurité corrigés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/store.rs`,
+`docs/suivi/modules/dengon-core.md`
+**Lot :** US-207, PR #76
+
+### Fait
+- **AAD de `messages.body` élargie à toute la ligne, pas seulement
+  `msg_uuid`.** Reproduit concrètement l'attaque : trafiquer
+  `author_peer_id` d'une ligne `messages` (via `UPDATE` direct sur le
+  `.db`) laissait le corps se déchiffrer normalement — le message se
+  réattribuait silencieusement à un autre auteur. L'AAD inclut maintenant
+  un préfixe de domaine et `conv_id`/`author_peer_id`/`direction`,
+  **recalculée à la lecture depuis les colonnes réellement stockées**
+  (`get_message_body` ne fait plus confiance à des valeurs fournies par
+  l'appelant). Même traitement pour `noise_sessions.state` (préfixe de
+  domaine ajouté). Nouveau test
+  `trafiquer_lauteur_dun_message_casse_le_dechiffrement`.
+- **`upsert_contact` : rotation de clé trace `key_changed_at` et efface
+  `verified_at`.** La version d'origine écrasait les clés publiques d'un
+  contact sans toucher son statut « vérifié » — un contact vérifié restait
+  vérifié même après qu'un pair ait annoncé le même `peer_id` avec
+  d'autres clés (rotation légitime ou usurpation, indiscernables sans
+  cette trace). Ajout d'un paramètre `now_ms` et d'un `CASE` SQL qui
+  compare les clés avant/après pour décider s'il faut effacer/horodater.
+  Corrigé au passage : `pseudo=None` n'efface plus un pseudo déjà connu.
+  Nouveaux tests
+  `changer_les_cles_d_un_contact_efface_son_statut_verifie`,
+  `upsert_contact_ne_vide_pas_un_pseudo_deja_connu`.
+
+### Pourquoi / décisions
+- Retour de revue d'OswinFreyr sur la PR #76 (revue automatique, passe
+  diff unique) : 2 points, l'un « moyen », l'autre « faible » selon Oswin
+  — les deux sont de vrais problèmes de sécurité une fois qu'on a un
+  attaquant à écriture sur le fichier `.db` dans le modèle de menace (déjà
+  celui qui justifie le chiffrement champ par champ lui-même).
 ## 2026-09-28 — US-206 : `ledger`, round de revue d'OswinFreyr — débordement `u64::MAX` corrigé
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
@@ -148,6 +185,48 @@ Finished (0 erreurs)
 
 ### État après cette session
 - `cargo test -p dengon-core` → 32 passés (28 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check` verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core --lib store
+13 passed (module store seul)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+```
+- Les deux corrections confirmées détecter leur régression respective :
+  AAD réduite à `msg_uuid` seul → le test de trafiquage échoue (le
+  déchiffrement réussit à tort) ; `CASE` SQL neutralisé →
+  `verified_at`/`key_changed_at` restent inchangés après un vrai
+  changement de clé. Les deux restaurés ensuite.
+
+---
+
+## 2026-09-28 — US-207 : rebase sur `main` (US-108 mergée), fiche fusionnée
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/lib.rs`,
+`docs/suivi/modules/dengon-core.md`, `docs/suivi/02-avancement.md`
+**Lot :** US-207, PR #76
+
+### Fait
+- Rebase de la branche sur `main` (qui a entre-temps intégré US-108,
+  `protocol::{consts, types}`, PR #63). Conflits réels sur `lib.rs`
+  (`pub mod store;` vs `pub mod protocol;` — fusion triviale, les deux
+  coexistent), `Cargo.lock` (régénéré via `cargo check`), et la fiche
+  `dengon-core.md` (fusion éditoriale des deux sections). Ligne
+  `dengon-core` dupliquée dans `02-avancement.md` par le merge union,
+  fusionnée en une seule (même piège que celui déjà signalé sur la PR #63).
+- Contrairement à la branche `ledger` (US-206), **aucun correctif de code
+  nécessaire ici** : `store.rs` ne fait aucun cast `usize as u32` du genre
+  qui a cassé `ledger.rs` sous les lints `cast_possible_truncation`/
+  `cast_sign_loss`/`cast_possible_wrap` activés par US-108 — vérifié en
+  relançant `cargo clippy --workspace --all-targets --all-features -- -D
+  warnings` après le merge, propre du premier coup.
+
+### Pourquoi / décisions
+- Aucune nouvelle décision — rebase de suivi.
   `clippy -D warnings`, `fmt --check`, `check --no-default-features` tous
   verts. Fiche module fusionnée pour refléter `ledger` + `protocol`
   ensemble.
@@ -405,6 +484,20 @@ $ grep -c '^\s*```' docs/suivi/00-journal.md
 - Aucun.
 
 ### État après cette session
+- `cargo test -p dengon-core` → 29 passés (25 lib + 4 intégration).
+  `clippy -D warnings`, `fmt --check`, `check --no-default-features` tous
+  verts.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+29 passed (25 lib + 4 intégration)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+Finished (0 erreurs)
+
+$ cargo fmt --all -- --check
+(rien — propre)
 - Les 2 points de ce round sont traités.
 
 ### Vérification (commandes réellement exécutées)
@@ -415,6 +508,106 @@ $ grep -n "esp_fill_random\|snow" docs/synthese/06-securite.md
 
 ---
 
+## 2026-09-26 — US-207 : AAD manquante sur le chiffrement champ par champ
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/store.rs`
+**Lot :** US-207, Sprint 2 (auto-revue de la PR #76 avant merge, demandée
+explicitement par Olivier — « refaire un tour sur ces dernières PR un peu
+en mode review »)
+
+### Fait
+- Vulnérabilité trouvée en relisant `encrypt_field`/`decrypt_field` de
+  manière adversariale : le chiffrement XChaCha20-Poly1305 ne liait le
+  texte chiffré à **aucun contexte** (ni `msg_uuid`, ni `peer_id`, ni nom
+  de colonne). Un attaquant capable d'écrire directement dans le fichier
+  `.db` (appareil compromis, synchronisation malveillante) aurait donc pu
+  copier le blob chiffré d'une ligne vers une autre — par ex. remplacer
+  le corps chiffré d'un message par celui, chiffré, d'un autre message, ou
+  échanger l'état Noise de deux pairs — et le déchiffrement aurait quand
+  même réussi, puisque l'AEAD n'authentifiait que le texte chiffré
+  lui-même, jamais la ligne à laquelle il est censé appartenir.
+- Corrigé en ajoutant un paramètre `aad` (« additional authenticated
+  data ») à `encrypt_field`/`decrypt_field`, porté par `chacha20poly1305`
+  nativement (`aead::Payload { msg, aad }`) : `identity.priv_static`/
+  `priv_sign` liés à une constante de colonne, `messages.body` lié à
+  `msg_uuid`, `noise_sessions.state` lié à `peer_id`. Un même texte chiffré
+  présenté sous un mauvais contexte échoue désormais explicitement au
+  déchiffrement (`StoreError::Decryption`), au lieu de réussir
+  silencieusement.
+- Nouveau test permanent
+  `un_champ_dechiffre_avec_un_mauvais_contexte_echoue` couvrant ce cas.
+- Vérifié au passage (hypothèses de la revue précédente) : le fichier
+  `-wal` de SQLite ne peut jamais contenir de plaintext, puisque le
+  chiffrement a lieu côté Rust avant que les octets n'atteignent SQLite
+  (aucun risque lié à `journal_mode = WAL`) ; aucun fichier `-wal`/`-shm`
+  résiduel constaté après fermeture de la connexion dans le test sur
+  fichier réel. La clé de chiffrement partagée entre les trois colonnes
+  sensibles reste un choix de simplification documenté (espace de nonce
+  XChaCha20 assez grand), pas un bug. `#[allow(clippy::too_many_arguments)]`
+  sur `set_identity`/`insert_message` reflète 1:1 les colonnes de la
+  table — accepté tel quel.
+
+### Vérification
+- `cargo test -p dengon-core --lib store` : 10 tests, tous verts (incluait
+  déjà le test négatif de la revue précédente + le nouveau).
+- `cargo fmt --all -- --check` : propre.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` :
+  propre.
+
+## 2026-09-26 — US-207 : `store` — persistance SQLite chiffrée champ par champ
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/{Cargo.toml,src/lib.rs,src/store.rs}`
+(nouveau), `Cargo.toml` (racine), `docs/suivi/modules/dengon-core.md`,
+`docs/suivi/02-avancement.md`, `docs/suivi/03-ecarts-conception.md`
+**Lot :** US-207, Sprint 2
+
+### Fait
+- Implémenté `store::{Store, KeySource, FixedKeySource}` : schéma SQLite
+  complet (11 tables, repris tel quel de `docs/synthese/09` §11.1),
+  migrations versionnées et rejouables (même discipline que
+  `dashboard/api/app/migrations.py`, US-110), chiffrement XChaCha20-Poly1305
+  champ par champ (`identity.priv_static`/`priv_sign`, `messages.body`,
+  `noise_sessions.state`).
+- Clé de chiffrement différée derrière le trait `KeySource` — même schéma
+  que `ledger::Signer` (US-206) : `identity` (US-205) est dans le même
+  sprint, dépendance intra-sprint interdite par la règle du projet. Écart
+  consigné dans `03-ecarts-conception.md`.
+- `store` reste `std`-only par choix : `rusqlite` vendorise sqlite3 en C,
+  incompatible ESP32 de toute façon (l'impl ESP32 sera un module séparé,
+  NVS/flash, prévu par l'architecture).
+- 9 tests sur `store` : migrations rejouables, round-trip identité/
+  message/session Noise, nonce aléatoire (deux chiffrements du même texte
+  diffèrent), mauvaise clé / donnée modifiée / buffer tronqué échouent tous
+  proprement (pas de panique). **Test central du critère d'acceptation** :
+  écrit un message connu sur un vrai fichier `.db`, `grep` binaire sur le
+  fichier — le texte en clair n'y est pas.
+
+### Pourquoi / décisions
+- Voir `03-ecarts-conception.md`, entrée « `store` : clé de chiffrement
+  différée derrière un trait `KeySource` (US-207) ».
+
+### Écarts vs conception
+- Un écart, documenté : la clé de chiffrement est fixe (bouchon), pas
+  dérivée d'un Keystore/Keychain réel (voir ci-dessus). Le mécanisme de
+  chiffrement lui-même n'est pas un bouchon — il chiffre réellement,
+  vérifié par le test négatif sur fichier.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+11 passed; 0 failed
+
+$ cargo fmt --all -- --check
+(vert)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+(vert, 0 warning)
+
+$ cargo check -p dengon-core --no-default-features --locked
+(vert — store absent de cette configuration, comme prévu)
+```
 ## 2026-09-28 — US-112 : round de revue d'OswinFreyr sur la PR #66, gap `CryptoResolver` reporté dans les issues
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

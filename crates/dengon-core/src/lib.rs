@@ -20,7 +20,7 @@
 //! # État
 //!
 //! Squelette livré par l'US-104. `protocol` livré par l'US-108. `ledger`
-//! livré par l'US-206.
+//! livré par l'US-206. `store` livré par l'US-207.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
@@ -32,6 +32,8 @@ extern crate alloc;
 
 pub mod ledger;
 pub mod protocol;
+#[cfg(feature = "std")]
+pub mod store;
 
 /// Version du protocole dengon implémentée par cette crate.
 ///

@@ -3,7 +3,7 @@
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame).
 **Dernière mise à jour :** 2026-09-28
-**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206).
+**État :** esquisse — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207).
 
 ## À quoi ça sert
 
@@ -21,8 +21,9 @@ charge de transporter (le trait `Transport` de `dengon-ble`).
 ```
 dengon-core/
   src/
-    lib.rs              — bascule no_std, extern crate alloc, PROTOCOL_VERSION, VERSION
+    lib.rs              — bascule no_std, extern crate alloc, PROTOCOL_VERSION, VERSION, pub mod store (feature std)
     ledger.rs           — journal chaîné append-only (US-206)
+    store.rs            — persistance SQLite, chiffrement champ par champ (US-207)
     protocol/
       mod.rs           — re-exports du module protocol
       consts.rs        — TOUTES les constantes du protocole (synthese/05 §2)
@@ -33,8 +34,8 @@ dengon-core/
     protocol_vectors.rs — contrôle structurel de ces vecteurs
 ```
 
-Modules encore absents : `codec` (US-201), `crypto`, `identity`, `store`,
-`sync`, `observability`, `api` (sprint 2).
+Modules encore absents : `codec` (US-201), `crypto`, `identity`, `sync`,
+`observability`, `api` (sprint 2).
 
 ## Concepts / types importants
 
@@ -52,6 +53,9 @@ Modules encore absents : `codec` (US-201), `crypto`, `identity`, `store`,
 | `ledger::Signer` / `ledger::NullSigner` | `src/ledger.rs` | Trait de signature + bouchon nul, tant que `crypto` (US-203, même sprint) n'existe pas — voir « Décisions ». |
 | `ledger::Verdict` | `src/ledger.rs` | `Ok`/`Broken`/`Fork`/`Gap`, renvoyé par `verify_chain()`. Réutilisé tel quel par `dengon-verify::main`, qui n'en a plus de copie locale. |
 | `Entry::to_bytes`/`Entry::from_bytes` | `src/ledger.rs` | Sérialisation binaire simple d'une entrée — sert le test de reprise après redémarrage, pas un vrai backend de stockage (voir « Décisions »). |
+| `store::Store<K: KeySource>` | `src/store.rs` | Connexion SQLite + migrations. `open()`/`open_in_memory()`, puis `set_identity`/`get_identity_private_keys`, `upsert_contact`, `insert_conversation`, `insert_message`/`get_message_body`, `set_noise_session`/`get_noise_session_state`. |
+| `store::KeySource` / `store::FixedKeySource` | `src/store.rs` | Trait qui fournit la clé de chiffrement des champs sensibles + bouchon à clé fixe (tests uniquement) — voir « Décisions », même schéma que `ledger::Signer` (US-206). |
+| `store::encrypt_field`/`decrypt_field` (privées) | `src/store.rs` | XChaCha20-Poly1305, nonce aléatoire de 24 o préfixé au résultat stocké, AAD liée au contexte de ligne/colonne. |
 
 ## Flux principal (exemple)
 
@@ -75,10 +79,25 @@ entries.iter().flat_map(Entry::to_bytes) → écrit quelque part (hors périmèt
 Ledger::from_entries(entries_relues, signer).verify_chain() → Verdict::Ok
 ```
 
+`store`, lui aussi, a un flux exécutable :
+
+```
+`store`, lui, a déjà un flux exécutable :
+
+```
+Store::open("dengon.db", key_source)
+  → run_migrations() (schema_migrations, IF NOT EXISTS, une transaction par migration)
+  → upsert_contact(peer_id, ...) → insert_conversation(conv_id, peer_id)
+  → insert_message(msg_uuid, conv_id, ..., body="salut", ...)
+       body chiffré (XChaCha20-Poly1305 + AAD) AVANT le INSERT — jamais en clair sur disque
+  → get_message_body(msg_uuid) → déchiffre, renvoie "salut"
+```
+
 Le flux applicatif complet (Alice écrit → chiffrement → trame → diffusion BLE
 → relais → Bob → accusé) reste décrit dans
 [`04-architecture.md`](../../synthese/04-architecture.md) §4 — `ledger` n'en
-est qu'un maillon (la traçabilité), pas le chemin des messages.
+est qu'un maillon (la traçabilité) et `store` la persistance locale, pas le
+chemin des messages.
 
 ## Dépendances
 
@@ -87,8 +106,11 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
   dépendance sortante de `dengon-core` serait une dépendance imposée au
   firmware ESP32.
 - **Externes (runtime) :** `sha2` (`default-features = false`, no_std) pour
-  `ledger`. `protocol` n'utilise que `core`. Viendront encore
-  `ed25519-dalek`, `snow`, `x25519-dalek`, `chacha20poly1305`, `rusqlite`,
+  `ledger`. `protocol` n'utilise que `core`.
+- **Externes (crates), `store` seulement (feature `std`) :** `rusqlite`
+  (`features = ["bundled"]` — sqlite3 vendorisé en C, pas de dépendance
+  système) et `chacha20poly1305` (`features = ["getrandom"]`, pour
+  `aead::OsRng`). Viendront encore `ed25519-dalek`, `snow`, `x25519-dalek`,
   `serde`.
 - **Externes (dev) :** `proptest` (property tests de `ledger`) ; `serde_json`
   — lecture de `tests/vectors_v0.json` via `Value` (pas de derive, donc
@@ -149,6 +171,77 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
   compare en arithmétique `u128`, qui ne peut pas déborder pour des
   opérandes `u64`. Test dédié :
   `seq_u64_max_ne_panique_pas_et_est_detecte`.
+- **`store` reste `std`-only, volontairement** (US-207) : contrairement à
+  `protocol`/`sync`/`ledger`, `store` n'a pas vocation à compiler en
+  `no_std` — `rusqlite` vendorise sqlite3 en C, absent d'ESP32.
+  `04-architecture.md` §2 le dit explicitement : « `store` est derrière un
+  trait `Store` (impl `rusqlite` natif, impl NVS/flash sur ESP32) », donc
+  l'implémentation ESP32 sera un module séparé, pas celui-ci.
+  `std = ["dep:rusqlite", "dep:chacha20poly1305"]` dans `Cargo.toml` active
+  `store` en même temps que `std`, pas de nouveau flag à retenir.
+- **Clé de chiffrement différée derrière `KeySource`** (US-207), même
+  schéma que `ledger::Signer` (US-206) : `identity` (US-205) — qui garde la
+  vraie clé, idéalement en Keystore/Keychain — est dans le **même sprint**
+  que `store`, et la règle du projet interdit la dépendance intra-sprint.
+  `FixedKeySource` (clé fixe) sert de bouchon aux tests. Écart consigné
+  dans `03-ecarts-conception.md`.
+- **XChaCha20-Poly1305, nonce aléatoire par appel** : jamais le même nonce
+  deux fois avec la même clé (condition de sécurité d'un AEAD en mode
+  compteur/stream). Le nonce est stocké en clair, préfixé au texte chiffré
+  — c'est la pratique normale, un nonce n'a pas besoin d'être secret,
+  seulement unique.
+- **Migrations calquées sur `dashboard/api/app/migrations.py`** (US-110,
+  déjà revue) : `(version, nom, [instructions])`, `CREATE ... IF NOT
+  EXISTS`, une transaction par migration, jamais rejouée une fois dans
+  `schema_migrations`. Même discipline, langage différent.
+- **Schéma repris tel quel de `docs/synthese/09-dashboard-et-donnees.md`
+  §11.1** : les 11 tables sont créées par la migration initiale ; seules
+  `identity`, `contacts`, `conversations`, `messages` et `noise_sessions`
+  ont des méthodes CRUD pour l'instant (celles nécessaires pour prouver le
+  chiffrement champ par champ) — `outbox`, `held_envelopes`, `seen_set`,
+  `recon_cache`, `ledger`, `ship_cursor` attendent `sync` (US-209..212) et
+  `ledger` (US-206) pour avoir un appelant.
+- **AAD ajoutée au chiffrement champ par champ après auto-revue
+  (2026-09-26)** : la version d'origine ne liait le texte chiffré à aucun
+  contexte de ligne/colonne, donc un attaquant à écriture sur le fichier
+  `.db` aurait pu copier le blob chiffré d'une ligne vers une autre (ex.
+  substituer le corps d'un message par celui, chiffré, d'un autre message)
+  sans que le déchiffrement échoue. `encrypt_field`/`decrypt_field`
+  prennent maintenant un `aad` (`identity.priv_static`/`priv_sign` liés à
+  une constante de colonne, `messages.body` à `msg_uuid`,
+  `noise_sessions.state` à `peer_id`) — un texte chiffré présenté sous un
+  mauvais contexte échoue explicitement. Voir `00-journal.md`, entrée
+  dédiée du 2026-09-26.
+- **AAD de `messages.body` élargie à toute la ligne** (retour de revue #76,
+  OswinFreyr) : lier `messages.body` au seul `msg_uuid` protégeait contre
+  une substitution de blob **entre lignes différentes**, mais pas contre
+  une modification des **autres colonnes de la même ligne**
+  (`author_peer_id`, `conv_id`, `direction`) — un attaquant à écriture sur
+  le fichier `.db` pouvait réattribuer un message à un autre auteur/une
+  autre conversation sans que le déchiffrement du corps échoue. L'AAD
+  inclut maintenant un préfixe de domaine (`"messages.body"`) et ces trois
+  colonnes, recalculée à la **lecture** depuis les valeurs réellement
+  stockées (pas fournies par l'appelant) — toute incohérence entre le
+  contenu chiffré et les métadonnées de sa ligne fait échouer le
+  déchiffrement. Même préfixe de domaine ajouté à `noise_sessions.state`
+  (`"noise_sessions.state"` + `peer_id`, déjà unique par ligne). Test dédié
+  : `trafiquer_lauteur_dun_message_casse_le_dechiffrement`.
+- **`upsert_contact` : rotation de clé publique trace `key_changed_at` et
+  efface `verified_at`** (retour de revue #76, OswinFreyr) : la version
+  d'origine écrasait `pub_static`/`pub_sign` sans toucher ces deux
+  colonnes — un contact vérifié par l'utilisateur restait « vérifié »
+  après qu'un pair ait annoncé le même `peer_id` avec d'autres clés
+  (rotation légitime ou usurpation, `verified_at`/`key_changed_at` existent
+  justement pour distinguer les deux). Le `ON CONFLICT DO UPDATE` compare
+  maintenant les clés avant/après (`CASE WHEN ... THEN NULL/?6 ELSE
+  contacts.verified_at/key_changed_at END`) : mêmes clés → statut
+  inchangé, clés différentes → `verified_at` effacé et `key_changed_at`
+  horodaté (nouveau paramètre `now_ms`). Au passage, `pseudo =
+  COALESCE(excluded.pseudo, contacts.pseudo)` au lieu de `pseudo =
+  excluded.pseudo` : un appel avec `pseudo=None` n'efface plus un pseudo
+  déjà connu. Tests dédiés :
+  `changer_les_cles_d_un_contact_efface_son_statut_verifie`,
+  `upsert_contact_ne_vide_pas_un_pseudo_deja_connu`.
 - **`protocol::{consts, types}` séparé de `protocol::codec`** (US-201) : permet
   à `sync::*` de démarrer sans la sérialisation. C'est l'objet même de l'US-108.
 - **`no_std` garanti pour `protocol`** : n'importe que `core`
@@ -216,6 +309,23 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
   **2 property tests** (`proptest`) : toute séquence d'appends reste
   vérifiable ; corrompre n'importe quelle entrée d'une séquence quelconque
   est toujours détecté comme `Broken`.
+- `src/store.rs`, module `tests` : 13 tests — migrations rejouables sans
+  erreur, round-trip identité/message/session Noise (chiffré puis
+  déchiffré, on retrouve le texte d'origine), deux chiffrements du même
+  texte donnent des octets différents (nonce aléatoire), déchiffrer avec la
+  mauvaise clé échoue, déchiffrer une donnée modifiée échoue (garantie
+  d'authenticité Poly1305), déchiffrer un buffer tronqué échoue sans
+  paniquer, déchiffrer avec un mauvais contexte AAD échoue (protection
+  anti-substitution entre lignes), **trafiquer `author_peer_id` d'un
+  message casse son déchiffrement** (nouveau, retour de revue #76 : l'AAD
+  ne liait `messages.body` qu'à `msg_uuid`, pas au reste de la ligne — voir
+  « Décisions »), **changer les clés d'un contact efface son statut
+  vérifié et trace le changement, un ré-appel avec les mêmes clés le
+  conserve** (nouveau, retour de revue #76), **`upsert_contact` avec
+  `pseudo=None` ne vide pas un pseudo déjà connu** (nouveau, retour de
+  revue #76), et le test central du critère d'acceptation : **écrire un
+  message connu sur un vrai fichier `.db`, puis `grep` binaire sur le
+  fichier — le texte en clair n'y est pas**.
 - `src/protocol/consts.rs` — 5 tests : valeurs de référence, cohérence des
   tailles d'en-tête, UUIDs GATT, sens des plages.
 - `src/protocol/types.rs` — 8 tests : discriminants contigus `0x01`–`0x0D`,
@@ -235,12 +345,13 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
   paquets **adressés** comme `ack-addressed`, pas seulement broadcast,
   contrairement à une formulation précédente de cette fiche — pas
   seulement pour les deux corrigés au round 2).
-- Commande : `cargo test -p dengon-core` → **33 passés** (29 lib + 4
-  intégration + 0 doc — 16 pour `ledger`/`lib.rs`, 13 pour
-  `protocol::{consts,types}`), rejoué le 2026-09-28 après le round 8 de
-  revue. `cargo clippy --workspace --all-targets --all-features -- -D
-  warnings` et `cargo fmt --all -- --check` verts. `cargo check -p
-  dengon-core --no-default-features` (frontière `no_std`) vert.
+- Commande : `cargo test -p dengon-core` → **46 passés** (42 lib + 4
+  intégration + 0 doc — 16 pour `ledger`, 13 pour `store`, 13 pour
+  `protocol::{consts,types}` et `lib.rs`), rejoué le
+  2026-09-28 après intégration de `ledger` (#75) et `store` (#76). `cargo
+  clippy --workspace --all-targets --all-features -- -D warnings` et `cargo
+  fmt --all -- --check` verts. `cargo check -p dengon-core
+  --no-default-features` (frontière `no_std`) vert.
 - Négatif vérifié en local : la garde de longueur `hdr + 2` réintroduite
   temporairement fait échouer `accept_vectors_are_structurally_consistent`
   sur le nouveau vecteur `noise-msg-addressed-reserved-bit-ignored` (30
@@ -259,16 +370,26 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
   commençant pas à 0) — voir le docstring d'`export()` et l'écart consigné
   dans `03-ecarts-conception.md` (retour de revue #75). Pas encore
   bloquant : aucun appelant réel d'`export()` n'existe en dehors des tests.
-- Pas de vrai backend de persistance câblé (SQLite/littlefs) — `to_bytes`/
-  `from_bytes` prouvent le format, pas l'écriture disque réelle.
+- `ledger` n'est pas encore câblé sur `store` : la table `ledger` existe
+  (migration initiale) mais aucune méthode d'accès — `to_bytes`/`from_bytes`
+  prouvent le format, pas l'écriture disque réelle.
+- Clé de chiffrement fixe (`FixedKeySource`) — pas de vraie dérivation
+  depuis un Keystore/Keychain (voir « Décisions » — dépend d'`identity`,
+  US-205).
+- CRUD incomplet : `outbox`, `held_envelopes`, `seen_set`, `recon_cache`,
+  `ledger`, `ship_cursor` ont leur table créée mais aucune méthode
+  d'accès — pas d'appelant avant `sync`.
 - **Pas de codec** : aucun `encode`/`decode` — c'est US-201. Le test des
   vecteurs est donc *structurel* (pas « `decode(bytes) == expect` »).
 - Pas de property test sur `protocol` (la DoD §7.2 en exigera dès qu'il y
   aura de la logique de sérialisation — `ledger`, lui, en a déjà).
-- Couverture ≥ 85 % non mesurée ni imposée.
+- Couverture ≥ 85 % non mesurée ni imposée (`cargo llvm-cov` pas encore
+  posé) — mais chaque chemin d'erreur de `store` (`Encryption`,
+  `Decryption`, `InvalidUtf8`, `Sqlite`) a un test dédié qui l'exerce.
 - `no_std` vérifié sur cible hôte seulement ; la vraie cross-compilation
   `xtensa-esp32-none-elf` est l'objet du Spike A (US-101), déjà validé pour
   `protocol`/`crypto` mais pas encore rejoué pour `ledger` spécifiquement.
+  `store` n'a jamais vocation à y compiler (voir « Décisions »).
 - **`timestamp_ms` des vecteurs `accept` figé à une date fixe (2024-07-29),
   hors tolérance anti-rejeu `TIMESTAMP_TOLERANCE_MS` (±2 h)** — signalé
   hors-diff par Paul (revue PR #63) : un décodeur qui appliquerait l'anti-rejeu
@@ -282,7 +403,7 @@ est qu'un maillon (la traçabilité), pas le chemin des messages.
 
 ## Pour l'oral
 
-Deux livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
+Trois livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du
 protocole** : les 13 types de paquets, les 5 drapeaux, la forme de l'en-tête,
 et une trentaine de constantes (durée de vie d'un message, seuils
 d'anti-inondation, TTL de départ…) — rien ne « fonctionne » encore, mais
@@ -292,3 +413,7 @@ firmware) vont s'accorder, d'où les **vecteurs de conformité**. US-206
 chaîné append-only, vérifiable hors ligne, qui prouve qu'un appareil n'a pas
 triché sur son historique — la pièce qui rend crédible « sécurité type
 blockchain » sans blockchain.
+US-207 (`store`) est la première **persistance réelle** : SQLite avec
+chiffrement champ par champ des données sensibles (clés privées, corps des
+messages, sessions Noise) — la preuve qu'un téléphone volé ne livre rien
+en clair, critère central de `docs/synthese/06-securite.md`.
