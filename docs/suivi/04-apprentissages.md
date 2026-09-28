@@ -893,3 +893,42 @@ transport sont restés identiques octet par octet.
 **Piège / surprise :** on s'attendait à devoir régénérer tout le transcript.
 **Où c'est utilisé :** `crates/dengon-core/tests/vectors/crypto_v0.json`.
 **Pour aller plus loin :** spec Noise §5.2 (`MixKey`, `MixHash`, `Split`).
+### Biais du modulo et le piège `u16 % 100000` (US-205)
+
+**C'est quoi :** pour tirer un nombre dans `0..N` depuis des octets
+aléatoires, on calcule `v % N`. Si `v` couvre `0..M` et que `M` n'est pas un
+multiple de `N`, les petites valeurs sortent un peu plus souvent : c'est le
+biais du modulo, d'autant plus négligeable que `M` est grand devant `N`. Le
+cas extrême est `M < N` : le modulo ne fait rien, et les valeurs `M..N` ne
+sortent jamais.
+**Pourquoi dans dengon :** la formule de conception du code de vérification
+prenait 2 octets (`M = 65 536`) pour un groupe de 5 chiffres (`N = 100 000`).
+Aucun groupe au-delà de 65535 n'était possible. On prend 5 octets
+(`M = 2⁴⁰`), comme Signal.
+**Piège / surprise :** le bug ne se voit pas dans un test d'égalité A = B.
+Il se voit en regardant la **distribution** : aucun groupe ne commence par
+7, 8 ou 9. Le test `toujours_60_chiffres` vérifie la forme ; la formule
+elle-même est recoupée en Python.
+**Où c'est utilisé :** `crates/dengon-core/src/identity/safety.rs:80`.
+**Pour aller plus loin :** Signal, *Safety number updates* (2016) ;
+libsignal `displayable_fingerprint` (chunks de 5 octets, `% 100000`).
+
+---
+
+### AAD : authentifier l'en-tête d'un blob chiffré sans le chiffrer (US-205)
+
+**C'est quoi :** un AEAD (ChaCha20-Poly1305, XChaCha20-Poly1305) prend en
+entrée, en plus du clair, des *associated data* (AAD). Elles ne sont pas
+chiffrées mais sont couvertes par le tag : modifier un seul de leurs octets
+fait échouer le déchiffrement.
+**Pourquoi dans dengon :** l'en-tête du coffre `"DGID" ‖ version` est lisible,
+pour que le code choisisse le bon format avant de déchiffrer. Il est passé en
+AAD : un attaquant ne peut donc pas faire passer un blob v1 pour un blob v2
+(attaque par rétrogradation), ni l'inverse.
+**Piège / surprise :** « l'en-tête n'est pas secret » ne veut pas dire « il
+n'a pas besoin d'être protégé ». Sans AAD, la version serait modifiable
+librement. Le test `octet_altere_refuse` modifie un bit au hasard dans tout
+le blob, en-tête compris, et vérifie le refus.
+**Où c'est utilisé :** `crates/dengon-core/src/identity/vault.rs:74`.
+**Pour aller plus loin :** RFC 8439 §2.8 ; draft-irtf-cfrg-xchacha
+(nonce de 24 octets, sûr en tirage aléatoire).

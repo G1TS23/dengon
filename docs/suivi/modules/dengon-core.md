@@ -1,9 +1,9 @@
 # Module : `dengon-core` (`crates/dengon-core/`)
 
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
-**Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame).
+**Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
 **Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201).
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `identity` : clés, QR, code de vérification, coffre (US-205).
 
 ## À quoi ça sert
 
@@ -28,6 +28,14 @@ dengon-core/
       pad.rs           — padding vers PAD_BUCKETS : len(u16 BE) ‖ données ‖ zéros (US-204)
       tag.rs           — recipient_tag = HMAC-SHA256(pub_static, "dengon-tag" ‖ day)[0..16], epoch_day (US-204)
       rng.rs           — CallerResolver : aléa de l'appelant injecté dans snow (privé) (US-204)
+    identity.rs         — IdentityError, ré-exports (US-205)
+    identity/
+      keys.rs          — Identity (secrets + pseudo), PublicIdentity (carte de contact),
+                         peer_id, fingerprint, peer_id_base32 (US-205)
+      qr.rs            — PublicIdentity::to_qr / from_qr : "dengon:v1:<base64url>" (US-205)
+      safety.rs        — SafetyNumber, safety_number, verification_code : 60 chiffres (US-205)
+      vault.rs         — seal / unseal (XChaCha20-Poly1305), trait Vault, MemoryVault,
+                         FileVault (std), load_or_create (US-205)
     ledger.rs           — journal chaîné append-only (US-206)
     store.rs            — persistance SQLite, chiffrement champ par champ (US-207)
     protocol/
@@ -44,13 +52,15 @@ dengon-core/
     codec_proptest.rs      — property tests du codec (round-trip, aucun panic)
     crypto_vectors.rs      — contrôle + régénération des vecteurs crypto (US-204)
     vectors/crypto_v0.json — vecteurs crypto (padding, tags, transcript XX, enveloppe X)
+    identity_vectors.rs    — vecteurs identity + scénario d'appairage A↔B (US-205)
+    vectors/identity_v0.json — 2 identités : clés publiques, peerID, empreinte, QR, code
 ```
 
 `crypto.rs` et le dossier `crypto/` coexistent (disposition Rust 2018) : le
 fichier Ed25519 de US-203 n'a pas été déplacé (pas de déplacement
 de fichier pendant que les PR #78/#81/#82 sont empilées).
 
-Modules encore absents : `identity`, `sync`,
+Modules encore absents : `sync`,
 `observability`, `api` (sprint 2).
 
 ## Concepts / types importants
@@ -88,6 +98,13 @@ Modules encore absents : `identity`, `sync`,
 | `protocol::signing_input` / `received_signing_input` | `src/protocol/codec/mod.rs` | Octets à signer / à vérifier : en-tête + payload **avec l'octet `ttl` à 0**, car un relais le décrémente (revue #80). La réception travaille sur les octets **reçus**. À passer à `crypto::SigningKey::sign` / `VerifyingKey::verify`. |
 | `protocol::AppFrame` (`Message`, `Ack`) | `src/protocol/codec/app.rs` | Frames L4 (le clair dans Noise), `encode_app_frame` / `decode_app_frame`. Kinds hors MVP refusés. |
 | `impl ledger::Signer for crypto::SigningKey` | `src/crypto.rs` | Branche une vraie clé Ed25519 sur `Ledger<S>` à la place de `NullSigner`. `crypto::Signature`/`SIGNATURE_LEN` sont des réexports de `protocol`. |
+| `Identity` | `src/identity/keys.rs` | Identité locale : `StaticKeypair` + `SigningKey` + pseudo. `generate(pseudo, rng)` tire 32 o de secret X25519 puis 32 o de graine Ed25519 ; `peer_id` = `SHA-256(pub_static)[0..8]` ; `fingerprint` = `SHA-256(pub_static ‖ pub_sign)` ; `public`. `Debug` sans secret. |
+| `PublicIdentity` | `src/identity/keys.rs` | Carte de contact (pseudo + 2 clés publiques), mêmes `peer_id`/`fingerprint`. Pseudo validé : 1–255 octets UTF-8. |
+| `to_qr` / `from_qr` | `src/identity/qr.rs` | `dengon:v1:` + base64url sans padding de `len ‖ pseudo ‖ pub_static ‖ pub_sign`. Décodage strict, canonique, une erreur par cause. |
+| `SafetyNumber` / `safety_number` / `verification_code` | `src/identity/safety.rs` | `SHA-512(min(fp) ‖ max(fp))`, 12 groupes `u40_be(5 o) % 100000`. Symétrique. `Display` = `"75116 36485 …"`, `digits()` = 60 chiffres. |
+| `Identity::seal` / `unseal` | `src/identity/vault.rs` | Blob `"DGID" ‖ 1 ‖ nonce 24 ‖ XChaCha20-Poly1305(secret ‖ graine ‖ len ‖ pseudo)`, en-tête en AAD, nonce de la RNG injectée. Erreurs `VaultFormat` / `VaultVersion` / `VaultDecrypt`. |
+| `Vault`, `MemoryVault`, `FileVault`, `load_or_create` | `src/identity/vault.rs` | Rangement d'octets opaques. `FileVault` (std) écrit via `.tmp` + `rename`, mode `0600`. `load_or_create` : déchiffre si présent, sinon génère + scelle + enregistre → `peerID` stable. |
+| `IdentityError` | `src/identity.rs` | `InvalidPseudo`, `Qr{Prefix,Version,Encoding,Length,PublicKey}`, `Vault{Format,Version,Decrypt}`, `VaultIo(ErrorKind)` (std). |
 
 ## Flux principal (exemple)
 
@@ -115,6 +132,14 @@ Session live Noise `XX` entre Alice (initiatrice) et Bob :
 Enveloppe pour Bob absent : `seal(&alice, &bob_pub, clair, rng)` ; la couche
 trame (à venir) y ajoutera `recipient_tag(&bob_pub, epoch_day(now)) ‖ epoch_day`
 et la signature Ed25519 ; Bob fait `open(&bob, env)`.
+
+Appairage (US-205, test `appairage_a_et_b`) : au premier lancement,
+`load_or_create(&mut coffre, &clé, "alice", rng)` génère et scelle
+l'identité. Au lancement suivant, il la relit : le `peerID` ne change pas.
+Alice affiche `alice.public().to_qr()` ; Bob le scanne
+(`PublicIdentity::from_qr`), et inversement. Chacun affiche ensuite
+`verification_code(&moi.public(), &contact)` : le même code de 60 chiffres
+des deux côtés.
 
 `ledger`, lui, a déjà un flux exécutable :
 
@@ -163,10 +188,14 @@ encore le codec (US-201).
   `default-features = false` + `default-resolver`, `use-curve25519`,
   `use-chacha20poly1305`, `use-sha2` — config du Spike A, **sans**
   `use-getrandom`) ; `hmac` 0.12 ; `rand_core` 0.6 (trait du RNG injecté) ;
-  `zeroize` 1. `protocol` n'utilise que `core`.
+  `zeroize` 1 (feature `alloc`, pour
+  `Zeroizing<Vec<u8>>`) ; **`chacha20poly1305` 0.10** (`default-features =
+  false`, `alloc` : XChaCha20 du coffre, US-205, et de `store`) ;
+  **`data-encoding` 2** (`alloc` : base64url du QR, base32 du `peerID`,
+  US-205). `protocol` n'utilise que `core`.
 - **Externes (crates), `store` seulement (feature `std`) :** `rusqlite`
   (`features = ["bundled"]` — sqlite3 vendorisé en C, pas de dépendance
-  système) et `chacha20poly1305` (`features = ["getrandom"]`, pour
+  système) ; la feature `std` ajoute `getrandom` à `chacha20poly1305` (pour
   `aead::OsRng`) : `getrandom` n'est donc tiré que par la feature `std`.
   Viendront encore `serde`.
 - **Externes (dev) :** `rand_chacha` 0.3 (RNG déterministe des vecteurs),
@@ -362,6 +391,17 @@ encore le codec (US-201).
   éphémère prend un `R: RngCore + CryptoRng + Send + Sync + 'static` par
   valeur. Pas de `getrandom` : sur ESP32, l'appelant fournira un RNG sur
   `esp_fill_random` (US-307/308).
+- **Accès `pub(crate)` aux secrets** (US-205) : `StaticKeypair::secret()`
+  (`crypto/noise.rs`) et `SigningKey::to_seed()` (`crypto.rs`, rendu
+  dans un `Zeroizing`) servent uniquement à `Identity::seal`. Hors de la
+  crate, un secret ne sort toujours pas.
+- **Coffre sans `OsRng`** (US-205) : le nonce XChaCha20 de 24 octets vient
+  de la RNG injectée, comme les éphémères Noise. `chacha20poly1305` est donc
+  utilisé sans `getrandom` par `identity`, qui compile en `no_std` (seule
+  la feature `std`, donc `store`, active `getrandom`).
+- **Code de vérification sur 5 octets par groupe** (US-205, décision de
+  Paul) : c'est un écart par rapport au `u16` de la conception, voir
+  `03-ecarts-conception.md`.
 - **Padding dans le chiffré** (US-204) : appliqué au clair, avant Noise, pour
   le transport et les enveloppes `X`. **Pas** pour le handshake (revue #81) :
   le message 1 part en clair et refuse tout payload, et avec des payloads vides
@@ -455,9 +495,40 @@ encore le codec (US-201).
   écrites dans le fichier, GitGuardian les signalant comme secrets).
   Régénération volontaire :
   `cargo test -p dengon-core --test crypto_vectors -- --ignored generer_vecteurs`.
-- Commande : `cargo test -p dengon-core` → **107 unitaires + 2 (vecteurs crypto) + 4 (vecteurs
-  protocole) passés**, 1 ignoré (générateur), 0 échec — 2026-09-28, après rebase
-  sur `main` (`ledger`, `store`) et sur la nouvelle tête de US-203 (#78).
+- `src/identity/*` (US-205), 26 tests unitaires + 8 property tests :
+  - `peer_id` et empreinte recalculés à la main, génération déterministe
+    pour une RNG donnée, pseudo vide ou de 256 octets refusé, base32
+    (RFC 4648), `Debug` sans secret ;
+  - format exact du QR, et chaque erreur de `from_qr` (préfixe, version,
+    padding ou caractère interdit, longueur, pseudo vide ou non UTF-8, point
+    Ed25519 invalide) ;
+  - code recoupé à la main, affichage en 12 groupes ;
+  - `seal`/`unseal` : aller-retour, deux scellements différents, pas de
+    secret ni de pseudo en clair dans le blob, mauvaise clé, signature de
+    fichier, version, blob tronqué, clair authentique mais mal formé ;
+  - `load_or_create` stable et avec une mauvaise clé ;
+  - `FileVault` : « grep binaire » du fichier, absence du `.tmp`, mode
+    `0600`, réouverture, erreur d'E/S.
+- **Property tests `identity`** :
+  - aller-retour QR dans les deux sens (`from_qr(to_qr(p)) == p` et
+    `to_qr(from_qr(s)) == s`) ;
+  - `from_qr` sans panique sur une chaîne arbitraire et sur des octets
+    arbitraires ;
+  - **symétrie** `safety_number(a, b) == safety_number(b, a)`, toujours 60
+    chiffres, une empreinte différente donne un code différent ;
+  - aller-retour `seal`/`unseal` pour tout pseudo, et un bit modifié
+    n'importe où est refusé.
+- `tests/identity_vectors.rs` :
+  - `vecteurs_conformes` et `vecteurs_rejouables` ;
+  - `appairage_a_et_b` : A et B affichent le même code, et une carte MITM le
+    change.
+  Tout le fichier (clés, `peerID`, base32, empreintes, QR, code) a été
+  recalculé en Python (`cryptography`) depuis les graines ChaCha20 :
+  identique.
+- Commande : `cargo test -p dengon-core` → **141 unitaires + 3 (vecteurs identity) + 2 (vecteurs
+  crypto) + 4 (vecteurs protocole) passés**, 2 ignorés (générateurs), 0 échec —
+  2026-09-28, après rebase sur la tête revue de US-204 (#81), elle-même sur
+  `main` (`ledger`, `store`).
   `cargo clippy --workspace --all-targets -- -D warnings` et `cargo fmt --all
   -- --check` verts. `cargo check -p dengon-core --no-default-features`
   (frontière `no_std`) vert.
@@ -537,7 +608,14 @@ encore le codec (US-201).
   prouvée que par le Spike A (US-101), sur une crate jouet, pas sur `crypto`
   (ni sur `snow` tel qu'utilisé ici : toolchain `esp` absente du poste le
   2026-09-28).
-- `crypto` : pas de génération de clé, pas de séparation de domaine ; vecteur
+- `identity` : aucun coffre plateforme branché (Keystore, Secret Service,
+  NVS). La clé du coffre est fournie par l'appelant, et `FileVault` n'est
+  qu'un fichier chiffré. `identity` ne décide pas non plus du TOFU :
+  comparer une clé à un contact connu et lever `contact.key_changed`
+  relève de `store` / `sync`. Enfin, les `ANNOUNCE` ne sont pas encore
+  signés.
+- `crypto` : pas de génération de clé (c'est `identity::Identity::generate`
+  qui la fait), pas de séparation de domaine ; vecteur
   RFC 8032 « TEST 1024 » non repris.
 
 ## Pour l'oral
@@ -556,3 +634,13 @@ US-207 (`store`) est la première **persistance réelle** : SQLite avec
 chiffrement champ par champ des données sensibles (clés privées, corps des
 messages, sessions Noise) — la preuve qu'un téléphone volé ne livre rien
 en clair, critère central de `docs/synthese/06-securite.md`.
+
+US-205 donne son **identité** à chaque appareil : deux paires de clés, dont
+on tire un identifiant court (`peerID`). L'identité est rangée chiffrée dans
+un coffre, ce qui la garde stable d'un redémarrage à l'autre. Pour ajouter
+un contact, on scanne son QR (pseudo + clés publiques, aucun secret). Pour
+s'assurer que personne ne s'est glissé au milieu de l'échange, les deux
+téléphones affichent le même code de 60 chiffres, que l'on compare de visu.
+Anecdote utile à l'oral : la formule du document de conception ne pouvait
+jamais produire un groupe au-dessus de 65535. On l'a vu, corrigée, et
+consignée.

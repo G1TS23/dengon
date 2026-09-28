@@ -1,0 +1,30 @@
+{
+  "alice": {
+    "fingerprint": "9fafcdd64544e7985629b6b0c2658c77dbc33f1628f34aa50633ef4d89eb49b3",
+    "peer_id": "c9eceb87a0acb621",
+    "peer_id_base32": "zhwoxb5avs3cc",
+    "pseudo": "alice",
+    "pub_sign": "c2418197849ede247a5cdae97dd00a3b6de1ab7f380e99686ccfb466c16ced6d",
+    "pub_static": "c0c57ce3410d46d4a1ed4481d2390ae5b788f2cd977cca04388dc5bfb0c6c407",
+    "qr": "dengon:v1:BWFsaWNlwMV840ENRtSh7USB0jkK5beI8s2XfMoEOI3Fv7DGxAfCQYGXhJ7eJHpc2ul90Ao7beGrfzgOmWhsz7RmwWztbQ",
+    "rng_seed": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+  },
+  "bob": {
+    "fingerprint": "91e5599eb10d917a56f47fd52fa3a3e151671393c77168f346b911a11412cd33",
+    "peer_id": "e395cd0fc654b49b",
+    "peer_id_base32": "4ok42d6gks2jw",
+    "pseudo": "Bob 🐝",
+    "pub_sign": "7a01afe3034ccd4502b32daa4515218f5de7154cb4aeca9dcd2ea11a405b9fcb",
+    "pub_static": "112866436d77cdbe987da36d85f61bb9cde2ba4f024a078f6d11f7e5886fe85b",
+    "qr": "dengon:v1:CEJvYiDwn5CdEShmQ213zb6YfaNthfYbuc3iuk8CSgePbRH35Yhv6Ft6Aa_jA0zNRQKzLapFFSGPXecVTLSuyp3NLqEaQFufyw",
+    "rng_seed": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+  },
+  "safety_number": {
+    "between": [
+      "alice",
+      "bob"
+    ],
+    "digits": "751163648522106473562395742805241007355078369866547590384916",
+    "display": "75116 36485 22106 47356 23957 42805 24100 73550 78369 86654 75903 84916"
+  }
+}

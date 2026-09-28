@@ -136,6 +136,12 @@ impl SigningKey {
     pub fn sign(&self, message: &[u8]) -> Signature {
         self.0.sign(message).to_bytes()
     }
+
+    /// Graine de 32 octets, pour le scellement du coffre d'identité (US-205).
+    /// Volontairement `pub(crate)` ; la copie est effacée à la destruction.
+    pub(crate) fn to_seed(&self) -> zeroize::Zeroizing<[u8; SEED_LEN]> {
+        zeroize::Zeroizing::new(self.0.to_bytes())
+    }
 }
 
 /// Branche une vraie clé Ed25519 sur le journal chaîné, à la place de

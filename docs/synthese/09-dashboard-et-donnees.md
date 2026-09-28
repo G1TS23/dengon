@@ -518,7 +518,7 @@ nœud, taux de livraison glissant) calculés à la volée par des requêtes.
 ```text
 fpA = SHA-256(pub_static_A ‖ pub_sign_A)         (32 o)   ;  fpB = idem pour B
 material = SHA-512( min(fpA,fpB) ‖ max(fpA,fpB) )  (64 o)
-pour i in 0..12 : g[i] = be_u16(material[2i..2i+2]) mod 100000
+pour i in 0..12 : g[i] = be_u40(material[5i..5i+5]) mod 100000   // corrigé US-205 (était be_u16)
 affichage : 12 groupes de 5 chiffres, zero-paddés
 ```
 

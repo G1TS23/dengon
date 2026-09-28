@@ -129,6 +129,12 @@ impl StaticKeypair {
     pub fn public(&self) -> [u8; DH_LEN] {
         self.public
     }
+
+    /// Secret X25519, pour le scellement du coffre d'identité (US-205).
+    /// Volontairement `pub(crate)` : hors de la crate, le secret ne sort pas.
+    pub(crate) fn secret(&self) -> &[u8; DH_LEN] {
+        &self.secret
+    }
 }
 
 impl Drop for StaticKeypair {

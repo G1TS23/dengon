@@ -1002,3 +1002,67 @@ _(aucun écart pour l'instant)_
   révèle à un relais le rang du message dans la session (pas son contenu).
 - **Doc de conception mise à jour ?** Non — à reporter dans 05 §4 (format du
   payload `NOISE_MSG`).
+
+---
+
+### 2026-09-28 — Code de vérification : 5 octets par groupe au lieu d'un `u16` (US-205)
+
+- **Prévu :** `docs/powl/04-security.md` §2.3, `docs/synthese/06-securite.md`
+  §2 et `docs/synthese/09-dashboard-et-donnees.md` §11.3 :
+  `groupe_i = u16_be(material[2i..2i+2]) % 100000`.
+- **Réel :** `groupe_i = u40_be(material[5i..5i+5]) % 100000`
+  (`crates/dengon-core/src/identity/safety.rs:80`). On consomme 60 des 64
+  octets du SHA-512. Le reste de la formule ne change pas : `min`/`max` des
+  empreintes, SHA-512, 12 groupes de 5 chiffres complétés par des zéros.
+- **Raison :** un `u16` ne dépasse pas 65 535, donc `% 100000` ne fait rien.
+  Aucun groupe ne peut commencer par 7, 8 ou 9, et chaque groupe « de 5
+  chiffres » ne porte que 16 bits. Avec 40 bits par groupe, comme dans le
+  safety number de Signal, le biais du modulo devient négligeable. La
+  sécurité de la formule d'origine restait correcte (12 × 16 = 192 bits),
+  mais un code dont 30 % des valeurs sont impossibles, c'est une question
+  certaine à l'oral. Décision de Paul, 2026-09-28.
+- **Conséquences :** tout client non-Rust (Kotlin, Python) doit suivre la
+  nouvelle formule ; les vecteurs `tests/vectors/identity_v0.json` font
+  référence. Rien d'autre n'était encore codé.
+- **Doc de conception mise à jour ?** Oui : `docs/synthese/06-securite.md`
+  §2 et `docs/synthese/09-dashboard-et-donnees.md` §11.3. `docs/powl/04`
+  reste inchangé, comme matière d'origine.
+
+### 2026-09-28 — Coffre d'identité : trait `Vault` et clé fournie par l'appelant (US-205)
+
+- **Prévu :** `docs/synthese/06-securite.md` §2 : les clés sont stockées
+  « dans le coffre de la plateforme (Android Keystore / Secret Service / NVS
+  chiffrée ESP32) ». `09` §11.1 prévoit la table `identity`, avec
+  `priv_static`/`priv_sign` chiffrés.
+- **Réel :** `identity` chiffre lui-même l'identité en un blob
+  XChaCha20-Poly1305 (`Identity::seal`/`unseal`, `vault.rs:74`/`:117`). Ce
+  blob est rangé derrière un trait `Vault` (`vault.rs:161`), avec deux
+  implémentations : `MemoryVault` et `FileVault`. La clé de 32 octets est
+  **fournie par l'appelant**. Aucun coffre plateforme n'est branché.
+- **Raison :** le Keystore et Secret Service ne sont joignables que depuis
+  `dengon-ffi` (Kotlin) et `dengon-node`. De son côté, `store` (US-207,
+  PR #76) est du même sprint, et la règle d'or interdit d'en dépendre. On
+  reprend le principe de son `KeySource`, sans le partager.
+- **Conséquences :** l'US d'intégration devra choisir entre deux options :
+  le blob dans `FileVault` et la clé dans le Keystore, ou bien les secrets
+  dans la table `identity` de `store`. La première est la plus simple : un
+  seul appel à `load_or_create`.
+- **Doc de conception mise à jour ?** Non (la cible plateforme reste valable).
+
+### 2026-09-28 — QR : base64url sans padding, pseudo de 1 à 255 octets (US-205)
+
+- **Prévu :** `09` §11.3 : `dengon:v1:<base64url( B )>`, avec
+  `B = pseudo_len:u8 ‖ pseudo:utf8 ‖ …`. Le padding et le pseudo vide ne
+  sont pas précisés.
+- **Réel :**
+  - base64url **sans** `=` et **canonique** (bits de fin nuls vérifiés) : un
+    QR avec padding est refusé (`QrEncoding`) ;
+  - pseudo UTF-8 de **1 à 255 octets**, le pseudo vide étant refusé
+    (`InvalidPseudo`).
+  (`crates/dengon-core/src/identity/qr.rs:58`, `keys.rs:27`.)
+- **Raison :** avec un encodage unique par carte, la comparaison de deux QR
+  reste sûre et l'aller-retour est exact dans les deux sens. Un pseudo vide
+  n'a pas de sens à l'affichage, et 255 est la limite imposée par le `u8`.
+- **Conséquences :** l'app Android doit encoder sans padding
+  (`Base64.URL_SAFE or NO_PADDING or NO_WRAP`).
+- **Doc de conception mise à jour ?** Non (précision, pas contradiction).

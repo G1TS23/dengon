@@ -54,10 +54,13 @@ dengon-ble  = { path = "crates/dengon-ble", version = "0.1.0" }
 # dépendance système (même choix que faute de mieux sur les postes de dev
 # et la CI, qui n'ont pas forcément libsqlite3-dev).
 rusqlite = { version = "0.32", features = ["bundled"] }
-# `getrandom` : expose `aead::OsRng`, nécessaire pour tirer un nonce XChaCha20
-# aléatoire à chaque chiffrement (jamais le même nonce deux fois avec la
-# même clé, sous peine de casser l'AEAD).
-chacha20poly1305 = { version = "0.10", features = ["getrandom"] }
+# XChaCha20-Poly1305 : `store` (US-207) et le coffre d'`identity` (US-205).
+# `default-features = false` + `alloc` : compilable en no_std pour le coffre,
+# dont le nonce vient de la RNG injectée par l'appelant. `store` a besoin
+# d'`aead::OsRng` (nonce aléatoire à chaque chiffrement, jamais deux fois le
+# même avec la même clé) : dengon-core active `getrandom` via SA feature
+# `std`, pas ici, pour ne pas tirer getrandom sur ESP32.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 # no_std (`default-features = false` retire l'implémentation std du digest,
 # indispensable pour compiler `ledger` (US-206) sur cible ESP32).
 sha2 = { version = "0.10", default-features = false }
@@ -84,7 +87,9 @@ curve25519-dalek = { version = "4.1", default-features = false }
 # recipient_tag = HMAC-SHA256(...)[0..16] (US-204).
 hmac      = { version = "0.12", default-features = false }
 rand_core = { version = "0.6", default-features = false }
-zeroize   = { version = "1", default-features = false }
+zeroize   = { version = "1", default-features = false, features = ["alloc"] }
+# QR de contact (base64url) et affichage du peerID (base32), no_std + alloc.
+data-encoding = { version = "2", default-features = false, features = ["alloc"] }
 # Tests uniquement : RNG déterministe (vecteurs de conformité) et property tests.
 rand_chacha = { version = "0.3", default-features = false }
 proptest    = "1"

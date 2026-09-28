@@ -148,6 +148,129 @@ $ cargo tree -p dengon-core -e normal --no-default-features | grep -c getrandom
 
 ---
 
+## 2026-09-28 — US-205 : module `identity` (clés, QR, code 60 chiffres, coffre)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/identity.rs` et
+`src/identity/{keys,qr,safety,vault}.rs` (nouveaux), `src/lib.rs`,
+`src/crypto.rs` et `src/crypto/noise.rs` (accès `pub(crate)` aux secrets),
+`tests/identity_vectors.rs` et `tests/vectors/identity_v0.json` (nouveaux),
+`Cargo.toml` et `crates/dengon-core/Cargo.toml`, `docs/synthese/06` et `09`,
+`docs/suivi/`.
+**Lot :** US-205 (issue #19). Branche `feat/US-205-identity`, empilée sur
+`feat/US-204-crypto-noise` (PR #81, non mergée).
+
+### Fait
+
+- `identity::keys` :
+  - `Identity::generate(pseudo, rng)` tire 32 o de secret X25519 puis 32 o
+    de graine Ed25519 (`keys.rs:81`) ;
+  - `peer_id` = `SHA-256(pub_static)[0..8]` ; `fingerprint` =
+    `SHA-256(pub_static ‖ pub_sign)` ;
+  - `PublicIdentity` est la carte de contact ; `peer_id_base32` produit
+    13 caractères en minuscules.
+- `identity::qr` : `to_qr` / `from_qr` au format
+  `dengon:v1:<base64url>`. Le décodage est strict, avec une erreur par cause
+  (préfixe, version, encodage, longueur, pseudo, clé Ed25519).
+- `identity::safety` : `safety_number(fpA, fpB)` et
+  `verification_code(a, b)` donnent 12 groupes de 5 chiffres ; l'affichage
+  est `"75116 36485 …"`.
+- `identity::vault` :
+  - `seal` / `unseal` : blob `"DGID" ‖ v1 ‖ nonce 24 ‖ XChaCha20-Poly1305`,
+    en-tête en AAD ;
+  - trait `Vault`, `MemoryVault`, `FileVault` (std : écriture atomique via
+    `.tmp` puis `rename`, mode `0600` sous Unix) ;
+  - `load_or_create` garde le `peerID` stable d'un lancement à l'autre.
+- `crypto` : `StaticKeypair::secret()` et `SigningKey::to_seed()` ajoutés
+  en **`pub(crate)`**, nécessaires au scellement. L'API publique ne change
+  pas.
+- Dépendances :
+  - `chacha20poly1305` 0.10 (`default-features = false`, `alloc`) ;
+  - `data-encoding` 2.11 (`alloc`) ;
+  - `zeroize` passe à `features = ["alloc"]`, pour `Zeroizing<Vec<u8>>`.
+- Vecteurs `tests/vectors/identity_v0.json` : deux identités (dont un pseudo
+  avec emoji), leurs QR et le code entre elles. Le test d'intégration
+  `appairage_a_et_b` joue le scénario de l'écran US-215 : A et B scannent le
+  QR l'un de l'autre et affichent le même code ; une carte MITM change le
+  code.
+
+### Pourquoi / décisions
+
+- **Formule du code corrigée** (décision de Paul, 2026-09-28) : 5 octets
+  par groupe au lieu de 2 (détail dans `03-ecarts-conception.md`).
+- **Coffre derrière un trait, clé fournie par l'appelant** (décision de
+  Paul). `store` (US-207, PR #76) est du même sprint et on ne peut pas en
+  dépendre. On suit le même principe que son `KeySource`.
+- **Nonce du coffre tiré de la RNG injectée**, pas d'`OsRng` : c'est ce qui
+  permet de rester `no_std`. `getrandom` reste absent de l'arbre normal.
+- **`data-encoding`** fournit à la fois base64url et base32, soit une seule
+  crate `no_std` au lieu de deux. Son décodage est **canonique** (bits de fin
+  vérifiés), donc `to_qr(from_qr(s)) == s` : c'est testé.
+- **Écartée : une image QR dans le cœur.** Le rendu et le scan appartiennent
+  à l'UI (US-215).
+
+### Écarts vs conception
+
+- Quatre écarts, reportés dans `03-ecarts-conception.md` :
+  1. la formule du code sur 5 octets ;
+  2. le coffre derrière un trait ;
+  3. le base64url sans padding ;
+  4. le pseudo limité à 1–255 octets.
+- La formule est corrigée dans `docs/synthese/06-securite.md` §2 et
+  `docs/synthese/09-dashboard-et-donnees.md` §11.3. `docs/powl/04` n'est pas
+  modifié : c'est la matière d'origine.
+
+### Appris
+
+- Biais d'un modulo et le bug `u16 % 100000` ; le rôle de l'AAD dans un blob
+  AEAD. Ajoutés à `04-apprentissages.md`.
+
+### État après cette session
+
+- Les cinq critères de l'issue #19 sont remplis : génération + coffre
+  chiffré, aller-retour QR, code symétrique déterministe, property tests,
+  couverture ≥ 85 %.
+- Pas encore fait (hors US) :
+  - les coffres plateforme (Keystore Android via `dengon-ffi`, Secret
+    Service via `dengon-node`) ;
+  - la décision TOFU et l'alerte `contact.key_changed` (`store` / `sync`) ;
+  - la signature des `ANNOUNCE`.
+- Merge : la PR #76 déclare `chacha20poly1305` avec `features =
+  ["getrandom"]` dans le workspace. Il faudra garder
+  `default-features = false` au workspace et activer `getrandom` dans le
+  `Cargo.toml` de `store`.
+- Fiche(s) module mise(s) à jour : `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non (plus à toucher).
+
+### Vérification (commandes réellement exécutées)
+
+```
+$ cargo fmt --all -- --check
+OK
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+OK (0 warning) — un lint `sliced_string_as_bytes` corrigé en cours de route
+$ cargo test --workspace
+dengon-core : 109 unitaires + 3 (vecteurs identity) + 2 (vecteurs crypto)
++ 4 (vecteurs protocole) passés, 2 ignorés (générateurs), 0 échec
+$ cargo check -p dengon-core --no-default-features
+OK
+$ cargo check -p dengon-core --no-default-features --target thumbv7em-none-eabi
+OK
+$ cargo tree -p dengon-core -e normal | grep -c getrandom
+0
+$ cargo llvm-cov -p dengon-core --all-features --summary-only
+identity.rs 100 % · keys.rs 100 % · qr.rs 99,1 % · safety.rs 98,4 %
+· vault.rs 98,4 % (lignes) ; crate : 99,09 %
+```
+
+- Recoupement indépendant (Python `cryptography` + `hashlib`) : les
+  `pub_static`, `pub_sign`, `peer_id`, base32, empreintes, chaînes QR et le
+  code de 60 chiffres de `identity_v0.json` sont recalculés depuis les
+  graines ChaCha20, et tous identiques.
+- Non vérifié : la compilation `xtensa-esp32-none-elf`, faute de toolchain
+  `esp` sur le poste (même limite que pour US-204).
+---
+
 ## 2026-09-28 — US-204 : rebase sur `main` (US-108 mergée) et scan de secrets
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

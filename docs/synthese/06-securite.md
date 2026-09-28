@@ -74,9 +74,14 @@ MITM au premier contact sans serveur. Version réconciliée (fondée sur les
 ```text
 material = SHA-512( min(fpA, fpB) ‖ max(fpA, fpB) )   // ordre-indépendant
 code = 60 chiffres décimaux :
-       pour i in 0..12 : groupe_i = ( u16_be(material[i*2 .. i*2+2]) % 100000 )
+       pour i in 0..12 : groupe_i = ( u40_be(material[i*5 .. i*5+5]) % 100000 )
        affiché : "01234 56789 01234 ..." (12 groupes de 5)
 ```
+
+> Corrigé le 2026-09-28 (US-205) : la version d'origine prenait
+> `u16_be(material[i*2 .. i*2+2])`. Un `u16` ne dépasse pas 65 535, donc le
+> `% 100000` ne faisait rien. On prend 5 octets par groupe, comme Signal.
+> Voir `docs/suivi/03-ecarts-conception.md`.
 
 Les deux appareils affichent **le même code** ; l'utilisateur compare de visu ou
 lit à voix haute. Match → contact marqué **✔ vérifié** (`contacts.verified_at`).
