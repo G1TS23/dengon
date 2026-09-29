@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fenêtre sombre : évite un flash blanc au lancement quand le téléphone est en mode sombre (US-321). -->
+    <style name="Theme.Dengon" parent="android:Theme.Material.NoActionBar" />
+</resources>

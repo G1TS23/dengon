@@ -512,8 +512,10 @@ les rappels Android par adresse brute, donc n'exerçait pas ces 4 chemins) —
   ne montre que « En attente » / « Parti » à l'envoi. `AndroidTransport`
   (US-213) n'est pas non plus branché sur `dengon-core` : c'est un
   `Transport` qui fonctionne, sans encore transporter le protocole dengon.
-- `unreadCount` n'est jamais remis à zéro : le contrat v0 n'a pas de
-  `mark_read` (US-214 hors périmètre, à ajouter au contrat).
+- `unreadCount` n'est jamais remis à zéro par le cœur : le contrat n'a pas de
+  `mark_read` (à ajouter au contrat). Contournement US-321 : `ConversationsUiState.lus`
+  retient le compteur vu à l'ouverture de chaque conversation, `nonLus()` n'affiche que
+  l'écart (en mémoire, perdu au redémarrage — où le cœur perd aussi ses conversations).
 - Pas de navigation Compose (`navigation-compose` non ajouté, pour ne pas
   toucher au verrouillage des dépendances) : quatre états booléens dans
   `MainActivity` (messagerie, appairage, transport, spike). À revoir si un
@@ -704,6 +706,21 @@ redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
   - `DeadObjectException` rattrapée à l'envoi, ciblée : l'app plantait après un redémarrage du Bluetooth ;
   - `Reassembleur` gère le morceau d'abandon (`FragmentationBle.ABANDON`) et ignore la queue d'une trame trop longue ;
   - `MainActivity`, en build debug seulement, accepte une carte par intent (`--es dengon.carte_debug`) et écrit la carte locale dans logcat, pour piloter l'essai par `adb` sans caméra.
+
+## Refonte du design (US-321)
+
+- `ui/theme/Theme.kt` : `DengonTheme` (M3 clair/sombre, `CibleTactileMin` = 48 dp).
+- `ui/composants/` : `EnTeteEcran`, `EtatGuide`, `BandeauAlerte`,
+  `EtatBluetooth.kt` (`rememberBluetoothActif`, `ouvrirReglagesBluetooth`).
+- `LibelleStatut.kt` : + `iconeStatut`, `formaterHorodatage`, `initiale`.
+- Écrans refaits : accueil (`MainActivity`), conversations/fil, « Appareils à
+  proximité » (ex-Réseau), appairage en 3 étapes. Signatures : `ReseauScreen` prend
+  `bluetoothActif`, `MessagerieRoute` prend `onAjouterContact`.
+- `MessagerieRoute` relit le nœud à l'ouverture (`rafraichir()`) : sans cela, un
+  contact appairé après la création du ViewModel n'avait pas sa conversation.
+- Tests : `LibelleStatutTest` ; 110 tests JVM verts. Essayé sur Samsung A16 +
+  OnePlus 7 Pro : appairage, messages dans les deux sens, clair/sombre, police 200 %
+  (voir journal). Clavier : `adjustResize` (manifeste), fil resté visible clavier ouvert, vérifié sur le Samsung.
 
 ## Pour l'oral
 

@@ -207,6 +207,96 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
   - la mesure du tas du relais pendant un réassemblage.
 
 ---
+## 2026-09-29 — US-321 : badge « non lu », états d'erreur vus sur appareil, textes de permission
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `ConversationsViewModel.kt` (`lus`, `nonLus`), `ConversationsScreen.kt`, `MainActivity.kt`, `strings.xml`, `NonLusTest.kt`, captures `apres-14` à `apres-18`
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Badge « non lu »** : le cœur ne remet jamais `unreadCount` à zéro (pas de `mark_read` dans
+  le contrat, l'ajouter demanderait `dengon-core`, `.udl`, bindings et `.so`, hors périmètre US-321).
+  Côté app, `ConversationsUiState.lus` retient le compteur vu à l'ouverture (et suit les messages
+  reçus fil ouvert) ; `nonLus()` n'affiche que l'écart, jamais négatif. `NonLusTest` (+5, 115 tests
+  JVM verts). Vu sur Samsung A16 + OnePlus 7 Pro : message reçu → badge 1, fil ouvert puis retour
+  → plus de badge, nouveau message → badge 1.
+- **Bluetooth coupé** (Samsung, `svc bluetooth disable`) : bandeau à l'accueil et sur « Appareils à
+  proximité », qui disparaît de lui-même au rallumage. **Permission refusée** (vraies boîtes de
+  dialogue Android refusées) : bandeau « Autorisation refusée » + « Ouvrir les réglages de l'app »
+  (ouvre bien `InstalledAppDetails`).
+- **Textes de permission** réécrits en langage courant (plus de « maillage BLE » ni de « permissions
+  Bluetooth (et de localisation…) ») ; le bandeau de demande dit « Autorisation requise ».
+
+### Pas comme ça, à savoir
+- **« Échec » + « Renvoyer » : captures faites sur un APK de démonstration temporaire** (données
+  fictives injectées dans `FilConversation`, retiré du code avant de committer ; l'APK installé
+  ensuite ne contient pas la démo, vérifié par recherche de chaîne dans `classes*.dex`). Ce n'est
+  **pas** un vrai message expiré : le TTL réel est de 24 h. Le rendu est celui du vrai composant.
+- Retour des réglages Android après avoir accordé la permission (`onResume`) : non essayé.
+- Contacts et conversations perdus à chaque réinstallation (limite connue) : quatre appairages
+  refaits à la main pendant l'essai.
+
+### Écarts vs conception
+- Aucun nouveau. Reste à faire : `mark_read` dans le contrat FFI (suivi ailleurs) ; Accessibility Scanner.
+
+### État après cette session
+- Fiche module `modules/android-app.md` mise à jour ; `01-etat-du-code.md` : non.
+
+## 2026-09-29 — US-321 : `adjustResize`, le fil reste visible clavier ouvert
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `AndroidManifest.xml` (`MainActivity`), captures `apres-12`, `apres-13`
+**Lot :** Lot 3 — app Android
+
+### Fait
+- `android:windowSoftInputMode="adjustResize"` sur `MainActivity` : corrige le point « clavier »
+  de l'entrée précédente (le fil défilait hors écran, en-tête et messages cachés).
+- Vérifié sur le Samsung A16 après réinstallation et nouvel appairage : clavier ouvert, l'en-tête et
+  le fil restent visibles, un message envoyé clavier ouvert passe à « Distribué ». `assembleDebug` +
+  110 tests JVM verts.
+
+### Pas vu
+- Non essayé sur le OnePlus 7 Pro (Android 12) : seul le Samsung a été utilisé pour ce point.
+- Le badge « non lu » resté à 1 (entrée précédente) n'a pas été réexaminé.
+
+### Écarts vs conception
+- Aucun.
+
+## 2026-09-29 — US-321 : essai à deux téléphones, correctif « conversation absente après appairage »
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `ConversationsScreen.kt` (`MessagerieRoute`), captures `docs/suivi/assets/us-321/`
+**Lot :** Lot 3 — app Android
+
+### Fait
+- Branche rebasée sur `main` après la fusion de la PR #122 (`git rebase --onto origin/main 8e3a183`), PR #126 repointée sur `main`. Build + 110 tests JVM inchangés (verts).
+- **Essai réel** Samsung A16 (Android 16, clair) + OnePlus 7 Pro (Android 12, sombre) : appairage
+  par caméra dans les deux sens, code de 60 chiffres, message Samsung → OnePlus puis réponse
+  OnePlus → Samsung. Les deux messages passent à « Distribué » ; fil, aperçu de liste et badge
+  « non lu » vus sur appareil.
+- **Bug trouvé, corrigé** : un contact appairé *après* la création du ViewModel n'apparaissait pas
+  dans « Conversations » (« Aucune conversation ») : `sonder()` ne relit le nœud que si `pollEvents`
+  rend un événement, et `add_contact` n'en émet aucun. Correctif côté écran : `MessagerieRoute`
+  appelle `viewModel.rafraichir()` à l'ouverture. Vérifié sur les deux téléphones après le correctif.
+  Aucune logique de ViewModel modifiée.
+- Le OnePlus portait une build signée avec une autre clé de debug : désinstallée (données
+  dengon de ce téléphone effacées, avec l'accord d'Oswin) avant d'installer.
+
+### Constaté, pas corrigé
+- **Clavier** : sur le Samsung, à l'ouverture du clavier le fil défile hors écran (l'en-tête et les
+  messages disparaissent au-dessus du champ) : le `windowSoftInputMode` n'est pas défini (pan par
+  défaut). `adjustResize` dans le manifeste devrait corriger ; non essayé (réinstaller efface les
+  contacts, qui ne sont qu'en mémoire).
+- Le badge « non lu » reste à 1 sur le Samsung alors que la réponse a été lue dans le fil.
+- Contacts perdus à chaque réinstallation / arrêt de l'app (limite déjà consignée).
+- Toujours jamais vus sur appareil : statut « Échec » + « Renvoyer » (TTL de 24 h), « Bluetooth
+  coupé », permission refusée sur appareil. Accessibility Scanner non lancé.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### État après cette session
+- Fiche module : `modules/android-app.md` (section US-321) à jour ; `01-etat-du-code.md` : non.
 
 ## 2026-09-29 — US-309 : retours de revue de la PR #120 (Oswin), mesures sur carte
 
@@ -298,6 +388,29 @@ n'avait aucun appelant réel. Empilée sur #119 (branche
 - Pas de nouvel événement `peer.disconnected` ici (écart déjà consigné,
   US-319) : aucun constructeur `observability::peer_disconnected` n'existe
   encore — en ajouter un est un autre travail que « câbler l'existant ».
+## 2026-09-29 — US-321 : essai sur appareil et captures avant/après
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `docs/suivi/assets/us-321/` (captures), suivi
+**Lot :** Lot 3 — app Android
+
+### Fait
+- Essai sur un **Samsung A16 (`SM_A165F`, Android 16)** : `avant.apk` (branche US-313)
+  puis `apres.apk` (US-321) installés par `adb install -r`, permissions accordées par
+  `adb shell pm grant`, captures par `adb exec-out screencap`.
+- Écrans vus : accueil, outils de développement dépliés, conversations (état vide),
+  appairage étape 1, « Appareils à proximité » ; en clair, en sombre
+  (`cmd uimode night yes`) et police 200 % (`settings put system font_scale 2.0`).
+  Réglages du téléphone remis à leur valeur d'origine ensuite.
+- Résultat : pas de texte tronqué à 200 % (les écrans défilent), thème sombre lisible,
+  état vide « Aucune conversation » avec action.
+
+### Pas vu / reste à faire
+- Fil de discussion avec bulles et statuts « Échec » / « Renvoyer » : aucun contact sur
+  ce téléphone, donc jamais affiché sur appareil (seulement en aperçu Compose).
+- États « Bluetooth coupé » et « permission refusée » non essayés.
+- Accessibility Scanner non lancé. Écran de comparaison des 60 chiffres non capturé.
+- Captures de l'accueil « avant » : bouton « Réseau » du build US-313, écran tel quel.
 
 ### Écarts vs conception
 - Aucun nouveau.
@@ -418,6 +531,57 @@ déjà non formatés avant ce changement (non traité).
   `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
   référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
+### État après cette session
+- Captures dans `docs/suivi/assets/us-321/` (`avant-*`, `apres-*`, suffixes `-sombre`, `-x2`).
+
+## 2026-09-29 — US-321 : refonte du design de l'app (Material 3, accessibilité)
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `android/app` — `ui/theme/`, `ui/composants/`, `MainActivity.kt`,
+`ConversationsScreen.kt`, `LibelleStatut.kt`, `ReseauScreen.kt`, `AppairageScreen.kt`,
+`strings.xml`, `values-night/themes.xml` + tests
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Thème** `DengonTheme` (`ui/theme/Theme.kt`) : Material 3, palettes claire **et**
+  sombre, typographie en `sp`, formes ; thème fenêtre `values-night` (pas de flash blanc).
+- **Composants communs** (`ui/composants/`) : `EnTeteEcran` (retour en icône 48 dp),
+  `EtatGuide` (état vide + action), `BandeauAlerte`, `rememberBluetoothActif`
+  (récepteur `ACTION_STATE_CHANGED`) + ouverture des réglages Bluetooth.
+- **Conversations / fil** : pastille d'initiale, horodatage (`formaterHorodatage`),
+  bulles envoyé/reçu distinctes, statut = icône **+** texte (`iconeStatut`), bouton
+  « Envoyer » en icône avec `contentDescription`, état vide « Ajouter un contact ».
+- **Accueil** : cartes d'action en langage courant, bandeaux guidés (permission,
+  permission refusée → réglages de l'app, Bluetooth coupé), outils de debug repliés.
+- **Réseau** → « Appareils à proximité » : carte d'état, « Économie de batterie »
+  (ligne entière cliquable), états vides expliqués.
+- **Appairage** : « Étape N sur 3 », titre + consigne par étape, aide caméra refusée.
+- Libellé `IN_FLIGHT` : « Parti » → « Envoyé » (`libelleStatut`, test adapté).
+- Tests : `LibelleStatutTest` (+6). Aucune logique ViewModel/FFI modifiée.
+
+### Pourquoi / décisions
+- Pas de bibliothèque d'icônes étendue (`material-icons-extended`, lourde) : seules
+  les icônes du jeu « core » sont utilisées.
+- Le QR reste noir sur blanc en thème sombre (lisibilité pour les lecteurs).
+- Activer le Bluetooth passe par les réglages système (aucune permission requise)
+  plutôt que par `ACTION_REQUEST_ENABLE` (demande `BLUETOOTH_CONNECT`).
+
+### Écarts vs conception
+- Statut « Parti » renommé « Envoyé » à l'écran → `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau dans `04-apprentissages.md`.
+
+### État après cette session
+- Fait : `assembleDebug` + `testDebugUnitTest` verts (110 tests, 0 échec),
+  commande `./gradlew.bat --offline assembleDebug testDebugUnitTest`.
+- **Non fait, à faire avant de fermer l'US** : essai sur appareil réel (thème
+  clair/sombre, police 200 %), Accessibility Scanner, captures avant/après jointes à
+  la PR. Aucun appareil ni émulateur n'était utilisé dans cette session : le rendu
+  n'a **pas** été vu, seulement compilé. Contrastes AA calculés à la main, non mesurés.
+- Fiche module mise à jour : `modules/android-app.md`
+- 01-etat-du-code.md mis à jour : non (pas de nouveau module)
+
 ## 2026-09-29 — US-313 : corrections après la revue de la PR #122
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)

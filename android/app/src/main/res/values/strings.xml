@@ -4,24 +4,27 @@
     <string name="mesh_notification_channel_name">Maillage dengon</string>
     <string name="mesh_notification_title">dengon actif</string>
     <string name="mesh_notification_text">Relais du réseau maillé en cours…</string>
-    <string name="permissions_rationale_title">Permissions Bluetooth requises</string>
-    <string name="permissions_rationale_body">dengon a besoin des permissions Bluetooth (et de localisation sur les anciennes versions d\'Android) pour découvrir les autres appareils et relayer les messages sans réseau.</string>
+    <string name="permissions_rationale_title">Autorisation requise</string>
+    <string name="permissions_rationale_body">dengon utilise le Bluetooth pour trouver les téléphones autour de vous et transmettre vos messages sans Internet. Android va vous demander l\'autorisation « Appareils à proximité ».</string>
     <string name="permissions_grant_button">Autoriser</string>
-    <string name="permissions_denied">Permissions refusées : le maillage BLE ne peut pas démarrer.</string>
+    <string name="permissions_denied">Sans cette autorisation, dengon ne peut ni trouver d\'autres téléphones ni envoyer vos messages.</string>
     <string name="mesh_status_running">Service de fond : actif</string>
     <string name="mesh_status_stopped">Service de fond : arrêté</string>
 
     <!-- US-215 : appairage par QR + code de vérification 60 chiffres. -->
     <string name="appairage_ouvrir">Ajouter un contact (QR)</string>
     <string name="appairage_titre">Ajouter un contact</string>
-    <string name="appairage_retour">Retour</string>
+    <string name="appairage_etape">Étape %1$d sur %2$d</string>
+    <string name="appairage_etape1_titre">Montrez votre code</string>
+    <string name="appairage_etape2_titre">Comparez les codes</string>
+    <string name="appairage_aide_camera">Si la caméra ne s\'ouvre pas, autorisez l\'appareil photo pour dengon dans les réglages du téléphone.</string>
     <string name="appairage_mon_qr">Mon QR : %1$s</string>
     <string name="appairage_mon_qr_description">QR code de mon identité dengon</string>
-    <string name="appairage_consigne">Faites scanner ce QR par votre correspondant, puis scannez le sien.</string>
+    <string name="appairage_consigne">Pour s\'ajouter mutuellement, mettez-vous face à face. Votre correspondant scanne le code ci-dessous, puis vous scannez le sien.</string>
     <string name="appairage_scanner">Scanner le QR de mon correspondant</string>
     <string name="appairage_scan_invite">Visez le QR affiché sur l\'autre téléphone</string>
     <string name="appairage_comparer">Comparez ce code avec celui affiché sur le téléphone de %1$s :</string>
-    <string name="appairage_lecture_croisee">Lisez-le à voix haute, groupe par groupe, en regardant l\'autre écran. Les 60 chiffres doivent être identiques.</string>
+    <string name="appairage_lecture_croisee">Lisez-le à voix haute, groupe par groupe, en regardant l\'autre écran. Les 60 chiffres doivent être identiques : c\'est ce qui garantit que personne ne s\'est glissé entre vous.</string>
     <string name="appairage_codes_identiques">Les codes sont identiques</string>
     <string name="appairage_codes_differents">Les codes sont différents</string>
     <string name="appairage_rappel_mon_qr">%1$s ne voit pas encore ce code ? Faites-lui scanner votre QR :</string>

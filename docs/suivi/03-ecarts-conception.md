@@ -38,6 +38,14 @@ et le mentionner dans l'entrée de journal.
   7. Après un redémarrage du Bluetooth, le transport Android n'est pas reconstruit (il faut arrêter puis relancer le service). L'app ne plante plus, elle jette la file du lien.
 - **Pourquoi :** trouvé pendant l'essai sur matériel et la revue de la PR #129 (Oswin).
 - **Impact :** `crates/dengon-core/src/api.rs`, `firmware/dengon-relay/components/dengon_transport_core/`, `main/transport_nimble.c`, `android/.../ble/transport/{GattRadio,Annonce,FragmentationBle}.kt`, `MainActivity.kt`.
+### 2026-09-29 — Statut « Parti » affiché « Envoyé » (US-321)
+
+- **Prévu :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §1 : `IN_FLIGHT` = « Parti ».
+- **Réel :** l'app affiche « Envoyé » (`libelleStatut`). Le sens (remis à ≥ 1 relais
+  ou pair, pas encore chez le destinataire) est inchangé.
+- **Pourquoi :** US-321 demande un langage courant ; « envoyé » est le mot des
+  messageries.
+- **Doc de conception mise à jour ?** non : à reporter dans la synthèse si retenu.
 
 ---
 

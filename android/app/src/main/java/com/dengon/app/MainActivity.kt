@@ -1,22 +1,46 @@
 package com.dengon.app
 
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBox
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MailOutline
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -26,7 +50,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.dengon.app.ble.BlePermissions
@@ -36,9 +65,14 @@ import com.dengon.app.ble.transport.TransportActif
 import com.dengon.app.ble.transport.TransportDebugScreen
 import com.dengon.app.ui.appairage.AppairageScreen
 import com.dengon.app.ui.appairage.AppairageViewModel
+import com.dengon.app.ui.composants.BandeauAlerte
+import com.dengon.app.ui.composants.ouvrirReglagesBluetooth
+import com.dengon.app.ui.composants.rememberBluetoothActif
 import com.dengon.app.ui.conversations.ConversationsViewModel
 import com.dengon.app.ui.conversations.MessagerieRoute
 import com.dengon.app.ui.reseau.ReseauRoute
+import com.dengon.app.ui.theme.CibleTactileMin
+import com.dengon.app.ui.theme.DengonTheme
 
 class MainActivity : ComponentActivity() {
 
@@ -46,6 +80,10 @@ class MainActivity : ComponentActivity() {
 
     // Écran d'appairage ouvert : aussi piloté par la carte de debug (US-312).
     private val afficherAppairage = mutableStateOf(false)
+
+    // `true` une fois que l'utilisateur a refusé la demande : Android ne
+    // réaffiche alors plus la boîte de dialogue, il faut passer par les réglages.
+    private var permissionsRefusees = mutableStateOf(false)
 
     // Le vrai nœud `dengon-core` (US-302), unique pour le processus.
     private val noeud get() = (application as DengonApplication).noeud
@@ -64,7 +102,9 @@ class MainActivity : ComponentActivity() {
 
     private val requestPermissions =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
-            permissionsGranted.value = results.values.all { it }
+            val toutes = results.values.all { it }
+            permissionsGranted.value = toutes
+            permissionsRefusees.value = !toutes
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,11 +121,18 @@ class MainActivity : ComponentActivity() {
                 appairage = appairage,
                 afficherAppairage = afficherAppairage,
                 permissionsGranted = permissionsGranted,
+                permissionsRefusees = permissionsRefusees,
                 onRequestPermissions = { requestPermissions.launch(BlePermissions.required()) },
                 onStartService = ::startMeshService,
                 onStopService = ::stopMeshService,
             )
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Retour des réglages Android : la permission a pu être accordée entre-temps.
+        permissionsGranted.value = BlePermissions.allGranted(this)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -136,11 +183,13 @@ private fun DengonApp(
     appairage: AppairageViewModel,
     afficherAppairage: MutableState<Boolean>,
     permissionsGranted: MutableState<Boolean>,
+    permissionsRefusees: MutableState<Boolean>,
     onRequestPermissions: () -> Unit,
     onStartService: () -> Unit,
     onStopService: () -> Unit,
 ) {
     val granted by permissionsGranted
+    val refusees by permissionsRefusees
     var serviceRunning by remember { mutableStateOf(false) }
     var showSpike by remember { mutableStateOf(false) }
     var showMessagerie by remember { mutableStateOf(false) }
@@ -157,10 +206,17 @@ private fun DengonApp(
         }
     }
 
-    MaterialTheme {
+    DengonTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
             if (showMessagerie) {
-                MessagerieRoute(viewModel = conversationsViewModel, onQuitter = { showMessagerie = false })
+                MessagerieRoute(
+                    viewModel = conversationsViewModel,
+                    onQuitter = { showMessagerie = false },
+                    onAjouterContact = {
+                        showMessagerie = false
+                        showAppairage = true
+                    },
+                )
             } else if (showSpike) {
                 HelloMeshSpikeScreen(onBack = { showSpike = false })
             } else if (showAppairage) {
@@ -172,6 +228,7 @@ private fun DengonApp(
             } else {
                 DengonScreen(
                     permissionsGranted = granted,
+                    permissionsRefusees = refusees,
                     serviceRunning = serviceRunning,
                     onRequestPermissions = onRequestPermissions,
                     onToggleService = {
@@ -196,6 +253,7 @@ private fun DengonApp(
 @Composable
 private fun DengonScreen(
     permissionsGranted: Boolean,
+    permissionsRefusees: Boolean,
     serviceRunning: Boolean,
     onRequestPermissions: () -> Unit,
     onToggleService: () -> Unit,
@@ -205,52 +263,162 @@ private fun DengonScreen(
     onOpenTransport: () -> Unit,
     onOpenReseau: () -> Unit,
 ) {
+    val contexte = LocalContext.current
+    val bluetoothActif = rememberBluetoothActif()
+    var outilsOuverts by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Text(text = stringResource(R.string.app_name))
+        Column {
+            Text(stringResource(R.string.app_name), style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Des messages qui passent sans Internet, d'un téléphone à l'autre.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        // États guidés : chacun dit ce qui bloque et propose l'action pour le lever.
+        if (!permissionsGranted) {
+            if (permissionsRefusees) {
+                BandeauAlerte(
+                    icone = Icons.Filled.Warning,
+                    titre = "Autorisation refusée",
+                    explication = stringResource(R.string.permissions_denied) +
+                        " Ouvrez les réglages de dengon, puis « Autorisations » et accordez « Appareils à proximité ».",
+                    libelleAction = "Ouvrir les réglages de l'app",
+                    onAction = { ouvrirReglagesApp(contexte) },
+                )
+            } else {
+                BandeauAlerte(
+                    icone = Icons.Filled.LocationOn,
+                    titre = stringResource(R.string.permissions_rationale_title),
+                    explication = stringResource(R.string.permissions_rationale_body),
+                    libelleAction = stringResource(R.string.permissions_grant_button),
+                    onAction = onRequestPermissions,
+                )
+            }
+        } else if (!bluetoothActif) {
+            BandeauAlerte(
+                icone = Icons.Filled.Warning,
+                titre = "Bluetooth coupé",
+                explication = "Allumez le Bluetooth pour envoyer et recevoir des messages.",
+                libelleAction = "Ouvrir les réglages Bluetooth",
+                onAction = { ouvrirReglagesBluetooth(contexte) },
+            )
+        }
 
         // Messagerie : accessible sans permissions BLE, puisqu'aucune radio
         // n'alimente encore le nœud (AndroidTransport, US-213 / US-306).
-        Button(onClick = onOpenMessagerie) {
-            Text(text = "Conversations")
-        }
-
+        CarteAction(
+            icone = Icons.Filled.MailOutline,
+            titre = "Conversations",
+            description = "Lire et écrire à vos contacts.",
+            onClick = onOpenMessagerie,
+        )
         // L'appairage par QR ne dépend pas du Bluetooth : accessible même
         // sans les permissions BLE.
-        Button(onClick = onOpenAppairage) {
-            Text(text = stringResource(R.string.appairage_ouvrir))
+        CarteAction(
+            icone = Icons.Filled.Add,
+            titre = stringResource(R.string.appairage_titre),
+            description = "Scannez le code d'un proche, en personne, pour pouvoir lui écrire.",
+            onClick = onOpenAppairage,
+        )
+        if (permissionsGranted) {
+            CarteAction(
+                icone = Icons.Filled.AccountBox,
+                titre = "Appareils à proximité",
+                description = "Voir les téléphones et relais joignables, régler l'économie de batterie.",
+                onClick = onOpenReseau,
+            )
+            LigneService(serviceRunning, onToggleService)
         }
 
-        if (!permissionsGranted) {
-            Text(text = stringResource(R.string.permissions_rationale_body))
-            Button(onClick = onRequestPermissions) {
-                Text(text = stringResource(R.string.permissions_grant_button))
-            }
-        } else {
-            Text(
-                text = stringResource(
-                    if (serviceRunning) R.string.mesh_status_running else R.string.mesh_status_stopped,
-                ),
+        // Outils d'essai : repliés, ils ne s'adressent pas au grand public.
+        TextButton(
+            onClick = { outilsOuverts = !outilsOuverts },
+            modifier = Modifier.heightIn(min = CibleTactileMin),
+        ) {
+            Icon(
+                if (outilsOuverts) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
+                contentDescription = null,
             )
-            Button(onClick = onToggleService) {
-                Text(text = if (serviceRunning) "Arrêter" else "Démarrer")
-            }
-            Button(onClick = onOpenReseau) {
-                Text(text = "Réseau")
-            }
+            Spacer(Modifier.width(8.dp))
+            Text("Outils de développement")
+        }
+        if (outilsOuverts && permissionsGranted) {
             // Essais du transport réel sur deux téléphones (US-213).
-            Button(onClick = onOpenTransport) {
-                Text(text = "Transport BLE (debug)")
-            }
+            CarteAction(Icons.Filled.LocationOn, "Transport BLE (debug)", "Liens, pairs et journal radio.", onOpenTransport)
             // Écran de debug jetable (US-103) — voir ble/spike/HelloMeshSpikeScreen.kt.
-            Button(onClick = onOpenSpike) {
-                Text(text = "Spike C : hello mesh (debug)")
+            CarteAction(Icons.Filled.LocationOn, "Spike C : hello mesh (debug)", "Essai du premier échange.", onOpenSpike)
+        } else if (outilsOuverts) {
+            Text(
+                "Les outils de développement demandent l'autorisation Bluetooth.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Grande carte cliquable : pictogramme, titre, phrase d'explication. */
+@Composable
+private fun CarteAction(icone: ImageVector, titre: String, description: String, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp).heightIn(min = CibleTactileMin),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icone, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(16.dp))
+            Column {
+                Text(titre, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
+}
+
+/** Interrupteur du service de fond, en toutes lettres (« Recevoir en arrière-plan »). */
+@Composable
+private fun LigneService(actif: Boolean, onChange: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = CibleTactileMin)
+            .toggleable(value = actif, role = Role.Switch, onValueChange = { onChange() })
+            .semantics { stateDescription = if (actif) "Activé" else "Désactivé" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Recevoir en arrière-plan", style = MaterialTheme.typography.titleMedium)
+            Text(
+                if (actif) "Vous recevez vos messages même écran éteint." else "Vous ne recevrez rien tant que c'est éteint.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Spacer(Modifier.width(16.dp))
+        // Le clic est géré par la ligne entière.
+        Switch(checked = actif, onCheckedChange = null)
+    }
+}
+
+private fun ouvrirReglagesApp(contexte: Context) {
+    contexte.startActivity(
+        Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", contexte.packageName, null))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+    )
 }
