@@ -78,6 +78,9 @@ jobs:
 
       - name: Transférer dashboard/api, contracts, dashboard/deploy
         run: |
+          # `.uv-version` (racine du dépôt) : le Dockerfile de l'API le copie
+          # (`COPY .uv-version`, contexte = racine) — oublié au premier
+          # déploiement réel, le build échouait « "/.uv-version": not found ».
           # `rm -rf` sur `dashboard/api`/`contracts` avant l'extraction
           # (corrigé après revue de la PR #97, remarque POWLAIR n°5) : un
           # `tar xzf` par-dessus ~/dengon ne supprime pas les fichiers
@@ -93,7 +96,7 @@ jobs:
           # par git dans `dashboard/deploy/` un par un sans y toucher.
           ssh vps-deploy "rm -rf ~/dengon/dashboard/api ~/dengon/contracts && mkdir -p ~/dengon/dashboard/deploy"
           tar czf - --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' \
-            dashboard/api contracts dashboard/deploy \
+            dashboard/api contracts dashboard/deploy .uv-version \
             | ssh vps-deploy "tar xzf - -C ~/dengon"
 
       - name: docker compose up -d --build
