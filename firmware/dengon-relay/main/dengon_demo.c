@@ -20,6 +20,11 @@
 //
 // Désactivable par CONFIG_DENGON_TRANSPORT_DEMO (US-308 la remplacera).
 // ---------------------------------------------------------------------------
+#include "sdkconfig.h"
+
+/* Démo US-220, compilée seulement si elle remplace le relais (Kconfig). */
+#if CONFIG_DENGON_TRANSPORT_DEMO
+
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -206,3 +211,5 @@ dengon_demo_start(void)
         ESP_LOGE(TAG, "création de la tâche de démo impossible");
     }
 }
+
+#endif /* CONFIG_DENGON_TRANSPORT_DEMO */

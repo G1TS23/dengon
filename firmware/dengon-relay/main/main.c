@@ -1,13 +1,15 @@
 // ---------------------------------------------------------------------------
 // firmware/dengon-relay/main/main.c — point d'entrée du relais dengon.
 //
-// Depuis l'US-220, tout le Bluetooth vit dans transport_nimble.c : annonce,
-// scan, connexions dans les deux rôles, émission et réception d'octets
-// opaques. main.c ne fait plus que préparer ce dont le transport a besoin et
-// le démarrer. Ce qui n'est PAS ici, et où ça ira :
-//   - libdengon_core.a en FFI, vraie identité ....... US-307
-//   - boucle du cœur (routage, relais dengon) ....... US-308
-//   - Wi-Fi, HTTPS, journal chaîné .................. US-309 et suivantes
+// Ordre de démarrage (US-308) :
+//   1. NVS (calibration PHY du contrôleur BT, secrets et curseur du relais) ;
+//   2. relais dengon (dengon_relay_app.c) : littlefs, identité — tirée sous
+//      bootloader_random_enable() au premier démarrage, donc AVANT la radio —
+//      et reprise du journal chaîné ;
+//   3. transport NimBLE (transport_nimble.c, US-220), avec le vrai peerID ;
+//   4. auto-test Noise sur l'aléa matériel, tâches route / inventory /
+//      courier / ledger, console série.
+// Ce qui n'est PAS ici : Wi-Fi, SNTP, export HTTPS du journal (US-309+).
 //
 // Références : docs/synthese/08-relais-esp32.md §3,
 //              docs/powl/03-network-protocol.md §6.
@@ -16,7 +18,9 @@
 #include "nvs_flash.h"
 #include "sdkconfig.h"
 
+#include "dengon_console.h"
 #include "dengon_peer_id.h"
+#include "dengon_relay_app.h"
 #include "dengon_transport.h"
 #if CONFIG_DENGON_TRANSPORT_DEMO
 #include "dengon_demo.h"
@@ -48,8 +52,14 @@ app_main(void)
     }
     ESP_ERROR_CHECK(err);
 
+#if CONFIG_DENGON_TRANSPORT_DEMO
+    /* Démo US-220 : octets opaques, pas de dengon-core ; peerID bouchon. */
     ESP_ERROR_CHECK(dengon_peer_id_init());
     dengon_peer_id_get(cfg.local_peer_id);
+#else
+    ESP_ERROR_CHECK(dengon_relay_app_init(cfg.local_peer_id));
+    dengon_peer_id_set(cfg.local_peer_id);
+#endif
 
     tr = dengon_transport_start(&cfg);
     if (tr != DENGON_TR_OK) {
@@ -59,5 +69,8 @@ app_main(void)
 
 #if CONFIG_DENGON_TRANSPORT_DEMO
     dengon_demo_start();
+#else
+    ESP_ERROR_CHECK(dengon_relay_app_start());
+    ESP_ERROR_CHECK(dengon_console_start());
 #endif
 }

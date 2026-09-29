@@ -18,13 +18,13 @@
 CONFIG_IDF_TARGET="esp32"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 
-# Le partitionnement par défaut n'accorde que 1 Mo à l'application. Le binaire
-# NimBLE + mbedTLS en frôle déjà la limite, et l'US-307 y ajoutera
-# libdengon_core.a. On prend tout de suite le schéma « large » (1,5 Mo de
-# factory) : rebasculer plus tard obligerait à réécrire toute la flash de chaque
-# carte déjà déployée. Et l'erreur « app partition is too small » n'arrive
-# qu'APRÈS une compilation complète.
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# Table de partitions propre au relais (US-308, partitions.csv) : factory de
+# 2 Mo (NimBLE + mbedTLS + libdengon_core.a) et une partition littlefs de
+# 256 Ko pour le journal chaîné. Remplace PARTITION_TABLE_SINGLE_APP_LARGE
+# (US-114), qui n'avait aucune place pour un système de fichiers.
+# ⚠ Carte déjà flashée avec l'ancienne table : `idf.py erase-flash flash`.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # --- 2. Bluetooth : contrôleur BLE seul, host NimBLE -------------------------
 # ⚠ Le host par défaut d'ESP-IDF est Bluedroid (components/bt/Kconfig). Il faut
@@ -76,3 +76,9 @@ CONFIG_BT_NIMBLE_SVC_GAP_DEVICE_NAME="dengon-relay"
 # textuelle des critères d'acceptation. À redescendre à WARNING en US-308,
 # quand le budget flash comptera.
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- 7. Relais dengon (US-308) ----------------------------------------------
+# La tâche route de dengon_relay_app.c appelle dengon-core (Rust) : Noise,
+# SHA-256 et Ed25519 sur la pile. 6 Ko réservés à sa création ; la tâche
+# principale n'exécute que l'initialisation (auto-test Noise compris).
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

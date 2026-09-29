@@ -1,0 +1,7 @@
+# Application de test : chien de garde coupé (Unity ne rend pas la main entre
+# les cas). Sur carte, la table de partitions du relais fournit la partition
+# `littlefs` que les tests montent.
+CONFIG_ESP_TASK_WDT_EN=n
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../../../partitions.csv"
