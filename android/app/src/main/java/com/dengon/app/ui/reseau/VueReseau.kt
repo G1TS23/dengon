@@ -2,8 +2,12 @@ package com.dengon.app.ui.reseau
 
 import com.dengon.app.ble.transport.LinkId
 
-/** Préfixe de pseudo des relais ESP32 (`node_id` `relay-…`, docs/synthese/09). */
-const val PREFIXE_RELAIS = "relay-"
+/**
+ * Préfixes de pseudo des relais ESP32 : `relais-xxxx` est ce que le firmware
+ * annonce (`dengon_relay_app.c`), `relay-…` le `node_id` du dashboard
+ * (docs/synthese/09).
+ */
+val PREFIXES_RELAIS = listOf("relais-", "relay-")
 
 /** Un pair relié en ce moment, tel que l'écran réseau l'affiche. */
 data class PairVu(val peerId: String, val pseudo: String?, val estRelais: Boolean)
@@ -20,7 +24,7 @@ data class VueReseau(
 
 /**
  * Construit la vue à partir de l'état du transport. Un pair est un **relais**
- * si son pseudo annoncé commence par [PREFIXE_RELAIS] : l'`ANNOUNCE` ne porte
+ * si son pseudo annoncé commence par l'un des [PREFIXES_RELAIS] : l'`ANNOUNCE` ne porte
  * pas de capacité « relais » exploitable côté téléphone.
  */
 fun vueReseau(
@@ -31,7 +35,7 @@ fun vueReseau(
 ): VueReseau {
     val vus = liens.values.distinct().sorted().map { peerId ->
         val pseudo = pseudos[peerId]
-        PairVu(peerId, pseudo, estRelais = pseudo?.startsWith(PREFIXE_RELAIS) == true)
+        PairVu(peerId, pseudo, estRelais = pseudo != null && PREFIXES_RELAIS.any { pseudo.startsWith(it) })
     }
     val (relais, pairs) = vus.partition { it.estRelais }
     return VueReseau(serviceDemarre, modeEco, pairs, relais)

@@ -152,6 +152,58 @@ déjà non formatés avant ce changement (non traité).
   `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
   référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
+## 2026-09-29 — US-313 : essai avec le relais ESP32, incompatibilité de trame trouvée
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `ui/reseau/VueReseau.kt` (préfixe de pseudo), test ; aucun changement de transport
+**Lot :** Lot 3 — app Android / relais
+
+### Fait
+- Relais ESP32 (`dengon-relay-9309`, port COM8) allumé à côté des téléphones.
+  Le Samsung A16 ouvre un lien avec lui (`48:9D:31:00:83:DE`, rssi −34) ; le
+  relais journalise `lien 1 ouvert`, MTU 517, `notify`.
+- **Le relais n'apparaît pas dans l'écran Réseau** : « Relais atteints (0) ».
+  Log temporaire (retiré) dans `GattRadio.recu` : la notification du relais
+  arrive (`174 o`, lien `pret=true`) mais aucun `↔ peerID` ne suit et
+  `Maillage` ne journalise rien, donc aucun `FrameReceived` n'est produit.
+- **Cause (très probable, non prouvée par un test)** : le transport Android
+  (US-213, `FragmentationBle`) préfixe chaque morceau d'un octet d'en-tête
+  (bit 7 = SUITE, bits 0-6 = 0) ; le relais NimBLE (US-220) envoie la trame
+  brute (« 1 trame = 1 PDU ATT, aucune fragmentation BLE »,
+  `03-ecarts-conception.md`). Le premier octet de l'`ANNOUNCE` est lu comme
+  en-tête, `Reassembleur.ajouter` lève, `AndroidTransport.morceauRecu` jette la
+  trame en silence. Entre téléphones, ça marche (les deux ont l'en-tête).
+- Corrigé dans cette PR : le firmware annonce le pseudo **`relais-xxxx`**
+  (`dengon_relay_app.c:372`), pas `relay-` ; `vueReseau` accepte les deux.
+
+### Pourquoi / décisions
+- Incompatibilité **non corrigée ici** : trancher entre « le relais adopte
+  l'en-tête » et « le téléphone lit la trame brute » change le format sur le
+  fil, hors du périmètre d'une US d'écran. À traiter dans une US dédiée.
+
+### Écarts vs conception
+- Format des morceaux BLE Android ≠ NimBLE : déjà signalé en « proposition à
+  aligner » dans `FragmentationBle.kt`, **jamais aligné** ; bloque aussi le
+  scénario 4 du DoD (téléphone ↔ relais).
+
+### Appris
+- Un transport qui jette une trame invalide sans journal cache ce genre de
+  bug : `AndroidTransport.morceauRecu` devrait au moins journaliser.
+
+### État après cette session
+- « Relais atteints » **non vérifié** sur appareil : bloqué par l'écart ci-dessus.
+- Fiche module : inchangée.
+
+### Vérification (commandes réellement exécutées)
+```
+$ Get-CimInstance Win32_PnPEntity ... -> USB-SERIAL CH340 (COM8)
+$ lecture série COM8 115200 -> lien conn=0/1 prêt, notify, dengon-relay-9309
+$ adb -s R58Y10M1W8A logcat -s dengon-transport -> notif 174 o, pret=true, pas de "↔"
+$ ./gradlew.bat testDebugUnitTest -> BUILD SUCCESSFUL
+```
+
+---
+
 ## 2026-09-29 — US-313 : essai sur appareils (OnePlus 7 Pro + Samsung A16)
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)

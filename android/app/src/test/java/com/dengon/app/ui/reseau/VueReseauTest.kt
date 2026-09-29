@@ -25,6 +25,12 @@ class VueReseauTest {
     }
 
     @Test
+    fun `le pseudo relais- annonce par le firmware est un relais`() {
+        val vue = vueReseau(true, false, mapOf(LinkId(1) to "AAAA"), mapOf("AAAA" to "relais-9309"))
+        assertEquals(listOf("AAAA"), vue.relais.map { it.peerId })
+    }
+
+    @Test
     fun `un pair sans pseudo connu reste un pair simple`() {
         val vue = vueReseau(true, false, mapOf(LinkId(1) to "AAAA"), emptyMap())
         assertEquals(null, vue.pairs.single().pseudo)
