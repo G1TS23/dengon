@@ -19,6 +19,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use dengon_ble::{LinkId, Transport, TransportConfig, TransportError, TransportEvent};
 use dengon_core::api::{DengonError, Node, NodeEvent};
+use dengon_core::observability::Role;
 use dengon_core::protocol::PeerId;
 use dengon_core::sync::routing::Now;
 use dengon_core::sync::status::MsgUuid;
@@ -100,10 +101,27 @@ impl<T: Transport> Session<T> {
         let now = self.maintenant();
         for evenement in self.transport.poll() {
             match evenement {
-                TransportEvent::PeerConnected { peer_link_id, .. } => {
+                TransportEvent::PeerConnected { peer_link_id, rssi } => {
                     if self.lien.is_none() {
                         self.lien = Some(peer_link_id);
                         self.node.on_peer_connected(self.pair, now, OsRng);
+                        // `peer.connected` (US-208/US-319, `docs/powl/08` §5) :
+                        // seul site d'appel réel de `Node::record_peer_connected`
+                        // à ce jour. `role` est toujours `Central` — `demarrer()`
+                        // ne configure ce transport qu'en scan (`advertise:
+                        // false`), jamais en pair annoncé. `rssi` : `None` est
+                        // fréquent (Android ne le donne qu'à la demande, NimBLE
+                        // pas du tout sur une connexion entrante — voir la doc
+                        // de `TransportEvent::PeerConnected`) ; on n'émet rien
+                        // plutôt que d'inventer une valeur.
+                        if let Some(rssi) = rssi {
+                            self.node.record_peer_connected(
+                                self.pair,
+                                rssi_i8_sature(rssi),
+                                Role::Central,
+                                now.wall_ms,
+                            );
+                        }
                     }
                 }
                 TransportEvent::PeerDisconnected { peer_link_id, .. } => {
@@ -142,6 +160,15 @@ impl<T: Transport> Session<T> {
             }
         }
     }
+}
+
+/// `TransportEvent::PeerConnected::rssi` est un `i16` (la plateforme), le
+/// catalogue d'observabilité attend un `i8` (`docs/powl/08` §5). Les RSSI BLE
+/// réels tiennent largement dans `i8` (`-100..0` dBm typique) : une saturation
+/// aux bornes plutôt qu'un `unwrap`/panic pour le cas non réaliste où la
+/// plateforme rendrait une valeur hors plage.
+fn rssi_i8_sature(rssi: i16) -> i8 {
+    i8::try_from(rssi).unwrap_or(if rssi > 0 { i8::MAX } else { i8::MIN })
 }
 
 #[cfg(test)]
@@ -246,6 +273,54 @@ mod tests {
         assert!(
             !alice.transport_mut().trames_envoyees_a(lien).is_empty(),
             "le message doit partir dès que le lien s'ouvre"
+        );
+    }
+
+    /// US-208/US-319/US-321 : `record_peer_connected` doit avoir un site
+    /// d'appel réel ici — c'était le point bloquant de la revue de PR #119
+    /// (Oswin) : « aucun appelant réel ». Voir aussi `dengon_core::api`,
+    /// doc de `TransportEvent::PeerConnected` (RSSI fréquemment absente).
+    #[test]
+    fn connexion_avec_rssi_emet_peer_connected() {
+        use dengon_core::observability::Value;
+
+        let (na, nb) = (noeud("alice"), noeud("bob"));
+        let idb = nb.peer_id();
+        let mut alice = Session::new(na, MockTransport::new(), idb);
+        alice.demarrer().unwrap();
+
+        alice.transport_mut().connecter_pair(Some(-50));
+        let _ = alice.tourner();
+
+        let events = alice.node.take_observability_events();
+        let trouve = events
+            .iter()
+            .find(|env| env.name == "peer.connected")
+            .expect("une connexion avec RSSI doit émettre peer.connected");
+        let Value::Object(obj) = &trouve.payload else {
+            panic!("payload pas un objet")
+        };
+        assert_eq!(obj.get("rssi"), Some(&Value::Int(-50)));
+        assert_eq!(obj.get("role"), Some(&Value::Str(String::from("central"))));
+    }
+
+    /// Sans RSSI (fréquent sur Android/NimBLE, voir la doc de
+    /// `TransportEvent::PeerConnected`) : aucune valeur inventée, donc pas
+    /// d'événement du tout plutôt qu'un `rssi` fabriqué.
+    #[test]
+    fn connexion_sans_rssi_n_emet_pas_peer_connected() {
+        let (na, nb) = (noeud("alice"), noeud("bob"));
+        let idb = nb.peer_id();
+        let mut alice = Session::new(na, MockTransport::new(), idb);
+        alice.demarrer().unwrap();
+
+        alice.transport_mut().connecter_pair(None);
+        let _ = alice.tourner();
+
+        let events = alice.node.take_observability_events();
+        assert!(
+            !events.iter().any(|env| env.name == "peer.connected"),
+            "sans RSSI, aucun peer.connected ne doit être émis"
         );
     }
 }
