@@ -11,7 +11,7 @@ alimente le nœud (`Maillage`).
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109, US-213 ; `crates/dengon-ble/src/transport.rs` (le contrat, US-105) et
 `crates/dengon-ble/src/conformance.rs` (la suite de conformité).
-**Dernière mise à jour :** 2026-09-29 (US-306 : radio branchée sur le nœud ; US-302 : corrections revue PR #109)
+**Dernière mise à jour :** 2026-09-29 (US-324 : switch de service réconcilié avec l'état réel, bug de démo corrigé ; US-306 : radio branchée sur le nœud ; US-302 : corrections revue PR #109)
 **État :** partiel — service de fond (US-109) + transport BLE réel (US-213) +
 messagerie (US-214) + appairage QR (US-215), **sur le vrai FFI** depuis
 l'US-302 ; transport branché sur le nœud (US-306, testé en JVM et
@@ -721,6 +721,68 @@ redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
 - Tests : `LibelleStatutTest` ; 110 tests JVM verts. Essayé sur Samsung A16 +
   OnePlus 7 Pro : appairage, messages dans les deux sens, clair/sombre, police 200 %
   (voir journal). Clavier : `adjustResize` (manifeste), fil resté visible clavier ouvert, vérifié sur le Samsung.
+
+## Bugs trouvés en démo (2026-09-29) : #131/#132
+
+Deux problèmes remontés en conditions réelles de démo, analysés (2 agents
+d'exploration lecture-seule) puis suivis chacun par une issue GitHub.
+
+### #132 (US-324) — switch de service désynchronisé — corrigé
+
+**Symptôme :** couper le service Bluetooth `dengon` depuis les
+notifications (arrêt système du service de premier plan, pas un bouton
+in-app — `buildNotification()` n'a aucune `addAction`), puis vouloir le
+réactiver depuis l'écran d'accueil : l'envoi de message ne fonctionnait
+plus.
+
+**Cause :** `DengonApp` (`MainActivity.kt`) affichait le switch « Recevoir
+en arrière-plan » à partir d'un booléen Compose purement local
+(`var serviceRunning by remember { mutableStateOf(false) }`), modifié
+uniquement par l'app elle-même. Aucune réconciliation avec l'état réel de
+`MeshForegroundService` (pas de `bindService`, pas de vérification dans
+`onResume()`). Quand le service était arrêté de l'extérieur,
+`onDestroy()` annulait bien `TransportActif.transport/radio/maillage`
+(`TransportActif.arreter()`), mais l'UI continuait d'afficher « Activé » :
+le tap suivant de l'utilisateur appelait donc `onStopService()` (no-op) au
+lieu de `onStartService()`, et `TransportActif.demarrer()` n'était jamais
+rappelé.
+
+**Correctif :** `DengonApp` lit désormais
+`TransportActif.etat.collectAsState().value.demarre` — le `StateFlow` déjà
+exposé par `TransportActif` (déjà utilisé par `ReseauScreen.kt` et
+`TransportDebugScreen.kt`) — au lieu d'un état local dupliqué. Le toggle du
+switch se contente d'appeler `onStartService`/`onStopService` ; l'affichage
+suit la vraie valeur, mise à jour par `TransportActif.demarrer()`/
+`arreter()` (appelés par `MeshForegroundService.onStartCommand`/
+`onDestroy`) quel que soit ce qui a déclenché l'arrêt. Aucun nouveau
+mécanisme introduit — seule source de vérité déjà existante, juste pas lue
+par cet écran.
+
+**Non vérifié sur matériel** dans cette session (pas d'accès au téléphone
+connecté au moment du correctif) — à rejouer : couper le service depuis la
+notification système, revenir sur l'app, vérifier « Désactivé », réactiver,
+vérifier l'envoi.
+
+### #131 (US-323) — persistance des conversations non branchée — pas corrigé
+
+**Symptôme :** fermer totalement l'app (tâche balayée + service arrêté)
+puis la relancer fait perdre **toutes** les conversations et messages.
+Seule l'identité survit.
+
+**Cause :** le module de persistance SQLite chiffrée existe et fonctionne
+(`crates/dengon-core/src/store.rs`, US-207 ; déjà utilisé par le binaire
+CLI `dengon-node`), mais `Node::new()` (`crates/dengon-core/src/api.rs`)
+initialise toujours `store: None` — `attach_store()` existe mais n'est
+appelée que dans les tests unitaires. `dengon-ffi::DengonNode::open`
+(`crates/dengon-ffi/src/lib.rs`) ne persiste que l'identité
+(`identity.vault`) et n'ouvre jamais de base ni n'appelle
+`attach_store()`. Déjà documenté en commentaire dans
+`ConversationsViewModel.kt` (« Non persisté… », « En mémoire seulement… »),
+mais jamais suivi d'une issue avant cette session.
+
+**État :** issue ouverte, non traitée dans cette session (implémentation
+plus lourde : dérivation de clé, ouverture de fichier, gestion des
+migrations — voir issue #131 pour le détail).
 
 ## Pour l'oral
 

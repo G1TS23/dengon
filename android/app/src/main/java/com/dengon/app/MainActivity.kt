@@ -44,6 +44,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -190,19 +191,24 @@ private fun DengonApp(
 ) {
     val granted by permissionsGranted
     val refusees by permissionsRefusees
-    var serviceRunning by remember { mutableStateOf(false) }
+    // Reflète l'état réel de `MeshForegroundService` (US-324) : un booléen
+    // local ne voit jamais un arrêt déclenché hors de l'app (notification
+    // système), ce qui désynchronisait l'interrupteur et empêchait de
+    // relancer le transport (voir issue #132).
+    val etatTransport by TransportActif.etat.collectAsState()
+    val serviceRunning = etatTransport.demarre
     var showSpike by remember { mutableStateOf(false) }
     var showMessagerie by remember { mutableStateOf(false) }
     var showAppairage by afficherAppairage
     var showTransport by remember { mutableStateOf(false) }
     var showReseau by remember { mutableStateOf(false) }
 
-    // Démarrage auto dès que les permissions sont accordées (une
-    // seule fois par passage à `true`, pas à chaque recomposition).
+    // Démarrage auto dès que les permissions sont accordées (une seule fois
+    // par passage à `true`, pas à chaque recomposition). `demarrer()` est
+    // idempotent côté service, donc sans risque si déjà en cours.
     LaunchedEffect(granted) {
         if (granted && !serviceRunning) {
             onStartService()
-            serviceRunning = true
         }
     }
 
@@ -237,7 +243,6 @@ private fun DengonApp(
                         } else {
                             onStartService()
                         }
-                        serviceRunning = !serviceRunning
                     },
                     onOpenSpike = { showSpike = true },
                     onOpenMessagerie = { showMessagerie = true },

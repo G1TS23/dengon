@@ -18,6 +18,36 @@ et le mentionner dans l'entrée de journal.
 
 ---
 
+### 2026-09-29 — Android : conversations non persistées, service de fond non observable (bugs trouvés en démo, issues #131/#132)
+
+- **Prévu :** `docs/synthese/04-architecture.md` prévoit `store` (SQLite chiffré, US-207) comme mécanisme de persistance des messages sur chaque nœud, y compris côté Android.
+- **Réel :**
+  1. **Conversations jamais persistées côté Android** (issue #131, US-323) :
+     `store` existe et fonctionne (`crates/dengon-core/src/store.rs`, déjà
+     utilisé par le binaire CLI `dengon-node`), mais
+     `dengon-ffi::DengonNode::open` n'appelle jamais `Node::attach_store()` —
+     `Node::new()` laisse toujours `store: None` en dehors des tests. Seule
+     l'identité (`identity.vault`) survit à un redémarrage du process. Déjà
+     documenté en commentaire dans `ConversationsViewModel.kt` avant cette
+     session, mais jamais suivi d'une issue.
+  2. **Switch « Recevoir en arrière-plan » désynchronisé d'un arrêt externe
+     du service** (issue #132, US-324, **corrigé** dans cette session) : l'UI
+     lisait un booléen Compose local au lieu de l'état réel de
+     `MeshForegroundService`, donc un arrêt déclenché depuis la notification
+     système laissait le switch afficher « Activé » ; le tap suivant de
+     l'utilisateur faisait l'inverse de ce qu'il pensait faire et ne
+     relançait jamais `TransportActif`. Voir `modules/android-app.md`
+     (section « Bugs trouvés en démo ») pour l'analyse complète.
+- **Pourquoi :** remonté par l'utilisateur pendant une démo (fermeture totale
+  de l'app / coupure-réactivation du service Bluetooth). Analyse faite par 2
+  agents d'exploration lecture-seule (persistance côté Android/Rust ; cycle
+  de vie du service BLE), vérifiée manuellement avant correction.
+- **Impact :** `crates/dengon-core/src/api.rs`, `crates/dengon-ffi/src/lib.rs`
+  (issue #131, non corrigé), `android/app/src/main/java/com/dengon/app/MainActivity.kt`
+  (issue #132, corrigé).
+
+---
+
 ### 2026-09-29 — Relais : preuve de possession légère, initiation par le téléphone, liaisons fantômes (US-312, essai sur carte et revue PR #129)
 
 - **Prévu :**

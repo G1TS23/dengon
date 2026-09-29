@@ -10,6 +10,83 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-324 : réconcilier le switch « Recevoir en arrière-plan » avec l'état réel du service (issue #132)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/MainActivity.kt`, `docs/suivi/`.
+**Lot :** US-324 (issue #132), bug trouvé en démo.
+
+### Fait
+- Bug remonté en démo : couper le service Bluetooth `dengon` depuis les
+  notifications puis le réactiver laissait l'envoi de message cassé.
+- Analyse (2 agents d'exploration lecture-seule en parallèle) : cause
+  racine identifiée dans `MainActivity.kt` — le switch « Recevoir en
+  arrière-plan » lisait un booléen Compose purement local
+  (`var serviceRunning by remember { mutableStateOf(false) } `), jamais
+  réconcilié avec l'état réel de `MeshForegroundService`. Un arrêt externe
+  (action système sur la notification) laissait l'UI croire que le service
+  tournait encore ; le tap suivant de l'utilisateur faisait donc l'inverse
+  de ce qu'il pensait faire et ne relançait jamais `TransportActif`.
+- Deuxième bug analysé dans la même session, cause racine différente
+  (`store: None` jamais branché côté `dengon-ffi`, perte totale des
+  conversations au kill du process) : consigné dans l'issue #131 (US-323),
+  **non traité ici**, volontairement laissé pour une session dédiée.
+- Correctif US-324 : `DengonApp` (`MainActivity.kt`) lit désormais
+  `TransportActif.etat.collectAsState().value.demarre` — un `StateFlow`
+  déjà exposé par `TransportActif` (déjà utilisé ailleurs, ex.
+  `ReseauScreen.kt`, `TransportDebugScreen.kt`) — au lieu d'un état local.
+  Le toggle du switch ne fait plus qu'appeler `onStartService`/
+  `onStopService` ; l'affichage suit désormais la vraie valeur, mise à jour
+  par `TransportActif.demarrer()`/`arreter()` (appelés depuis
+  `MeshForegroundService.onStartCommand`/`onDestroy`), quel que soit ce qui
+  a déclenché l'arrêt.
+
+### Pourquoi / décisions
+- Pas de nouveau mécanisme de synchronisation (`bindService`,
+  `ServiceConnection`, broadcast) : `TransportActif` exposait déjà un
+  `StateFlow<Etat>` avec un champ `demarre` fidèle à l'état réel du
+  transport — il suffisait que l'UI le lise au lieu de dupliquer l'état
+  dans un `remember` local. Solution la plus petite, cohérente avec le
+  reste de l'app (même pattern que les autres écrans).
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau (pattern `collectAsState()` déjà établi dans le code).
+
+### État après cette session
+- US-324 / issue #132 : correctif appliqué et compilé
+  (`./gradlew :app:compileDebugKotlin`). Non testé sur matériel physique
+  dans cette session (pas d'accès au téléphone connecté au moment du
+  correctif) — à valider manuellement : couper le service depuis la
+  notification, revenir sur l'app, vérifier que le switch affiche
+  « Désactivé », le réactiver, vérifier qu'un message part.
+- US-323 / issue #131 (persistance SQLite non branchée côté Android) reste
+  ouverte, non commencée.
+- `./gradlew :app:testDebugUnitTest` : 1 échec préexistant, **non lié à ce
+  changement** — `MaillageTest > le pseudo de l'ANNOUNCE est retenu tant
+  que le lien vit` échoue avec `UnsatisfiedLinkError:
+  uniffi_dengon_ffi_checksum_func_announce_is_relay symbol not found`
+  (reproduit à l'identique avec `git stash`, donc bibliothèque native hôte
+  désynchronisée du binding Kotlin généré, indépendant du correctif
+  US-324). À investiguer séparément (rebuild de `libdengon_ffi` côté hôte).
+- Fiche module `android` : pas de fiche dédiée dans `docs/suivi/modules/`
+  à ce jour pour `android/` (hors périmètre de cette correction ponctuelle).
+
+### Vérification (commandes réellement exécutées)
+```
+$ ./gradlew :app:compileDebugKotlin -q
+(warning SDK XML sans rapport, aucune erreur)
+
+$ ./gradlew :app:testDebugUnitTest -q
+120 tests, 1 échec (MaillageTest, préexistant — confirmé par git stash)
+```
+- Test manuel sur device (couper/réactiver le service depuis la
+  notification, vérifier l'envoi de message) **non exécuté** dans cette
+  session — pas de build/installation sur le téléphone connecté effectuée
+  ici.
+
 ## 2026-09-29 — US-312 : essai sur carte et 2 téléphones, bugs trouvés, retours de revue (PR #129)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
