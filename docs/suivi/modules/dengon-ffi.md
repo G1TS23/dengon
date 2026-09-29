@@ -2,7 +2,7 @@
 
 **Rôle en une phrase :** le pont qui permet à l'application Android, écrite en Kotlin, d'appeler le cœur écrit en Rust.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §3 et §5 ; [`docs/powl/09-data-model.md`](../../powl/09-data-model.md) §1/§3 (formats QR, code de vérification).
-**Dernière mise à jour :** 2026-09-29 (US-302 ; corrections revue PR #109)
+**Dernière mise à jour :** 2026-09-29 (US-306 : `announce_frame`, `identity_from_announce` ; US-302 : corrections revue PR #109)
 **État :** **fonctionnel** — vrai FFI branché sur `dengon_core::api` (US-301). Plus aucun bouchon, ni en Rust ni en Kotlin. Contrat étendu en v1 : écart consigné, **à annoncer en point d'équipe**.
 
 > Historique : l'US-106 avait livré un contrat v0 gelé et deux bouchons
@@ -49,7 +49,8 @@ android/app/src/test/.../ffi/
 |---|---|---|
 | `DengonNode` | `src/lib.rs:179` | `Mutex<api::Node>` + origine de l'horloge monotone. Le verrou empoisonné est récupéré (`PoisonError::into_inner`) plutôt que de paniquer à chaque appel suivant. |
 | `DengonNode::open` | `src/lib.rs:194` | Constructeur v1. Crée `data_dir`, puis `identity::load_or_create` sur un `FileVault` (`<data_dir>/identity.vault`, clé de 32 o fournie par l'appelant). `peerID` stable d'un lancement à l'autre ; `pseudo` lu au premier lancement seulement. |
-| `on_peer_connected` / `on_peer_disconnected` / `on_bytes_received` / `take_outgoing` | `src/lib.rs:239-268` | Le chemin des octets radio : l'appelant (`AndroidTransport`, US-213) pousse ce qu'il reçoit et vide ce qu'il doit émettre. Le nœud ne possède aucun transport. |
+| `on_peer_connected` / `on_peer_disconnected` / `on_bytes_received` / `take_outgoing` | `src/lib.rs` | Le chemin des octets radio : l'appelant (`Maillage` sur `AndroidTransport`, US-306) pousse ce qu'il reçoit et vide ce qu'il doit émettre. Le nœud ne possède aucun transport. |
+| `announce_frame` / `identity_from_announce` | `src/lib.rs` | (US-306) L'`ANNOUNCE` signé de ce nœud, à écrire en première trame d'un lien ; et sa vérification côté réception, qui rend la carte de l'autre bout — c'est ce qui relie un `LinkId` à un `peer_id`. |
 | `now` | `src/lib.rs:292` | `Now { wall_ms: SystemTime, mono_ms: Instant écoulé depuis open }`. |
 | `generate_identity` | `src/lib.rs:319` | Vraies clés, mais **jetable** : seule la carte publique franchit le FFI. Pour les tests ; l'app passe par `open`. |
 | `identity_qr_code` / `identity_from_qr_code` / `verification_code` | `src/lib.rs:329-352` | Délèguent à `dengon_core::identity` (US-205) : QR `dengon:v1:`, code 60 chiffres SHA-512. |
@@ -113,7 +114,8 @@ Rust (`cargo test -p dengon-ffi`, 13 tests) :
 
 | Test | Vérifie |
 |---|---|
-| `message_de_bout_en_bout_entre_deux_noeuds` | handshake + message chiffré Alice → Bob, `MessageReceived`, `StatusChanged(InFlight)`, même `conv_id` des deux côtés |
+| `message_de_bout_en_bout_entre_deux_noeuds` | handshake + message chiffré Alice → Bob, `MessageReceived`, statuts exactement `[InFlight, Delivered]` (US-306), même `conv_id` des deux côtés |
+| `announce_revele_la_carte_de_l_autre_bout_du_lien` | `announce_frame` → `identity_from_announce` rend la carte locale ; ANNOUNCE altéré ou trame de session → `Internal` (US-306) |
 | `evenements_de_connexion_et_deconnexion` | `PeerConnected` puis `PeerDisconnected` |
 | `identite_stable_d_une_ouverture_a_l_autre` | réouverture du coffre : même carte, pseudo d'origine |
 | `mauvaise_cle_de_coffre_refusee` | mauvaise clé, clé de 31 octets → `Internal` |
@@ -122,8 +124,10 @@ Rust (`cargo test -p dengon-ffi`, 13 tests) :
 | `qr_aller_retour`, `carte_au_peer_id_falsifie_refusee`, `carte_au_peer_id_en_majuscules_acceptee`, `code_de_verification_symetrique_60_chiffres`, `pseudo_vide_refuse` | fonctions libres |
 | `convert::tests` (2) | base32 et hexadécimal, aller-retour et longueur stricte |
 
-Kotlin (`./gradlew testDebugUnitTest`) : `DengonNodeIntegrationTest` (4 tests,
-mêmes scénarios à travers JNA). Ces tests, avec `AppairageViewModelTest` et 3
+Kotlin (`./gradlew testDebugUnitTest`) : `DengonNodeIntegrationTest` (6 tests,
+mêmes scénarios à travers JNA, plus depuis l'US-306 deux vrais nœuds reliés
+par `Maillage` + `AndroidTransport` jusqu'à `DELIVERED`, et le décodage du
+`peerID` base32 recoupé avec le `sender_id` de l'ANNOUNCE). Ces tests, avec `AppairageViewModelTest` et 3
 tests de `QrCodeTest`, sont **ignorés** si `libdengon_ffi.so` hôte manque
 (`FfiNatif.exiger()`), par exemple dans Android Studio sous Windows ; le job CI
 `android` échoue si `DengonNodeIntegrationTest` a été ignoré.
@@ -133,8 +137,8 @@ tests de `QrCodeTest`, sont **ignorés** si `libdengon_ffi.so` hôte manque
 - **Messages non persistés** : `api::Node::attach_store` n'est pas appelé. Les
   conversations vivent le temps du processus ; seule l'identité survit.
 - `Read` et `Cancelled` jamais émis (pas de `mark_read` / `cancel_message`).
-- Statut final observable : `InFlight` — la façade US-301 n'émet pas d'ACK
-  (écart de l'US-301).
+- ~~Statut final observable : `InFlight`~~ — depuis l'US-306 le cœur émet
+  l'accusé en session : `Delivered` est atteint (test de bout en bout).
 - Contacts non persistés non plus : à réenregistrer (`addContact`) après
   redémarrage — l'écran d'appairage devra être rejoué tant que ce n'est pas fait.
 - Pas de SBOM ni de signature de l'APK release.

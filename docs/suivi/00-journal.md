@@ -482,6 +482,178 @@ $ adb … input tap / input text / uiautomator dump / screencap             OK
   progression des statuts au-delà de « En attente ».
 - Fiches mises à jour : `modules/android-app.md`, `modules/dengon-ffi.md`.
 - 01-etat-du-code.md mis à jour : non.
+## 2026-09-29 — US-306 : scénario 1 démontré sur 2 vrais téléphones (+ correctif `add_contact`)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** essai matériel piloté par `adb` ; `crates/dengon-core/src/api.rs`
+(`add_contact`), `docs/suivi/`.
+**Lot :** US-306 (issue #44), suite de l'entrée précédente, même branche.
+
+### Fait
+- **Matériel :** Pixel 8 Pro (Android 17, SDK 37, `3C181FDJG0024V`) et
+  OnePlus 7 Pro GM1913 (Android 12, SDK 31, `c365d658`), arm64, reliés en
+  USB au PC ; `adb.exe` Windows (l'`adb` de WSL ne voit pas l'USB). Le
+  OnePlus remplace le Galaxy A16 prévu.
+- **Préparation (à consigner, pas du code) :**
+  - Pixel : ancienne app signée par une autre clé de debug →
+    `INSTALL_FAILED_UPDATE_INCOMPATIBLE` → désinstallée (identité de test
+    perdue), APK de cette branche installée.
+  - OnePlus : **horloge au 12/07/2019** et aucun réseau. Le routeur refuse
+    un paquet de plus de 2 h dans le futur ou de plus de 24 h
+    (`sync::routing`) : rien ne serait passé. Remise à l'heure par
+    `adb shell cmd alarm set-time` ; Bluetooth activé par
+    `svc bluetooth enable` (le transport avait échoué au démarrage :
+    « Bluetooth désactivé »).
+- **Liaison ANNOUNCE sur radio réelle :** OnePlus `link#0 ↔ rpdmrfafwuoxw`
+  (Pixel), Pixel `link#1 ↔ aujth3bfurjeo` (OnePlus). Un 3ᵉ appareil
+  (`48:9D:31:00:83:DE`) ouvre des liens sans ANNOUNCE : jamais relié, comme
+  prévu.
+- **Trou trouvé :** après appairage, « Aucune conversation » : aucun moyen
+  d'écrire un premier message (le bouchon le masquait). Correctif :
+  `add_contact` ouvre une conversation vide nommée (+ test). `.so`, APK
+  reconstruits et réinstallés ; identités conservées (coffre), appairage
+  refait.
+- **Appairage par QR, caméras réelles :** le OnePlus scanne le QR du Pixel,
+  le Pixel celui du OnePlus ; code lu sur les deux écrans (dump UI) :
+  `76825 89045 47968 68760 48434 46262 40927 75210 71169 73504 88383 43361`,
+  **identique** ; « Les codes sont identiques » des deux côtés →
+  « ✔ GM1913 est vérifié » / « ✔ Pixel 8 Pro est vérifié ». (Un premier
+  appairage, avant le correctif, avait été confirmé à la main par Paul.)
+- **Messages :**
+  - 03:05:33 Pixel → OnePlus « Bonjour depuis le Pixel US-306 » :
+    « Distribué » en < 1 s ; reçu côté OnePlus (« 1 non lus »).
+  - 03:06:22 réponse OnePlus → Pixel : « Distribué », reçue côté Pixel.
+  - Service du OnePlus **arrêté** (Pixel : `link#1 fermé : PROPRE`), envoi
+    03:07:42 « Pendant la coupure » → **« En attente »** ; service
+    redémarré 03:07:59 → nouveau lien `link#2 ↔ aujth3bfurjeo` 03:08:03 →
+    **« Distribué »** relevé à 03:08:04 (enveloppe rejouée à la connexion,
+    accusé parti à l'établissement de la session).
+- **Écran éteint ≥ 5 min :** 1ᵉʳ essai **invalide** : l'écran s'était
+  rallumé 5 s après la mise en veille (`mLastWakeTime`) et est resté allumé.
+  2ᵉ essai : écran éteint (`input keyevent 223`), débranchement simulé
+  (`dumpsys battery unplug`) et Doze forcé (`dumpsys deviceidle
+  force-idle`) ; relevé toutes les 10 s de 03:15:51 à 03:21:45 :
+  **33/33 `mScreenState=OFF`, Doze `IDLE`, aucun réveil**. Envoi 03:22:16
+  « Ecran eteint depuis 6 min » → **« Distribué »** immédiat, OnePlus
+  toujours `OFF` + `IDLE`. Au réveil, message affiché (« 4 non lus »).
+  Remise en état : `deviceidle unforce`, `battery reset`.
+
+### Pourquoi / décisions
+- Doze **forcé** plutôt qu'un vrai débranchement : débrancher coupe `adb`
+  (plus de mesure) ; `force-idle` est plus sévère qu'un simple écran éteint
+  (restrictions de Doze profond appliquées d'emblée).
+- Correctif de la conversation dans le cœur (`add_contact`) plutôt qu'un
+  écran « nouveau message » : une ligne d'état, aucune UI nouvelle.
+
+### Écarts vs conception
+- `add_contact` ouvre la conversation → `03-ecarts-conception.md`.
+
+### Appris
+- Un téléphone de test à l'horloge fausse rend tout le protocole muet
+  (fenêtre de fraîcheur du routeur) — à vérifier en premier lors d'un essai.
+
+### État après cette session
+- Critères de l'US-306 : FFI réel ✔ ; scénario 1 sur 2 téléphones ✔
+  (QR + code 60 chiffres, statuts « En attente » → « Distribué ») ; service
+  de fond écran éteint ≥ 5 min ✔ (Doze forcé) ; `assembleDebug` + tests ✔ ;
+  démonstration consignée ici ✔.
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`,
+  `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all ; cargo test -p dengon-core -p dengon-ffi --all-features   405 passed, 2 ignored
+$ cargo clippy -p dengon-core -p dengon-ffi --all-targets --all-features -- -D warnings   OK
+$ android/scripts/build-ffi.sh bindings android hote       dengon.kt inchangé
+$ ./gradlew --no-daemon -q assembleDebug testDebugUnitTest -Pdengon.ffi.libHote=…   OK
+$ adb.exe -s <série> install -r dengon-us306.apk           Success (×2)
+$ adb.exe … uiautomator dump / input / screencap / logcat -s dengon-transport
+```
+- **Non vu :** le statut intermédiaire « Parti » (`IN_FLIGHT`) à l'écran :
+  il dure moins d'une seconde, sous la cadence de relevé (~1–3 s) ; la
+  progression est prouvée par les tests JVM/Rust (`[InFlight, Delivered]`).
+- Écran éteint avec **débranchement simulé**, pas physique ; OnePlus rechargé
+  pendant l'essai (4 → 16 %). Pas de vidéo : la démonstration est ce
+  journal.
+
+---
+
+## 2026-09-29 — US-306 : radio branchée sur le nœud, ANNOUNCE de lien, accusés → `Delivered`
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/` (`protocol/codec/announce.rs` créé,
+`protocol/codec/mod.rs`, `api.rs`, `tests/api_mock.rs`), `crates/dengon-ffi/`
+(`dengon.udl`, `lib.rs`), `android/` (`ble/Maillage.kt` et
+`ble/PeerIdOctets.kt` créés, `TransportActif`, `TransportDebugScreen`,
+`MeshForegroundService`, `ConversationsViewModel`, `MainActivity`,
+`DengonApplication`, `ffi/dengon.kt` régénéré, tests), `docs/suivi/`.
+**Lot :** US-306 (issue #44), jalon J2. Branche `feat/US-306-app-ffi-reel`,
+partie de `feat/US-302-ffi-reel` (US-302 pas encore sur `main`).
+
+### Fait
+- **Constat de départ :** depuis l'US-302 l'UI parle au vrai nœud, mais
+  aucune radio ne l'alimente (`TransportActif` tournait seul, `peerID`
+  aléatoire) et deux trous bloquaient le scénario 1 du DoD : un lien BLE
+  n'est connu que par son `LinkId`, et le cœur n'émettait aucun accusé
+  (`Delivered` jamais atteint).
+- **`ANNOUNCE` (core)** : payload `peerID ‖ pub_static ‖ pub_sign ‖
+  pseudo_len ‖ pseudo ‖ ledger_height ‖ caps` (`protocol::codec::announce`,
+  `synthese/05` §4) ; `Node::announce_packet` (signé, TTL 1) et
+  `api::parse_announce` (signature Ed25519 + `peerID` = `sender_id` =
+  `SHA-256(pub_static)[0..8]`).
+- **Accusés (core)** : `deliver_message` met un `Ack{Delivered}` en attente
+  pour l'auteur (`pending_acks`, 64 max par pair) ; il part **dans la
+  session** Noise, tout de suite si elle existe, sinon dès qu'elle
+  s'établit. Dans `handle_handshake_message`, le message 3 est désormais
+  mis en sortie **avant** ce que la session débloque (sinon l'accusé
+  précédait la fin du handshake chez le répondeur).
+- **FFI** : `DengonNode.announce_frame()` et `identity_from_announce(frame)`
+  (`[Throws]`), bindings Kotlin régénérés.
+- **Android** : `Maillage` relie `Transport` et nœud — `PeerConnected` →
+  on écrit notre `ANNOUNCE` ; 1ʳᵉ trame d'un lien non identifié → lue comme
+  `ANNOUNCE` → lien ↔ `peerID` + `onPeerConnected` ; trames suivantes →
+  `onBytesReceived` ; `takeOutgoing` → lien du pair. `TransportActif`
+  démarre le transport avec le **vrai** `peerID` (`PeerIdOctets`, base32 →
+  8 o) et passe chaque lot d'événements au `Maillage`. L'UI appelle
+  `TransportActif.vider()` après chaque envoi.
+- Écran de debug : liens identifiés affichés ; boutons d'envoi brut et
+  battement de l'US-213 **retirés** (ces octets iraient au nœud, qui les
+  jetterait).
+
+### Pourquoi / décisions
+- `ANNOUNCE` plutôt qu'une trame « hello » Kotlin non signée : c'est la
+  séquence de reconnexion prévue (`synthese/07` §6, étape 1), signée, et
+  réutilisable par le relais (US-312). Choix validé par Paul.
+- Vérification de l'`ANNOUNCE` injectée dans `Maillage` (`lireAnnonce`) :
+  testable en JVM pur sans la lib native.
+- Accusé **en session seulement** : un accusé par enveloppe scellée
+  demande un `rng` sur le chemin de réception (`on_bytes_received` n'en a
+  pas) ; pour le scénario 1 (deux téléphones à portée) la session existe
+  toujours. Choix validé par Paul (émission d'Ack dans `api.rs`).
+- `Maillage` ne lit pas `pollEvents` : l'UI en reste la seule lectrice,
+  sinon les événements seraient partagés entre deux consommateurs.
+
+### Écarts vs conception
+- `.udl` v1 encore étendu (2 appels) ; `ANNOUNCE` de lien seulement (TTL 1,
+  pas d'annonce périodique) ; accusé sans store-and-forward ; UI seule
+  lectrice de `pollEvents`. Reportés dans `03-ecarts-conception.md`.
+
+### Appris
+- Lier un lien radio à un pair par un `ANNOUNCE` signé ; l'ordre des
+  messages de fin de handshake → `04-apprentissages.md`.
+
+### État après cette session
+- Le chemin complet radio → nœud → radio est codé et testé en JVM avec deux
+  **vrais** nœuds (`Maillage` + `AndroidTransport` + radio de test qui
+  fragmente à 20 o) : message reçu, statuts `IN_FLIGHT` puis `DELIVERED`.
+- Manque pour clore l'US-306 : la **démonstration sur 2 téléphones**
+  (appairage QR + code 60 chiffres, statuts qui progressent, ≥ 5 min écran
+  éteint) — voir « Non vérifié ». Contacts et messages toujours non
+  persistés (réappairer après redémarrage de l'app).
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`,
+  `modules/dengon-ffi.md`, `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non (commandes inchangées).
 
 ### Vérification (commandes réellement exécutées)
 ```
@@ -540,6 +712,23 @@ $ cargo test --workspace --all-features --locked        474 passed, 2 ignored
 - Tests : `cargo build -p dengon-verify` puis, dans `dashboard/api`,
   `uv run pytest` → 107 passés ; `ruff check` OK ; `node --check` sur
   `app.js`/`api.js` OK. **Pas de vérification navigateur** après le rebase.
+$ cargo test --workspace --all-features --locked        479 passed, 2 ignored
+$ cargo check -p dengon-core --no-default-features --locked               OK
+$ android/scripts/build-ffi.sh bindings hote android    dengon.kt régénéré (+43 lignes), 3 .so
+$ ./gradlew --no-daemon assembleDebug testDebugUnitTest -Pdengon.ffi.libHote=…/target/debug
+  BUILD SUCCESSFUL — 89 tests, 0 échec, 0 ignoré (dont 8 MaillageTest,
+  4 PeerIdOctetsTest, 6 DengonNodeIntegrationTest)
+```
+- Gradle lancé dans WSL sur une copie de `android/` (scratchpad) avec son
+  propre `local.properties`, comme à l'US-302.
+- **Non vérifié :** l'APK n'a été installé sur **aucun** téléphone depuis
+  cette session. Le critère « scénario 1 démontré sur 2 vrais téléphones »,
+  le relais écran éteint ≥ 5 min et la démo filmée/consignée restent
+  **à faire** (Pixel 8 Pro + Galaxy A16) ; l'essai devrait se faire
+  **débranché** pour couvrir le Doze réel, trou déjà signalé à l'US-213.
+
+---
+
 ## 2026-09-29 — US-302 : `dengon-ffi` réel (UniFFI), l'app quitte le bouchon
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
