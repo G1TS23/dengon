@@ -194,6 +194,16 @@ class GattRadio(context: Context) : BleRadio {
         } catch (e: SecurityException) {
             Log.w(TAG, "envoi : permission retirée", e)
             false
+        } catch (e: RuntimeException) {
+            // Pile Bluetooth redémarrée sous nos pieds (Bluetooth coupé puis
+            // rallumé) : le serveur/client GATT est mort (`DeadObjectException`
+            // enveloppée). Vu sur Pixel 8 Pro pendant l'US-312 : l'app
+            // plantait sur un envoi depuis l'UI. Ce lien ne reviendra pas ;
+            // on jette sa file au lieu de réessayer à l'infini. Le cœur rejoue
+            // ce qui n'a pas été accusé.
+            Log.w(TAG, "envoi : pile Bluetooth indisponible, file du lien jetée", e)
+            c.file.clear()
+            return
         }
         if (lance) {
             c.file.removeFirst()
