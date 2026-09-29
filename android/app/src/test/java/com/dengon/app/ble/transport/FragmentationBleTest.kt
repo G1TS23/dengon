@@ -117,6 +117,17 @@ class FragmentationBleTest {
     }
 
     @Test
+    fun `annonce d un relais reconnue a son octet de flags`() {
+        val relais = byteArrayOf(0x93.toByte(), 0x09, 0xE5.toByte(), 0x5E, 0x05) // préfixe + RELAY|ACCEPTS_CONN
+        val telephone = byteArrayOf(0xF1.toByte(), 0xD6.toByte(), 0xA8.toByte(), 0x60)
+        val courrier = byteArrayOf(1, 2, 3, 4, 0x02) // COURIER seul
+        assertTrue(Annonce.estRelais(relais))
+        assertFalse(Annonce.estRelais(telephone))
+        assertFalse(Annonce.estRelais(courrier))
+        assertFalse(Annonce.estRelais(null))
+    }
+
+    @Test
     fun `motif de deconnexion selon le status GATT`() {
         assertEquals(DisconnectReason.LOCALE, motifDeconnexion(8, demandeeLocalement = true))
         assertEquals(DisconnectReason.BRUTALE, motifDeconnexion(8, demandeeLocalement = false))

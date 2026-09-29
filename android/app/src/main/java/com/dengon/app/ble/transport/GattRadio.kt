@@ -459,13 +459,17 @@ class GattRadio(context: Context) : BleRadio {
 
     private val rappelScan = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val prefixe = Annonce.prefixeDistant(result.scanRecord?.getManufacturerSpecificData(Annonce.ID_FABRICANT))
-                ?: return
+            val donnees = result.scanRecord?.getManufacturerSpecificData(Annonce.ID_FABRICANT)
+            val prefixe = Annonce.prefixeDistant(donnees) ?: return
             val adresse = result.device.address
             synchronized(verrou) {
                 val c = cfg ?: return
                 if (!actif) return
-                if (!Annonce.doitInitier(c.localPeerId, prefixe)) return
+                // Vers un relais, le téléphone initie toujours (US-312) : sur
+                // carte, le relais cessait parfois de scanner et ne
+                // rappelait jamais un téléphone de préfixe plus grand. Un
+                // lien en double est ignoré par `Maillage`.
+                if (!Annonce.estRelais(donnees) && !Annonce.doitInitier(c.localPeerId, prefixe)) return
                 if (connexions.keys.any { it.adresse == adresse }) return
                 val maintenant = System.currentTimeMillis()
                 // Les adresses BLE tournent (adresses privées résolubles) : on oublie les vieilles.
