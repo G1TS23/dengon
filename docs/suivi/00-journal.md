@@ -207,6 +207,26 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
   - la mesure du tas du relais pendant un réassemblage.
 
 ---
+## 2026-09-29 — US-321 : `adjustResize`, le fil reste visible clavier ouvert
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `AndroidManifest.xml` (`MainActivity`), captures `apres-12`, `apres-13`
+**Lot :** Lot 3 — app Android
+
+### Fait
+- `android:windowSoftInputMode="adjustResize"` sur `MainActivity` : corrige le point « clavier »
+  de l'entrée précédente (le fil défilait hors écran, en-tête et messages cachés).
+- Vérifié sur le Samsung A16 après réinstallation et nouvel appairage : clavier ouvert, l'en-tête et
+  le fil restent visibles, un message envoyé clavier ouvert passe à « Distribué ». `assembleDebug` +
+  110 tests JVM verts.
+
+### Pas vu
+- Non essayé sur le OnePlus 7 Pro (Android 12) : seul le Samsung a été utilisé pour ce point.
+- Le badge « non lu » resté à 1 (entrée précédente) n'a pas été réexaminé.
+
+### Écarts vs conception
+- Aucun.
+
 ## 2026-09-29 — US-321 : essai à deux téléphones, correctif « conversation absente après appairage »
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)

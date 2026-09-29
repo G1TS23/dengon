@@ -718,7 +718,7 @@ redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
   contact appairé après la création du ViewModel n'avait pas sa conversation.
 - Tests : `LibelleStatutTest` ; 110 tests JVM verts. Essayé sur Samsung A16 +
   OnePlus 7 Pro : appairage, messages dans les deux sens, clair/sombre, police 200 %
-  (voir journal). Clavier : le fil défile hors écran (pas d'`adjustResize`), non corrigé.
+  (voir journal). Clavier : `adjustResize` (manifeste), fil resté visible clavier ouvert, vérifié sur le Samsung.
 
 ## Pour l'oral
 
