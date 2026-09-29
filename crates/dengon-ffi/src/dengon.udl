@@ -12,6 +12,10 @@
 //   - un chemin pour les octets radio : `on_bytes_received`, `take_outgoing`,
 //     `on_peer_disconnected`. Le nœud ne possède aucun transport, c'est
 //     l'appelant (AndroidTransport, US-213) qui pousse et tire les trames.
+// v1 complété par l'US-306 (même écart, même annonce) : `announce_frame` et
+// `identity_from_announce`. Un lien radio ne connaît que son LinkId ; la
+// première trame de chaque côté est l'ANNOUNCE signé du nœud, qui dit à
+// l'appelant quel `peer_id` passer à `on_peer_connected`.
 // Les types v0 (Identity, Message, Conversation, NodeEvent, MessageStatus,
 // DengonError) sont inchangés. Les fonctions libres gardent leur nom et leurs
 // arguments mais deviennent `[Throws]` : une carte `Identity` reçue de
@@ -50,6 +54,12 @@ namespace dengon {
     // soit l'ordre des arguments.
     [Throws=DengonError]
     string verification_code(Identity local, Identity remote);
+
+    // v1 (US-306) : vérifie l'ANNOUNCE reçu en première trame d'un lien
+    // (signature, peer_id = SHA-256(pub_static)[0..8]) et rend la carte de
+    // son émetteur. Toute autre trame est refusée (`Internal`).
+    [Throws=DengonError]
+    Identity identity_from_announce(bytes frame);
 };
 
 dictionary Identity {
@@ -116,6 +126,11 @@ interface DengonNode {
 
     // v1 : carte publique de ce nœud (à afficher en QR).
     Identity local_identity();
+
+    // v1 (US-306) : ANNOUNCE signé de ce nœud, à écrire en première trame
+    // de chaque lien radio qui s'ouvre.
+    [Throws=DengonError]
+    bytes announce_frame();
 
     // v1 : enregistre un correspondant (après appairage QR), ce qui permet de
     // lui écrire avant toute connexion directe.

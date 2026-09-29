@@ -214,6 +214,11 @@ impl DengonNode {
         convert::identity_to_ffi(&self.lock().public_identity())
     }
 
+    pub fn announce_frame(&self) -> Result<Vec<u8>, DengonError> {
+        let now = self.now();
+        Ok(self.lock().announce_packet(now)?)
+    }
+
     pub fn add_contact(&self, contact: Identity) -> Result<(), DengonError> {
         let contact = convert::identity_from_ffi(&contact)?;
         self.lock().add_contact(contact);
@@ -350,6 +355,17 @@ pub fn verification_code(local: Identity, remote: Identity) -> Result<String, De
     Ok(core_identity::verification_code(&local, &remote).to_string())
 }
 
+/// Carte de l'émetteur d'un `ANNOUNCE` de lien, après vérification
+/// ([`api::parse_announce`]).
+///
+/// # Errors
+///
+/// [`DengonError::Internal`] si `frame` n'est pas un `ANNOUNCE` valide et
+/// correctement signé.
+pub fn identity_from_announce(frame: Vec<u8>) -> Result<Identity, DengonError> {
+    Ok(convert::identity_to_ffi(&api::parse_announce(&frame)?))
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -464,9 +480,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(
-            statuts.contains(&MessageStatus::InFlight),
-            "statuts vus : {statuts:?}"
+        // Scénario 1 du DoD : parti, puis distribué par l'accusé de Bob (US-306).
+        assert_eq!(
+            statuts,
+            vec![MessageStatus::InFlight, MessageStatus::Delivered]
         );
 
         // Même `conv_id` des deux côtés, et le message est listé.
@@ -478,6 +495,35 @@ mod tests {
         let messages = bob.list_messages(conv_bob[0].conv_id.clone());
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].msg_uuid, msg_uuid);
+    }
+
+    #[test]
+    fn announce_revele_la_carte_de_l_autre_bout_du_lien() {
+        let (da, db) = (Dossier::nouveau(), Dossier::nouveau());
+        let alice = ouvrir(&da, "alice");
+        let bob = ouvrir(&db, "bob");
+        let trame = alice.announce_frame().unwrap();
+        assert_eq!(
+            identity_from_announce(trame.clone()).unwrap(),
+            alice.local_identity()
+        );
+
+        let mut alteree = trame;
+        let dernier = alteree.len() - 1;
+        alteree[dernier] ^= 1;
+        assert_eq!(identity_from_announce(alteree), Err(DengonError::Internal));
+
+        // Une trame de session n'est pas un ANNOUNCE.
+        alice
+            .on_peer_connected(bob.local_identity().peer_id)
+            .unwrap();
+        bob.on_peer_connected(alice.local_identity().peer_id)
+            .unwrap();
+        let autre = [alice.take_outgoing(), bob.take_outgoing()]
+            .concat()
+            .remove(0)
+            .frame;
+        assert_eq!(identity_from_announce(autre), Err(DengonError::Internal));
     }
 
     #[test]
