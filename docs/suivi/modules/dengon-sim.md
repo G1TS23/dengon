@@ -2,8 +2,8 @@
 
 **Rôle en une phrase :** faire tourner N nœuds dengon sur une seule machine, sans radio, avec un réseau simulé scriptable et **rejouable à l'identique**.
 **Correspond à la conception :** [`docs/synthese/10-benchmarks-mvp-tests.md`](../../synthese/10-benchmarks-mvp-tests.md) §4.3 ; [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §5.
-**Dernière mise à jour :** 2026-09-28
-**État :** partiel — harness, réseau simulé, scénarios et job CI `sim` livrés (US-221) ; les nœuds exécutent un relais de démonstration (`Inondation`), pas encore `dengon-core`.
+**Dernière mise à jour :** 2026-09-29
+**État :** partiel — harness, réseau simulé, scénarios et job CI `sim` livrés (US-221) ; **le vrai `dengon-core::api::Node` est câblé** (`NoeudClient`, US-304) pour les scénarios client-à-client (`direct`, `recipient_offline`, `sender_offline`, `tests/scenarios_reel.rs`) ; `multihop`/`partition_merge` attendent un nœud **relais** (`dengon-core::relay::Relay`), pas encore câblé. `Inondation` reste le bouchon des 4 scénarios `.ron` existants.
 
 ## À quoi ça sert
 
@@ -26,13 +26,17 @@ dengon-sim/
     reseau.rs     — Reseau / ReseauPartage (horloge, topologie, partitions,
                     files datées, trace) + SimTransport (impl Transport)
     harness.rs    — Simulation (N nœuds), trait Comportement, Inondation
+    noeud_client.rs — NoeudClient : le vrai api::Node en Comportement (US-304)
     scenario.rs   — scénarios RON : lecture, validation, exécution, attendus
     cli.rs        — logique de la commande dengon-sim (testée)
     main.rs       — point d'entrée, délègue à cli
-  scenarios/      — direct, multihop, partition_merge, lossy_mesh (.ron)
+  scenarios/      — direct, multihop, partition_merge, lossy_mesh (.ron,
+                    Inondation — pas les scénarios réels, voir tests/)
   tests/
     conformite_sim.rs — suite de conformité Transport (US-105) sur SimTransport
-    scenarios.rs      — scénarios livrés : réussis + déterministes
+    scenarios.rs      — scénarios .ron livrés : réussis + déterministes
+    scenarios_reel.rs — US-304 : direct/recipient_offline/sender_offline
+                        avec NoeudClient (vrai dengon-core, pas Inondation)
 ```
 
 ## Concepts / types importants
@@ -46,6 +50,8 @@ dengon-sim/
 | `Simulation` | `src/harness.rs` | N nœuds (transport + comportement), `emettre`, `pas`, `executer_jusqu_a`, `livres`. |
 | `trait Comportement` / `Contexte` | `src/harness.rs` | Ce qu'un nœud fait de son transport à chaque pas. Point d'injection du futur nœud `dengon-core`. |
 | `Inondation` | `src/harness.rs` | Relais de démonstration : dédup par contenu, re-diffusion, et poussée de tout ce qui est connu à chaque nouvelle connexion (convergence après partition). |
+| `NoeudClient` | `src/noeud_client.rs` | Le vrai `dengon-core::api::Node` en `Comportement` (US-304) : `ANNOUNCE` à l'ouverture d'un lien pour associer `LinkId`↔`PeerId` (le harness ne le donne pas d'avance — même limite que le vrai Bluetooth), Noise `XX`/enveloppe, outbox rejouée à la reconnexion. |
+| `charge_adressee` | `src/noeud_client.rs` | Convention locale (pas une extension du format `.ron`) : `PeerId` destinataire (8 o) ‖ texte UTF-8, décodée par `NoeudClient::emettre`. |
 | `Scenario`, `Rapport` | `src/scenario.rs` | Scénario RON validé (indices, pertes, pas) → exécution → empreinte + attendus non tenus. |
 | `Alea` | `src/alea.rs` | SplitMix64 à graine fixe (vecteur de référence testé). |
 
@@ -66,10 +72,14 @@ dengon-sim/
 ## Dépendances
 
 - **Internes :** `dengon-ble` (contrat `Transport`, suite de conformité),
-  `dengon-core` (lien de squelette, en attendant le vrai nœud).
+  `dengon-core` — **le vrai nœud** (`api::Node`, US-304), plus le squelette
+  de lien (`PROTOCOL_VERSION`, test `le_coeur_est_reellement_lie`).
 - **Externes (crates) :** `serde` (derive) + `ron` 0.12 — lecture des
-  scénarios. Pas de `rand` : l'aléa est un SplitMix64 maison, pour que la
-  reproductibilité ne dépende pas d'une mise à jour de crate.
+  scénarios `.ron` (réseau/`Inondation` seulement, l'aléa réseau reste un
+  SplitMix64 maison, sans dépendance). `rand_core` + `rand_chacha` (US-304,
+  `noeud_client.rs` seulement) : `dengon-core::api::Node` exige une RNG pour
+  les poignées de main Noise et les UUID de message — `ChaCha20Rng` à
+  graine fixe, jamais `OsRng`, pour rester déterministe.
 
 ## Décisions d'implémentation
 
@@ -88,9 +98,35 @@ dengon-sim/
   vol est jeté et tracé `PerteEnVol`.
 - **Rôles et quotas respectés** : deux nœuds ne se connectent que si l'un
   scanne et l'autre annonce, et sous leur `max_connections`.
-- **Comportement injecté** (`Comportement`) plutôt que `dengon-core` en dur :
-  `sync::routing` (US-209) et la façade `api` (US-301) n'existent pas encore.
-  Écart consigné dans `03-ecarts-conception.md`.
+- **Comportement injecté** (`Comportement`) : `Inondation` (bouchon) et
+  `NoeudClient` (vrai `api::Node`, US-304) coexistent, le harness n'a pas eu
+  à changer pour accueillir le second.
+- **`NoeudClient` découvre ses voisins par `ANNOUNCE`, pas par une triche du
+  harness** (US-304) : `api::Node` ne reçoit qu'un `PeerId` explicite, le
+  `SimTransport` ne donne qu'un `LinkId` opaque — même limite que le vrai
+  Bluetooth. `NoeudClient` envoie son propre `ANNOUNCE`
+  (`Node::announce_packet`, déjà livré par US-306) à l'ouverture d'un lien,
+  et attend le même du voisin (`api::parse_announce`) avant d'appeler
+  `on_peer_connected` — exactement le mécanisme déjà utilisé par
+  `relay.rs`/`dengon-node::session.rs`, pas un nouveau à expliquer à l'oral.
+- **Adressage par convention locale (`charge_adressee`), pas une extension
+  du format `.ron`** (US-304) : `Comportement::emettre` ne porte qu'une
+  charge opaque ; les 8 premiers octets valent `PeerId` destinataire côté
+  `NoeudClient`, le reste le texte. Les 4 scénarios `.ron` existants restent
+  inchangés (ils utilisent `Inondation`, qui diffuse sans adresse). Les
+  scénarios réels sont donc écrits en Rust
+  (`tests/scenarios_reel.rs`), pas en RON.
+- **Contacts pré-partagés à la construction du scénario**
+  (`NoeudClient::add_contact`), pas découverts par le réseau : reproduit la
+  vraie condition (`api.rs`, « Ce que cette façade N'est PAS ») —
+  `send_message` exige un contact connu ou une session ; un `PeerId` jamais
+  rencontré n'est jamais un correspondant valable, en simulation comme en
+  vrai.
+- **`multihop`/`partition_merge` restent hors périmètre de `NoeudClient`**
+  (US-304, écart consigné) : `api::Node` n'appelle jamais `Router::poll_due`
+  (elle ne relaie jamais, voir sa doc de module) — un scénario à 3+ sauts
+  réels a besoin d'un nœud **relais** (`dengon-core::relay::Relay`), pas
+  encore câblé en `Comportement`.
 - **Logique CLI dans `cli.rs`** (testée) ; `main.rs` ne fait que déléguer.
 
 ## Tests
@@ -111,22 +147,42 @@ dengon-sim/
   (succès, échec d'attendu, fichier illisible, fichier absent).
 - `tests/conformite_sim.rs` — `suite_complete` de `dengon-ble` sur
   `SimTransport`.
-- `tests/scenarios.rs` — 3 : scénarios livrés réussis, même graine → même
-  trace pour chacun, graine différente → empreinte différente sur
+- `tests/scenarios.rs` — 3 : scénarios `.ron` livrés réussis, même graine →
+  même trace pour chacun, graine différente → empreinte différente sur
   `lossy_mesh` (et pertes réellement tirées).
-- Commande : `cargo test -p dengon-sim` → **28 passés** (24 unitaires + 1
-  conformité + 3 scénarios), 2026-09-28.
-- Couverture (job CI `core`, run 36404136592, lcov) : **96,5 %** des lignes de
-  `dengon-sim` ; `reseau.rs` 97,1 %, `harness.rs` 96,4 %, `scenario.rs`
-  96,8 %, `cli.rs` 99 %, `alea.rs` 100 % ; `main.rs` 0 % (8 lignes, délègue
-  à `cli`).
+- `src/noeud_client.rs` — 3 : `charge_adressee` intacte, identités
+  distinctes/identiques selon la graine.
+- `tests/scenarios_reel.rs` — 3 (US-304, `NoeudClient`) : `direct` (remise
+  immédiate, lien déjà ouvert), `recipient_offline` (destinataire jamais
+  connecté au moment de l'envoi → rien n'arrive → remise automatique dès la
+  connexion), `sender_offline` (émetteur déconnecté puis reconnecté →
+  chemin enveloppe, remise à la reconnexion). Rejoués 3× de suite en local,
+  stables.
+- Commande : `cargo test -p dengon-sim` → **34 passés** (28 unitaires/scénarios
+  `.ron` + 1 conformité + 2 liens dengon-core + 3 scénarios réels),
+  2026-09-29.
+- Couverture (`cargo llvm-cov -p dengon-sim`, local) : **96,4 %** des lignes
+  de `dengon-sim` ; `noeud_client.rs` 92,7 % (nouveau, US-304), `reseau.rs`
+  97,1 %, `harness.rs` 98,0 %, `scenario.rs` 96,8 %, `cli.rs` 99 %,
+  `alea.rs` 100 % ; `main.rs` 0 % (8 lignes, délègue à `cli`).
 
 ## Limites connues / TODO
 
-- **Pas encore de nœud `dengon-core`** dans la simulation : `Inondation` n'a ni
-  TTL, ni signature, ni inventaire. Les scénarios de `synthese/10` §4.3 qui
-  dépendent du protocole (`recipient_offline`, `sender_offline`, `flood`,
-  `dup_paths`, `tamper`, `key_change`) attendent US-209 / US-301.
+- **`multihop`/`partition_merge` avec de vrais nœuds pas encore livrés**
+  (US-304) : `NoeudClient` (façade client, `api::Node`) n'appelle jamais
+  `Router::poll_due` — elle ne relaie jamais un paquet, par conception,
+  voir la doc de module d'`api.rs`. Un scénario à 3+ sauts réels a besoin
+  d'un nœud **relais** (`dengon-core::relay::Relay`, celui du firmware
+  ESP32) câblé en `Comportement`, pas encore fait — suite prévue dans une
+  session séparée (voir `03-ecarts-conception.md`).
+- **Statuts de message pas exposés côté harness** : les assertions des
+  scénarios réels ne portent que sur la **livraison** (`sim.livres`, même
+  mécanisme que `Inondation`), pas sur les statuts intermédiaires (`Parti`,
+  `Distribué`…) — `Simulation` ne rend aucun accès aux `Comportement`
+  ajoutés une fois qu'ils lui appartiennent (`ajouter_noeud` en prend
+  possession). Suffisant pour ce que `direct`/`recipient_offline`/
+  `sender_offline` doivent démontrer ; à revoir si un futur scénario a
+  besoin de plus.
 - Modèle réseau **sans bande passante, churn ni dérive d'horloge** (prévus
   par §4.3) : latence, gigue, perte et partition seulement — ce que demande
   US-221.

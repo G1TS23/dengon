@@ -2673,3 +2673,31 @@ _(aucun écart pour l'instant)_
   PR #116, qui a déjà `Node::on_peer_disconnected` appelé au bon endroit —
   il suffirait d'y ajouter l'émission).
 - **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-29 — US-304 livrée en deux temps : client d'abord, relais ensuite
+
+- **Prévu :** l'issue #42 (US-304) demande les 5 scénarios `direct`,
+  `multihop`, `recipient_offline`, `sender_offline`, `partition_merge` avec
+  le vrai `dengon-core`, dans une seule US.
+- **Réel :** cette session livre `NoeudClient` (le vrai `api::Node` en
+  `Comportement`) et 3 scénarios entièrement réels :
+  `direct`/`recipient_offline`/`sender_offline` — les trois réalisables
+  avec deux correspondants, sans relais. `multihop`/`partition_merge`
+  restent sur `Inondation` (bouchon de flood, scénarios `.ron` existants).
+- **Raison :** `multihop`/`partition_merge` exigent un nœud qui **relaie**
+  réellement — `dengon-core::api::Node` n'appelle jamais `Router::poll_due`
+  (documenté dans `api.rs` : ce n'est pas son rôle, c'est celui de
+  `relay.rs`/le firmware ESP32). Écrire aussi le `Comportement` relais dans
+  la même session aurait doublé la taille du changement sans que les 3
+  premiers scénarios (déjà complets et vérifiés) n'aient à en dépendre —
+  découpage discuté et validé avec l'utilisateur avant de commencer.
+- **Conséquences :** #42 reste ouverte après cette session : 3 critères sur
+  4 partiellement couverts (3/5 scénarios, pas les 5 ; le reste — CI à
+  graine fixe, traces exploitables, résultats précis — est satisfait pour
+  ces 3). Suite prévue : un `Comportement` relais (`relay::Relay`) pour
+  `multihop`/`partition_merge`.
+- **Doc de conception mise à jour ?** non — `synthese/10` §4.3/§4.4 décrit
+  déjà les 5 scénarios comme la cible ; ce fichier documente l'ordre de
+  livraison, pas un changement de cible.

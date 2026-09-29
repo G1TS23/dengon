@@ -10,6 +10,87 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-304 (1/2) : `NoeudClient`, le vrai `dengon-core::api::Node` dans `dengon-sim`
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-sim/{Cargo.toml,src/{lib.rs,noeud_client.rs},tests/scenarios_reel.rs}`,
+`docs/suivi/`.
+**Lot :** US-304 (issue #42), 1ʳᵉ moitié — voir découpage ci-dessous.
+
+### Fait
+- `NoeudClient` (`src/noeud_client.rs`) : `dengon-core::api::Node` câblé en
+  `Comportement` du harness. Découverte de pair par `ANNOUNCE`
+  (`Node::announce_packet`, déjà livré par US-306, `api::parse_announce`
+  pour le vérifier) — le harness ne donne aucune correspondance
+  `LinkId`↔`PeerId` d'avance, exactement la limite du vrai Bluetooth.
+- Convention `charge_adressee` (8 octets `PeerId` ‖ texte UTF-8) pour
+  adresser un envoi : `Comportement::emettre` reste une charge opaque, le
+  format `.ron` existant n'est pas touché.
+- 3 scénarios réels (`tests/scenarios_reel.rs`), écrits en Rust (pas RON) :
+  `direct` (remise immédiate, lien déjà ouvert), `recipient_offline`
+  (destinataire jamais connecté à l'envoi → rien n'arrive → remise
+  automatique dès la connexion), `sender_offline` (émetteur déconnecté
+  puis reconnecté → chemin enveloppe → remise à la reconnexion).
+- RNG déterministe (`ChaCha20Rng` à graine fixe, jamais `OsRng`) pour les
+  poignées de main Noise et UUID de message — 3 graines distinctes par
+  nœud (identité/routage/RNG), pour qu'une seule ne fasse pas dériver les
+  deux autres.
+- `docs/suivi/modules/dengon-sim.md` et `03-ecarts-conception.md` mis à
+  jour.
+
+### Pourquoi / décisions
+- **Aucun changement côté `dengon-core`** : `Node::announce_packet` et
+  `api::parse_announce` existaient déjà (US-306) — vérifié avant d'écrire
+  quoi que ce soit, pour ne pas réinventer un mécanisme déjà livré.
+- **Découpage en deux sessions** (discuté et validé avec l'utilisateur
+  avant de commencer) : `multihop`/`partition_merge` ont besoin d'un nœud
+  **relais** (`relay::Relay`), pas `api::Node` (qui n'appelle jamais
+  `Router::poll_due` — ce n'est pas son rôle). Écrire les deux
+  `Comportement` dans la même session aurait doublé la taille du
+  changement sans bénéfice pour les 3 premiers scénarios.
+- **Contacts pré-partagés** (`add_contact`) à la construction du scénario,
+  pas découverts par le réseau : reproduit la vraie contrainte de `api.rs`
+  (un correspondant inconnu ne peut pas recevoir de message chiffré) —
+  pas une simplification du simulateur, le comportement réel.
+
+### Écarts vs conception
+- Consigné : `multihop`/`partition_merge` restent sur `Inondation`
+  jusqu'au `Comportement` relais (entrée détaillée dans
+  `03-ecarts-conception.md`).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- 3 des 5 scénarios de l'issue #42 sont réels, vérifiés, stables (rejoués
+  3× de suite). Issue **non fermée** : reste `multihop`/`partition_merge`,
+  qui attendent le `Comportement` relais dans une session séparée.
+- Fiche module mise à jour : `modules/dengon-sim.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-sim
+34 passed (6 suites)
+
+$ cargo test -p dengon-sim --test scenarios_reel   (×3, pour la stabilité)
+3 passed à chaque fois
+
+$ cargo test --workspace
+564 passed, 2 ignored (35 suites)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo fmt --all -- --check
+(rien)
+
+$ cargo llvm-cov -p dengon-sim --summary-only
+TOTAL 96.25 % régions / 96.43 % lignes ; noeud_client.rs 92.73 % lignes
+```
+
+---
+
 ## 2026-09-29 — US-312 : essai sur carte et 2 téléphones, bugs trouvés, retours de revue (PR #129)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

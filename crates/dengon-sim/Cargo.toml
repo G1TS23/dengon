@@ -16,6 +16,11 @@ dengon-ble  = { workspace = true }
 # Lecture des scénarios `scenarios/*.ron` (docs/synthese/10 §4.3).
 serde = { version = "1", features = ["derive"] }
 ron   = "0.12"
+# RNG déterministe pour le nœud réel (US-304, `NoeudClient`) : les poignées
+# de main Noise et les UUID de message exigent une RNG, jamais `OsRng` ici —
+# la reproductibilité à graine fixe est le point même du simulateur.
+rand_core   = { workspace = true }
+rand_chacha = { workspace = true }
 
 [lints]
 workspace = true
