@@ -1,6 +1,7 @@
 use super::*;
 use crate::crypto::VerifyingKey;
 use crate::ledger::{GENESIS_HASH, SIG_LEN};
+use alloc::collections::BTreeMap;
 use alloc::vec;
 
 /// Graine de `contracts/events/test-signing-key.json` (clé de test publique).
@@ -139,4 +140,33 @@ fn trop_d_evenements_refuse() {
         signed_batch(&trop, "relay-000000", &cle_de_test()),
         Err(BatchError::TooMany)
     );
+}
+
+#[test]
+fn une_enveloppe_d_un_autre_noeud_est_refusee() {
+    let e = Envelope::new(
+        "relay-111111",
+        NodeKind::Relay,
+        0,
+        0,
+        "relay.wifi_up",
+        Value::Object(BTreeMap::new()),
+    );
+    assert_eq!(
+        signed_batch(&[e], "relay-222222", &cle_de_test()),
+        Err(BatchError::NodeMismatch)
+    );
+}
+
+#[test]
+fn le_batch_id_du_corps_est_celui_de_batch_id() {
+    let envs = [Envelope::from_ledger_entry(
+        &entree(3, "relay.wifi_up", r#"{"ssid":"ap","duration_s":0}"#),
+        "relay-abcdef",
+        NodeKind::Relay,
+    )
+    .unwrap()];
+    let corps = signed_batch(&envs, "relay-abcdef", &cle_de_test()).unwrap();
+    let texte = core::str::from_utf8(&corps).unwrap();
+    assert!(texte.starts_with(&alloc::format!("{{\"batch_id\":\"{}\"", batch_id(&envs))));
 }
