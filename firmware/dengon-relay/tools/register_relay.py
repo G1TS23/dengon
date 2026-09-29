@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Enregistre un relais auprès du dashboard et affiche son jeton (US-309).
+
+Le relais n'a pas de moyen de s'enregistrer seul : l'opérateur lit son
+identité sur la console série (`dash id`), la poste ici sur
+`POST /api/nodes`, puis recopie le jeton rendu dans la console
+(`dash token <jwt>`) :
+
+    python3 tools/register_relay.py --node-id relay-3f2a9c --pub-sign <64 hex>
+
+Le serveur est vérifié avec la même racine que celle embarquée dans le
+firmware (`main/certs/dashboard_root.pem`, voir `main/certs/README.md`).
+
+Limites du dashboard (US-216), pas de ce script :
+- le jeton expire au bout de 24 h et ne se renouvelle pas ;
+- un `node_id` déjà connu est refusé (409) : pour réémettre un jeton, il faut
+  repartir d'une base vide (`dashboard/deploy/purge-demo.sh`, prévu après
+  chaque démo) puis réenregistrer le relais.
+Aucun jeton n'est écrit sur disque par ce script.
+"""
+
+import argparse
+import json
+import re
+import ssl
+import sys
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+URL_DEFAUT = "https://51.255.38.214:8443"
+RACINE_DEFAUT = (
+    Path(__file__).resolve().parent.parent / "main" / "certs" / "dashboard_root.pem"
+)
+NODE_ID = re.compile(r"^relay-[0-9a-f]{6}$")
+PUB_SIGN = re.compile(r"^[0-9a-f]{64}$")
+
+
+def enregistrer(url, node_id, pub_sign, cafile):
+    """POST /api/nodes ; rend (statut, corps JSON décodé ou texte brut)."""
+    # `http://` n'a de sens qu'en local (dashboard de dev) : pas de TLS.
+    ctx = (
+        ssl.create_default_context(cafile=str(cafile))
+        if url.startswith("https")
+        else None
+    )
+    corps = json.dumps(
+        {"node_id": node_id, "kind": "relay", "pub_sign": pub_sign}
+    ).encode()
+    req = urllib.request.Request(
+        url.rstrip("/") + "/api/nodes",
+        data=corps,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as rep:
+            return rep.status, json.loads(rep.read())
+    except urllib.error.HTTPError as err:
+        texte = err.read().decode(errors="replace")
+        try:
+            return err.code, json.loads(texte)
+        except ValueError:
+            return err.code, texte
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument(
+        "--node-id", required=True, help="affiché par `dash id` (relay-xxxxxx)"
+    )
+    p.add_argument(
+        "--pub-sign", required=True, help="clé publique Ed25519, 64 hex (`dash id`)"
+    )
+    p.add_argument(
+        "--url", default=URL_DEFAUT, help=f"URL du dashboard (défaut : {URL_DEFAUT})"
+    )
+    p.add_argument(
+        "--cacert",
+        type=Path,
+        default=RACINE_DEFAUT,
+        help="racine de l'autorité du dashboard (défaut : main/certs/dashboard_root.pem)",
+    )
+    args = p.parse_args(argv)
+
+    pub_sign = args.pub_sign.lower()
+    if not NODE_ID.match(args.node_id):
+        p.error("--node-id doit être de la forme relay-xxxxxx (6 hex)")
+    if not PUB_SIGN.match(pub_sign):
+        p.error("--pub-sign doit faire 64 caractères hexadécimaux")
+    if not args.cacert.is_file():
+        p.error(f"racine introuvable : {args.cacert} (voir main/certs/README.md)")
+
+    try:
+        statut, corps = enregistrer(args.url, args.node_id, pub_sign, args.cacert)
+    except ssl.SSLError as err:
+        print(
+            f"TLS : {err} — racine {args.cacert} invalide ou pas celle du serveur",
+            file=sys.stderr,
+        )
+        return 1
+    except urllib.error.URLError as err:
+        print(f"dashboard injoignable ({args.url}) : {err.reason}", file=sys.stderr)
+        return 1
+    if statut == 201 and isinstance(corps, dict) and "token" in corps:
+        print(
+            f"relais {args.node_id} enregistré. À coller dans la console du relais :\n"
+        )
+        print(f"dash token {corps['token']}")
+        return 0
+    if statut == 409:
+        print(
+            f"{args.node_id} est déjà enregistré (409) : le dashboard ne réémet pas de jeton.\n"
+            "Repartir d'une base vide (dashboard/deploy/purge-demo.sh) puis relancer ce script.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"échec ({statut}) : {corps}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

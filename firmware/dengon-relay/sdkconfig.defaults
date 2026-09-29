@@ -82,3 +82,32 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 # SHA-256 et Ed25519 sur la pile. 6 Ko réservés à sa création ; la tâche
 # principale n'exécute que l'initialisation (auto-test Noise compris).
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# --- 8. Wi-Fi + HTTPS vers le dashboard (US-309) ----------------------------
+# Deux radios sur une antenne : la coexistence logicielle partage le temps
+# d'antenne entre BLE (prioritaire, c'est le maillage) et Wi-Fi.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+# Budget de tas : WROOM sans PSRAM, NimBLE déjà démarré (~128 Ko libres
+# mesurés à l'US-308 avant Wi-Fi). On réduit les tampons Wi-Fi (débit
+# inutile ici : quelques Ko de JSON par seconde au plus) et on désactive
+# l'agrégation AMPDU, gourmande en RAM.
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=4
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=8
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_AMPDU_RX_ENABLED=n
+# mbedTLS : tampons alloués seulement le temps d'une session TLS (une par
+# batch, keep-alive coupé) plutôt que 2 × 16 Ko en permanence.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CA_CERT=y
+# On épingle la racine du dashboard : le paquet de ~130 racines publiques ne
+# sert à rien et coûte ~60 Ko de flash.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=n
+# IRAM : BLE + Wi-Fi ne tiennent pas dans les 128 Ko d'IRAM de l'ESP32 avec
+# les optimisations « chemin chaud en IRAM » du Wi-Fi et de lwIP (dépassement
+# de 1,6 Ko constaté au premier build US-309). On les coupe : quelques Ko/s
+# de débit en moins, sans importance pour des batchs de JSON.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+CONFIG_LWIP_IRAM_OPTIMIZATION=n
