@@ -45,9 +45,17 @@
 #![no_std]
 #![allow(unsafe_code)]
 
+extern crate alloc;
+
+mod relay;
+mod rng;
+
+pub use relay::*;
+pub use rng::*;
+
 use dengon_core::protocol::{decode, encode};
 
-/// Résultat d'un appel à [`dengon_decode_reencode`].
+/// Résultat d'un appel à une fonction de cette bibliothèque.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
@@ -63,6 +71,10 @@ pub enum Status {
     BufferTooSmall = 2,
     /// Un pointeur obligatoire est nul.
     NullPointer = 3,
+    /// File vide : rien à rendre (`dengon_relay_pop_*`, US-308).
+    Empty = 4,
+    /// Échec cryptographique (auto-test Noise, US-308).
+    Crypto = 5,
 }
 
 /// Décode `input` (`input_len` octets) comme un paquet L3 dengon, puis le

@@ -1,9 +1,8 @@
 # Configuration cbindgen pour `include/dengon_core.h` (US-307).
 #
-# Minimaliste par construction : la surface exportée est volontairement
-# réduite à `dengon_decode_reencode` et `dengon_protocol_version` (voir
-# `src/lib.rs`). Étoffer cette liste au fil des besoins réels du firmware
-# (US-308/309), pas par anticipation.
+# Surface exportée : décodage L3 (US-307), relais et auto-test Noise
+# (US-308, `src/relay.rs` / `src/rng.rs`). Étoffer au fil des besoins réels
+# du firmware, pas par anticipation.
 
 language = "C"
 header = """
@@ -21,5 +20,8 @@ documentation_style = "doxy"
 prefix = "Dengon"
 
 [enum]
-prefix_with_name = false
+# Variantes préfixées (`DENGON_STATUS_OK`) : un `OK` nu entre en collision
+# avec l'énumérateur `OK` de `rom/ets_sys.h` d'ESP-IDF, inclus par la plupart
+# des en-têtes système du firmware (trouvé au premier lien firmware, US-308).
+prefix_with_name = true
 rename_variants = "ScreamingSnakeCase"

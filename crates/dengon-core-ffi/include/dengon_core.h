@@ -11,13 +11,13 @@
 #include <stdlib.h>
 
 /**
- * Résultat d'un appel à [`dengon_decode_reencode`].
+ * Résultat d'un appel à une fonction de cette bibliothèque.
  */
 enum DengonStatus {
     /**
      * Succès : `output`/`output_len` portent le paquet ré-encodé.
      */
-    OK = 0,
+    DENGON_STATUS_OK = 0,
     /**
      * `input` n'est pas un paquet L3 valide ([`dengon_core::protocol::DecodeError`]
      * ou, en pratique jamais ici, [`dengon_core::protocol::EncodeError`] sur un
@@ -25,17 +25,84 @@ enum DengonStatus {
      * reste consultable côté Rust, ce que la frontière C n'a pas besoin de
      * distinguer pour rejouer les vecteurs de conformité).
      */
-    DECODE = 1,
+    DENGON_STATUS_DECODE = 1,
     /**
      * `output_cap` est trop petit pour recevoir le paquet ré-encodé.
      */
-    BUFFER_TOO_SMALL = 2,
+    DENGON_STATUS_BUFFER_TOO_SMALL = 2,
     /**
      * Un pointeur obligatoire est nul.
      */
-    NULL_POINTER = 3,
+    DENGON_STATUS_NULL_POINTER = 3,
+    /**
+     * File vide : rien à rendre (`dengon_relay_pop_*`, US-308).
+     */
+    DENGON_STATUS_EMPTY = 4,
+    /**
+     * Échec cryptographique (auto-test Noise, US-308).
+     */
+    DENGON_STATUS_CRYPTO = 5,
 };
 typedef uint8_t DengonStatus;
+
+/**
+ * Handle opaque du relais.
+ */
+typedef struct DengonRelay DengonRelay;
+
+/**
+ * Horloges passées à chaque appel. `wall_ms` : ms UTC, ou toute valeur
+ * antérieure à 2024 si l'heure est inconnue (le relais l'apprend alors d'un
+ * `ANNOUNCE`) ; `mono_ms` : uptime, ne recule jamais.
+ */
+typedef struct DengonNow {
+    /**
+     * Horloge murale, ms UTC.
+     */
+    uint64_t wall_ms;
+    /**
+     * Horloge monotone, ms.
+     */
+    uint64_t mono_ms;
+} DengonNow;
+
+/**
+ * Compteurs du relais (pour `relay.health` et les journaux série).
+ */
+typedef struct DengonRelayStats {
+    /**
+     * Trames illisibles.
+     */
+    uint64_t malformed;
+    /**
+     * Paquets signés refusés (usurpation, signature).
+     */
+    uint64_t unauthentic;
+    /**
+     * Paquets relayés.
+     */
+    uint64_t relayed;
+    /**
+     * Enveloppes déposées.
+     */
+    uint64_t envelopes_stored;
+    /**
+     * Enveloppes remises.
+     */
+    uint64_t envelopes_handed_off;
+    /**
+     * Paquets ignorés faute d'heure murale.
+     */
+    uint64_t clock_unknown;
+    /**
+     * Enveloppes détenues maintenant.
+     */
+    uint32_t envelopes_held;
+    /**
+     * Paquets au cache de réconciliation maintenant.
+     */
+    uint32_t cache_len;
+} DengonRelayStats;
 
 /**
  * Décode `input` (`input_len` octets) comme un paquet L3 dengon, puis le
@@ -68,5 +135,216 @@ DengonStatus dengon_decode_reencode(const uint8_t *input,
  * vecteurs.
  */
 uint8_t dengon_protocol_version(void);
+
+/**
+ * Crée un relais. `dh_secret` / `sign_seed` : 32 octets chacun, générés une
+ * fois puis relus de NVS. `anchor_seq` / `anchor_hash` (32 octets) : curseur
+ * du journal persisté, ou `0` / `NULL` au tout premier démarrage (genèse).
+ * `pseudo` : chaîne C UTF-8, ou `NULL` pour `"relais"`. Rend `NULL` si un
+ * secret manque.
+ *
+ * # Safety
+ *
+ * `dh_secret`, `sign_seed` : valides pour 32 octets. `anchor_hash` : nul ou
+ * valide pour 32 octets. `pseudo` : nul ou chaîne C terminée par `\0`.
+ */
+struct DengonRelay *dengon_relay_new(const uint8_t *dh_secret,
+                                     const uint8_t *sign_seed,
+                                     uint64_t anchor_seq,
+                                     const uint8_t *anchor_hash,
+                                     const char *pseudo,
+                                     uint64_t routing_seed);
+
+/**
+ * Libère un relais créé par [`dengon_relay_new`] (sans effet sur `NULL`).
+ *
+ * # Safety
+ *
+ * `relay` : nul, ou rendu par [`dengon_relay_new`] et pas encore libéré.
+ */
+void dengon_relay_free(struct DengonRelay *relay);
+
+/**
+ * Écrit le `peerID` du relais (8 octets) dans `out`.
+ *
+ * # Safety
+ *
+ * `relay` valide ; `out` valide pour 8 octets écrits.
+ */
+DengonStatus dengon_relay_peer_id(const struct DengonRelay *relay, uint8_t *out);
+
+/**
+ * Écrit la clé publique Ed25519 du relais (32 octets) dans `out` : celle de
+ * `dengon-verify --pubkey`.
+ *
+ * # Safety
+ *
+ * `relay` valide ; `out` valide pour 32 octets écrits.
+ */
+DengonStatus dengon_relay_verifying_key(const struct DengonRelay *relay, uint8_t *out);
+
+/**
+ * Un lien vient de s'ouvrir.
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide.
+ */
+void dengon_relay_link_up(struct DengonRelay *relay,
+                          uint64_t link,
+                          struct DengonNow now);
+
+/**
+ * Le lien est tombé.
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide.
+ */
+void dengon_relay_link_down(struct DengonRelay *relay, uint64_t link);
+
+/**
+ * Une trame (`len` octets à `bytes`) est arrivée sur `link`.
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide ; `bytes` valide pour `len` octets (ou nul si
+ * `len == 0`).
+ */
+void dengon_relay_on_frame(struct DengonRelay *relay,
+                           uint64_t link,
+                           const uint8_t *bytes,
+                           uintptr_t len,
+                           struct DengonNow now);
+
+/**
+ * Fait avancer toutes les échéances (relais jitterés, pushs, expirations).
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide.
+ */
+void dengon_relay_poll(struct DengonRelay *relay, struct DengonNow now);
+
+/**
+ * Relais jitterés arrivés à échéance seulement (tâche `route`).
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide.
+ */
+void dengon_relay_poll_routing(struct DengonRelay *relay, struct DengonNow now);
+
+/**
+ * Pushs d'inventaire cadencés seulement (tâche `inventory`).
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide.
+ */
+void dengon_relay_poll_inventory(struct DengonRelay *relay, struct DengonNow now);
+
+/**
+ * Expiration des enveloppes seulement (tâche `courier`).
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide.
+ */
+void dengon_relay_poll_courier(struct DengonRelay *relay, struct DengonNow now);
+
+/**
+ * Prochaine échéance (ms **monotones**) dans `*out` ; `false` s'il n'y en a
+ * pas (le firmware peut alors attendre la prochaine trame).
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide ; `out` nul ou valide.
+ */
+bool dengon_relay_next_deadline(const struct DengonRelay *relay,
+                                struct DengonNow now,
+                                uint64_t *out);
+
+/**
+ * Retire la prochaine trame à émettre : lien dans `*link`, octets dans
+ * `buf`, longueur dans `*len`. [`Status::Empty`] si rien à émettre ;
+ * [`Status::BufferTooSmall`] si `cap` ne suffit pas (`*len` = taille
+ * requise, trame conservée).
+ *
+ * # Safety
+ *
+ * `relay` valide ; `link`, `len` valides ; `buf` valide pour `cap` octets.
+ */
+DengonStatus dengon_relay_pop_outgoing(struct DengonRelay *relay,
+                                       uint64_t *link,
+                                       uint8_t *buf,
+                                       uintptr_t cap,
+                                       uintptr_t *len);
+
+/**
+ * Retire la prochaine entrée de journal à persister (`Entry::to_bytes`,
+ * à ajouter telle quelle à `ledger.bin`). Mêmes conventions que
+ * [`dengon_relay_pop_outgoing`].
+ *
+ * # Safety
+ *
+ * `relay` valide ; `len` valide ; `buf` valide pour `cap` octets.
+ */
+DengonStatus dengon_relay_pop_ledger(struct DengonRelay *relay,
+                                     uint8_t *buf,
+                                     uintptr_t cap,
+                                     uintptr_t *len);
+
+/**
+ * Curseur du journal **après** toutes les entrées produites jusqu'ici
+ * (y compris celles pas encore retirées par [`dengon_relay_pop_ledger`]) :
+ * `seq` de la prochaine entrée dans `*seq`, hash de la dernière (32
+ * octets) dans `hash`. À persister **une fois la file vidée et écrite**.
+ *
+ * # Safety
+ *
+ * `relay`, `seq` valides ; `hash` valide pour 32 octets écrits.
+ */
+DengonStatus dengon_relay_ledger_anchor(const struct DengonRelay *relay,
+                                        uint64_t *seq,
+                                        uint8_t *hash);
+
+/**
+ * Ajoute au journal un événement du firmware (`relay.boot`,
+ * `peer.connected`…). `false` si le nom n'est pas au catalogue ou si une
+ * chaîne n'est pas de l'UTF-8.
+ *
+ * # Safety
+ *
+ * `relay` nul ou valide ; `name`, `payload_json` nuls ou chaînes C
+ * terminées par `\0`.
+ */
+bool dengon_relay_record_event(struct DengonRelay *relay,
+                               const char *name,
+                               const char *payload_json,
+                               struct DengonNow now);
+
+/**
+ * Compteurs du relais dans `*out`.
+ *
+ * # Safety
+ *
+ * `relay`, `out` valides.
+ */
+DengonStatus dengon_relay_stats(const struct DengonRelay *relay,
+                                struct DengonRelayStats *out);
+
+/**
+ * Auto-test Noise avec l'aléa de la plateforme : deux paires de clés
+ * tirées de `fill`, handshake `XX` complet, puis un message chiffré dans
+ * chaque sens. [`Status::Ok`] si tout aboutit, [`Status::Crypto`] sinon
+ * (notamment si `snow` n'obtient aucun aléa), [`Status::NullPointer`] si
+ * `fill` est nul.
+ *
+ * # Safety
+ *
+ * `fill` : voir [`PlatformRng::new`].
+ */
+DengonStatus dengon_noise_selftest(void (*fill)(uint8_t *buf, uintptr_t len));
 
 #endif  /* DENGON_CORE_H */
