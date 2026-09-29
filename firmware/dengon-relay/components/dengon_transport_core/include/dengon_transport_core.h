@@ -61,6 +61,15 @@ extern "C" {
  */
 #define DENGON_TC_CHUNK_SUITE 0x80
 #define DENGON_TC_CHUNK_HDR   1
+/**
+ * Morceau d'abandon : l'émetteur n'a pas pu finir la trame en cours (pool de
+ * mbufs vide…). Le récepteur jette son partiel sans compter d'erreur. Sans
+ * lui, le morceau suivant (début valide de la trame d'après) serait collé au
+ * partiel : deux trames perdues sans détection (revue PR #129 point 2). Les
+ * bits réservés le rendent invalide pour un réassembleur plus ancien, qui
+ * abandonne aussi.
+ */
+#define DENGON_TC_CHUNK_ABORT 0x40
 
 /** Codes HCI de déconnexion utiles (Core Spec Vol 1, Part F). */
 #define DENGON_HCI_CONN_SPVN_TMO      0x08 /* supervision timeout           */
@@ -158,6 +167,10 @@ typedef struct {
        la fin de la trame ou à la fermeture. NULL hors réassemblage. */
     uint8_t           *rx_part;
     size_t             rx_len;
+    /* Trame trop longue abandonnée : ses morceaux restants sont ignorés
+       jusqu'au dernier (sans SUITE), au lieu de passer pour une trame neuve
+       (revue PR #129 point 3). */
+    bool               rx_skip;
 } dengon_tc_link_t;
 
 /** L'état complet du transport. Allocation statique, aucun malloc hors trames. */
@@ -177,7 +190,11 @@ typedef struct {
 
 /* --- Cycle de vie ---------------------------------------------------------- */
 
-/** Remet l'état à neuf : non démarré, aucun lien, file vide. */
+/**
+ * Remet l'état à neuf : non démarré, aucun lien, file vide. Libère les
+ * réassemblages en cours : `tc` doit donc être déjà initialisé ou mis à zéro
+ * (cas d'une variable statique).
+ */
 void dengon_tc_init(dengon_tc_t *tc);
 
 /**

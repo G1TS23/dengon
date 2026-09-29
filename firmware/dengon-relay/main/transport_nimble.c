@@ -328,9 +328,9 @@ on_disc(const struct ble_gap_disc_desc *d)
         return;
     }
 
-    if (!dengon_adv_should_initiate(s_tc.cfg.local_peer_id, info.peer_prefix,
-                                    s_own_addr, d->addr.val)) {
-        ESP_LOGD(TAG, "pair %02x%02x%02x%02x vu : peerID plus petit, c'est à lui d'initier",
+    if (!dengon_adv_relay_should_connect(s_tc.cfg.local_peer_id, &info, s_own_addr,
+                                         d->addr.val)) {
+        ESP_LOGD(TAG, "pair %02x%02x%02x%02x vu : téléphone ou peerID plus petit, c'est à lui d'initier",
                  info.peer_prefix[0], info.peer_prefix[1], info.peer_prefix[2],
                  info.peer_prefix[3]);
         return;
@@ -875,18 +875,28 @@ static dengon_tr_err_t
 emit(const dengon_tc_route_t *r, const uint8_t *bytes, size_t len)
 {
     size_t total = dengon_tc_chunk_count(len, r->mtu);
+    size_t sent = 0;
     int rc = 0;
 
-    for (size_t i = 0; i < total && rc == 0; i++) {
+    for (; sent < total && rc == 0; sent++) {
         size_t off = 0;
         size_t n = 0;
-        uint8_t hdr = dengon_tc_chunk_at(len, r->mtu, i, &off, &n);
+        uint8_t hdr = dengon_tc_chunk_at(len, r->mtu, sent, &off, &n);
 
         rc = emit_chunk(r, hdr, bytes + off, n);
     }
 
     if (rc == 0) {
         return DENGON_TR_OK;
+    }
+    /* Échec au milieu d'une trame (sent > 1 : au moins un morceau SUITE est
+       parti) : le pair tient un partiel. Morceau d'abandon, sinon il collerait
+       la trame suivante à ce partiel ; si même lui ne part pas, on coupe le
+       lien plutôt que de laisser le pair désynchronisé (revue PR #129 point 2). */
+    if (sent > 1 && rc != BLE_HS_ENOTCONN &&
+        emit_chunk(r, DENGON_TC_CHUNK_ABORT, NULL, 0) != 0) {
+        ESP_LOGW(TAG, "conn=%u : trame interrompue, lien coupé", r->conn_handle);
+        ble_gap_terminate(r->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
     /* Le pair est tombé entre la prise de route et l'émission : condition
        normale, pas une erreur de pile. */

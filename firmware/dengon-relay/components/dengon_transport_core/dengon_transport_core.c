@@ -107,6 +107,11 @@ route_of(const dengon_tc_link_t *l, dengon_tc_route_t *r)
 void
 dengon_tc_init(dengon_tc_t *tc)
 {
+    /* Un réassemblage en cours à la remise à zéro ne doit pas fuir (revue
+       PR #129 point 4). */
+    for (size_t i = 0; i < DENGON_TC_MAX_LINKS; i++) {
+        free(tc->links[i].rx_part);
+    }
     memset(tc, 0, sizeof(*tc));
     /* 0 est réservé : un LinkId nul trahit une structure non initialisée. */
     tc->next_id = 1;
@@ -304,6 +309,12 @@ dengon_tc_on_chunk(dengon_tc_t *tc, uint16_t conn_handle, const uint8_t *chunk, 
     if (l == NULL) {
         return DENGON_TR_UNKNOWN_PEER;
     }
+    /* Abandon annoncé par l'émetteur : on jette le partiel, sans erreur. */
+    if (len == DENGON_TC_CHUNK_HDR && chunk[0] == DENGON_TC_CHUNK_ABORT) {
+        rx_abandon(l);
+        l->rx_skip = false;
+        return DENGON_TR_OK;
+    }
     /* Même règle que le Reassembleur Android : un morceau vide ou aux bits
        réservés non nuls abandonne la trame en cours. */
     if (len < DENGON_TC_CHUNK_HDR || (chunk[0] & (uint8_t)~DENGON_TC_CHUNK_SUITE) != 0) {
@@ -315,8 +326,15 @@ dengon_tc_on_chunk(dengon_tc_t *tc, uint16_t conn_handle, const uint8_t *chunk, 
     data = chunk + DENGON_TC_CHUNK_HDR;
     n = len - DENGON_TC_CHUNK_HDR;
 
+    /* Queue d'une trame trop longue déjà rejetée : ignorée jusqu'à sa fin. */
+    if (l->rx_skip) {
+        l->rx_skip = suite;
+        return DENGON_TR_OK;
+    }
+
     if (l->rx_len + n > DENGON_TC_FRAME_MAX) {
         rx_abandon(l);
+        l->rx_skip = suite;
         tc->bad_chunks++;
         return DENGON_TR_FRAME_TOO_LARGE;
     }

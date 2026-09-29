@@ -53,6 +53,23 @@ test_mfg_du_telephone_sans_flags_est_accepte(void)
     TEST_ASSERT_EQUAL_HEX8(0, info.flags);
 }
 
+/* Le relais n'initie jamais vers un téléphone (US-312), seulement vers un
+   relais au peerID plus grand. */
+static void
+test_relais_n_initie_que_vers_un_relais(void)
+{
+    static const uint8_t moi[8] = { 0x10, 0, 0, 0, 0, 0, 0, 0 };
+    static const uint8_t adr_a[6] = { 1, 1, 1, 1, 1, 1 };
+    static const uint8_t adr_b[6] = { 2, 2, 2, 2, 2, 2 };
+    dengon_adv_info_t telephone = { .peer_prefix = { 0xF0, 0, 0, 0 }, .flags = 0 };
+    dengon_adv_info_t grand = { .peer_prefix = { 0xF0, 0, 0, 0 }, .flags = DENGON_ADV_F_RELAY };
+    dengon_adv_info_t petit = { .peer_prefix = { 0x01, 0, 0, 0 }, .flags = DENGON_ADV_F_RELAY };
+
+    TEST_ASSERT_FALSE(dengon_adv_relay_should_connect(moi, &telephone, adr_a, adr_b));
+    TEST_ASSERT_TRUE(dengon_adv_relay_should_connect(moi, &grand, adr_a, adr_b));
+    TEST_ASSERT_FALSE(dengon_adv_relay_should_connect(moi, &petit, adr_a, adr_b));
+}
+
 /* Des champs ajoutés en queue par une version future ne rendent pas aveugle. */
 static void
 test_mfg_plus_long_est_accepte(void)
@@ -100,6 +117,7 @@ run_adv(void)
     RUN_TEST(test_mfg_trop_court_ou_etranger_est_rejete);
     RUN_TEST(test_mfg_du_telephone_sans_flags_est_accepte);
     RUN_TEST(test_mfg_plus_long_est_accepte);
+    RUN_TEST(test_relais_n_initie_que_vers_un_relais);
     RUN_TEST(test_anti_boucle_le_plus_petit_initie);
     RUN_TEST(test_anti_boucle_egalite_departagee_par_adresse);
     RUN_TEST(test_anti_boucle_pas_de_connexion_a_soi);

@@ -201,6 +201,72 @@ test_coupure_pendant_le_reassemblage(void)
     TEST_ASSERT_EQUAL(DENGON_EVT_PEER_DISCONNECTED, s_lot.ev[0].kind);
 }
 
+/* Revue PR #129 point 2 : l'émetteur n'a pas pu finir sa trame et envoie un
+   morceau d'abandon. Le partiel est jeté sans erreur, et la trame suivante
+   n'en hérite pas. */
+static void
+test_morceau_d_abandon_jette_le_partiel(void)
+{
+    static const uint8_t debut[] = { 0x80, 1, 2, 3 };
+    static const uint8_t abandon[] = { DENGON_TC_CHUNK_ABORT };
+    static const uint8_t suivante[] = { 0x00, 9 };
+    uint16_t conn = lien_au_mtu(517);
+
+    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_on_chunk(&s_banc.tc, conn, debut, sizeof(debut)));
+    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_on_chunk(&s_banc.tc, conn, abandon, sizeof(abandon)));
+    TEST_ASSERT_EQUAL(0, s_banc.tc.bad_chunks);
+    TEST_ASSERT_EQUAL(DENGON_TR_OK,
+                      dengon_tc_on_chunk(&s_banc.tc, conn, suivante, sizeof(suivante)));
+    banc_poll(&s_banc, &s_lot);
+    TEST_ASSERT_EQUAL(1, s_lot.n);
+    TEST_ASSERT_EQUAL(1, s_lot.ev[0].u.frame.len);
+    TEST_ASSERT_EQUAL_HEX8(9, s_lot.ev[0].u.frame.bytes[0]);
+}
+
+/* Revue PR #129 point 3 : après un dépassement, les morceaux restants de la
+   même trame sont ignorés jusqu'au dernier ; aucun ne remonte comme trame. */
+static void
+test_queue_d_une_trame_trop_longue_ignoree(void)
+{
+    static const uint8_t suite[] = { 0x80, 7 };
+    static const uint8_t fin[] = { 0x00, 7 };
+    static const uint8_t neuve[] = { 0x00, 42 };
+    uint16_t conn = lien_au_mtu(517);
+
+    motif(DENGON_TC_FRAME_MAX);
+    s_morceau[0] = DENGON_TC_CHUNK_SUITE;
+    memcpy(s_morceau + 1, s_trame, 513);
+    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_on_chunk(&s_banc.tc, conn, s_morceau, 514));
+    TEST_ASSERT_EQUAL(DENGON_TR_FRAME_TOO_LARGE,
+                      dengon_tc_on_chunk(&s_banc.tc, conn, s_morceau, 514));
+    /* Queue de la trame rejetée : ignorée. */
+    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_on_chunk(&s_banc.tc, conn, suite, sizeof(suite)));
+    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_on_chunk(&s_banc.tc, conn, fin, sizeof(fin)));
+    banc_poll(&s_banc, &s_lot);
+    TEST_ASSERT_EQUAL(0, s_lot.n);
+    /* La trame suivante passe normalement. */
+    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_on_chunk(&s_banc.tc, conn, neuve, sizeof(neuve)));
+    banc_poll(&s_banc, &s_lot);
+    TEST_ASSERT_EQUAL(1, s_lot.n);
+    TEST_ASSERT_EQUAL_HEX8(42, s_lot.ev[0].u.frame.bytes[0]);
+    TEST_ASSERT_EQUAL(1, s_banc.tc.bad_chunks);
+}
+
+/* Revue PR #129 point 4 : une remise à zéro pendant un réassemblage libère
+   le tampon (vérifié par l'absence de fuite sous Valgrind/ASan si activés ;
+   ici, le lien repart propre). */
+static void
+test_init_pendant_un_reassemblage(void)
+{
+    static const uint8_t debut[] = { 0x80, 1, 2 };
+    uint16_t conn = lien_au_mtu(517);
+
+    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_on_chunk(&s_banc.tc, conn, debut, sizeof(debut)));
+    TEST_ASSERT_NOT_NULL(s_banc.tc.links[0].rx_part);
+    dengon_tc_init(&s_banc.tc);
+    TEST_ASSERT_NULL(s_banc.tc.links[0].rx_part);
+}
+
 /* Un morceau d'un conn_handle inconnu est refusé. */
 static void
 test_morceau_sans_lien(void)
@@ -222,6 +288,9 @@ run_morceaux(void)
     RUN_TEST(test_morceau_invalide_abandonne);
     RUN_TEST(test_trame_trop_longue_puis_reutilisable);
     RUN_TEST(test_coupure_pendant_le_reassemblage);
+    RUN_TEST(test_morceau_d_abandon_jette_le_partiel);
+    RUN_TEST(test_queue_d_une_trame_trop_longue_ignoree);
+    RUN_TEST(test_init_pendant_un_reassemblage);
     RUN_TEST(test_morceau_sans_lien);
     lot_liberer(&s_lot);
 }

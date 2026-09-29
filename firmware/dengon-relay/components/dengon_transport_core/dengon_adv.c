@@ -49,3 +49,13 @@ dengon_adv_should_initiate(const uint8_t local_peer_id[8],
     }
     return cmp < 0;
 }
+
+bool
+dengon_adv_relay_should_connect(const uint8_t local_peer_id[8], const dengon_adv_info_t *remote,
+                                const uint8_t local_addr[6], const uint8_t remote_addr[6])
+{
+    if ((remote->flags & DENGON_ADV_F_RELAY) == 0) {
+        return false; /* un téléphone : c'est lui qui initie */
+    }
+    return dengon_adv_should_initiate(local_peer_id, remote->peer_prefix, local_addr, remote_addr);
+}
