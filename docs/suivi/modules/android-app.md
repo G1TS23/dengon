@@ -436,6 +436,10 @@ les rappels Android par adresse brute, donc n'exerçait pas ces 4 chemins) —
   `./gradlew testDebugUnitTest assembleDebug assembleRelease` → BUILD
   SUCCESSFUL (21 tests). **Rendu sur appareil non vérifié** (aucun appareil
   ni émulateur sur le poste) : à faire sur la matrice, captures dans la PR.
+  **Rendu vérifié le 2026-09-29** sur OnePlus 7 Pro (Android 12) : liste,
+  fil, saisie, statut « En attente » corrects ; défaut connu : clavier
+  ouvert, la zone au-dessus du champ de saisie est blanche
+  (`imePadding`, `ConversationsScreen.kt:162`, non corrigé). Voir le journal.
 - `BlePermissionsTest` (`src/test/.../BlePermissionsTest.kt`) : vérifie que
   l'ensemble de permissions renvoyé couvre soit le triplet BLE moderne, soit
   la localisation legacy. Tourne en JVM pur (`unitTests.isReturnDefaultValues
