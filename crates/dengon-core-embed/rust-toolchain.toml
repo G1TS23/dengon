@@ -1,0 +1,23 @@
+# Toolchain de CETTE sous-racine de workspace uniquement (voir Cargo.toml sur
+# pourquoi `dengon-core-embed` est exclue du workspace principal, dont la
+# toolchain figée reste `rust-toolchain.toml` de la racine, 1.98.1 stable).
+#
+# `nightly` amont, PAS `esp` (le fork Espressif installé par `espup`, Spike A
+# / US-101, `docs/suivi/spikes/US-101-*.md`) : cette toolchain sert par
+# défaut à la vérification hôte (C, cible native), qui n'a besoin que de
+# `-Z build-std` (voir `.cargo/config.toml`) — recompiler `core`/`alloc`
+# depuis les sources pour ne PAS lier contre le sysroot précompilé avec
+# `panic = "unwind"` (voir la note de `Cargo.toml` sur `panic = "abort"`), pas
+# de la cible xtensa. `nightly` s'installe en quelques secondes ; `esp`
+# (~2 Go, ~7 min, Spike A §3) resterait un coût inutile pour cette
+# vérification, jouée à chaque CI (`cross-vectors`) contrairement au job
+# `firmware`.
+#
+# La cible xtensa n'existe QUE dans `esp` : le job `firmware`
+# (`.github/workflows/firmware.yml`) l'installe via `espup` et invoque
+# explicitement `cargo +esp build --target xtensa-esp32-none-elf`, en
+# ignorant ce fichier pour cette seule commande (`+esp` sur la ligne de
+# commande l'emporte toujours sur `rust-toolchain.toml`).
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]

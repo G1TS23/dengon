@@ -1,0 +1,72 @@
+# ---------------------------------------------------------------------------
+# Racine de workspace SÉPARÉE (US-307) : ce `[workspace]` (même vide) exclut
+# cette crate du workspace principal (`dengon/Cargo.toml`, qui la liste
+# explicitement dans `exclude`). Raison : `libdengon_core.a` doit compiler en
+# `-C panic=abort` (voir `.cargo/config.toml` à côté de ce fichier), un
+# réglage qui s'applique à toute une invocation `cargo` — l'imposer au
+# workspace principal casserait `cargo build --workspace` pour toutes les
+# autres crates (`std`, `panic = "unwind"`). Contrepartie assumée : son
+# propre `Cargo.lock`, ses champs de paquet et ses lints ne peuvent plus
+# s'hériter du workspace principal (`*.workspace = true`), donc dupliqués
+# ci-dessous à la main. Voir `docs/suivi/03-ecarts-conception.md`.
+[workspace]
+
+[package]
+name        = "dengon-core-embed"
+description = "Archive `libdengon_core.a` autonome (allocateur + panic handler) pour un hôte C (US-307)"
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.85"
+repository   = "https://github.com/G1TS23/dengon"
+authors      = ["G1TS23"]
+publish      = false
+
+[lib]
+# Le nom de sortie attendu par l'issue US-307 et par
+# `docs/synthese/08-relais-esp32.md` est `libdengon_core.a` : c'est le SEUL
+# rôle de cette crate. Elle réexporte les fonctions de `dengon-core-ffi` sans
+# rien y ajouter (voir `src/lib.rs`) et fournit les deux éléments qu'un
+# artefact `staticlib` doit résoudre lui-même puisqu'il est lié dans un
+# exécutable C sans aucun autre code Rust pour les fournir : l'allocateur
+# global et le panic handler.
+#
+# `test = false` : cette crate n'a et n'aura pas de tests à elle (voir
+# `dengon-core-ffi/tests/` pour les tests de la logique, ce module n'étant
+# qu'un point d'assemblage).
+name       = "dengon_core"
+crate-type = ["staticlib"]
+test       = false
+
+[dependencies]
+dengon-core-ffi = { path = "../dengon-core-ffi", version = "0.1.0" }
+
+# Même configuration que `[workspace.lints]` du workspace principal — dupliquée
+# ici faute d'héritage possible (racine de workspace séparée, voir plus haut).
+# Les six lints à surveiller si le principal change (piège déjà documenté
+# là-bas) : les revérifier ici aussi.
+[lints.rust]
+unsafe_code                   = "deny"
+missing_debug_implementations = "warn"
+unused_qualifications         = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all           = { level = "warn", priority = -1 }
+unwrap_used   = "warn"
+expect_used   = "warn"
+todo          = "warn"
+unimplemented = "warn"
+dbg_macro     = "warn"
+mem_forget    = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss           = "warn"
+cast_possible_wrap       = "warn"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+lto           = "thin"
+codegen-units = 1
+strip         = "symbols"
+panic         = "abort"

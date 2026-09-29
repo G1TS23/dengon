@@ -1,0 +1,25 @@
+# Configuration cbindgen pour `include/dengon_core.h` (US-307).
+#
+# Minimaliste par construction : la surface exportée est volontairement
+# réduite à `dengon_decode_reencode` et `dengon_protocol_version` (voir
+# `src/lib.rs`). Étoffer cette liste au fil des besoins réels du firmware
+# (US-308/309), pas par anticipation.
+
+language = "C"
+header = """
+/* Généré par cbindgen (build.rs de dengon-core-ffi) — NE PAS ÉDITER À LA MAIN.
+ * Régénérer : `cargo build -p dengon-core-ffi`, puis committer le résultat.
+ */"""
+include_guard = "DENGON_CORE_H"
+braces = "SameLine"
+line_length = 88
+tab_width = 4
+documentation = true
+documentation_style = "doxy"
+
+[export]
+prefix = "Dengon"
+
+[enum]
+prefix_with_name = false
+rename_variants = "ScreamingSnakeCase"

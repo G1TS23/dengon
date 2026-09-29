@@ -18,6 +18,52 @@ et le mentionner dans l'entrée de journal.
 
 ---
 
+### 2026-09-29 — `dengon-core-embed` : racine de workspace séparée, hors du workspace principal (US-307)
+
+- **Prévu :** `docs/synthese/08-relais-esp32.md` §3 attend `libdengon_core.a`
+  comme un livrable de `crates/`, sans préciser son intégration Cargo — rien
+  ne prévoyait un second workspace dans le dépôt.
+- **Réel :** `dengon-core-embed` (la crate qui assemble réellement
+  `libdengon_core.a`) déclare son propre `[workspace]` (vide) et est exclue
+  du workspace principal (`exclude` dans le `Cargo.toml` racine). Elle a son
+  propre `Cargo.lock`, sa propre toolchain (`rust-toolchain.toml` : nightly
+  amont, PAS la 1.98.1 figée du reste du dépôt), et duplique à la main les
+  champs de paquet et les lints qu'elle ne peut plus hériter par
+  `*.workspace = true`.
+- **Pourquoi :** `libdengon_core.a` est un artefact `no_std` **autonome** :
+  aucun autre code Rust ne fournit l'allocateur global ni le panic handler
+  dans le binaire final (un exécutable C, hôte ou ESP32). Une archive
+  `staticlib` doit résoudre ces deux lang items AU MOMENT de sa compilation
+  par rustc (contrainte du format), pas au moment du lien final comme un
+  `rlib` normal. Or le sysroot `core`/`alloc` précompilé par rustup est
+  construit avec `panic = "unwind"` (le défaut amont) : même en recompilant
+  cette seule crate en `panic = "abort"`, l'éditeur de liens réclame encore
+  `rust_eh_personality` (vérifié sur cible hôte `x86_64-pc-windows-gnu`,
+  message exact : `undefined reference to 'rust_eh_personality'`). La seule
+  façon stable de lever cette référence est de recompiler `core`/`alloc`
+  eux-mêmes en `panic = "abort"` (`-Z build-std`, donc nightly) — et
+  `panic`/`build-std` sont des réglages **par invocation cargo entière**, pas
+  par crate : les imposer au workspace principal aurait cassé
+  `cargo build --workspace` pour tout le reste (`std`, `panic = "unwind"`).
+- **Essayé avant, écarté :** une feature Cargo `standalone` dans **une
+  seule** crate (`dengon-core-ffi`), activant panic handler + allocateur
+  seulement quand demandée. Casse dès qu'une commande unifie les features de
+  tout le graphe — notamment `cargo clippy --workspace --all-targets
+  --all-features`, qui active la feature à la fois pour le `rlib` (testé
+  dans le harnais `std`, qui a DÉJÀ les deux) et pour le `staticlib`, d'où
+  `error[E0152]: found duplicate lang item 'panic_impl'`. D'où la scission
+  en deux crates : `dengon-core-ffi` (rlib normal, jamais de panic
+  handler/allocateur) et `dengon-core-embed` (staticlib, `test = false`, les
+  fournit en permanence, jamais mêlée à un binaire `std`).
+- **Conséquence acceptée :** deux `Cargo.lock`, deux jeux de lints à tenir à
+  jour en parallèle (piège documenté dans `dengon-core-embed/Cargo.toml`).
+  La toolchain `esp` réelle (`espup`, cible `xtensa-esp32-none-elf`) n'est
+  exercée que par le job CI `firmware` — voir
+  `docs/suivi/modules/dengon-core-ffi.md`, section Tests, pour ce qui a
+  (et n'a pas) pu être vérifié en local sur ce poste Windows sans `espup`.
+
+---
+
 ### 2026-09-28 — `cross-vectors` : la patte « firmware » est un proxy `no_std`, pas le firmware (US-222)
 
 - **Prévu :** `docs/synthese/10-benchmarks-mvp-tests.md` §4.7 — le job

@@ -14,14 +14,27 @@
 #                  lib      dengon-core SANS std — la patte « firmware » du
 #                           job cross-vectors (US-222). Aucun code : c'est sa
 #                           table de dépendances qui est le test.
+#   dengon-core-ffi lib     fonctions C exportées de dengon-core (US-307),
+#                           `rlib` normal, testé par `cargo test` comme le
+#                           reste du workspace.
 #
 # US-104 ne livre que les squelettes : chaque crate compile, expose une
 # constante et un test fumigène. Les implémentations réelles arrivent au
 # sprint 2 (voir docs/plan-mvp.md).
-# ---------------------------------------------------------------------------
-
+#
+# `dengon-core-embed` (US-307) N'EST PAS un membre de CE workspace, d'où
+# l'exclusion ci-dessous malgré le glob `crates/*` : elle produit
+# `libdengon_core.a`, un artefact `no_std` **autonome** (allocateur global +
+# panic handler définis par elle-même, `panic = "abort"`), qui doit donc
+# compiler en `-C panic=abort` — un réglage qui s'applique à TOUTE une
+# invocation `cargo`, pas crate par crate. L'imposer ici casserait
+# `cargo build --workspace` pour toutes les autres crates (`std`,
+# `panic = "unwind"`). Elle déclare son propre `[workspace]` (racine séparée,
+# son propre `Cargo.lock`) avec son propre `.cargo/config.toml` — voir son
+# `Cargo.toml` et `docs/suivi/03-ecarts-conception.md`.
 [workspace]
 members  = ["crates/*"]
+exclude  = ["crates/dengon-core-embed"]
 resolver = "2"
 
 [workspace.package]

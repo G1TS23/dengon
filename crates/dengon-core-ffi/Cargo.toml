@@ -1,0 +1,47 @@
+[package]
+name        = "dengon-core-ffi"
+description = "Fonctions C exportées de dengon-core : décodage/ré-encodage L3 (US-307)"
+
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+repository.workspace   = true
+authors.workspace      = true
+publish.workspace      = true
+
+# `[lib]` par défaut (nom `dengon_core_ffi`, crate-type `lib`/rlib) :
+# volontairement PAS de `crate-type = ["staticlib"]` ici. Un `no_std` qui
+# déclare `staticlib` doit résoudre le panic handler et l'allocateur global
+# au moment même où rustc le compile (contrainte du format, contrairement au
+# `rlib` normal qui les délègue au binaire final). Comme cette crate est
+# aussi testée par `cargo test` (harnais `std`, qui fournit déjà les deux),
+# lui ajouter `staticlib` casserait `cargo test`/`clippy --all-features`
+# (essayé, confirmé en écrivant cette US : conflit de lang item
+# `panic_impl`). L'archive `.a` liable (`libdengon_core.a`) est produite par
+# la crate séparée `dengon-core-embed`, qui fournit CES DEUX éléments et
+# réexporte les fonctions d'ici — voir son `Cargo.toml`.
+
+# ⚠ Dépendance de CHEMIN en `default-features = false`, pas
+# `{ workspace = true }` : même piège que dengon-conformance (voir son
+# Cargo.toml) — l'héritage de workspace ignore `default-features = false`
+# tant que `[workspace.dependencies]` ne le déclare pas lui-même. Écrire le
+# chemin ici est le seul moyen de ne priver QUE cette crate de `std`.
+[dependencies]
+dengon-core = { path = "../dengon-core", version = "0.1.0", default-features = false }
+
+# cbindgen ne compile PAS la crate : il reparse son code source (`syn`) pour
+# produire le header. Le build script tourne donc toujours sur l'hôte, y
+# compris lors d'une cross-compilation xtensa (règle générale des scripts de
+# build Cargo). Le header décrit les fonctions déclarées ICI ; peu importe
+# que l'archive finale soit assemblée par `dengon-core-embed`, `#[no_mangle]`
+# préserve le nom de symbole.
+[build-dependencies]
+cbindgen = { version = "=0.29.0", default-features = false }
+
+[dev-dependencies]
+# Lecture de contracts/packet/vectors_v0.json — via `Value`, pas de derive
+# (même choix que dengon-conformance et dengon-verify).
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
