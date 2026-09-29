@@ -39,11 +39,12 @@ PUB_SIGN = re.compile(r"^[0-9a-f]{64}$")
 def enregistrer(url, node_id, pub_sign, cafile):
     """POST /api/nodes ; rend (statut, corps JSON décodé ou texte brut)."""
     # `http://` n'a de sens qu'en local (dashboard de dev) : pas de TLS.
-    ctx = (
-        ssl.create_default_context(cafile=str(cafile))
-        if url.startswith("https")
-        else None
-    )
+    ctx = None
+    if url.startswith("https"):
+        ctx = ssl.create_default_context(cafile=str(cafile))
+        # Comme mbedTLS côté firmware : le certificat fourni sert d'ancre même
+        # s'il n'est pas auto-signé (intermédiaire Caddy épinglé pour un essai).
+        ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
     corps = json.dumps(
         {"node_id": node_id, "kind": "relay", "pub_sign": pub_sign}
     ).encode()

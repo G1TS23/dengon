@@ -26,3 +26,18 @@ Le fichier est ignoré par git (règle `*.pem` du `.gitignore` racine).
 Absent, le build réussit quand même (CI) mais l'export HTTPS est coupé :
 `dash status` affiche `racine CA : absente`. Une racine régénérée (volume
 Caddy supprimé) impose de reflasher.
+
+## Dépannage : sans accès au VPS
+
+Pour un **essai** seulement, on peut épingler l'intermédiaire, que le serveur
+envoie lui-même (mbedTLS l'accepte comme ancre) — il expire au bout de
+**7 jours** :
+
+```sh
+openssl s_client -connect 51.255.38.214:8443 -showcerts </dev/null 2>/dev/null \
+  | awk '/BEGIN CERT/{n++} n==2{print} /END CERT/ && n==2{exit}' \
+  > firmware/dengon-relay/main/certs/dashboard_root.pem
+```
+
+`tools/register_relay.py` l'accepte aussi (`VERIFY_X509_PARTIAL_CHAIN`).
+

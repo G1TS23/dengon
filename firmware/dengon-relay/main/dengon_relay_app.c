@@ -51,7 +51,10 @@ static const char *TAG = "dengon-relay";
 #define ROUTE_STACK      16384
 #define COURIER_STACK    16384
 #define INVENTORY_STACK  8192
-#define LEDGER_STACK     8192
+/* ledger : 8 Ko suffisaient à l'US-308 ; depuis l'US-309 elle signe aussi
+   les événements différés (relay.wifi_*, relay.health) : marge mesurée sur
+   carte tombée à 1 308 o, d'où 12 Ko. */
+#define LEDGER_STACK     12288
 
 static DengonRelay      *s_relay;
 static SemaphoreHandle_t s_lock;
