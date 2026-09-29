@@ -512,8 +512,10 @@ les rappels Android par adresse brute, donc n'exerçait pas ces 4 chemins) —
   ne montre que « En attente » / « Parti » à l'envoi. `AndroidTransport`
   (US-213) n'est pas non plus branché sur `dengon-core` : c'est un
   `Transport` qui fonctionne, sans encore transporter le protocole dengon.
-- `unreadCount` n'est jamais remis à zéro : le contrat v0 n'a pas de
-  `mark_read` (US-214 hors périmètre, à ajouter au contrat).
+- `unreadCount` n'est jamais remis à zéro par le cœur : le contrat n'a pas de
+  `mark_read` (à ajouter au contrat). Contournement US-321 : `ConversationsUiState.lus`
+  retient le compteur vu à l'ouverture de chaque conversation, `nonLus()` n'affiche que
+  l'écart (en mémoire, perdu au redémarrage — où le cœur perd aussi ses conversations).
 - Pas de navigation Compose (`navigation-compose` non ajouté, pour ne pas
   toucher au verrouillage des dépendances) : quatre états booléens dans
   `MainActivity` (messagerie, appairage, transport, spike). À revoir si un

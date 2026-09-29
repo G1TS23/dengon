@@ -207,6 +207,41 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
   - la mesure du tas du relais pendant un réassemblage.
 
 ---
+## 2026-09-29 — US-321 : badge « non lu », états d'erreur vus sur appareil, textes de permission
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `ConversationsViewModel.kt` (`lus`, `nonLus`), `ConversationsScreen.kt`, `MainActivity.kt`, `strings.xml`, `NonLusTest.kt`, captures `apres-14` à `apres-18`
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Badge « non lu »** : le cœur ne remet jamais `unreadCount` à zéro (pas de `mark_read` dans
+  le contrat, l'ajouter demanderait `dengon-core`, `.udl`, bindings et `.so`, hors périmètre US-321).
+  Côté app, `ConversationsUiState.lus` retient le compteur vu à l'ouverture (et suit les messages
+  reçus fil ouvert) ; `nonLus()` n'affiche que l'écart, jamais négatif. `NonLusTest` (+5, 115 tests
+  JVM verts). Vu sur Samsung A16 + OnePlus 7 Pro : message reçu → badge 1, fil ouvert puis retour
+  → plus de badge, nouveau message → badge 1.
+- **Bluetooth coupé** (Samsung, `svc bluetooth disable`) : bandeau à l'accueil et sur « Appareils à
+  proximité », qui disparaît de lui-même au rallumage. **Permission refusée** (vraies boîtes de
+  dialogue Android refusées) : bandeau « Autorisation refusée » + « Ouvrir les réglages de l'app »
+  (ouvre bien `InstalledAppDetails`).
+- **Textes de permission** réécrits en langage courant (plus de « maillage BLE » ni de « permissions
+  Bluetooth (et de localisation…) ») ; le bandeau de demande dit « Autorisation requise ».
+
+### Pas comme ça, à savoir
+- **« Échec » + « Renvoyer » : captures faites sur un APK de démonstration temporaire** (données
+  fictives injectées dans `FilConversation`, retiré du code avant de committer ; l'APK installé
+  ensuite ne contient pas la démo, vérifié par recherche de chaîne dans `classes*.dex`). Ce n'est
+  **pas** un vrai message expiré : le TTL réel est de 24 h. Le rendu est celui du vrai composant.
+- Retour des réglages Android après avoir accordé la permission (`onResume`) : non essayé.
+- Contacts et conversations perdus à chaque réinstallation (limite connue) : quatre appairages
+  refaits à la main pendant l'essai.
+
+### Écarts vs conception
+- Aucun nouveau. Reste à faire : `mark_read` dans le contrat FFI (suivi ailleurs) ; Accessibility Scanner.
+
+### État après cette session
+- Fiche module `modules/android-app.md` mise à jour ; `01-etat-du-code.md` : non.
+
 ## 2026-09-29 — US-321 : `adjustResize`, le fil reste visible clavier ouvert
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)
