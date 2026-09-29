@@ -38,8 +38,12 @@ data class ConversationsUiState(
  * conversations en mémoire et répond sans E/S, et les tests unitaires lisent
  * [etat] directement, sans dispatcher de test.
  * L'interrogation périodique du nœud ([sonder]) est cadencée par l'écran.
- * Quand le vrai FFI fera des E/S, ces appels passeront dans `viewModelScope`
- * sur un dispatcher d'E/S (US-306).
+ *
+ * TODO(US-306) : chaque appel prend le `Mutex` du nœud Rust, qui sera
+ * partagé avec le service de premier plan (radio : `on_bytes_received`,
+ * `on_peer_connected`…). Un appel de l'UI pourra alors attendre que le
+ * service relâche ce verrou : passer ces appels dans `viewModelScope` sur un
+ * dispatcher d'E/S, pour ne jamais bloquer le thread principal.
  */
 class ConversationsViewModel(private val noeud: DengonNodeInterface) : ViewModel() {
 
