@@ -7,8 +7,9 @@
 # `build-std` recompile `core`/`alloc` depuis les sources AVEC
 # `panic = "abort"`, ce qui élimine la référence à la source.
 #
-# Nécessite la toolchain nightly déclarée par `rust-toolchain.toml` (ici,
-# `esp`) et son composant `rust-src` — pas de `-Z build-std` à passer en
-# ligne de commande, cargo nightly lit directement `[unstable]` ici.
+# Nécessite une toolchain nightly (`nightly` par `rust-toolchain.toml`, ou
+# `esp` via `cargo +esp` dans le job `firmware`) et son composant
+# `rust-src` — pas de `-Z build-std` à passer en ligne de commande, cargo
+# nightly lit directement `[unstable]` ici.
 [unstable]
 build-std = ["core", "alloc"]

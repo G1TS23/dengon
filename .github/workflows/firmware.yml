@@ -219,7 +219,11 @@ jobs:
         run: |
           cargo install espup --locked
           espup install --targets esp32
-          rustup component add rust-src --toolchain esp
+          # Pas de `rustup component add --toolchain esp` : rustup ≥ 1.28
+          # rejette ce nom de toolchain custom (« invalid toolchain name »),
+          # et espup installe déjà `rust-src` — on se contente de le vérifier.
+          test -d "$(rustc +esp --print sysroot)/lib/rustlib/src/rust"
+          cargo +esp --version
 
       - name: Compiler libdengon_core.a pour xtensa-esp32-none-elf
         if: steps.filtre.outputs.core_ffi == 'true'

@@ -10,6 +10,30 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-307 : rebase de la PR #108 sur `main` + correctif CI `firmware`
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `.github/workflows/firmware.yml`,
+`crates/dengon-core-embed/.cargo/config.toml`, `docs/suivi/`.
+**Lot :** US-307, branche `feat/US-307-libdengon-core-ffi` (PR #108), base
+`main` (après #107).
+
+- Rebase sans conflit.
+- `firmware.yml` : retrait de `rustup component add rust-src --toolchain
+  esp` (rustup ≥ 1.28 rejette ce nom de toolchain custom ; `espup` installe
+  déjà `rust-src`) → simple vérification du sysroot. Même correctif que
+  celui déjà fait sur la branche US-308 (PR #110).
+- `.cargo/config.toml` : commentaire corrigé (la toolchain par défaut de la
+  sous-racine est `nightly`, `esp` seulement via `cargo +esp`).
+- Commandes exécutées : `cargo fmt --all --check`, `cargo clippy --workspace
+  --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`
+  (tout vert, header `dengon_core.h` inchangé après build) ;
+  `RUSTUP_TOOLCHAIN=esp crates/dengon-core-embed/tests/c/run.sh` → 8 accept
+  / 5 reject OK ; `cargo +esp build --release --target
+  xtensa-esp32-none-elf --locked` → `libdengon_core.a` 715 Ko.
+
+---
+
 ## 2026-09-28 — US-301 : corrections suite à la revue de la PR #102
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
