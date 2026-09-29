@@ -1,0 +1,111 @@
+# ---------------------------------------------------------------------------
+# Workflow `android` — build + tests unitaires de l'app Android (android/).
+# Référence : issue #79 (retour de revue d'OswinFreyr sur la PR #72).
+#
+# Deux régressions ont survécu sans être vues avant un clone frais sur une
+# autre plateforme, faute de CI sur android/ :
+#   - `android/gradlew` committé sans le bit exécutable (PR #56, corrigé #72) ;
+#   - `gradle/verification-metadata.xml` régénéré sur macOS seulement :
+#     checksum `aapt2` manquant pour Linux (PR #72). Le premier `./gradlew`
+#     réellement exécuté sur Linux, ici, est ce qui le vérifie pour de vrai.
+#
+# ⚠ DEUX RÈGLES À NE PAS CASSER (identiques à core.yml/firmware.yml)
+#
+# 1. Le check exigé par la protection de `main` est le nom du JOB (`android`),
+#    pas le nom du workflow : pas de `strategy.matrix` sur ce job, pas de
+#    workflow réutilisable, ne pas le renommer.
+#
+# 2. Le filtrage par chemin est fait DANS le job, pas via
+#    `on.pull_request.paths` : un filtre au niveau du déclencheur empêche
+#    GitHub de créer le moindre check pour une PR qui ne touche pas android/,
+#    qui resterait bloquée sur « Expected — Waiting for status to be
+#    reported » le jour où `android` entrerait dans les checks requis de
+#    `main`. Voir docs/suivi/03-ecarts-conception.md.
+#
+# Les actions tierces sont épinglées sur un SHA de commit complet, avec le
+# numéro de version en commentaire à droite (même règle que core.yml).
+# ---------------------------------------------------------------------------
+name: android
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  # On n'annule jamais un run sur main : il fait foi pour l'historique.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  android:
+    name: android
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Nécessaire au filtre de chemins sur les événements push.
+          fetch-depth: 0
+
+      - name: Détecter les changements android/
+        id: filtre
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            android:
+              - 'android/**'
+              - '.github/workflows/android.yml'
+
+      - name: Aucun changement android/
+        if: steps.filtre.outputs.android != 'true'
+        run: |
+          {
+            echo '### android — ignoré'
+            echo
+            echo "Aucun fichier android/ modifié : le build gradle est sauté."
+            echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # compileOptions/kotlinOptions d'app/build.gradle.kts visent le bytecode
+      # 17, et AGP 8.5 (gradle/libs.versions.toml) exige un JDK ≥ 17 pour
+      # tourner lui-même.
+      - name: Installer le JDK 17
+        if: steps.filtre.outputs.android == 'true'
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Installe cmdline-tools + platform-tools et accepte les licences SDK :
+      # AGP télécharge ensuite tout seul la plateforme 34 et les build-tools
+      # correspondants (compileSdk/targetSdk, gradle/libs.versions.toml) au
+      # premier `./gradlew`, sans dépendre d'un SDK préinstallé sur le runner.
+      - name: Installer le SDK Android
+        if: steps.filtre.outputs.android == 'true'
+        uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+
+      - name: Cache Gradle
+        if: steps.filtre.outputs.android == 'true'
+        uses: gradle/actions/setup-gradle@da187c8e6ffbd3802e00f2477aa5a822b25f2dda # v4.4.4
+        with:
+          # N'écrire le cache que depuis main, pour qu'une PR ne le pollue pas
+          # (même règle que Swatinem/rust-cache dans core.yml).
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # `verification-metadata.xml` (dépendances verrouillées par sha256) et
+      # `gradle.lockfile`/`settings-gradle.lockfile` (versions résolues,
+      # resolutionStrategy.activateDependencyLocking() dans build.gradle.kts)
+      # font déjà échouer le build si l'un des deux est périmé — pas besoin
+      # d'étape de vérification séparée, contrairement à `uv sync --frozen`
+      # côté dashboard.
+      - name: Build + tests unitaires (assembleDebug testDebugUnitTest)
+        if: steps.filtre.outputs.android == 'true'
+        run: ./gradlew assembleDebug testDebugUnitTest --no-daemon

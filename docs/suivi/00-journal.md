@@ -166,6 +166,132 @@ OK après un point de format corrigé (eprintln! multi-lignes)
   `pip install -e ".[dev]"` (système Python 3.13) pour pouvoir exécuter la
   suite après résolution des conflits — pas la méthode habituelle du projet
   (`uv run pytest`), mais résultat équivalent (mêmes fichiers, mêmes tests).
+## 2026-09-28 — Workflow CI `android.yml` (issue #79)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `.github/workflows/android.yml`, `docs/suivi/`
+**Lot :** issue #79 (retour de revue d'OswinFreyr sur la PR #72, `area:process`/`area:android`)
+
+### Fait
+- Nouveau workflow `.github/workflows/android.yml`, même patron que
+  `core.yml`/`firmware.yml` (filtrage par chemin **dans le job**, pas au
+  niveau du déclencheur ; actions tierces épinglées par SHA de commit ;
+  `concurrency` + `permissions: contents: read` ; job nommé `android`, pas
+  de matrice).
+- Étapes : checkout → `dorny/paths-filter` (`android/**`) → JDK 17
+  (`actions/setup-java`, temurin) → SDK Android
+  (`android-actions/setup-android`, licences acceptées, AGP télécharge la
+  plateforme 34 + build-tools à la demande) → cache
+  (`gradle/actions/setup-gradle`) → `./gradlew assembleDebug
+  testDebugUnitTest --no-daemon`.
+- Versions épinglées vérifiées via `git ls-remote --tags` (pas de web
+  générique) : `actions/setup-java@cf277c6` (v4.9.1),
+  `android-actions/setup-android@be39fa8` (v4.0.4),
+  `gradle/actions/setup-gradle@da187c8` (v4.4.4).
+
+### Pourquoi / décisions
+- Pas d'étape de vérification séparée pour les lockfiles Gradle
+  (`gradle.lockfile`/`settings-gradle.lockfile`/`verification-metadata.xml`) :
+  `resolutionStrategy.activateDependencyLocking()` (root `build.gradle.kts`)
+  et la vérification par sha256 font déjà échouer le build si l'un des deux
+  est périmé — contrairement à `uv sync --frozen` côté `dashboard.yml`, qui
+  lui n'a pas cette garantie native.
+- SDK non préinstallé sur le runner : `android-actions/setup-android`
+  installe seulement `platform-tools` et accepte les licences ; AGP résout
+  et télécharge lui-même `platforms;android-34` et les build-tools
+  correspondants au premier `./gradlew`, comme documenté par l'action.
+
+### Écarts vs conception
+- Aucun vs l'issue #79. Écart de **vérification**, consigné dans la fiche
+  `processus-github.md` : voir « Vérification » ci-dessous.
+
+### Appris
+- Le bac à sable de cette session bloque `dl.google.com` au niveau du
+  proxy sortant (403 sur le tunnel HTTPS), alors que `services.gradle.org`
+  (redirige vers `release-assets.githubusercontent.com`) et
+  `repo.maven.apache.org` sont joignables. Un `./gradlew tasks` échoue donc
+  ici dès la résolution du plugin `com.android.application` (hébergé sur le
+  Maven de Google) — confirmé volontairement en le lançant sans SDK, pour
+  vérifier que l'échec vient bien de là et pas d'une erreur du script.
+
+### État après cette session
+- Workflow écrit, YAML validé (`python3 -c "import yaml; ..."`), SHA des
+  actions tierces vérifiés contre de vrais tags GitHub. `./gradlew
+  --version` (bootstrap du wrapper, sans évaluer le projet Android) a pu
+  être exécuté avec succès en local — confirme au moins que le bit
+  exécutable de `gradlew` et le téléchargement de la distribution Gradle
+  fonctionnent, ce qui couvre la moitié des deux régressions historiques
+  citées par l'issue.
+- **Vérifié pour de vrai sur GitHub Actions** (PR #107) : le job `android`
+  est passé au vert en 3 min 04 (`assembleDebug testDebugUnitTest` sur
+  `ubuntu-latest`, SDK réel téléchargé via `android-actions/setup-android`),
+  confirmant que la limite de vérification locale ci-dessus n'a pas laissé
+  passer de problème réel — les 9 autres checks de la PR sont verts aussi.
+- Fiche(s) module mise(s) à jour : `modules/processus-github.md` (liste des
+  workflows, écart deploy-vps.yml/android.yml résolu, limite de
+  vérification ajoutée puis levée), `02-avancement.md` (nouvelle ligne
+  `android`, mise à jour avec le résultat du run réel).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python3 -c "import yaml; d = yaml.safe_load(open('.github/workflows/android.yml')); ..."
+OK, job keys: ['android'] ; job name: android
+
+$ git ls-remote --tags https://github.com/actions/setup-java.git | grep v4.9.1
+cf277c60eb25467037889841efdb72551f06f6c3   refs/tags/v4.9.1
+(idem pour android-actions/setup-android v4.0.4 et gradle/actions v4.4.4 — SHA confirmés)
+
+$ cd android && ./gradlew --version
+BUILD réussi (Gradle 8.9, wrapper opérationnel)
+
+$ cd android && ./gradlew tasks --no-daemon
+FAILURE — résolution du plugin com.android.application impossible : dépôt
+Google inaccessible depuis ce bac à sable (403 côté proxy sur dl.google.com).
+Confirme le point d'échec attendu (pas de SDK local), pas un bug du script.
+```
+- **Pas exécuté** : `./gradlew assembleDebug testDebugUnitTest` de bout en
+  bout (nécessite le SDK Android, indisponible ici). À vérifier sur le
+  premier run CI après le push.
+- **Pas exécuté en local** : `./gradlew assembleDebug testDebugUnitTest` de
+  bout en bout (nécessite le SDK Android, indisponible dans ce bac à
+  sable) — mais exécuté et **vert** sur le vrai runner GitHub Actions de la
+  PR #107 (job `android`, 3 min 04, `conclusion: success`).
+## 2026-09-29 — US-219 : rebase de la PR #100 sur `main`
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `dashboard/api/app/{config,ingest,main,migrations}.py`,
+`dashboard/api/tests/test_api.py`, `docs/suivi/modules/dashboard-api.md`.
+**Lot :** US-219 (PR #100), branche `feat/US-219-web-timeline`, rebase sur
+`main` (qui avait avancé jusqu'à `54f143e`, incluant le rebase de la PR #98).
+
+### Fait
+- `gh pr view 100` signalait `mergeable: CONFLICTING` (checks CI verts par
+  ailleurs). Rebase interactif via `git rebase origin/main` dans un worktree
+  dédié (`dengon-us219`).
+- Conflits sur les 4 premiers commits de la branche (US-216/217/218) :
+  chacun rejouait une version de `dashboard/api/app/{config,ingest,main,
+  migrations}.py` et de `docs/suivi/modules/dashboard-api.md` déjà dépassée —
+  `main` contenait une version strictement plus complète (revues de PR #91
+  déjà appliquées). Résolu en gardant systématiquement le côté `HEAD`
+  (`git checkout --ours`) après vérification manuelle, chunk par chunk, que
+  le côté entrant n'ajoutait rien d'absent de `HEAD`.
+- Conflit réel sur le commit US-219 lui-même : uniquement
+  `docs/suivi/modules/dashboard-api.md` (compteurs de tests + section
+  « Limites connues »). Fusionné à la main (garde les deux apports :
+  description de `test_messages_api.py` + mention `GET /api/messages*` dans
+  les limites d'auth).
+- Suite complète (`python -m pytest`, `dashboard/api/`) réexécutée après le
+  rebase : **99 passed** (le chiffre affiché dans `dashboard-api.md` avant le
+  rebase, 69/72, datait d'avant la fusion de plusieurs PR indépendantes sur
+  `main` entre-temps) — mis à jour dans la fiche module.
+- `git push --force-with-lease` sur `feat/US-219-web-timeline` : PR #100
+  passe à `mergeable: MERGEABLE`.
+
+### Écart / point d'attention
+- Environnement de test local sans `uv` : dépendances installées via
+  `pip install -e ".[dev]"` (système Python 3.13) pour pouvoir exécuter la
+  suite après résolution des conflits — pas la méthode habituelle du projet
+  (`uv run pytest`), mais résultat équivalent (mêmes fichiers, mêmes tests).
 
 ## 2026-09-28 — US-224 : corrections suite à la revue de la PR #97
 
