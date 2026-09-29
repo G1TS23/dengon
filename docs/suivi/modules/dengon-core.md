@@ -2,7 +2,7 @@
 
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
-**Dernière mise à jour :** 2026-09-29 (US-306 : ANNOUNCE de lien, accusés émis)
+**Dernière mise à jour :** 2026-09-29 (US-306 : ANNOUNCE de lien, accusés émis ; revue PR #111 : `peerID` prouvé par le handshake)
 **État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::inventory` (US-210) + `sync::courier` (US-212) + `observability` (US-208) + `relay`, codec `ANNOUNCE`, `Ledger::resume` (US-308) + ANNOUNCE de lien, accusés émis (US-306).
 
 ## À quoi ça sert

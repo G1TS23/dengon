@@ -133,6 +133,33 @@ et le mentionner dans l'entrée de journal.
   exercée que par le job CI `firmware` — voir
   `docs/suivi/modules/dengon-core-ffi.md`, section Tests, pour ce qui a
   (et n'a pas) pu être vérifié en local sur ce poste Windows sans `espup`.
+### 2026-09-29 — Le `peerID` d'un lien n'est prouvé qu'à la fin du handshake (US-306, revue PR #111)
+
+- **Prévu :** la doc de `parse_announce` s'appuyait sur « le handshake `XX`
+  qui suit prouvera la possession de la clé » ; `on_peer_connected` liait le
+  lien au `peerID` (`bind_peer`) dès la connexion.
+- **Réel :** ce contrôle n'existait pas : la session était rangée sous le
+  `peerID` fourni par l'appelant sans comparer `remote_static`. Un ANNOUNCE
+  étant signé mais rejouable, un pair à portée pouvait le rejouer et
+  terminer le `XX` avec sa propre clé sous le `peerID` d'un tiers.
+  Corrigé : `Node::finish_handshake` refuse la session si
+  `peer_id_of(remote_static) != peerID` ou si `remote_static` diffère de la
+  clé du contact connu ; `bind_peer` n'a lieu qu'à ce moment-là.
+- **Conséquence :** tests `handshake_usurpant_un_peer_id_inconnu_est_rejete`
+  (échoue sans le contrôle sur le `peerID`) et
+  `handshake_avec_une_autre_cle_sous_le_peer_id_d_un_tiers_est_rejete`
+  (contact connu). L'anti-inondation compte par lien jusqu'à la preuve.
+- **Reste ouvert (déni de service) :** `Maillage` ignore un 2ᵉ lien vers un
+  pair déjà relié, donc un lien fantôme ou rejoué occupe la place jusqu'à
+  son `PeerDisconnected`. Le remplacer « si la session n'est pas établie »
+  demande un état de session que le `.udl` v1 n'expose pas, et un
+  remplacement systématique casserait le cas légitime des deux rôles GATT.
+  À traiter avec l'US-312. `pending_acks` est borné par pair mais pas en
+  nombre de pairs : idem. Une conversation ouverte par `add_contact` restera
+  orpheline si une US de suppression de contact ne la retire pas.
+
+---
+
 ### 2026-09-29 — `add_contact` ouvre la conversation (US-306, trouvé sur téléphones)
 
 - **Prévu :** `api::Node` (US-301) ne crée une conversation qu'au premier

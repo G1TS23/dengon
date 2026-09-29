@@ -356,6 +356,29 @@ $ essai hôte jetable : journal via l'API C, redémarrage par l'ancre, export
   reste non prouvée.
 - L'essai « un message traverse le relais » n'est démontré qu'en Rust
   (`relay::tests::un_message_traverse_deux_relais`, téléphones simulés).
+## 2026-09-29 — US-306 : corrections de la revue de la PR #111
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `crates/dengon-core/src/api.rs` ; `docs/suivi/`.
+**Lot :** US-306, PR #111.
+
+- Rebase de la branche sur `main` après le merge (squash) de #109 : les 5
+  commits US-302 écartés (`git rebase --onto origin/main b09a00f`), conflits
+  résolus dans `DengonApplication.kt`, `ConversationsViewModel.kt` et les
+  fiches `android-app` / `dengon-ffi` (corrections de #109 conservées).
+- **Bloquant corrigé :** `finish_handshake` vérifie
+  `peer_id_of(remote_static) == peerID` et la clé du contact ; `bind_peer`
+  déplacé après la preuve. Deux tests négatifs ; le test « peerID inconnu »
+  a été vu échouer avec le contrôle désactivé (le test « contact connu »
+  passe aussi sans, la clé du contact suffisant — attendu).
+- Non corrigé, consigné dans `03-ecarts-conception.md` : squat du lien par
+  ANNOUNCE rejoué (US-312), `pending_acks` non borné en nombre de pairs,
+  conversation orpheline après suppression de contact.
+- `cargo test --workspace` vert (349 tests `dengon-core`), `clippy -D
+  warnings` vert. Kotlin non rejoué localement, aucun code Kotlin modifié en
+  dehors de la résolution de conflits.
+- Note : `cargo fmt --all` réécrit les fins de ligne de tout le dépôt sur ce
+  poste Windows ; les autres fichiers ont été laissés tels quels.
 
 ---
 

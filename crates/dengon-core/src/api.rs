@@ -488,9 +488,9 @@ impl Node {
         R: rand_core::RngCore + rand_core::CryptoRng + Send + Sync + 'static,
     {
         self.router.link_up(peer_id);
-        // Le lien EST le pair (voir la doc de module) : authentifié tout de
-        // suite, l'anti-inondation compte par `peerID` dès la connexion.
-        self.router.bind_peer(peer_id, peer_id, now.mono_ms);
+        // Le lien n'est **pas** encore authentifié : le `peerID` vient de
+        // l'ANNOUNCE, rejouable. `bind_peer` attend la fin du handshake
+        // (`finish_handshake`) ; d'ici là l'anti-inondation compte par lien.
 
         let initiator = self.peer_id < peer_id;
         let handshake_result = if initiator {
@@ -859,11 +859,7 @@ impl Node {
             let Some(PeerCrypto::Handshaking(handshake)) = peer.crypto.take() else {
                 unreachable!("vérifié juste au-dessus")
             };
-            if let Ok(session) = handshake.into_session() {
-                self.peers.entry(from).or_default().crypto = Some(PeerCrypto::Established(session));
-                self.redeliver_pending_envelopes(from, now.wall_ms);
-                self.flush_pending_acks(from, now.wall_ms);
-            }
+            self.finish_handshake(from, *handshake, now);
             return;
         }
         // Pas fini après cette lecture : on répond (message 2 côté répondeur,
@@ -888,14 +884,42 @@ impl Node {
             if let Some(PeerCrypto::Handshaking(handshake)) =
                 self.peers.get_mut(&from).and_then(|p| p.crypto.take())
             {
-                if let Ok(session) = handshake.into_session() {
-                    self.peers.entry(from).or_default().crypto =
-                        Some(PeerCrypto::Established(session));
-                    self.redeliver_pending_envelopes(from, now.wall_ms);
-                    self.flush_pending_acks(from, now.wall_ms);
-                }
+                self.finish_handshake(from, *handshake, now);
             }
         }
+    }
+
+    /// Range la session issue d'un handshake `XX` terminé — **si** la clé
+    /// statique prouvée par le handshake est bien celle du `peerID` `from`.
+    ///
+    /// Le `peerID` d'un lien vient de l'appelant (ANNOUNCE, rejouable) : seul
+    /// le handshake prouve une possession de clé. On exige donc
+    /// `peer_id_of(remote_static) == from` et, si le contact est connu,
+    /// `remote_static == pub_static` du contact. Sinon la session est jetée
+    /// (revue PR #111) : un pair qui joue un `XX` avec sa propre clé sous le
+    /// `peerID` d'un tiers ne reçoit ni message ni accusé.
+    fn finish_handshake(&mut self, from: PeerId, handshake: Handshake, now: RoutingNow) {
+        let Ok(session) = handshake.into_session() else {
+            return;
+        };
+        let remote = session.remote_static();
+        if identity::keys::peer_id_of(&remote) != from {
+            return;
+        }
+        let peer = self.peers.entry(from).or_default();
+        if peer
+            .identity
+            .as_ref()
+            .is_some_and(|contact| contact.pub_static() != remote)
+        {
+            return;
+        }
+        peer.crypto = Some(PeerCrypto::Established(session));
+        // Clé prouvée : le lien EST bien ce pair, l'anti-inondation compte
+        // désormais par `peerID`.
+        self.router.bind_peer(from, from, now.mono_ms);
+        self.redeliver_pending_envelopes(from, now.wall_ms);
+        self.flush_pending_acks(from, now.wall_ms);
     }
 
     fn handle_session_ciphertext(&mut self, from: PeerId, ciphertext: &[u8], now: RoutingNow) {
@@ -1707,6 +1731,62 @@ mod tests {
         assert_eq!(
             statut_de(&mut alice, msg_uuid),
             Some(MessageStatus::Delivered)
+        );
+    }
+
+    #[test]
+    fn handshake_avec_une_autre_cle_sous_le_peer_id_d_un_tiers_est_rejete() {
+        usurpation_de_peer_id_rejetee(true);
+    }
+
+    #[test]
+    fn handshake_usurpant_un_peer_id_inconnu_est_rejete() {
+        // Sans contact connu, seul `peer_id_of(remote_static) == peerID` protège.
+        usurpation_de_peer_id_rejetee(false);
+    }
+
+    /// Revue PR #111 : mallory rejoue l'ANNOUNCE de bob (peerID de bob sur
+    /// le lien) mais joue le `XX` avec sa propre clé statique. Mallory est
+    /// initiatrice ; alice (répondeuse, car `bob < alice`) doit refuser de
+    /// ranger la session sous bob.
+    fn usurpation_de_peer_id_rejetee(bob_est_contact: bool) {
+        let mut alice = noeud("alice", 1);
+        let bob = (2..200)
+            .map(|seed| noeud("bob", seed))
+            .find(|b| b.peer_id() < alice.peer_id())
+            .unwrap();
+        let mallory = noeud("mallory", 300);
+        if bob_est_contact {
+            alice.add_contact(bob.public_identity());
+        }
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(70));
+
+        let mut hs = Handshake::initiator(mallory.identity.static_keypair(), rng(71)).unwrap();
+        let vers_alice = |hs: &mut Handshake, alice: &mut Node| {
+            let msg = hs.write_message(&[]).unwrap();
+            let paquet = mallory
+                .encode_unsigned(PacketType::NoiseHs, alice.peer_id(), T0, msg)
+                .unwrap();
+            // Le lien d'alice porte le peerID usurpé de bob.
+            alice.on_bytes_received(bob.peer_id(), &paquet, now(T0));
+        };
+        vers_alice(&mut hs, &mut alice);
+        let reponses = alice.take_outgoing();
+        assert_eq!(reponses.len(), 1, "alice répond au message 1");
+        let paquet = codec::decode(&reponses[0].1).unwrap();
+        hs.read_message(&paquet.payload).unwrap();
+        vers_alice(&mut hs, &mut alice);
+        assert!(hs.is_finished(), "le handshake de mallory va au bout");
+
+        assert!(
+            !matches!(
+                alice
+                    .peers
+                    .get(&bob.peer_id())
+                    .and_then(|p| p.crypto.as_ref()),
+                Some(PeerCrypto::Established(_))
+            ),
+            "aucune session ne doit être rangée sous le peerID de bob"
         );
     }
 
