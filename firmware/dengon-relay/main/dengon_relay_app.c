@@ -227,9 +227,27 @@ courier_task(void *arg)
     }
 }
 
+/* Écrit un lot d'entrées consécutives puis le curseur, recalculé depuis la
+   DERNIÈRE entrée du lot (à l'offset `last`) : seq + 1, entry_hash. */
+static void
+persister_lot(const uint8_t *lot, size_t used, size_t last)
+{
+    const uint8_t *e   = lot + last;
+    uint64_t       seq = 0;
+
+    for (int i = 0; i < 8; i++) {
+        seq = (seq << 8) | e[i];
+    }
+    /* entry_hash : 32 octets avant la signature (64). */
+    if (dengon_store_append_ledger(lot, used, seq + 1, lot + used - 64 - DENGON_LEDGER_HASH_LEN)
+        != ESP_OK) {
+        ESP_LOGE(TAG, "journal : écriture perdue (%u o)", (unsigned)used);
+    }
+}
+
 /* Écrit dans littlefs toutes les entrées produites, par lots, puis le
-   curseur. L'ancre est recalculée depuis la DERNIÈRE entrée écrite du lot
-   (seq + 1, entry_hash) : le curseur ne devance jamais le fichier. */
+   curseur. L'ancre est recalculée depuis la DERNIÈRE entrée écrite du lot :
+   le curseur ne devance jamais le fichier. */
 static void
 ledger_task(void *arg)
 {
@@ -237,14 +255,16 @@ ledger_task(void *arg)
 
     (void)arg;
     for (;;) {
-        size_t       used = 0;
-        size_t       last = 0;
-        size_t       len  = 0;
-        DengonStatus st   = DENGON_STATUS_OK;
+        bool encore = false;
 
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LEDGER_WAIT_MS));
         do {
-            used = 0;
+            size_t       used   = 0;
+            size_t       last   = 0;
+            size_t       len    = 0;
+            uint8_t     *grande = NULL;
+            DengonStatus st     = DENGON_STATUS_OK;
+
             dengon_relay_app_lock();
             while (used < sizeof(lot)) {
                 st = dengon_relay_pop_ledger(s_relay, lot + used, sizeof(lot) - used, &len);
@@ -254,24 +274,34 @@ ledger_task(void *arg)
                 last = used;
                 used += len;
             }
-            dengon_relay_app_unlock();
-
-            if (used > 0) {
-                const uint8_t *e   = lot + last;
-                uint64_t       seq = 0;
-
-                for (int i = 0; i < 8; i++) {
-                    seq = (seq << 8) | e[i];
-                }
-                /* entry_hash : 32 octets avant la signature (64). */
-                if (dengon_store_append_ledger(lot, used, seq + 1,
-                                               lot + used - 64 - DENGON_LEDGER_HASH_LEN)
-                    != ESP_OK) {
-                    ESP_LOGE(TAG, "journal : écriture perdue (%u o)", (unsigned)used);
+            if (st == DENGON_STATUS_BUFFER_TOO_SMALL && used == 0) {
+                /* Une entrée seule dépasse le lot (name et payload vont
+                   jusqu'à 4 Ko chacun) : tampon dédié, sinon elle resterait
+                   en tête de file et bloquerait toutes les suivantes. */
+                grande = malloc(len);
+                if (grande == NULL) {
+                    ESP_LOGE(TAG, "journal : entrée de %u o en attente, mémoire insuffisante",
+                             (unsigned)len);
+                } else if (dengon_relay_pop_ledger(s_relay, grande, len, &len)
+                           != DENGON_STATUS_OK) {
+                    free(grande);
+                    grande = NULL;
                 }
             }
-            /* Lot plein : il en reste, on recommence sans attendre. */
-        } while (st == DENGON_STATUS_BUFFER_TOO_SMALL && used > 0);
+            dengon_relay_app_unlock();
+
+            if (grande != NULL) {
+                persister_lot(grande, len, 0);
+                free(grande);
+            } else if (used > 0) {
+                persister_lot(lot, used, last);
+            }
+            /* Lot plein (rempli exactement, ou trop petit pour l'entrée
+               suivante) ou grande entrée écrite : il en reste peut-être, on
+               recommence sans attendre le prochain réveil. */
+            encore = grande != NULL
+                     || (used > 0 && (st == DENGON_STATUS_BUFFER_TOO_SMALL || used == sizeof(lot)));
+        } while (encore);
     }
 }
 
