@@ -5,6 +5,7 @@ import android.os.Build
 import android.util.Log
 import com.dengon.app.ffi.DengonNode
 import java.io.File
+import java.io.IOException
 
 /**
  * Nœud dengon de cet appareil (US-302), ouvert sur le vrai `dengon-core`.
@@ -68,15 +69,24 @@ object IdentiteLocale {
         source: SourceCleCoffre,
         surReinitialisation: (Throwable) -> Unit,
     ): ByteArray {
-        if (!source.existe()) File(dossier, COFFRE).delete()
+        if (!source.existe()) supprimerCoffre(dossier)
         return try {
             source.cle()
         } catch (e: CleCoffre.CleIrrecuperable) {
             surReinitialisation(e)
             source.oublier()
-            File(dossier, COFFRE).delete()
+            supprimerCoffre(dossier)
             source.cle()
         }
+    }
+
+    /**
+     * Supprime le coffre illisible. Un échec est remonté : le laisser en
+     * place ferait échouer `DengonNode.open` juste après, sans cause claire.
+     */
+    private fun supprimerCoffre(dossier: File) {
+        val coffre = File(dossier, COFFRE)
+        if (coffre.exists() && !coffre.delete()) throw IOException("coffre illisible non supprimé : $coffre")
     }
 
     /**
