@@ -799,6 +799,78 @@ $ cargo test --workspace --all-features --locked        474 passed, 2 ignored
   tests de `IdentiteLocaleTest`) et le workflow fusionné ne sont vérifiés que
   par le job CI `android` de la PR. Rien testé sur téléphone, en particulier
   pas la perte réelle de la clé du Keystore.
+## 2026-09-29 — Revue de la PR #114 (Oswin) : `seq` non contigu et `msg_log_id` non corrélable, corrigés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/api.rs`.
+**Lot :** réponse à la revue « changements demandés » d'Oswin sur PR #114
+(US-318), avant merge.
+
+### Fait
+- **Bloquant corrigé** : `envelope_seq: u64` nouveau, dédié au `seq` des
+  `Envelope` (`record_observability`), séparé de `obs_seq` (toujours
+  utilisé par `record_ledger`, qui n'émet pas d'`Envelope`). Le `seq` du
+  flux d'`Envelope` d'un nœud est maintenant contigu par construction. Test
+  ajouté : `les_seq_des_envelope_restent_contigus_meme_avec_des_evenements_ledger_seuls`
+  (deux `send_message` de part et d'autre d'un `on_peer_connected` qui ne
+  journalise que dans `ledger`).
+- **Important corrigé** : `msg.queued` hachait `msg_uuid`, alors que
+  `pkt.seen` hache le `msgID` réseau (`compute_msg_id`) — deux
+  `msg_log_id` différents pour le même message. `send_message` recalcule
+  maintenant le `msgID` à partir des octets tout juste encodés (comme le
+  ferait le receveur), avant de le passer à `observability::msg_log_id`.
+  Test ajouté : `msg_queued_et_pkt_seen_partagent_le_meme_msg_log_id`
+  (corrélation croisée alice/bob, pas juste une valeur recalculée dans le
+  test).
+- **Mineur traité par la doc, pas par du code** : `obs_events` reste non
+  bornée — une borne avec éviction silencieuse perdrait des événements
+  d'observabilité, pire que la croissance mémoire. Doc de champ renforcée :
+  avertit explicitement que rien ne la vide encore aujourd'hui (ni
+  `dengon-node`, ni le `.udl`), à surveiller avant l'app Android (US-306).
+- **Tests renforcés** : `recevoir_un_paquet_emet_pkt_seen_meme_rejete_par_le_routeur`
+  vérifie maintenant le payload complet (`type`/`ttl_in`/`size_bucket`/
+  `from_peer`/`rssi`), pas seulement l'enveloppe (`name`/`node_kind`/
+  `node_id`).
+- Petit correctif au passage : un caractère invisible (soft hyphen `\xad`)
+  s'était glissé dans un commentaire de `api.rs` (« bat\xadche » au lieu de
+  « batche ») — corrigé.
+
+### Pourquoi / décisions
+- Compteur séparé plutôt que faire émettre un `Envelope` par
+  `record_ledger` (l'autre option proposée par Oswin) : `record_ledger`
+  journalise des transitions de statut (`queued`→`in_flight`→…) qui ne
+  correspondent à aucun nom d'événement du catalogue `pkt`/`msg`/`peer` —
+  inventer un `Envelope` dessus aurait été plus risqué qu'un compteur
+  dédié.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- PR #114 mise à jour, en attente d'une nouvelle revue d'Oswin.
+- Fiche module mise à jour : `modules/dengon-core.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+385 passed, 2 ignored (10 suites)
+
+$ cargo test --workspace
+473 passed, 2 ignored (31 suites)
+
+$ cargo fmt -p dengon-core -- --check
+(rien, après un premier passage cargo fmt)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+```
+
+---
+
 ## 2026-09-29 — US-318 : câblage `api` → `observability` (`pkt.seen`, `msg.queued`)
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

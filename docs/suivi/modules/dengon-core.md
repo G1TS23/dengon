@@ -536,6 +536,21 @@ encore le codec (US-201).
   dédié, US-308), donc ce nœud ne relaie jamais rien à observer. `node_id`
   (`client-<6 hex>`) et `rssi = None` (transport non possédé par cette
   façade) — écarts consignés dans `03-ecarts-conception.md`.
+- **`seq` des `Envelope` séparé du `seq` de `record_ledger`** (revue de
+  PR #114, Oswin) : les deux méthodes partageaient au départ `obs_seq`, or
+  `record_ledger` n'émet jamais d'`Envelope` — chaque transition de statut
+  journalisée (ex. `mark_handed_off`) consommait un numéro sans laisser de
+  trace côté flux d'événements, créant de faux trous que
+  `integrity.gap` (`docs/powl/08` §8) aurait détectés côté dashboard.
+  `envelope_seq` (dédié, incrémenté uniquement par
+  `record_observability`) est maintenant contigu par construction.
+- **`msg_log_id` de `msg.queued` recalculé depuis le `msgID` réseau, pas
+  `msg_uuid`** (revue de PR #114, Oswin) : `pkt.seen` hache le `msgID`
+  (`compute_msg_id`, sur les octets décodés), `msg.queued` hachait
+  `msg_uuid` (l'identifiant applicatif) — deux `msg_log_id` différents
+  pour le même message, non corrélables côté dashboard. `send_message`
+  décode maintenant ses propres octets fraîchement encodés pour recalculer
+  le même `msgID` que le receveur calculera à la réception.
 - **`sync::inventory` (US-210) : push cadencé sous l'anti-inondation.**
   Le routeur du voisin refuse plus de 20 nouveaux `msgID`/min venant de
   nous ; pousser le manquant d'un bloc en ferait rejeter l'excédent. Chaque
