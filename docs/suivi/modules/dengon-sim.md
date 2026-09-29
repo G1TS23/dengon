@@ -3,7 +3,7 @@
 **Rôle en une phrase :** faire tourner N nœuds dengon sur une seule machine, sans radio, avec un réseau simulé scriptable et **rejouable à l'identique**.
 **Correspond à la conception :** [`docs/synthese/10-benchmarks-mvp-tests.md`](../../synthese/10-benchmarks-mvp-tests.md) §4.3 ; [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §5.
 **Dernière mise à jour :** 2026-09-29
-**État :** partiel — harness, réseau simulé, scénarios et job CI `sim` livrés (US-221) ; **le vrai `dengon-core::api::Node` est câblé** (`NoeudClient`, US-304) pour les scénarios client-à-client (`direct`, `recipient_offline`, `sender_offline`, `tests/scenarios_reel.rs`) ; `multihop`/`partition_merge` attendent un nœud **relais** (`dengon-core::relay::Relay`), pas encore câblé. `Inondation` reste le bouchon des 4 scénarios `.ron` existants.
+**État :** harness, réseau simulé, scénarios `.ron` et job CI `sim` livrés (US-221) ; **les 5 scénarios réels du DoD de l'US-304 sont livrés** avec le vrai `dengon-core` : `direct`/`recipient_offline`/`sender_offline` via `NoeudClient` (`api::Node`, `tests/scenarios_reel.rs`), `multihop`/`partition_merge` via `NoeudRelais` (`relay::Relay`, `tests/scenarios_relais.rs`). `Inondation` reste le bouchon des 4 scénarios `.ron` existants (inchangés).
 
 ## À quoi ça sert
 
@@ -27,16 +27,19 @@ dengon-sim/
                     files datées, trace) + SimTransport (impl Transport)
     harness.rs    — Simulation (N nœuds), trait Comportement, Inondation
     noeud_client.rs — NoeudClient : le vrai api::Node en Comportement (US-304)
+    noeud_relais.rs — NoeudRelais : le vrai relay::Relay en Comportement (US-304)
     scenario.rs   — scénarios RON : lecture, validation, exécution, attendus
     cli.rs        — logique de la commande dengon-sim (testée)
     main.rs       — point d'entrée, délègue à cli
   scenarios/      — direct, multihop, partition_merge, lossy_mesh (.ron,
                     Inondation — pas les scénarios réels, voir tests/)
   tests/
-    conformite_sim.rs — suite de conformité Transport (US-105) sur SimTransport
-    scenarios.rs      — scénarios .ron livrés : réussis + déterministes
-    scenarios_reel.rs — US-304 : direct/recipient_offline/sender_offline
-                        avec NoeudClient (vrai dengon-core, pas Inondation)
+    conformite_sim.rs   — suite de conformité Transport (US-105) sur SimTransport
+    scenarios.rs        — scénarios .ron livrés : réussis + déterministes
+    scenarios_reel.rs   — US-304 : direct/recipient_offline/sender_offline
+                          avec NoeudClient (vrai dengon-core, pas Inondation)
+    scenarios_relais.rs — US-304 : multihop/partition_merge avec NoeudRelais
+                          (vrai relay::Relay — NoeudClient ne relaie jamais)
 ```
 
 ## Concepts / types importants
@@ -52,6 +55,8 @@ dengon-sim/
 | `Inondation` | `src/harness.rs` | Relais de démonstration : dédup par contenu, re-diffusion, et poussée de tout ce qui est connu à chaque nouvelle connexion (convergence après partition). |
 | `NoeudClient` | `src/noeud_client.rs` | Le vrai `dengon-core::api::Node` en `Comportement` (US-304) : `ANNOUNCE` à l'ouverture d'un lien pour associer `LinkId`↔`PeerId` (le harness ne le donne pas d'avance — même limite que le vrai Bluetooth), Noise `XX`/enveloppe, outbox rejouée à la reconnexion. |
 | `charge_adressee` | `src/noeud_client.rs` | Convention locale (pas une extension du format `.ron`) : `PeerId` destinataire (8 o) ‖ texte UTF-8, décodée par `NoeudClient::emettre`. |
+| `NoeudRelais` | `src/noeud_relais.rs` | Le vrai `dengon-core::relay::Relay<LinkId>` en `Comportement` (US-304) : découverte de pair et cache d'inventaire déjà gérés en interne par `Relay` (contrairement à `NoeudClient`, pas d'ANNOUNCE à réimplémenter côté simulateur). Observable via `ctx.livrer(MARQUEUR_CACHE\|MARQUEUR_RELAYE)`. |
+| `paquet_diffuse` | `src/noeud_relais.rs` | Construit un paquet signé (`SealedEnvelope`, `RELAY_OK`) à injecter via `Simulation::emettre` — un « tiers » qui dépose un paquet sans être lui-même modélisé en nœud. |
 | `Scenario`, `Rapport` | `src/scenario.rs` | Scénario RON validé (indices, pertes, pas) → exécution → empreinte + attendus non tenus. |
 | `Alea` | `src/alea.rs` | SplitMix64 à graine fixe (vecteur de référence testé). |
 
@@ -72,14 +77,16 @@ dengon-sim/
 ## Dépendances
 
 - **Internes :** `dengon-ble` (contrat `Transport`, suite de conformité),
-  `dengon-core` — **le vrai nœud** (`api::Node`, US-304), plus le squelette
-  de lien (`PROTOCOL_VERSION`, test `le_coeur_est_reellement_lie`).
+  `dengon-core` — **les deux vrais nœuds** (`api::Node` et `relay::Relay`,
+  US-304), plus le squelette de lien (`PROTOCOL_VERSION`, test
+  `le_coeur_est_reellement_lie`).
 - **Externes (crates) :** `serde` (derive) + `ron` 0.12 — lecture des
   scénarios `.ron` (réseau/`Inondation` seulement, l'aléa réseau reste un
   SplitMix64 maison, sans dépendance). `rand_core` + `rand_chacha` (US-304,
-  `noeud_client.rs` seulement) : `dengon-core::api::Node` exige une RNG pour
-  les poignées de main Noise et les UUID de message — `ChaCha20Rng` à
-  graine fixe, jamais `OsRng`, pour rester déterministe.
+  `noeud_client.rs`/`noeud_relais.rs`) : `dengon-core::api::Node` et
+  `relay::Relay` exigent tous deux une RNG (poignées de main Noise, UUID de
+  message, secrets/signatures) — `ChaCha20Rng` à graine fixe, jamais
+  `OsRng`, pour rester déterministe.
 
 ## Décisions d'implémentation
 
@@ -122,11 +129,48 @@ dengon-sim/
   `send_message` exige un contact connu ou une session ; un `PeerId` jamais
   rencontré n'est jamais un correspondant valable, en simulation comme en
   vrai.
-- **`multihop`/`partition_merge` restent hors périmètre de `NoeudClient`**
-  (US-304, écart consigné) : `api::Node` n'appelle jamais `Router::poll_due`
-  (elle ne relaie jamais, voir sa doc de module) — un scénario à 3+ sauts
-  réels a besoin d'un nœud **relais** (`dengon-core::relay::Relay`), pas
-  encore câblé en `Comportement`.
+- **`multihop`/`partition_merge` utilisent `NoeudRelais`, pas
+  `NoeudClient`** (US-304) : `api::Node` n'appelle jamais `Router::poll_due`
+  (elle ne relaie jamais, voir sa doc de module) — même distinction que
+  dans le vrai système, téléphone contre relais dédié.
+- **`Relay` gère lui-même la découverte de pair et le cache d'inventaire**
+  (contrairement à `NoeudClient`) : `NoeudRelais` n'a donc besoin d'aucune
+  logique d'ANNOUNCE côté simulateur — `Relay::link_up`/`on_frame` s'en
+  chargent en interne, génériques sur `L` (le `LinkId` du simulateur, tel
+  quel).
+- **Horloge murale décalée de `WALL_CLOCK_MIN_MS`** (US-304, piège
+  rencontré) : `Relay` refuse toute décision de routage tant que son
+  horloge murale n'est pas **réaliste** (≥ 2024-01-01,
+  `Relay::clock`/`WALL_CLOCK_MIN_MS`) — un ESP32 sans Wi-Fi l'apprend du
+  premier `ANNOUNCE` reçu au-dessus de ce seuil. L'horloge virtuelle du
+  simulateur part de zéro, bien en dessous ; sans compensation, aucun
+  relais ne prendrait jamais de décision (tout resterait `clock_unknown`).
+  `NoeudRelais::maintenant` ajoute donc `WALL_CLOCK_MIN_MS` à l'horloge
+  murale transmise (la monotone reste celle du simulateur telle quelle) —
+  équivalent d'un relais qui a déjà une horloge fiable au démarrage.
+- **Injection par paquet complet déjà signé (`paquet_diffuse`), pas par
+  charge applicative** (US-304) : `Relay` n'a pas d'application — rien à
+  composer. `NoeudRelais::emettre` diffuse `charge` telle quelle, comme un
+  tiers non modélisé (téléphone hors de portée avant/après) qui vient de la
+  déposer.
+- **`SealedEnvelope`, pas `LogAttest`, pour observer `MARQUEUR_CACHE`**
+  (US-304, piège rencontré en écrivant les scénarios) :
+  `sync::inventory::cacheable` ne met en cache que
+  `SealedEnvelope`/`NoiseMsg`/`Ack` — `Announce`/`LogAttest`, même bien
+  relayés (`MARQUEUR_RELAYE` sort), ne laissent **jamais** de trace dans le
+  cache d'inventaire.
+- **Observer un relais via `ctx.livrer` détourné, pas une nouvelle API** :
+  `Simulation` ne rend aucun accès à un `Comportement` une fois ajouté —
+  `NoeudRelais` y pousse `MARQUEUR_CACHE`/`MARQUEUR_RELAYE` à chaque
+  variation constatée de `Relay::cache_len()`/`RelayStats::relayed`, seul
+  canal d'observation externe disponible.
+- **Après une partition, la reprise passe par la réconciliation
+  d'inventaire, pas par un nouvel essai du relais jitté** (US-304,
+  `partition_merge`) : un relais programmé dont l'échéance passe **sans
+  cible** (lien coupé) est définitivement perdu (`relays_without_target`,
+  pas retenté) — c'est `sync::inventory` (déjà en cache, poussé au nouveau
+  voisin après reconnexion) qui fait traverser le paquet une fois la
+  jonction reformée, pas une deuxième tentative de `Router::poll_due`.
 - **Logique CLI dans `cli.rs`** (testée) ; `main.rs` ne fait que déléguer.
 
 ## Tests
@@ -156,33 +200,46 @@ dengon-sim/
   immédiate, lien déjà ouvert), `recipient_offline` (destinataire jamais
   connecté au moment de l'envoi → rien n'arrive → remise automatique dès la
   connexion), `sender_offline` (émetteur déconnecté puis reconnecté →
-  chemin enveloppe, remise à la reconnexion). Rejoués 3× de suite en local,
-  stables.
-- Commande : `cargo test -p dengon-sim` → **34 passés** (28 unitaires/scénarios
-  `.ron` + 1 conformité + 2 liens dengon-core + 3 scénarios réels),
-  2026-09-29.
+  chemin enveloppe, remise à la reconnexion).
+- `src/noeud_relais.rs` — 4 : identités distinctes/identiques selon la
+  graine de secrets, `paquet_diffuse` se décode et se vérifie, signature
+  déterministe à graine fixe.
+- `tests/scenarios_relais.rs` — 2 (US-304, `NoeudRelais`) : `multihop`
+  (chaîne à 3 relais, le maillon du milieu reçoit **puis** relaie, le
+  dernier reçoit sans relayer plus loin faute de cible), `partition_merge`
+  (chaîne à 4 relais partitionnée en deux, confinement vérifié pendant la
+  partition, traversée complète vérifiée après réunion via la
+  réconciliation d'inventaire).
+- Les 5 scénarios réels (`scenarios_reel.rs` + `scenarios_relais.rs`)
+  rejoués 3× de suite en local : stables.
+- Commande : `cargo test -p dengon-sim` → **40 passés** (7 suites : lib +
+  `conformite_sim` + `scenarios` + `scenarios_reel` + `scenarios_relais` +
+  intégration `dengon-core`), 2026-09-29.
 - Couverture (`cargo llvm-cov -p dengon-sim`, local) : **96,4 %** des lignes
-  de `dengon-sim` ; `noeud_client.rs` 92,7 % (nouveau, US-304), `reseau.rs`
-  97,1 %, `harness.rs` 98,0 %, `scenario.rs` 96,8 %, `cli.rs` 99 %,
-  `alea.rs` 100 % ; `main.rs` 0 % (8 lignes, délègue à `cli`).
+  de `dengon-sim` ; `noeud_client.rs` 92,7 %, `noeud_relais.rs` 97,5 %
+  (les deux, US-304), `reseau.rs` 97,1 %, `harness.rs` 98,0 %, `scenario.rs`
+  96,8 %, `cli.rs` 99 %, `alea.rs` 100 % ; `main.rs` 0 % (8 lignes, délègue
+  à `cli`).
 
 ## Limites connues / TODO
 
-- **`multihop`/`partition_merge` avec de vrais nœuds pas encore livrés**
-  (US-304) : `NoeudClient` (façade client, `api::Node`) n'appelle jamais
-  `Router::poll_due` — elle ne relaie jamais un paquet, par conception,
-  voir la doc de module d'`api.rs`. Un scénario à 3+ sauts réels a besoin
-  d'un nœud **relais** (`dengon-core::relay::Relay`, celui du firmware
-  ESP32) câblé en `Comportement`, pas encore fait — suite prévue dans une
-  session séparée (voir `03-ecarts-conception.md`).
 - **Statuts de message pas exposés côté harness** : les assertions des
-  scénarios réels ne portent que sur la **livraison** (`sim.livres`, même
-  mécanisme que `Inondation`), pas sur les statuts intermédiaires (`Parti`,
-  `Distribué`…) — `Simulation` ne rend aucun accès aux `Comportement`
-  ajoutés une fois qu'ils lui appartiennent (`ajouter_noeud` en prend
-  possession). Suffisant pour ce que `direct`/`recipient_offline`/
-  `sender_offline` doivent démontrer ; à revoir si un futur scénario a
-  besoin de plus.
+  scénarios réels ne portent que sur la **livraison**/le **relais observé**
+  (`sim.livres`, même mécanisme que `Inondation`), pas sur les statuts
+  intermédiaires côté client (`Parti`, `Distribué`…) ni les compteurs
+  détaillés côté relais (`RelayStats` complet, `envelopes_held`…) —
+  `Simulation` ne rend aucun accès aux `Comportement` ajoutés une fois
+  qu'ils lui appartiennent (`ajouter_noeud` en prend possession).
+  Suffisant pour les 5 scénarios du DoD de l'US-304 ; à revoir si un futur
+  scénario a besoin de plus.
+- **Aucun scénario ne mélange `NoeudClient` et `NoeudRelais`** : un vrai
+  téléphone qui traverse un vrai relais (bout en bout, chiffré/déchiffré
+  aux deux extrémités) n'est pas démontré — `api::Node` ne pose jamais
+  `Flags::RELAY_OK` sur ses paquets de session (écart déjà documenté côté
+  `api.rs`), ce qui aurait exigé d'y toucher pour ce scénario précis.
+  `multihop`/`partition_merge` démontrent le maillage relais-à-relais avec
+  un paquet injecté directement (`paquet_diffuse`), pas une conversation
+  client réelle bout en bout.
 - Modèle réseau **sans bande passante, churn ni dérive d'horloge** (prévus
   par §4.3) : latence, gigue, perte et partition seulement — ce que demande
   US-221.

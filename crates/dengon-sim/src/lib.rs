@@ -18,7 +18,10 @@
 //! - [`scenario`] — scénarios `scenarios/*.ron` rejouables (avec
 //!   [`Inondation`]), avec attendus. Les scénarios réels (US-304,
 //!   `NoeudClient`) sont écrits en Rust : `tests/scenarios_reel.rs`.
-//! - [`noeud_client`] — [`noeud_client::NoeudClient`], le nœud réel.
+//! - [`noeud_client`] — [`noeud_client::NoeudClient`], le nœud client réel.
+//! - [`noeud_relais`] — [`noeud_relais::NoeudRelais`], le nœud relais réel
+//!   (US-304, 2/2) : `multihop`/`partition_merge` en dépendent, `api::Node`
+//!   ne relaie jamais.
 //! - [`alea`] — SplitMix64, le seul hasard du simulateur.
 //! - [`cli`] — la ligne de commande `dengon-sim`.
 //!
@@ -33,6 +36,7 @@ pub mod alea;
 pub mod cli;
 pub mod harness;
 pub mod noeud_client;
+pub mod noeud_relais;
 pub mod reseau;
 pub mod scenario;
 

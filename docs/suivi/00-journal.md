@@ -10,6 +10,86 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-304 (2/2) : `NoeudRelais`, le vrai `relay::Relay` — les 5 scénarios sont livrés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-sim/{src/{lib.rs,noeud_relais.rs},tests/scenarios_relais.rs}`,
+`docs/suivi/`.
+**Lot :** US-304 (issue #42), 2ᵉ moitié — complète la 1ʳᵉ (`NoeudClient`,
+entrée précédente du même jour).
+
+### Fait
+- `NoeudRelais` (`src/noeud_relais.rs`) : `dengon-core::relay::Relay<LinkId>`
+  câblé en `Comportement`. Plus simple que `NoeudClient` : `Relay` gère
+  lui-même la découverte de pair et le cache d'inventaire en interne
+  (`link_up`/`on_frame`, génériques sur `L`) — pas d'ANNOUNCE à
+  réimplémenter côté simulateur.
+- 2 scénarios réels (`tests/scenarios_relais.rs`) : `multihop` (chaîne à 3
+  relais, un paquet injecté au premier maillon est **relayé** par le
+  second, **reçu** par le troisième, qui ne le relaie pas plus loin faute
+  de cible), `partition_merge` (chaîne à 4 relais partitionnée en deux,
+  confinement vérifié, traversée complète vérifiée après réunion).
+- Observabilité via `ctx.livrer` détourné (`MARQUEUR_CACHE`/
+  `MARQUEUR_RELAYE`), puisque `Simulation` ne rend aucun accès à un
+  `Comportement` une fois ajouté.
+- `paquet_diffuse` : construit un paquet signé (`SealedEnvelope`,
+  `RELAY_OK`) à injecter — un tiers non modélisé qui vient de le déposer.
+
+### Pourquoi / décisions
+- **Continué dans la foulée plutôt que de s'arrêter** (l'entrée précédente
+  du jour anticipait une session séparée, par prudence avant exploration) :
+  une fois `Relay` exploré, le câblage s'est avéré plus simple que prévu.
+- **Deux pièges rencontrés et corrigés avant de finaliser, pas après coup**
+  (détail complet dans `modules/dengon-sim.md`) :
+  1. `Relay` refuse toute décision de routage sous `WALL_CLOCK_MIN_MS`
+     (2024-01-01) — l'horloge virtuelle du simulateur part de zéro.
+     Compensé en décalant l'horloge murale transmise, pas la monotone.
+  2. Le premier essai injectait un `LogAttest` : bien relayé
+     (`MARQUEUR_RELAYE` sortait), mais jamais mis en cache
+     (`MARQUEUR_CACHE` absent) — `sync::inventory::cacheable` ne retient
+     que `SealedEnvelope`/`NoiseMsg`/`Ack`. Corrigé en passant à
+     `SealedEnvelope`.
+- **`multihop`/`partition_merge` restent relais-à-relais**, pas un
+  téléphone traversant un relais (discuté et confirmé avec l'utilisateur
+  avant de commencer cette moitié) : `api::Node` ne pose jamais
+  `Flags::RELAY_OK` (écart déjà documenté côté `api.rs`) — y toucher
+  aurait été un changement de `dengon-core`, hors périmètre choisi.
+
+### Écarts vs conception
+- Consigné : aucun scénario ne mélange `NoeudClient`/`NoeudRelais` (voir
+  ci-dessus, entrée `03-ecarts-conception.md` du jour, complétée).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md` (les deux pièges ci-dessus sont
+  déjà détaillés dans la fiche module, suffisant).
+
+### État après cette session
+- **Les 5 scénarios du DoD de l'issue #42 sont réels, vérifiés, stables**
+  (rejoués 3× de suite). Reste à faire avant de fermer l'issue : merger
+  cette PR et la 1ʳᵉ moitié (#130).
+- Fiche module mise à jour : `modules/dengon-sim.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-sim --test scenarios_relais
+2 passed (×3, pour la stabilité)
+
+$ cargo test --workspace
+570 passed, 2 ignored (36 suites)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo fmt --all -- --check
+(rien)
+
+$ cargo llvm-cov -p dengon-sim --summary-only
+TOTAL 96.41 % régions / 96.52 % lignes ; noeud_relais.rs 97.46 % lignes
+```
+
+---
+
 ## 2026-09-29 — US-304 (1/2) : `NoeudClient`, le vrai `dengon-core::api::Node` dans `dengon-sim`
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

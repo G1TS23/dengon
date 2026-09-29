@@ -2701,3 +2701,34 @@ _(aucun écart pour l'instant)_
 - **Doc de conception mise à jour ?** non — `synthese/10` §4.3/§4.4 décrit
   déjà les 5 scénarios comme la cible ; ce fichier documente l'ordre de
   livraison, pas un changement de cible.
+
+---
+
+### 2026-09-29 — US-304 complétée : les 5 scénarios réels sont livrés
+
+- **Prévu (entrée précédente, même jour) :** `multihop`/`partition_merge`
+  restaient sur `Inondation`, en attente d'un nœud relais dans une session
+  séparée.
+- **Réel :** livré dans la foulée — `NoeudRelais`
+  (`crates/dengon-sim/src/noeud_relais.rs`) câble le vrai
+  `dengon-core::relay::Relay<LinkId>`, avec deux pièges rencontrés et
+  documentés dans `modules/dengon-sim.md` (horloge murale à décaler de
+  `WALL_CLOCK_MIN_MS`, `SealedEnvelope` requis — pas `LogAttest` — pour que
+  `sync::inventory::cacheable` mette effectivement le paquet en cache).
+  Les 5 scénarios du DoD de l'issue #42 (`direct`, `multihop`,
+  `recipient_offline`, `sender_offline`, `partition_merge`) sont tous
+  réels et vérifiés.
+- **Raison :** l'écart précédent anticipait une session séparée par
+  prudence (taille inconnue avant exploration) ; une fois `Relay` exploré,
+  le câblage s'est avéré plus simple que `NoeudClient` (`Relay` gère lui-
+  même la découverte de pair, pas d'ANNOUNCE à réimplémenter côté
+  simulateur) — la session a continué plutôt que de s'arrêter
+  artificiellement.
+- **Conséquences :** `multihop`/`partition_merge` démontrent un maillage
+  **relais-à-relais** (paquet injecté directement via `paquet_diffuse`,
+  pas une conversation client chiffrée bout en bout) — aucun scénario ne
+  mélange `NoeudClient` et `NoeudRelais` : `api::Node` ne pose jamais
+  `Flags::RELAY_OK` sur ses paquets de session (écart déjà documenté côté
+  `api.rs`), ce qui aurait exigé d'y toucher pour un scénario client → relais
+  → client réel. Hors périmètre de cette US.
+- **Doc de conception mise à jour ?** non.
