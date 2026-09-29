@@ -589,6 +589,143 @@ laissé ouvert par la PR #87 (`Refs #28`, aucun appareil sur le poste).
 
 ### Écarts vs conception
 - Clé du coffre perdue → identité réinitialisée : reporté dans
+## 2026-09-29 — US-303 : correctifs de la revue de la PR #116
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `crates/dengon-node/src/session.rs`, `crates/dengon-ble/src/btleplug_radio.rs`.
+
+### Fait
+- `Session::vider_sortie` : une trame au-delà de `ATTENTE_MAX` (64) est toujours abandonnée, mais **loguée** (`eprintln!`), comme le chemin d'échec d'envoi.
+- `btleplug_radio::vivre` : connexion, découverte GATT, `notifications()` et `subscribe()` sont sous un `tokio::time::timeout` de 20 s (`DELAI_ETABLISSEMENT`). À l'expiration : message, `None` → `tache_lien` déconnecte et libère l'identifiant, le périphérique sera retenté.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all
+$ cargo clippy -p dengon-node -p dengon-ble --all-targets -- -D warnings   # OK, avec et sans --features btleplug
+$ cargo test -p dengon-ble -p dengon-node                                    # tout vert
+```
+- **Non vérifié :** le timeout n'a pas de test (il faudrait une vraie radio bloquante) ; toujours pas d'essai BLE réel après correctif. La file pleine reste une perte (pas de rétro-pression) : consignée comme limite du banc de test.
+
+---
+
+
+## 2026-09-29 — US-303 : essai réel du transport `btleplug` contre un téléphone
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** aucun code ; vérification de `BtleplugRadio` (PC Windows, adaptateur MediaTek) contre l'app Android (écran de debug du transport, US-213).
+
+### Fait
+- Premier essai : `HRESULT 0x800710DF` (« Le périphérique n'est pas prêt ») tant que le Bluetooth Windows était désactivé ; erreur propre, exit 1.
+- Bluetooth du PC activé, app Android en annonce : `dengon-node run --peer <QR factice> --duree 40` affiche « en écoute du pair … » puis **« lien ouvert »**. Scan filtré sur le service, connexion, découverte, abonnement à `CHAR_TX` : validés sur matériel.
+
+### Vérification (commandes réellement exécutées)
+```
+$ dengon-node run --name alice --db a.db --peer <QR de bob> --duree 40
+en écoute du pair h2csfte5rxb7i (rôle central : le pair doit annoncer)…
+lien ouvert
+exit=0
+```
+- **Non vérifié :** échange de message (l'app n'a pas le vrai cœur, US-306) ; réception d'une trame de battement (aucune ligne affichée : le nœud ne montre pas les octets bruts, et la fenêtre de 40 s pouvait précéder le battement de 30 s) ; côté téléphone, la connexion entrante n'a pas été confirmée sur son écran ; Linux/BlueZ ; déconnexion brutale réelle.
+
+---
+
+
+## 2026-09-29 — US-303 : nœud CLI `dengon-node` et transport `btleplug` (central)
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `crates/dengon-ble/src/{central,btleplug_radio,lib}.rs`,
+`crates/dengon-ble/tests/conformite_central.rs`, `crates/dengon-node/src/*`,
+`Cargo.toml`, `.github/workflows/core.yml`.
+**Lot :** Sprint S3 (US-303, `Should`), branche `feat/US-303-dengon-node-btleplug`.
+
+### Fait
+- `dengon-ble::central` : `CentralTransport<R: CentralRadio>` implémente
+  `Transport` (LinkId monotone, quota `max_connections`, trames fantômes
+  jetées, `send` après coupure non pollée → `UnknownPeer`). La radio est un
+  petit trait (`CentralRadio`) : la logique de liens est testable sans BLE.
+- `dengon-ble::btleplug_radio` (feature `btleplug`) : `BtleplugRadio` — fil
+  dédié + `tokio`, scan filtré sur `SERVICE_UUID`, connexion, abonnement à
+  `CHAR_TX`, écriture sans réponse sur `CHAR_RX`. `BtleplugTransport` = alias.
+- `dengon-node` : `identity` (peerID + QR) et `run --peer <QR> --send … --duree N`.
+  `Session<T: Transport>` (nœud ⇄ transport) ; `etat` : clé, coffre, base
+  SQLite à côté de `--db`.
+- CI `core` : installation de `libdbus-1-dev` (btleplug compile `dbus` sous
+  Linux, et `--all-features` l'active).
+
+### Pourquoi / décisions
+- `btleplug` étant central-only (Spike B), le nœud n'annonce rien : il joint un
+  Android / un relais ESP32, pas un autre `dengon-node`.
+- La suite de conformité passe sur `CentralTransport<FausseRadio>` : elle juge
+  la logique de liens, pas la pile BLE. Le backend réel n'a pas de test auto.
+- Un seul pair par session : `Transport` ne remonte pas de `peerID` et
+  `Node::on_peer_connected` en exige un → `--peer` désigne le pair, tout lien
+  lui est attribué.
+
+### Écarts vs conception
+- Règle anti-boucle non appliquée, un seul pair, motif `Propre` jamais émis,
+  pas de MTU négocié : voir `03-ecarts-conception.md` (4 entrées US-303).
+
+### Appris
+- Deux pièges Windows/`cargo fmt` : voir `04-apprentissages.md`.
+
+### État après cette session
+- Message envoyé et reçu de bout en bout entre deux `Node` reliés par deux
+  `MockTransport` (test `session::tests`). **Jamais essayé sur de vrais
+  appareils.**
+- Fiches mises à jour : `modules/dengon-ble.md`, `modules/dengon-node.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings   # OK
+$ cargo clippy -p dengon-node --no-default-features --all-targets -- -D warnings   # OK
+$ cargo test -p dengon-node -p dengon-ble --all-features
+  dengon-node 3 tests, dengon-ble 19 unitaires + conformité mock (4) +
+  conformité central (5) + doctests (2) : tous OK
+$ dengon-node identity --name alice --db …   # OK, affiche peerID + QR
+$ dengon-node run --peer <QR> --duree 4      # Windows : « Le périphérique n'est
+                                             #  pas prêt » (adaptateur inutilisable),
+                                             #  erreur propre, exit 1
+```
+- **Non vérifié :** aucune connexion BLE réelle (pas de pair annonçant à
+  disposition), pas de Linux/BlueZ (le spike demandait de le revalider ici),
+  `cargo deny`/`cargo audit` non installés en local (licences des dépendances
+  de `btleplug` non contrôlées), `cargo llvm-cov`/`nextest` non lancés.
+
+---
+
+
+## 2026-09-29 — US-311 : carte réseau, flotte de relais, alerte `relay_silent`
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `dashboard/api/app/{network_api,config,main}.py`,
+`dashboard/api/tests/test_network_api.py`, `dashboard/web/{api,app}.js`,
+`index.html`, `style.css`.
+**Lot :** Lot 6 — Dashboard, branche `feat/US-311-web-reseau-flotte-alerting`.
+
+### Fait
+- API : `GET /api/nodes` (flotte : version, dernier contact, dernier
+  `relay.health`, alertes) et `GET /api/network/graph` (nœuds + liens
+  observés), dérivés de `events` à la lecture (`app/network_api.py`).
+- Alertes : `relay_silent` (aucun `relay.health` depuis N min, défaut 5,
+  réglable par `DENGON_DASHBOARD_RELAY_SILENT_MINUTES`) et `buffer_high`
+  (`log_buffer_pct` > 90).
+- Web : navigation Messages / Réseau / Flotte ; carte SVG (disposition
+  circulaire), cartes de relais triées avec les alertes en premier ; états
+  vides et champs de santé absents affichés « — » (vue partielle).
+
+### Pourquoi / décisions
+- Pas de table `links` ni de projection de santé : même choix qu'à
+  l'US-219 (dérivé à la lecture, volume de démo).
+- Le `peer` de `peer.connected` est un peerID, pas un `node_id` : les pairs
+  sont des nœuds `kind="peer"` rattachés à l'observateur, pas fusionnés
+  avec un nœud connu.
+- Un relais qui a booté sans jamais émettre de santé est muet à partir de son
+  `relay.boot` ; sans aucun événement, muet d'office.
+
+### Écarts vs conception
+- Routes `/api/nodes` et `/api/network/graph` sans le détail
+  `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
+  référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
 
 ### Appris
@@ -969,6 +1106,29 @@ Finished — sans effet ici : `api.rs` reste entièrement derrière
   encore un événement produit par `api.rs` en conditions réelles,
   contrairement aux fixtures unitaires déjà testées dans
   `observability::tests`).
+- Critères de l'US-311 couverts sauf « scénario 4 du DoD démontré » : le
+  texte du scénario 4 n'est défini nulle part dans `docs/synthese/` (seule
+  mention : `10-benchmarks-mvp-tests.md:190`) ; la détection d'un relais
+  muet est démontrée sur les fixtures golden (captures ci-dessous), pas sur
+  du matériel réel.
+- Fiches module mises à jour : `dashboard-api.md`, `dashboard-web.md`.
+- 01-etat-du-code.md mis à jour : non (aucune structure de crate touchée).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python -m pytest -q          (dashboard/api)   → tous verts, dont 9 nouveaux
+$ ruff check app tests                            → All checks passed
+$ node --check app.js && node --check api.js      → OK
+```
+- Rendu vérifié à 360 px avec `chrome-headless-shell` (API réelle sur :8765,
+  20 fixtures ingérées, web servi sur :8766) :
+  [`assets/us-311/reseau-360px.png`](assets/us-311/reseau-360px.png),
+  [`assets/us-311/flotte-360px.png`](assets/us-311/flotte-360px.png). Mode
+  sombre non vérifié.
+- `ruff format --check` signale 4 fichiers **préexistants** non formatés
+  (dont `config.py` avant ce changement) : non touchés.
+- Non vérifié : rafraîchissement live SSE sur ces deux écrans (mécanisme
+  inchangé, réutilisé tel quel), rendu à plus de 360 px.
 
 ---
 

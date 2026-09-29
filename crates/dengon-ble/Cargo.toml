@@ -9,8 +9,19 @@ repository.workspace   = true
 authors.workspace      = true
 publish.workspace      = true
 
+[features]
+# `btleplug` (US-303) : off par défaut. La pile BLE desktop tire `dbus` (donc
+# libdbus-1-dev) sous Linux ; les crates qui n'en ont pas besoin (dengon-sim,
+# dengon-ffi…) ne doivent pas payer ce coût de compilation.
+default  = []
+btleplug = ["dep:btleplug", "dep:tokio", "dep:futures", "dep:uuid"]
+
 [dependencies]
 dengon-core = { workspace = true }
+btleplug    = { workspace = true, optional = true }
+tokio       = { workspace = true, optional = true }
+futures     = { workspace = true, optional = true }
+uuid        = { workspace = true, optional = true }
 
 [lints]
 workspace = true

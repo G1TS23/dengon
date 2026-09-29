@@ -2380,3 +2380,48 @@ _(aucun écart pour l'instant)_
   périmètre `core-rust`/`skill:rust`, nécessite `skill:c-embarqué`.
 - **Doc de conception mise à jour ?** non — `docs/powl/08` ne précise pas
   quel composant émet quel événement, seulement le catalogue lui-même.
+
+---
+
+### 2026-09-29 — `dengon-node` : rôle central seul, règle anti-boucle non appliquée (US-303)
+
+- **Prévu :** `05-protocole-et-trame.md` §6 : chaque nœud est Peripheral **et**
+  Central ; le plus petit `peerID` initie la connexion.
+- **Réel :** `BtleplugRadio` n'annonce rien (Spike B : `btleplug` central-only).
+  Il se connecte à **tout** pair qui annonce le service, sans comparer les
+  `peerID`. Deux `dengon-node` ne se voient donc pas.
+- **Pourquoi :** appliquer la règle priverait de connexion tout pair au
+  `peerID` plus petit, qui attendrait vainement d'être joint par un nœud qui
+  n'annonce pas.
+- **Conséquence :** utile contre Android / ESP32, pas nœud à nœud. Le repli
+  `bluer` (Linux, peripheral) recommandé par B-6 reste à ratifier.
+
+### 2026-09-29 — `dengon-node` : un seul pair par session, désigné par `--peer` (US-303)
+
+- **Prévu :** un nœud dialogue avec tous les voisins du maillage.
+- **Réel :** `Session` attribue tout lien ouvert au pair donné par `--peer`
+  (`max_connections = 1`).
+- **Pourquoi :** `TransportEvent::PeerConnected` ne porte qu'un `LinkId`, et
+  `Node::on_peer_connected` exige un `peerID` ; l'`ANNOUNCE` qui associerait
+  les deux n'est pas câblé (`api.rs`, portée d'US-301). Banc de test à deux.
+- **À reprendre :** quand l'`ANNOUNCE` sera câblé, apprendre le `peerID` sur le
+  lien plutôt que de le passer en argument.
+
+### 2026-09-29 — `Transport` desktop : motif `Propre` jamais émis, pas de MTU négocié (US-303)
+
+- **Prévu :** le contrat distingue coupure propre / brutale / locale ; le MTU
+  517 est négocié (`preferred_mtu`).
+- **Réel :** `btleplug` n'expose ni la cause d'une déconnexion (toute perte de
+  lien est `Brutale`, une fermeture décidée localement est `Locale`) ni la
+  négociation du MTU (faite par l'OS). Taille max d'une trame = 512, limite
+  d'une valeur d'attribut GATT ; la pile refuse ce qui ne passe pas.
+- **Conséquence :** le cas `cas_deconnexion_propre_est_distinguee` passe sur la
+  fausse radio mais ne peut pas être satisfait par la radio réelle.
+
+### 2026-09-29 — `dengon-node` : clé locale en clair à côté de la base (US-303)
+
+- **Prévu :** clé du coffre issue d'un trousseau (Keystore Android, etc.).
+- **Réel :** `<db>.key` (32 octets aléatoires, `0600` sous Unix) sert de clé de
+  coffre et de clé des champs sensibles du `store`. Pas de trousseau desktop
+  dans le périmètre ; nœud de test uniquement.
+

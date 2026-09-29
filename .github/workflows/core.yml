@@ -114,6 +114,13 @@ jobs:
           # N'écrire le cache que depuis main, pour qu'une PR ne le pollue pas.
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      # `btleplug` (feature de dengon-ble, activée par --all-features) tire
+      # `dbus` sous Linux : libdbus-1-dev + pkg-config sont requis pour
+      # compiler, même si aucun test n'ouvre d'adaptateur Bluetooth (US-303).
+      - name: Installer libdbus (backend BlueZ de btleplug)
+        if: steps.filtre.outputs.rust == 'true'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+
       - name: Installer cargo-nextest et cargo-llvm-cov
         if: steps.filtre.outputs.rust == 'true'
         uses: taiki-e/install-action@c3ec0de9ae7f1019cea21aa96aa0a895b9552063 # v2.87.9
