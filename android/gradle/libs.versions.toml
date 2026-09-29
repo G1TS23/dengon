@@ -12,6 +12,9 @@ espressoCore = "3.6.1"
 # US-215 : génération (core) et scan caméra (android-embedded) des QR codes.
 zxingCore = "3.5.3"
 zxingAndroidEmbedded = "4.3.0"
+# US-302 : JNA, par lequel les bindings UniFFI appellent libdengon_ffi.so.
+# ≥ 5.12 exigé par uniffi-bindgen 0.28.
+jna = "5.14.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -28,6 +31,7 @@ androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version
 androidx-test-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxingCore" }
 zxing-android-embedded = { group = "com.journeyapps", name = "zxing-android-embedded", version.ref = "zxingAndroidEmbedded" }
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -23,6 +23,33 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### UniFFI côté Kotlin : JNA, deux artefacts, et une lib hôte pour les tests JVM
+
+**C'est quoi :** les bindings Kotlin qu'UniFFI génère n'utilisent pas JNI mais
+**JNA**, qui charge `libdengon_ffi.so` par son nom à l'exécution
+(`Native.load("dengon_ffi")`). Sur Android, JNA vient en **AAR** (avec son
+`libjnidispatch.so` Android) ; dans un test JVM, il faut le **JAR** (avec le
+`jnidispatch` de la machine) et une `libdengon_ffi.so` compilée pour
+l'**hôte**, trouvée via `jna.library.path`.
+**Pourquoi dans dengon :** c'est ce qui permet au test d'intégration
+Kotlin ↔ Rust (US-302) de tourner en `testDebugUnitTest`, sans téléphone ni
+émulateur.
+**Piège / surprise :** trois pièges, tous rencontrés.
+1. Lancé sur un `.udl` (hors métadonnées Cargo), `uniffi-bindgen` suppose que
+   la lib s'appelle `uniffi_dengon` : il faut `cdylib_name = "dengon_ffi"` dans
+   `uniffi.toml`, sinon tout compile et rien ne se charge.
+2. L'AAR de JNA embarque `jnidispatch` pour 7 ABI. Sans `abiFilters`, l'APK
+   s'installe sur un armv7 pour lequel `libdengon_ffi.so` n'existe pas → plantage
+   au premier appel, pas à l'installation.
+3. R8 (release) renomme les classes que JNA retrouve par réflexion : règles
+   `-keep` obligatoires, sinon l'erreur n'apparaît qu'à l'exécution.
+**Où c'est utilisé :** `crates/dengon-ffi/uniffi.toml`,
+`android/app/build.gradle.kts` (`jna`, `abiFilters`, `jna.library.path`),
+`android/app/proguard-rules.pro`, `android/app/src/test/java/com/dengon/app/ffi/FfiNatif.kt`.
+**Pour aller plus loin :** <https://mozilla.github.io/uniffi-rs/latest/kotlin/gradle.html>
+
+---
+
 ### Noise `XX` : c'est l'**écriture**, pas la lecture, qui termine le handshake côté initiateur
 
 **C'est quoi :** dans le patron `XX` (3 messages : `e` / `e,ee,s,es` /

@@ -22,14 +22,20 @@ import kotlinx.coroutines.flow.update
  *    compare à voix haute (lecture croisée) et **je confirme explicitement**
  *    ([confirmer]) ou je signale une différence ([refuser]).
  *
- * Alimenté exclusivement par le bouchon FFI de US-106 (`identityQrCode`,
- * `identityFromQrCode`, `verificationCode`) : même surface que les bindings
- * UniFFI, branchement réel à l'US-306.
+ * Alimenté par les fonctions du vrai FFI (US-302) : `identityQrCode`,
+ * `identityFromQrCode`, `verificationCode` (SHA-512 des empreintes, calculé
+ * par `dengon-core`).
  *
- * Synchrone, comme `ConversationsViewModel` (US-214) : le bouchon calcule en
- * mémoire, donc pas de coroutine à tester.
+ * Synchrone, comme `ConversationsViewModel` (US-214) : ces calculs sont
+ * immédiats, donc pas de coroutine à tester.
+ *
+ * [onContactVerifie] est appelé à la confirmation, avec la carte complète du
+ * contact : l'app l'enregistre auprès du nœud (`DengonNode.addContact`).
  */
-class AppairageViewModel(private val local: Identity) : ViewModel() {
+class AppairageViewModel(
+    private val local: Identity,
+    private val onContactVerifie: (Identity) -> Unit = {},
+) : ViewModel() {
 
     private val etatMutable = MutableStateFlow(
         AppairageEtat(monPseudo = local.pseudo, monQr = identityQrCode(local)),
@@ -66,6 +72,15 @@ class AppairageViewModel(private val local: Identity) : ViewModel() {
     /** Les deux codes sont identiques : le contact est marqué vérifié. */
     fun confirmer() {
         val comparaison = etatMutable.value.etape as? EtapeAppairage.Comparaison ?: return
+        try {
+            onContactVerifie(comparaison.distant)
+        } catch (e: DengonException) {
+            // Carte déjà décodée et vérifiée par `identityFromQrCode` : ne
+            // devrait pas arriver. Si le nœud la refuse, on ne la marque pas
+            // vérifiée pour autant.
+            etatMutable.update { it.copy(erreur = ErreurAppairage.QrInvalide) }
+            return
+        }
         val contact = ContactVerifie(comparaison.distant.peerId, comparaison.distant.pseudo)
         etatMutable.update { etat ->
             etat.copy(
@@ -96,10 +111,12 @@ class AppairageViewModel(private val local: Identity) : ViewModel() {
 
     companion object {
         /** Fabrique pour `by viewModels { … }` : injecte l'identité locale. */
-        fun fabrique(local: Identity): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
-            @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = AppairageViewModel(local) as T
-        }
+        fun fabrique(local: Identity, onContactVerifie: (Identity) -> Unit = {}): ViewModelProvider.Factory =
+            object : ViewModelProvider.Factory {
+                @Suppress("UNCHECKED_CAST")
+                override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                    AppairageViewModel(local, onContactVerifie) as T
+            }
     }
 }
 
@@ -112,7 +129,7 @@ data class AppairageEtat(
     val erreur: ErreurAppairage? = null,
     /**
      * Contacts vérifiés pendant la session. Gardés en mémoire : le contrat
-     * FFI v0 n'a pas encore d'appel « marquer vérifié »
+     * FFI n'a pas encore d'appel « marquer vérifié »
      * (`contacts.verified_at`, `powl/04` §2.3) — voir les écarts.
      */
     val contactsVerifies: List<ContactVerifie> = emptyList(),

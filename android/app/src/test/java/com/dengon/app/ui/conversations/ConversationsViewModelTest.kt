@@ -2,12 +2,7 @@ package com.dengon.app.ui.conversations
 
 import com.dengon.app.ffi.Conversation
 import com.dengon.app.ffi.DengonException
-import com.dengon.app.ffi.DengonNodeInterface
-import com.dengon.app.ffi.DengonNodeStub
-import com.dengon.app.ffi.Message
 import com.dengon.app.ffi.MessageStatus
-import com.dengon.app.ffi.NodeEvent
-import com.dengon.app.ffi.generateIdentity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -16,14 +11,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Tests du ViewModel de messagerie (US-214), alimenté par le bouchon FFI
- * (US-106) comme l'application. Aucune dépendance Android ni coroutine de
- * test : le ViewModel est synchrone, on lit `etat.value`.
+ * Tests du ViewModel de messagerie (US-214), sur [FauxNoeud] : c'est l'UI
+ * qu'on teste ici, pas le nœud (couvert par `DengonNodeIntegrationTest`).
+ * Aucune dépendance Android ni coroutine de test : le ViewModel est
+ * synchrone, on lit `etat.value`.
  */
 class ConversationsViewModelTest {
 
-    private fun vmSurBouchon(): Pair<ConversationsViewModel, DengonNodeStub> {
-        val noeud = DengonNodeStub(generateIdentity("moi"))
+    private fun vmSurBouchon(): Pair<ConversationsViewModel, FauxNoeud> {
+        val noeud = FauxNoeud()
         return ConversationsViewModel(noeud) to noeud
     }
 
@@ -114,13 +110,10 @@ class ConversationsViewModelTest {
     @Test
     fun `une erreur du noeud est affichee et le brouillon conserve`() {
         val conversation = Conversation("c1", "p1", "Bob", lastMessage = null, unreadCount = 0u)
-        val noeudEnPanne = object : DengonNodeInterface {
+        val noeudEnPanne = object : FauxNoeud() {
             override fun sendMessage(destPeerId: String, body: String): String =
                 throw DengonException.NotConnected("pair hors de portée")
-            override fun pollEvents(): List<NodeEvent> = emptyList()
-            override fun onPeerConnected(peerId: String) = Unit
             override fun listConversations(): List<Conversation> = listOf(conversation)
-            override fun listMessages(convId: String): List<Message> = emptyList()
         }
         val vm = ConversationsViewModel(noeudEnPanne)
         vm.ouvrir("c1")
@@ -147,7 +140,7 @@ class ConversationsViewModelTest {
 
     @Test
     fun `la fabrique cree le ViewModel sur le noeud fourni`() {
-        val noeud = DengonNodeStub(generateIdentity("moi"))
+        val noeud = FauxNoeud()
         val vm = ConversationsViewModel.fabrique(noeud).create(ConversationsViewModel::class.java)
         assertEquals(1, vm.etat.value.conversations.size)
     }

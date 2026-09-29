@@ -6,3 +6,7 @@
 # l'UI (revue PR #69, Paul).
 [bindings.kotlin]
 package_name = "com.dengon.app.ffi"
+# Nom de la bibliothèque chargée par JNA : libdengon_ffi.so (nom de la crate).
+# Sans cette ligne, uniffi-bindgen, lancé sur le `.udl` hors métadonnées Cargo,
+# chercherait « uniffi_dengon ».
+cdylib_name  = "dengon_ffi"

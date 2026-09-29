@@ -30,12 +30,10 @@ de son area (proposition d'organisation §10.3 point 3).
 | `dengon-verify` | [dengon-verify.md](dengon-verify.md) | fonctionnel (US-305), appelé par `dashboard/api` (US-310) | 2026-09-28 |
 | `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-25 |
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
-| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **contrat v0 gelé** (US-106) | 2026-09-28 |
+| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **fonctionnel** : vrai FFI sur `dengon-core::api`, contrat v1 (US-302) | 2026-09-29 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | 4 workflows requis présents (US-222) ; checks requis de `main` pas encore élargis | 2026-09-28 |
-| `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + messagerie sur bouchon, US-214) | 2026-09-28 |
+| `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + transport BLE réel US-213 + messagerie + appairage QR, sur le **vrai FFI** US-302 ; transport pas encore branché sur le nœud) | 2026-09-29 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | partiel (transport NimBLE US-220 ; essai 2 cartes à faire) | 2026-09-28 |
-| `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + appairage QR, US-215) | 2026-09-28 |
-| `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (transport BLE réel, US-213) | 2026-09-28 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
 | `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
 | `dengon-core-ffi` + `dengon-core-embed` (`crates/dengon-core-ffi/`, `crates/dengon-core-embed/`) | [dengon-core-ffi.md](dengon-core-ffi.md) | partiel (chaîne de compilation + header + vecteurs depuis le C, US-307 ; pas encore intégré au CMake ESP-IDF) | 2026-09-29 |

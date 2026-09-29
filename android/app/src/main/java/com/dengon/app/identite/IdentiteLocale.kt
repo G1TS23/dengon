@@ -1,60 +1,105 @@
 package com.dengon.app.identite
 
 import android.content.Context
-import com.dengon.app.ffi.Identity
-import com.dengon.app.ffi.generateIdentity
-import java.security.SecureRandom
+import android.os.Build
+import android.util.Log
+import com.dengon.app.ffi.DengonNode
+import java.io.File
+import java.io.IOException
 
 /**
- * Identité locale **provisoire** de l'appareil (US-215), en attendant la vraie
- * (keypair + coffre, US-205 branché par US-306).
+ * Nœud dengon de cet appareil (US-302), ouvert sur le vrai `dengon-core`.
  *
- * Le bouchon `generateIdentity(pseudo)` dérive les clés **du pseudo**, et le
- * `peerId` n'est fait que de ses **8 premiers octets**. D'où deux contraintes,
- * vérifiées en test :
- * - un pseudo aléatoire par installation (deux téléphones au même pseudo
- *   auraient la même identité) ;
- * - la partie aléatoire **dans les 8 premiers octets** : le premier essai,
- *   `appareil-xxxx`, donnait le même `peerId` (« appareil ») à tous les
- *   téléphones, et l'appairage les prenait pour un seul appareil — constaté
- *   sur un Pixel 8 Pro et un Galaxy A16 (« C'est votre propre QR »).
- *
- * Deuxième défaut trouvé en revue (PR #94) : le correctif `tel-xxxx` ne
- * faisait encore varier que 2 des 8 octets du `peerId` — le préfixe `tel-`
- * occupait sans le vouloir les 4 premiers, constants, des 8 octets où seule
- * la partie aléatoire compte. Sur 8 octets utiles, seuls 2 étaient
- * réellement aléatoires (2^16 valeurs). Le préfixe est abandonné : le pseudo
- * est maintenant purement hexadécimal, ses 8 octets UTF-8 tombant tous dans
- * la fenêtre du `peerId`. Encodés en hexadécimal (2 caractères par octet
- * aléatoire), ces 8 octets ne représentent que 4 octets de source aléatoire
- * — 2^32 valeurs possibles, contre 2^16 avant.
+ * L'identité (clés X25519 + Ed25519) est tirée par le cœur Rust au premier
+ * lancement puis relue de son coffre chiffré (`<filesDir>/dengon/identity.vault`,
+ * clé : [CleCoffre]) : le `peerId` est stable d'un lancement à l'autre et ne
+ * dépend plus du pseudo. L'ancien contournement de l'US-215 (pseudo
+ * hexadécimal aléatoire, pour que deux téléphones n'aient pas le même
+ * `peerId` du bouchon) n'a plus lieu d'être.
  */
 object IdentiteLocale {
 
-    private const val FICHIER = "dengon_identite"
-    private const val CLE_PSEUDO = "pseudo"
+    private const val TAG = "IdentiteLocale"
+    private const val DOSSIER = "dengon"
 
-    /** Octets de source aléatoire (8 caractères hexadécimaux en sortie). */
-    const val OCTETS_ALEATOIRES = 4
+    /** Nom du coffre dans [DOSSIER] (`VAULT_FILE` de `dengon-ffi`). */
+    internal const val COFFRE = "identity.vault"
 
-    /** Identité de cet appareil ; stable d'un lancement à l'autre. */
-    fun identite(context: Context): Identity = generateIdentity(pseudo(context))
+    /** Longueur maximale du pseudo par défaut, en caractères (≤ 255 octets UTF-8). */
+    const val PSEUDO_MAX = 60
+
+    private const val PSEUDO_REPLI = "dengon"
 
     /**
-     * Pseudo provisoire, purement hexadécimal, exactement 8 octets : la
-     * totalité tombe dans le `peerId` du bouchon, sans octet gaspillé sur un
-     * préfixe constant.
+     * Ouvre le nœud. Le pseudo ne sert qu'au premier lancement : ensuite, le
+     * coffre fait foi.
+     *
+     * Fait des E/S (Keystore, fichiers, génération d'identité au premier
+     * lancement) : à ne pas appeler sur le thread principal
+     * ([com.dengon.app.DengonApplication] l'ouvre en arrière-plan).
      */
-    fun pseudoPour(aleatoire: ByteArray): String {
-        require(aleatoire.size == OCTETS_ALEATOIRES) { "attendu $OCTETS_ALEATOIRES octets" }
-        return aleatoire.joinToString("") { "%02x".format(it) }
+    fun ouvrirNoeud(context: Context): DengonNode {
+        val dossier = File(context.filesDir, DOSSIER)
+        val source = object : SourceCleCoffre {
+            override fun existe() = CleCoffre.existe(context)
+            override fun cle() = CleCoffre.cle(context)
+            override fun oublier() = CleCoffre.oublier(context)
+        }
+        val cle = cleDuCoffre(dossier, source) { cause ->
+            Log.w(TAG, "clé du coffre perdue : identité réinitialisée", cause)
+        }
+        return DengonNode.open(dossier.absolutePath, cle, pseudoParDefaut(Build.MODEL))
     }
 
-    private fun pseudo(context: Context): String {
-        val prefs = context.getSharedPreferences(FICHIER, Context.MODE_PRIVATE)
-        prefs.getString(CLE_PSEUDO, null)?.let { return it }
-        val pseudo = pseudoPour(ByteArray(OCTETS_ALEATOIRES).also { SecureRandom().nextBytes(it) })
-        prefs.edit().putString(CLE_PSEUDO, pseudo).apply()
-        return pseudo
+    /**
+     * La clé du coffre de [dossier], en repartant d'une identité neuve si
+     * l'ancienne est devenue illisible (revue PR #109) :
+     *
+     * - clé enregistrée mais irrécupérable (clé du Keystore effacée ou
+     *   invalidée) : clé et coffre sont oubliés, [surReinitialisation] est
+     *   prévenu, une nouvelle identité sera tirée ;
+     * - aucune clé enregistrée mais un coffre présent (préférences effacées
+     *   seules) : ce coffre ne s'ouvrira plus jamais, il est supprimé.
+     *
+     * Sans cela, `DengonNode.open` échouerait à chaque lancement, sans issue.
+     * Le prix : un nouveau `peerId`, que les contacts devront ré-appairer.
+     */
+    internal fun cleDuCoffre(
+        dossier: File,
+        source: SourceCleCoffre,
+        surReinitialisation: (Throwable) -> Unit,
+    ): ByteArray {
+        if (!source.existe()) supprimerCoffre(dossier)
+        return try {
+            source.cle()
+        } catch (e: CleCoffre.CleIrrecuperable) {
+            surReinitialisation(e)
+            source.oublier()
+            supprimerCoffre(dossier)
+            source.cle()
+        }
     }
+
+    /**
+     * Supprime le coffre illisible. Un échec est remonté : le laisser en
+     * place ferait échouer `DengonNode.open` juste après, sans cause claire.
+     */
+    private fun supprimerCoffre(dossier: File) {
+        val coffre = File(dossier, COFFRE)
+        if (coffre.exists() && !coffre.delete()) throw IOException("coffre illisible non supprimé : $coffre")
+    }
+
+    /**
+     * Pseudo du premier lancement : le modèle du téléphone (« Pixel 8 Pro »),
+     * ce qui suffit à distinguer les appareils pendant une démonstration.
+     */
+    fun pseudoParDefaut(modele: String?): String =
+        modele?.trim()?.take(PSEUDO_MAX)?.takeIf { it.isNotEmpty() } ?: PSEUDO_REPLI
+}
+
+/** Ce dont [IdentiteLocale.cleDuCoffre] a besoin de [CleCoffre] (remplaçable en test). */
+internal interface SourceCleCoffre {
+    fun existe(): Boolean
+    fun cle(): ByteArray
+    fun oublier()
 }
