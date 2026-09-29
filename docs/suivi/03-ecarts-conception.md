@@ -133,6 +133,109 @@ et le mentionner dans l'entrée de journal.
   exercée que par le job CI `firmware` — voir
   `docs/suivi/modules/dengon-core-ffi.md`, section Tests, pour ce qui a
   (et n'a pas) pu être vérifié en local sur ce poste Windows sans `espup`.
+### 2026-09-29 — Le `peerID` d'un lien n'est prouvé qu'à la fin du handshake (US-306, revue PR #111)
+
+- **Prévu :** la doc de `parse_announce` s'appuyait sur « le handshake `XX`
+  qui suit prouvera la possession de la clé » ; `on_peer_connected` liait le
+  lien au `peerID` (`bind_peer`) dès la connexion.
+- **Réel :** ce contrôle n'existait pas : la session était rangée sous le
+  `peerID` fourni par l'appelant sans comparer `remote_static`. Un ANNOUNCE
+  étant signé mais rejouable, un pair à portée pouvait le rejouer et
+  terminer le `XX` avec sa propre clé sous le `peerID` d'un tiers.
+  Corrigé : `Node::finish_handshake` refuse la session si
+  `peer_id_of(remote_static) != peerID` ou si `remote_static` diffère de la
+  clé du contact connu ; `bind_peer` n'a lieu qu'à ce moment-là.
+- **Conséquence :** tests `handshake_usurpant_un_peer_id_inconnu_est_rejete`
+  (échoue sans le contrôle sur le `peerID`) et
+  `handshake_avec_une_autre_cle_sous_le_peer_id_d_un_tiers_est_rejete`
+  (contact connu). L'anti-inondation compte par lien jusqu'à la preuve.
+- **Reste ouvert (déni de service) :** `Maillage` ignore un 2ᵉ lien vers un
+  pair déjà relié, donc un lien fantôme ou rejoué occupe la place jusqu'à
+  son `PeerDisconnected`. Le remplacer « si la session n'est pas établie »
+  demande un état de session que le `.udl` v1 n'expose pas, et un
+  remplacement systématique casserait le cas légitime des deux rôles GATT.
+  À traiter avec l'US-312. `pending_acks` est borné par pair mais pas en
+  nombre de pairs : idem. Une conversation ouverte par `add_contact` restera
+  orpheline si une US de suppression de contact ne la retire pas.
+
+---
+
+### 2026-09-29 — `add_contact` ouvre la conversation (US-306, trouvé sur téléphones)
+
+- **Prévu :** `api::Node` (US-301) ne crée une conversation qu'au premier
+  message envoyé ou reçu ; l'UI de messagerie (US-214) ne liste que les
+  conversations existantes.
+- **Réel :** `add_contact` ouvre aussi une conversation **vide** avec le
+  contact (et complète le pseudo d'une conversation ouverte par un message
+  reçu avant l'appairage).
+- **Pourquoi :** constaté pendant l'essai sur deux téléphones : après
+  l'appairage, « Aucune conversation » — **aucun moyen** d'écrire un premier
+  message. Le bouchon masquait le trou avec une conversation factice.
+  Correctif dans le cœur plutôt qu'un écran « nouveau message » : une ligne
+  d'état, aucune UI nouvelle.
+- **Conséquence :** tout contact appairé apparaît dans la liste, même sans
+  message. Test `un_contact_ajoute_a_sa_conversation_vide_nommee`.
+
+---
+
+### 2026-09-29 — `ANNOUNCE` de lien seulement, ajouté au `.udl` v1 (US-306)
+
+- **Prévu :** `synthese/07` §6 — à chaque lien : `ANNOUNCE` mutuels, puis
+  handshake ; `synthese/05` §2 — `ANNOUNCE` périodique (`ANNOUNCE_ISOLATED_S`
+  = 4 s, `ANNOUNCE_CONNECTED_S` = 15–30 s), TTL faible (2–3), traité par le
+  pipeline de réception du nœud.
+- **Réel :** l'`ANNOUNCE` n'est émis **qu'une fois**, en première trame de
+  chaque lien, avec **TTL 1**, et il est lu par l'**app** (`Maillage`, via
+  `identity_from_announce`) pour relier le `LinkId` au `peerID` — pas par
+  `Node::on_bytes_received`, qui l'ignore toujours. `ledger_height` est
+  renseigné, `caps` vaut 0. Deux appels ajoutés au `.udl` v1 :
+  `DengonNode.announce_frame()` et `identity_from_announce(frame)`.
+- **Pourquoi :** le seul besoin de l'US-306 est de savoir qui est au bout du
+  lien ; `api::Node` identifie un lien par `PeerId` (doc de module US-301).
+  L'annonce périodique sert la découverte à plusieurs sauts, hors scénario 1.
+  Alternative écartée (avec Paul) : une trame « hello » Kotlin non signée.
+- **Conséquence :** **à annoncer en point d'équipe** (même règle que
+  l'extension v1 de l'US-302). Le relais (US-308/US-312) devra lire le même
+  `ANNOUNCE` en tête de lien.
+
+---
+
+### 2026-09-29 — Accusés de réception : en session uniquement (US-306)
+
+- **Prévu :** `synthese/07` §4 — à réception : `Ack{msg_uuid, status=2}`
+  envoyé en session si possible, **sinon en enveloppe** vers l'expéditeur ;
+  l'`Ack` est soumis au store-and-forward.
+- **Réel :** l'`Ack` part **dans la session Noise** avec l'auteur (paquet
+  `ACK`). Sans session (message reçu par enveloppe avant la fin du
+  handshake), il attend dans `pending_acks` (64 max par pair, le plus ancien
+  oublié) et part dès que la session s'établit. Pas d'accusé par enveloppe.
+- **Pourquoi :** sceller une enveloppe demande un `rng`, absent du chemin de
+  réception (`on_bytes_received`) ; changer sa signature touchait tout le
+  FFI. Pour le scénario 1 (deux téléphones à portée), la session existe
+  toujours.
+- **Conséquence :** un auteur jamais connecté **en direct** au destinataire
+  (message passé par un relais, scénarios 2 et 3, US-312) ne recevra pas son
+  accusé : reste `InFlight`. À reprendre avec l'US-312.
+
+---
+
+### 2026-09-29 — L'UI reste seule lectrice de `pollEvents` (US-306)
+
+- **Prévu :** `docs/suivi/modules/android-app.md` (US-302) : le nœud est
+  « partagé par l'UI et, à l'US-306, par le service de premier plan ».
+- **Réel :** le service (`TransportActif` → `Maillage`) appelle
+  `onPeerConnected` / `onBytesReceived` / `takeOutgoing`, mais **jamais**
+  `pollEvents`. Écran fermé, les événements s'accumulent dans le nœud ; ils
+  sont lus au retour de l'UI. L'expiration des messages (faite dans
+  `poll_events`) ne tourne donc que quand l'UI est ouverte.
+- **Pourquoi :** deux lecteurs se partageraient les événements (chacun n'en
+  verrait qu'une partie). Le `Maillage` n'en a pas besoin.
+- **Conséquence :** pas de notification « message reçu » app fermée (hors
+  critères d'acceptation) ; à revoir si on en veut une (flux partagé
+  alimenté par un seul lecteur).
+
+---
+
 ### 2026-09-29 — Contrat FFI étendu en v1 : `open` + coffre, chemin des octets radio (US-302)
 
 - **Prévu :** US-302 — « bindings UniFFI générés depuis le `.udl` de US-106,

@@ -1,29 +1,31 @@
 package com.dengon.app.ble.transport
 
 import android.content.Context
-import android.os.Build
 import android.util.Log
+import com.dengon.app.DengonApplication
+import com.dengon.app.ble.Maillage
+import com.dengon.app.ble.PeerIdOctets
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
-import java.util.zip.CRC32
 
 /**
  * Le transport du processus (US-213), possédé par `MeshForegroundService`.
  *
- * Tant que le cœur n'est pas branché (US-301/US-306), c'est ici que tourne la
- * boucle `poll()` du contrat : les événements sont journalisés (écran de
- * debug + `logcat`, étiquette `dengon-transport`) pour les essais sur deux
- * téléphones. Un **battement** optionnel diffuse une trame toutes les 30 s :
- * c'est ce qui montre que le lien vit encore écran éteint.
+ * Depuis l'US-306, il est **branché sur le nœud** : la boucle `poll()` du
+ * contrat passe chaque lot d'événements au [Maillage], qui les donne à
+ * `DengonApplication.noeud` et écrit sur la radio ce que le nœud produit.
+ * Le transport annonce le **vrai** `peerID` du nœud (plus de tirage
+ * aléatoire). Les événements restent journalisés (écran de debug +
+ * `logcat`, étiquette `dengon-transport`) pour les essais sur deux
+ * téléphones.
  */
 object TransportActif {
 
@@ -32,34 +34,37 @@ object TransportActif {
         val demarre: Boolean = false,
         val peerIdLocal: String = "",
         val liens: List<LinkId> = emptyList(),
+        /** Liens identifiés par `ANNOUNCE` → `peerID` du pair. */
+        val pairs: Map<LinkId, String> = emptyMap(),
         val trames: Int = 0,
-        val battement: Boolean = false,
         val erreur: String? = null,
         val journal: List<String> = emptyList(),
     )
 
     private const val TAG = "dengon-transport"
     private const val PERIODE_POLL_MS = 50L
-    private const val PERIODE_BATTEMENT_S = 30L
     private const val LIGNES_JOURNAL = 60
 
     private val etatMutable = MutableStateFlow(Etat())
     val etat: StateFlow<Etat> = etatMutable.asStateFlow()
 
-    // Écrit uniquement sous @Synchronized (demarrer/arreter), mais lu sans
-    // verrou depuis le thread de sonder()/battre() et depuis diffuser() /
-    // basculerBattement() (thread appelant) : @Volatile garantit la visibilité
-    // inter-thread d'une écriture faite sous @Synchronized sur un autre thread.
+    // Écrits uniquement sous @Synchronized (demarrer/arreter), mais lus sans
+    // verrou depuis le thread de sonder() et depuis vider() (thread de
+    // l'UI) : @Volatile garantit la visibilité inter-thread.
     @Volatile
     private var transport: AndroidTransport? = null
+
+    @Volatile
+    private var maillage: Maillage? = null
     private var boucle: ScheduledExecutorService? = null
-    private var numeroBattement = 0
 
     /** Démarre radio + transport + boucle. Sans effet s'il tourne déjà. */
     @Synchronized
     fun demarrer(context: Context) {
         if (transport != null) return
-        val peerId = peerIdLocal(context)
+        val noeud = (context.applicationContext as DengonApplication).noeud
+        val peerIdTexte = noeud.localIdentity().peerId
+        val peerId = PeerIdOctets.depuisBase32(peerIdTexte)
         val t = AndroidTransport(GattRadio(context))
         try {
             t.start(TransportConfig(localPeerId = peerId))
@@ -69,11 +74,11 @@ object TransportActif {
             return
         }
         transport = t
-        etatMutable.update { it.copy(demarre = true, peerIdLocal = hex(peerId), erreur = null) }
-        journaliser("démarré, peerID ${hex(peerId)} (préfixe annoncé ${hex(peerId.copyOfRange(0, 4))})")
+        maillage = Maillage(t, noeud, journal = ::journaliser)
+        etatMutable.update { it.copy(demarre = true, peerIdLocal = peerIdTexte, erreur = null) }
+        journaliser("démarré, peerID $peerIdTexte (préfixe annoncé ${hex(peerId.copyOfRange(0, 4))})")
         boucle = Executors.newSingleThreadScheduledExecutor().also { exec ->
             exec.scheduleWithFixedDelay(::sonder, 0, PERIODE_POLL_MS, TimeUnit.MILLISECONDS)
-            exec.scheduleWithFixedDelay(::battre, PERIODE_BATTEMENT_S, PERIODE_BATTEMENT_S, TimeUnit.SECONDS)
         }
     }
 
@@ -82,33 +87,20 @@ object TransportActif {
         boucle?.shutdownNow()
         boucle = null
         transport?.stop()
-        transport?.let { sonderAvec(it) } // dernières fermetures LOCALE
+        transport?.let { sonderAvec(it) } // dernières fermetures LOCALE, vues aussi par le nœud
         transport = null
-        etatMutable.update { it.copy(demarre = false, liens = emptyList()) }
+        maillage = null
+        etatMutable.update { it.copy(demarre = false, liens = emptyList(), pairs = emptyMap()) }
         journaliser("arrêté")
     }
 
-    /** Diffuse `octets` à tous les liens ouverts et le consigne. */
-    fun diffuser(octets: ByteArray, libelle: String) {
-        val t = transport ?: return journaliser("diffusion impossible : transport arrêté")
-        try {
-            t.broadcast(octets)
-            journaliser("diffusé $libelle : ${octets.size} o, crc ${crc(octets)}, vers ${t.nbLiens} lien(s)")
-        } catch (e: TransportException) {
-            journaliser("diffusion refusée : ${e.message}")
-        }
-    }
-
-    /** Active / coupe le battement périodique. */
-    fun basculerBattement() {
-        etatMutable.update { it.copy(battement = !it.battement) }
-        journaliser(if (etatMutable.value.battement) "battement activé (30 s)" else "battement coupé")
-    }
-
-    private fun battre() {
-        if (!etatMutable.value.battement) return
-        numeroBattement++
-        diffuser("battement ${Build.MODEL} #$numeroBattement".toByteArray(), "battement #$numeroBattement")
+    /**
+     * Écrit tout de suite ce que le nœud vient de produire (appelé par l'UI
+     * après `sendMessage`), sans attendre le prochain tour de boucle. Sans
+     * effet si le service ne tourne pas : le message reste en file.
+     */
+    fun vider() {
+        maillage?.vider()
     }
 
     private fun sonder() {
@@ -116,7 +108,15 @@ object TransportActif {
     }
 
     private fun sonderAvec(t: AndroidTransport) {
-        for (evenement in t.poll()) {
+        val evenements = t.poll()
+        // Un nœud qui lève ne doit pas tuer la boucle de l'exécuteur
+        // (une exception non rattrapée annule les exécutions suivantes).
+        try {
+            maillage?.traiter(evenements)
+        } catch (e: RuntimeException) {
+            journaliser("erreur du maillage : $e")
+        }
+        for (evenement in evenements) {
             when (evenement) {
                 is TransportEvent.PeerConnected -> {
                     etatMutable.update { it.copy(liens = it.liens + evenement.peerLinkId) }
@@ -128,9 +128,12 @@ object TransportActif {
                 }
                 is TransportEvent.FrameReceived -> {
                     etatMutable.update { it.copy(trames = it.trames + 1) }
-                    journaliser("reçu sur ${evenement.peerLinkId} : ${apercu(evenement.bytes)}")
                 }
             }
+        }
+        if (evenements.isNotEmpty()) {
+            val pairs = maillage?.pairs ?: emptyMap()
+            etatMutable.update { it.copy(pairs = pairs) }
         }
     }
 
@@ -140,26 +143,7 @@ object TransportActif {
         etatMutable.update { it.copy(journal = (listOf(horodatee) + it.journal).take(LIGNES_JOURNAL)) }
     }
 
-    /** `peerID` provisoire, tiré une fois par installation (vrai `peerID` : US-306). */
-    private fun peerIdLocal(context: Context): ByteArray {
-        val prefs = context.getSharedPreferences("dengon_transport", Context.MODE_PRIVATE)
-        prefs.getString("peer_id", null)?.let { return unhex(it) }
-        val id = ByteArray(8).also { SecureRandom().nextBytes(it) }
-        prefs.edit().putString("peer_id", hex(id)).apply()
-        return id
-    }
-
-    private fun apercu(octets: ByteArray): String {
-        val texte = octets.take(40).toByteArray().toString(Charsets.UTF_8)
-        val lisible = texte.all { it.isLetterOrDigit() || it in " #-_.:'" }
-        return "${octets.size} o, crc ${crc(octets)}" + if (lisible) " « $texte »" else ""
-    }
-
-    private fun crc(octets: ByteArray): String = "%08x".format(CRC32().apply { update(octets) }.value)
-
     private fun hex(octets: ByteArray): String = octets.joinToString("") { "%02x".format(it) }
-
-    private fun unhex(s: String): ByteArray = ByteArray(s.length / 2) { i -> s.substring(2 * i, 2 * i + 2).toInt(16).toByte() }
 
     private val HEURE = ThreadLocal.withInitial { SimpleDateFormat("HH:mm:ss", Locale.FRANCE) }
 }

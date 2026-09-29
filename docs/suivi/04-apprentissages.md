@@ -23,6 +23,34 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### Relier un lien radio à un pair : l'`ANNOUNCE` signé en tête de lien
+
+**C'est quoi :** une connexion BLE ne dit pas **qui** est en face : le
+transport ne rend qu'un `LinkId` (et au mieux 4 octets de `peerID` dans
+l'annonce BLE, vus seulement par le côté qui scanne). Chaque côté écrit donc
+son `ANNOUNCE` (clés publiques + pseudo, **signé** Ed25519) en première trame
+du lien ; l'autre le vérifie et en déduit le `peerID`
+(`SHA-256(pub_static)[0..8]`) à donner au nœud.
+**Pourquoi dans dengon :** `api::Node` ne raisonne qu'en `peerID` ; sans cette
+liaison, aucun octet radio ne pouvait atteindre le nœud (US-306).
+**Piège / surprise :**
+1. L'ordre suffit, pas besoin d'état « en attente » côté nœud : le transport
+   garantit l'ordre **par lien**, et un pair écrit son `ANNOUNCE` avant de
+   connaître le nôtre — donc avant tout autre paquet.
+2. La signature seule ne prouve rien sur le `peerID` : il faut aussi vérifier
+   `peerID == SHA-256(pub_static)[0..8]` (test « `peerID` usurpé »). Et même
+   là, c'est le handshake `XX` qui prouve la possession de la clé statique.
+3. Fin de handshake : l'initiateur écrit le message 3 **et** passe en session
+   dans la même fonction. Tout ce que la session débloque (accusés) doit être
+   mis en sortie **après** le message 3, sinon le répondeur reçoit un
+   ciphertext avant d'avoir fini son handshake et le jette.
+**Où c'est utilisé :** `crates/dengon-core/src/api.rs` (`announce_packet`,
+`parse_announce`, `handle_handshake_message`),
+`android/app/src/main/java/com/dengon/app/ble/Maillage.kt`.
+**Pour aller plus loin :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §6.
+
+---
+
 ### UniFFI côté Kotlin : JNA, deux artefacts, et une lib hôte pour les tests JVM
 
 **C'est quoi :** les bindings Kotlin qu'UniFFI génère n'utilisent pas JNI mais

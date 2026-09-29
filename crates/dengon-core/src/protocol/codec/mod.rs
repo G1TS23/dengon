@@ -48,7 +48,8 @@
 //!   récent est masqué par [`decode`], un ré-encodage ne serait donc plus
 //!   identique à ce que l'émetteur a signé.
 //!
-//! Les frames applicatives chiffrées (L4) sont dans [`app`].
+//! Les frames applicatives chiffrées (L4) sont dans [`app`], le payload
+//! `ANNOUNCE` dans [`announce`].
 
 pub mod announce;
 pub mod app;

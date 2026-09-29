@@ -2,8 +2,8 @@
 
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
-**Dernière mise à jour :** 2026-09-29
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::inventory` (US-210) + `sync::courier` (US-212) + `observability` (US-208) + `relay`, codec `ANNOUNCE`, `Ledger::resume` (US-308, branche empilée sur #108).
+**Dernière mise à jour :** 2026-09-29 (US-306 : ANNOUNCE de lien, accusés émis ; revue PR #111 : `peerID` prouvé par le handshake)
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::inventory` (US-210) + `sync::courier` (US-212) + `observability` (US-208) + `relay`, codec `ANNOUNCE`, `Ledger::resume` (US-308) + ANNOUNCE de lien, accusés émis (US-306).
 
 ## À quoi ça sert
 
@@ -1082,11 +1082,39 @@ initiale était à 88 % avant ces ajouts).
 - `ENVELOPE_OFFER`/`ENVELOPE_REQUEST` (porteur tiers) pas câblé : seul le
   cas « on est déjà connecté à qui on écrit » l'est.
 - Remise de ce que `sync::courier` porte pour un autre pair : pas câblée.
-- Aucun accusé de réception n'est **émis** par cette façade (seulement
-  reçu/traité) : le statut `Delivered` d'un message sortant n'est jamais
-  atteint ici, `InFlight` est le statut final observable.
+- ~~Aucun accusé de réception n'est émis~~ — corrigé à l'US-306, voir
+  ci-dessous.
 - `PeerId` utilisé directement comme identifiant de lien pour `Router`
   (simplification vs `dengon-ble::LinkId`, un nœud = une connexion active).
+  C'est à l'appelant de relier `LinkId` et `PeerId` — par l'`ANNOUNCE` de
+  lien depuis l'US-306.
+
+### Ajouts de l'US-306 : `ANNOUNCE` de lien et accusés
+
+| Élément | Fichier | Rôle |
+|---|---|---|
+| `AnnouncePayload`, `encode_announce`, `decode_announce` | `src/protocol/codec/announce.rs` | Payload `ANNOUNCE` de `synthese/05` §4 : `peerID(8) ‖ pub_static(32) ‖ pub_sign(32) ‖ pseudo_len(1) ‖ pseudo ‖ ledger_height(8) ‖ caps(1)`. Octets seulement, `no_std` ; refuse pseudo vide / > 255 o, tronqué, octets en trop, UTF-8 invalide. |
+| `Node::announce_packet(now)` | `src/api.rs` | `ANNOUNCE` signé de ce nœud, **TTL 1** (`ANNOUNCE_LINK_TTL`), à écrire en première trame d'un lien. |
+| `api::parse_announce(bytes)` | `src/api.rs` | Vérifie type, signature Ed25519 (avec le `pub_sign` annoncé) et `peerID` = `sender_id` = `SHA-256(pub_static)[0..8]` ; rend la `PublicIdentity`. TTL et horodatage non vérifiés (annonce de lien). |
+| `queue_ack` / `flush_pending_acks` | `src/api.rs` | `deliver_message` met un `Ack{Delivered}` en attente pour l'auteur (`pending_acks`, `PENDING_ACKS_MAX` = 64 par pair) ; il part en paquet `ACK` chiffré dans la session, tout de suite ou dès qu'elle s'établit. Un doublon est ré-accusé. |
+
+`add_contact` ouvre aussi la conversation, vide et nommée, avec le contact
+(trouvé pendant l'essai sur téléphones : sans elle, aucun moyen d'écrire un
+premier message) ; il complète le pseudo d'une conversation déjà ouverte
+par un message reçu. Test `un_contact_ajoute_a_sa_conversation_vide_nommee`.
+
+Correction au passage dans `handle_handshake_message` : le message 3 du
+handshake est mis en sortie **avant** ce que la session débloque, sinon un
+accusé chiffré pouvait précéder la fin du handshake chez le répondeur.
+
+Tests ajoutés : 4 (`codec::announce`) + 6 (`api` : ANNOUNCE vérifié,
+altéré / autre type, `peerID` usurpé, `Delivered` en session, `Delivered`
+après enveloppe, borne des accusés en attente) + 1 d'intégration
+(`tests/api_mock.rs` : `InFlight` puis `Delivered`).
+
+Limites : pas d'accusé par enveloppe scellée (auteur jamais connecté en
+direct → reste `InFlight`, à reprendre à l'US-312) ; `ANNOUNCE` jamais émis
+périodiquement ni traité par `on_bytes_received`.
 
 ## Sous-module `relay` (US-308)
 

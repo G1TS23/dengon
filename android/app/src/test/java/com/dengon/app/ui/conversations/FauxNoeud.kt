@@ -66,6 +66,8 @@ open class FauxNoeud : DengonNodeInterface {
 
     override fun localIdentity(): Identity = Identity("moi", "moi", ByteArray(32), ByteArray(32))
 
+    override fun announceFrame(): ByteArray = "ANNOUNCE moi".toByteArray()
+
     override fun addContact(contact: Identity) = Unit
 
     override fun onBytesReceived(peerId: String, frame: ByteArray) = Unit

@@ -39,13 +39,20 @@ data class ConversationsUiState(
  * [etat] directement, sans dispatcher de test.
  * L'interrogation périodique du nœud ([sonder]) est cadencée par l'écran.
  *
- * TODO(US-306) : chaque appel prend le `Mutex` du nœud Rust, qui sera
+ * TODO : chaque appel prend le `Mutex` du nœud Rust, qui est
  * partagé avec le service de premier plan (radio : `on_bytes_received`,
  * `on_peer_connected`…). Un appel de l'UI pourra alors attendre que le
  * service relâche ce verrou : passer ces appels dans `viewModelScope` sur un
  * dispatcher d'E/S, pour ne jamais bloquer le thread principal.
+ *
+ * [apresEnvoi] est appelé après chaque envoi accepté : dans l'app, il écrit
+ * tout de suite sur la radio les trames produites (`TransportActif.vider`),
+ * sans attendre le prochain tour de la boucle du service.
  */
-class ConversationsViewModel(private val noeud: DengonNodeInterface) : ViewModel() {
+class ConversationsViewModel(
+    private val noeud: DengonNodeInterface,
+    private val apresEnvoi: () -> Unit = {},
+) : ViewModel() {
 
     private val _etat = MutableStateFlow(ConversationsUiState())
 
@@ -113,6 +120,7 @@ class ConversationsViewModel(private val noeud: DengonNodeInterface) : ViewModel
             _etat.update { it.copy(erreur = "Envoi impossible : ${err.message ?: err::class.simpleName}") }
             return
         }
+        apresEnvoi()
         _etat.update { it.copy(brouillon = "", erreur = null) }
         rafraichir()
     }
@@ -137,11 +145,11 @@ class ConversationsViewModel(private val noeud: DengonNodeInterface) : ViewModel
 
     companion object {
         /** Fabrique pour `by viewModels { … }` : injecte le nœud. */
-        fun fabrique(noeud: DengonNodeInterface): ViewModelProvider.Factory =
+        fun fabrique(noeud: DengonNodeInterface, apresEnvoi: () -> Unit = {}): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    ConversationsViewModel(noeud) as T
+                    ConversationsViewModel(noeud, apresEnvoi) as T
             }
     }
 }
