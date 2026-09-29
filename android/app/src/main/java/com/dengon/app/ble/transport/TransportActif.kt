@@ -41,6 +41,8 @@ object TransportActif {
         /** Mode éco : scan à cycle réduit (US-313). */
         val modeEco: Boolean = false,
         val trames: Int = 0,
+        /** Option de démonstration US-312, voir [Maillage]. */
+        val ignorerLiensDirects: Boolean = false,
         val erreur: String? = null,
         val journal: List<String> = emptyList(),
     )
@@ -82,7 +84,12 @@ object TransportActif {
         }
         transport = t
         radio = r
-        maillage = Maillage(t, noeud, journal = ::journaliser)
+        maillage = Maillage(
+            t,
+            noeud,
+            journal = ::journaliser,
+            ignorerLiensDirects = { etat.value.ignorerLiensDirects },
+        )
         etatMutable.update { it.copy(demarre = true, peerIdLocal = peerIdTexte, erreur = null) }
         journaliser("démarré, peerID $peerIdTexte (préfixe annoncé ${hex(peerId.copyOfRange(0, 4))})")
         boucle = Executors.newSingleThreadScheduledExecutor().also { exec ->
@@ -101,6 +108,16 @@ object TransportActif {
         maillage = null
         etatMutable.update { it.copy(demarre = false, liens = emptyList(), pairs = emptyMap(), pseudos = emptyMap()) }
         journaliser("arrêté")
+    }
+
+    /**
+     * Option de démonstration (US-312) : ignorer les nouveaux liens vers un
+     * téléphone, pour ne passer que par le relais. Vaut pour les liens
+     * ouverts **après** le changement ; perdue au redémarrage du processus.
+     */
+    fun ignorerLiensDirects(actif: Boolean) {
+        etatMutable.update { it.copy(ignorerLiensDirects = actif) }
+        journaliser(if (actif) "liens directs ignorés : relais seulement" else "liens directs acceptés")
     }
 
     /**

@@ -56,6 +56,13 @@ open class FauxNoeud : DengonNodeInterface {
         if (connectes.add(peerId)) evenements += NodeEvent.PeerConnected(peerId)
     }
 
+    /** « ANNOUNCE <peerID> » (format de test de MaillageTest) → onPeerConnected. */
+    override fun onNeighborAnnounced(frame: ByteArray): String {
+        val peerId = String(frame).removePrefix("ANNOUNCE ").removeSuffix(" relais")
+        onPeerConnected(peerId)
+        return peerId
+    }
+
     override fun onPeerDisconnected(peerId: String) {
         if (connectes.remove(peerId)) evenements += NodeEvent.PeerDisconnected(peerId)
     }

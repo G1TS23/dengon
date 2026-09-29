@@ -17,8 +17,9 @@ import org.junit.Test
 /**
  * [Maillage] en JVM pur (US-306) : vrai [AndroidTransport] sur [FauxRadio],
  * faux nœud qui enregistre les appels. Un « ANNOUNCE » de test est la
- * chaîne `ANNOUNCE <peerID>` ; la vraie vérification (signature) est
- * couverte par `DengonNodeIntegrationTest`.
+ * chaîne `ANNOUNCE <peerID>`, suivie de ` relais` pour un relais (US-312) ;
+ * la vraie vérification (signature, CAP_RELAY) est couverte par
+ * `DengonNodeIntegrationTest` et les tests Rust.
  */
 class MaillageTest {
 
@@ -49,13 +50,17 @@ class MaillageTest {
     private val transport = AndroidTransport(radio)
     private val noeud = NoeudEspion()
     private val journal = mutableListOf<String>()
+    private var relaisSeulement = false
     private val maillage = Maillage(
         transport,
         noeud,
         lireAnnonce = { octets ->
-            String(octets).takeIf { it.startsWith("ANNOUNCE ") }?.let { AnnonceLue(it.removePrefix("ANNOUNCE "), null) }
+            String(octets).takeIf { it.startsWith("ANNOUNCE ") }
+                ?.let { AnnonceLue(it.removePrefix("ANNOUNCE ").removeSuffix(" relais"), null) }
         },
         journal = { journal += it },
+        estRelais = { String(it).endsWith(" relais") },
+        ignorerLiensDirects = { relaisSeulement },
     )
 
     @Before
@@ -175,6 +180,34 @@ class MaillageTest {
         assertEquals(listOf("bob"), noeud.connectes)
         assertEquals(transport.lienPour(premier), maillage.pairs.keys.single())
         assertNull(maillage.pairs[transport.lienPour(second)])
+    }
+
+    @Test
+    fun `l ANNOUNCE d un relais est passe au noeud qui le lie`() {
+        val pair = radio.nouveauPair()
+        radio.connecter(pair)
+        radio.faireRecevoir(pair, "ANNOUNCE esp32 relais".toByteArray())
+        tour()
+        assertEquals(listOf("esp32"), noeud.connectes)
+        assertTrue(journal.any { "(relais)" in it })
+    }
+
+    @Test
+    fun `option relais seulement - lien direct ignore, relais accepte`() {
+        relaisSeulement = true
+        val bob = radio.nouveauPair()
+        val relais = radio.nouveauPair()
+        radio.connecter(bob)
+        radio.connecter(relais)
+        radio.faireRecevoir(bob, "ANNOUNCE bob".toByteArray())
+        radio.faireRecevoir(relais, "ANNOUNCE esp32 relais".toByteArray())
+        tour()
+        assertEquals(listOf("esp32"), noeud.connectes)
+        assertEquals(setOf("esp32"), maillage.pairs.values.toSet())
+
+        radio.faireRecevoir(bob, "paquet".toByteArray())
+        tour()
+        assertTrue("rien de bob n'atteint le nœud", noeud.recus.isEmpty())
     }
 
     @Test

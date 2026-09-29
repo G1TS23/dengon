@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +52,13 @@ fun TransportDebugScreen(onRetour: () -> Unit) {
             Text("  $lien ↔ $pair", fontFamily = FontFamily.Monospace, fontSize = 12.sp)
         }
         Text("Trames reçues : ${etat.trames}")
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(
+                checked = etat.ignorerLiensDirects,
+                onCheckedChange = TransportActif::ignorerLiensDirects,
+            )
+            Text("  Relais seulement (ignorer les liens directs)")
+        }
 
         Text("Journal", style = MaterialTheme.typography.titleSmall)
         LazyColumn {
