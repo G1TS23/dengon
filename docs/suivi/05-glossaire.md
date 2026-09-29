@@ -172,3 +172,6 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **`CAP_RELAY`** | Bit 0 du champ `caps` de l'`ANNOUNCE` : « je suis un relais ». Le relais ESP32 le pose ; un téléphone qui le lit lie ce voisin sans session et lui confie ses enveloppes (`Node::on_relay_connected`, US-312). |
 | **Accusé par enveloppe** | `Ack{Delivered}` scellé en Noise `X` vers l'auteur quand aucune session n'existe avec lui, confié au relais, qui le lui remet à son retour (US-312, `synthese/07` §4). |
 | **« Relais seulement » (option debug)** | Interrupteur de l'écran debug transport de l'app : ignore les liens vers un téléphone, pour simuler deux téléphones hors de portée l'un de l'autre pendant la démo (US-312). |
+| **Liaison fantôme** | Liaison BLE restée ouverte côté relais alors que le téléphone a fermé son serveur GATT (service arrêté). Elle occupe un des 3 liens du relais jusqu'à la coupure du Bluetooth du téléphone (constaté à l'US-312). |
+| **Preuve de possession (relais)** | Premier paquet signé, adressé à nous et frais, par lequel un relais prouve qu'il détient la clé de son `ANNOUNCE` : sans elle, rien ne lui est confié (`Node::prove_relay`, US-312). |
+| **Morceau d'abandon** | Morceau L1 d'un octet `0x40` : « trame interrompue, jette ton partiel ». Envoyé quand l'émission échoue au milieu d'une trame (US-312). |

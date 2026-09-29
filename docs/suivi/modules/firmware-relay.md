@@ -727,8 +727,22 @@ téléphones mutuellement illisibles.
   `FragmentationBleTest.kt`. `test_specifique.c` a été adapté (nouvelle
   limite, broadcast sur tous les liens). **40 tests, 0 échec** sur la cible
   `linux`.
-- Pas encore vérifié : sur carte, et la mesure du tas pendant un
-  réassemblage.
+- Vérifié sur carte le 2026-09-29, avec deux téléphones :
+  - trames d'Android comprises (`illisibles=0`) ;
+  - scénario 2 démontré (`déposées=2 remises=2`).
+
+**Suites de l'essai et de la revue (PR #129) :**
+- **Annonce du téléphone** (6 octets, sans flags) acceptée par
+  `dengon_adv_parse_mfg` (`DENGON_ADV_MFG_MIN_LEN`).
+- **Le relais n'initie plus que vers un relais**
+  (`dengon_adv_relay_should_connect`) : ce sont les téléphones qui
+  l'initient.
+- **Morceau d'abandon.** `DENGON_TC_CHUNK_ABORT` (`0x40`) est émis par `emit`
+  après un échec au milieu d'une trame ; lien coupé si l'abandon échoue aussi.
+  À la réception, le partiel est jeté sans erreur.
+- **Queue d'une trame trop longue** ignorée jusqu'à sa fin (`rx_skip`).
+- `dengon_tc_init` libère les réassemblages en cours.
+- 45 tests Unity sur `linux` (4 de plus).
 
 ## Pour l'oral
 

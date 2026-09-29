@@ -23,6 +23,27 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### Une règle anti-boucle symétrique suppose que les deux côtés scannent (US-312)
+
+**C'est quoi :** « le plus petit `peerID` initie » évite que deux nœuds se
+connectent l'un à l'autre en même temps. La règle ne tient que si **chaque**
+côté scanne en permanence et sait lire l'annonce de l'autre.
+**Piège / surprise :** sur carte, un Pixel de préfixe `f1d6…` n'initiait pas
+vers le relais (`9309…`), puisque c'était au relais de le faire. Or le relais :
+- ne savait pas lire l'annonce du téléphone : 6 octets au lieu de 7 ;
+- cessait de scanner quand ses 3 liens étaient pris, souvent par une liaison
+  fantôme laissée par un service Android arrêté.
+
+Résultat : A ne se reliait plus jamais, et l'accusé du scénario 3 restait sur
+le relais. Rien ne l'annonçait dans les logs : `ensure_scanning` sort en
+silence.
+**Parade :** asymétrie assumée. Le téléphone, qui scanne activement, initie
+vers le relais ; le relais n'initie que vers un autre relais.
+**Où c'est utilisé :** `Annonce.estRelais` (Android),
+`dengon_adv_relay_should_connect` (firmware).
+
+---
+
 ### Deux implémentations d'un même transport doivent partager des vecteurs (US-312)
 
 **C'est quoi :** l'app Android (Kotlin, US-213) et le relais (C, US-220) ont

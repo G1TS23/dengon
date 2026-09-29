@@ -18,6 +18,29 @@ et le mentionner dans l'entrée de journal.
 
 ---
 
+### 2026-09-29 — Relais : preuve de possession légère, initiation par le téléphone, liaisons fantômes (US-312, essai sur carte et revue PR #129)
+
+- **Prévu :**
+  - `docs/powl/03` §6.1 : règle anti-boucle symétrique, le plus petit `peerID` initie, quel que soit le type de nœud ;
+  - `synthese/06` : les pairs s'authentifient par un handshake `XX`. Rien ne dit comment un client authentifie un relais, qui n'ouvre pas de session.
+- **Réel :**
+  1. **Relais lié en deux temps** (`api::Node::prove_relay`). L'`ANNOUNCE` ne sert qu'à enregistrer la clé. Rien n'est confié au relais avant un paquet signé par cette clé, adressé à nous et daté à ±2 min de notre horloge : en pratique, l'`INVENTORY` qu'il envoie à la liaison.
+     - **Risque restant, accepté pour le prototype :** un attaquant présent qui **retransmet en direct** l'`ANNOUNCE` puis l'`INVENTORY` du vrai relais passe cette preuve. Il reçoit alors des enveloppes, toujours chiffrées : il apprend qui écrit, et peut les jeter.
+     - Même risque si un faux relais se lie avant le vrai : `Maillage` ne garde que le premier lien vers ce `peerID`, ce qui masque le vrai relais.
+     - Parade complète, non faite : un défi signé à la liaison (nonce du client, repris dans un paquet signé du relais), ou des clés de relais épinglées dans la configuration.
+  2. **Asymétrie d'initiation.** Un téléphone initie toujours vers un relais (drapeau `RELAY` de l'annonce). Un relais n'initie que vers un relais, avec la règle anti-boucle. Deux raisons :
+     - sur carte, le relais cessait de scanner et ne rappelait jamais un téléphone de préfixe plus grand ;
+     - sinon, chaque téléphone occupait deux des trois liens du relais.
+  3. **Annonce du téléphone sans octet de flags** (6 octets). Le relais l'accepte, flags à 0. Le format de `docs/powl/03` §6.1 (7 octets) n'est tenu que par le relais.
+  4. **Liaison fantôme** : à l'arrêt du service Android, le serveur GATT est fermé mais la liaison BLE reste ouverte côté relais jusqu'à la coupure du Bluetooth du téléphone. Elle occupe un lien du relais. Non corrigé : c'est la pile Android qui la tient.
+  5. **Morceau d'abandon L1** (`0x40`, 1 octet) ajouté au format de morceau, pour qu'un échec d'émission au milieu d'une trame ne corrompe pas la suivante.
+  6. **Carte de contact par intent**, en build debug seulement (`--es dengon.carte_debug`). La carte publique locale est écrite dans logcat. Cela sert à piloter l'essai par `adb` sans caméra. Ignoré hors build debuggable.
+  7. Après un redémarrage du Bluetooth, le transport Android n'est pas reconstruit (il faut arrêter puis relancer le service). L'app ne plante plus, elle jette la file du lien.
+- **Pourquoi :** trouvé pendant l'essai sur matériel et la revue de la PR #129 (Oswin).
+- **Impact :** `crates/dengon-core/src/api.rs`, `firmware/dengon-relay/components/dengon_transport_core/`, `main/transport_nimble.c`, `android/.../ble/transport/{GattRadio,Annonce,FragmentationBle}.kt`, `MainActivity.kt`.
+
+---
+
 ### 2026-09-29 — « Renvoyer » crée un nouveau message, relais reconnu par son pseudo (US-313)
 
 - **Prévu :** US-313 — bouton « Renvoyer » sur un message en échec ; écran

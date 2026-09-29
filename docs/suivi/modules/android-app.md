@@ -699,6 +699,11 @@ redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
   `FauxNoeud.onNeighborAnnounced` renvoie vers `onPeerConnected`.
   **Pas relancés sur ce poste** (pas de JDK) : la CI `android` fait foi.
 - Procédure d'essai : [`../e2e/US-312-scenarios-2-3.md`](../e2e/US-312-scenarios-2-3.md).
+- **Après l'essai sur matériel et la revue (PR #129) :**
+  - `GattRadio` initie **toujours** vers un relais (`Annonce.estRelais` : drapeau `RELAY` après le préfixe) ;
+  - `DeadObjectException` rattrapée à l'envoi, ciblée : l'app plantait après un redémarrage du Bluetooth ;
+  - `Reassembleur` gère le morceau d'abandon (`FragmentationBle.ABANDON`) et ignore la queue d'une trame trop longue ;
+  - `MainActivity`, en build debug seulement, accepte une carte par intent (`--es dengon.carte_debug`) et écrit la carte locale dans logcat, pour piloter l'essai par `adb` sans caméra.
 
 ## Pour l'oral
 

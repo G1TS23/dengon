@@ -1,9 +1,36 @@
 # US-312 — Scénarios 2 et 3 du DoD sur vrai matériel : procédure rejouable
 
-> **État (2026-09-29) :** procédure écrite, code prêt (branche
-> `feat/US-312-e2e-relais`), **essai sur matériel pas encore fait**. Les
-> champs « à relever » sont remplis pendant l'essai, puis l'essai est
-> consigné dans [`00-journal.md`](../00-journal.md).
+> **État (2026-09-29, 14 h) :**
+> - **scénario 2 démontré** sur matériel ;
+> - **scénario 3 démontré jusqu'à la réception par B**. Le retour de
+>   l'accusé à A a échoué sur un bug du relais, corrigé depuis mais **pas
+>   encore rejoué** ;
+> - dashboard non démontré : VPS indisponible.
+>
+> Détails, heures et pannes dans [`00-journal.md`](../00-journal.md), entrée
+> « essai sur carte et 2 téléphones ».
+
+## 0. Essai du 2026-09-29 : relevés
+
+| Élément | Valeur relevée |
+|---|---|
+| A | Pixel 8 Pro, Android 17, `peerID` `6hlkqyhkm7l4s` |
+| B | OnePlus 7 Pro GM1913, Android 12, `peerID` `o5cdebyl7xhrk` |
+| Relais | ESP32-D0WD-V3 `relay-9309e5` (`sme6kxwz4m5um`), branche `feat/US-312-e2e-relais` |
+| APK | artefact CI `dengon-debug-apk` (commit `0b445b3`) |
+| Distances | tout sur une table, < 1 m ; « hors de portée » par l'option « Relais seulement » |
+| Pilotage | `adb.exe` depuis WSL (`uiautomator dump` + `input tap`), console série pyserial |
+| Appairage | carte injectée par intent debug ; code `86396 99540 59169 70161 20425 81618 87459 91735 20523 52016 67660 61817` identique |
+
+| # | Heure | Observé |
+|---|---|---|
+| 2.2 | 13:48:26 | A envoie « scenario 2 via le relais » → « Distribué » |
+| 2.3 | 13:48:54 | B affiche le message ; relais `déposées=2 remises=2 illisibles=0` |
+| 3.1 | 13:49:56 | B : service arrêté |
+| 3.2 | 13:50:23 | A envoie → « Parti » ; relais `enveloppes=1 déposées=3` |
+| 3.3 | 13:51:36 | A : service arrêté |
+| 3.4 | 13:51:55 → 13:52:10 | B relié au relais, **reçoit le message** ; `remises=3 déposées=4` (accusé déposé) |
+| 3.5 | 13:53:03 → … | A redémarré **ne se relie pas** au relais : l'accusé reste sur le relais. Bug corrigé depuis (le téléphone initie toujours vers un relais), étape à rejouer |
 
 Référence : `docs/synthese/10-benchmarks-mvp-tests.md` §3.1 (DoD n°2 et n°3),
 `docs/synthese/07-cycle-de-vie-et-statuts.md` §5 (parcours d'une enveloppe

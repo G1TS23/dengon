@@ -1293,6 +1293,19 @@ Cinq cas :
 Contre-épreuve faite : avec l'accusé par enveloppe coupé, 3 cas sur 5
 échouent.
 
+**Après la revue de la PR #129 :**
+- **Relais lié en deux temps.** `on_relay_connected` ne fait qu'enregistrer
+  la clé. `prove_relay` promeut le relais au premier paquet signé, adressé à
+  nous et daté à ±2 min (`RELAY_PROOF_MAX_SKEW_MS`), en pratique son
+  `INVENTORY`. Seuls les relais prouvés reçoivent enveloppes et accusés
+  (`linked_relays`).
+- **Accusés conservés.** `pending_acks` contient des `PendingAck`. Un accusé
+  confié à un relais reste en attente pour la session et repart au relais
+  suivant, jusqu'à `ACK_ENVELOPE_SENDS_MAX` (3) fois.
+- `hand_off` rend un `Result`, propagé par `send_message`.
+- 3 tests de plus dans `relais_client.rs` (8 au total) : `ANNOUNCE` rejoué,
+  preuve périmée, accusé perdu en route.
+
 ## Pour l'oral
 
 Quatre livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du

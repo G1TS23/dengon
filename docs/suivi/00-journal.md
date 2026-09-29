@@ -10,6 +10,80 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-312 : essai sur carte et 2 téléphones, bugs trouvés, retours de revue (PR #129)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :**
+- `crates/dengon-core/src/api.rs`, `tests/relais_client.rs` ;
+- `firmware/dengon-relay/components/dengon_transport_core/`, `main/transport_nimble.c` ;
+- `android/app/src/main/java/com/dengon/app/{MainActivity.kt,ble/transport/{GattRadio.kt,Annonce.kt,FragmentationBle.kt}}` ;
+- `docs/suivi/`.
+
+**Lot :** US-312 (issue #50), PR #129 (brouillon).
+
+### Configuration réelle de l'essai
+- **Relais :** ESP32-D0WD-V3 (`relay-9309e5`, `peerID` `sme6kxwz4m5um`, préfixe `9309e55e`). CH340 partagé dans WSL par `usbipd attach --wsl --busid 2-3`, console lue par pyserial à 115 200 bauds. Wi-Fi « dengon-test-44d0 » (partage de connexion du PC).
+- **A :** Pixel 8 Pro (Android 17), `peerID` `6hlkqyhkm7l4s` (préfixe `f1d6a860`).
+- **B :** OnePlus 7 Pro GM1913 (Android 12), `peerID` `o5cdebyl7xhrk` (préfixe `77443207`).
+- **Pilotage :** `adb.exe` Windows appelé depuis WSL. APK de la CI (artefact `dengon-debug-apk`). Appuis par `uiautomator dump` + `input tap`.
+- Tout sur une table, à moins de 1 m. « Hors de portée » est obtenu par l'option **« Relais seulement »** sur les deux téléphones. Journal : `link#… : <pair> n'est pas un relais, lien direct ignoré`.
+- **Un 3ᵉ nœud dengon inconnu** était à portée : `qnoosowed3lsm`, préfixe `835ce93a`, sans doute un autre téléphone avec une ancienne app. Il occupait un des 3 liens du relais.
+- **Réinstallations :** l'APK de la CI est signé avec une clé de debug neuve à chaque exécution. L'ancienne app était signée par une autre clé, d'où `INSTALL_FAILED_UPDATE_INCOMPATIBLE`. Il a fallu désinstaller (identités et contacts perdus) et réappairer.
+
+### Résultats
+- **Scénario 2 : démontré.** A → B, « scenario 2 via le relais », envoyé à 13:48:26.
+  - A affiche « Distribué » quelques secondes après ; B affiche le message.
+  - Relais : `déposées=2 remises=2 illisibles=0` (message et accusé).
+- **Scénario 3 : démontré à moitié.**
+  - B arrête son service (13:49:56). A envoie « scenario 3 destinataire eteint » (13:50:23) : **« Parti »**, `enveloppes=1 déposées=3`.
+  - A arrête son service (13:51:36).
+  - B redémarre (13:51:55), se lie au relais (13:52:01) et **reçoit le message** : `remises=3`. Son accusé est déposé : `déposées=4`, `enveloppes=1`.
+  - B arrête (13:52:56), A redémarre (13:53:03)… et **ne se relie jamais au relais** : l'accusé reste sur la carte, A reste « Parti ». Cause : bug n°4 ci-dessous. Corrigé depuis, mais **pas encore rejoué** sur matériel.
+- **Dashboard :** non démontré. Le VPS ne répond plus : le TLS sur `:8443` reste bloqué après le `ClientHello`, et SSH renvoie `Connection reset by peer`, y compris depuis le workflow `deploy-vps`. Le relais tourne sans racine CA (`export coupé`).
+- **Appairage sans caméra :** carte injectée par intent (build debug). Code à 60 chiffres identique des deux côtés : `86396 99540 59169 70161 20425 81618 87459 91735 20523 52016 67660 61817`, confirmé « vérifié ».
+
+### Pannes trouvées sur matériel, et corrections
+1. **Crash de l'app** (`DeadObjectException` dans `GattRadio.notifierPeripherique`) sur un envoi après un redémarrage du Bluetooth. Le serveur GATT était celui de l'ancienne pile. Correction : l'exception est rattrapée, **ciblée** sur `DeadObjectException`, et la file du lien est jetée. Le transport n'est toujours pas reconstruit au retour du Bluetooth : il faut arrêter puis relancer le service à la main. Consigné.
+2. **Le relais ne lisait pas l'annonce BLE d'un téléphone.** Android annonce l'identifiant constructeur et le préfixe (6 octets) ; le relais exigeait 7 octets (octet de flags). Correction : `DENGON_ADV_MFG_MIN_LEN = 6`, flags à 0.
+3. **Liaison fantôme.** À l'arrêt du service Android, le serveur GATT est fermé mais la liaison BLE de bas niveau reste ouverte côté relais. Elle occupe un de ses 3 liens. Vu sur la console : `lien 2 fermé` seulement au moment où le Bluetooth du Pixel est coupé, 4 min après l'arrêt du service. Non corrigé côté Android (c'est la pile Android qui la tient). Consigné.
+4. **Le relais cessait de scanner et ne rappelait pas le Pixel**, dont le préfixe est plus grand que le sien : le relais devait initier (règle anti-boucle), et ne scannait plus du tout (sortie silencieuse d'`ensure_scanning`). Corrections :
+   - le téléphone **initie toujours vers un relais** (drapeau `RELAY` de l'annonce, `Annonce.estRelais`) ;
+   - le relais **n'initie plus que vers un autre relais** (`dengon_adv_relay_should_connect`). Il ne tient plus deux liens par téléphone, et n'a plus besoin de scanner pour être joint.
+
+### Retours de revue (Oswin, PR #129)
+1. **`ANNOUNCE` rejoué** : le relais est lié en deux temps. `on_relay_connected` ne fait qu'enregistrer sa clé. Il n'est **promu** qu'au premier paquet signé, adressé à nous, émis par lui et daté à ±2 min de notre horloge (`prove_relay`), c'est-à-dire l'`INVENTORY` qu'il envoie à la liaison. Un rejeu octet pour octet est déjà écarté par la déduplication du routeur. Tests : `announce_de_relais_rejoue_ne_recoit_rien`, `preuve_perimee_du_relais_refusee`. Risque restant consigné.
+2. **Échec au milieu d'une trame** : émission d'un **morceau d'abandon** (`0x40`, sans données), qui fait jeter le partiel au pair (firmware et Android). S'il échoue aussi, le lien est coupé.
+3. **Queue d'une trame trop longue** : ignorée jusqu'à son dernier morceau (`rx_skip`, et `ignorerJusquALaFin` côté Android).
+4. **`rx_part` à la remise à zéro** : `dengon_tc_init` libère les tampons. Pas de fuite réelle aujourd'hui : les deux appels portent sur une structure nulle ou sans lien. Le tampon statique de 8 × 514 o est écarté : 4 Ko de DRAM en moins sur un tas mesuré à 15,5 Ko au minimum. Une trame en plusieurs morceaux est rare au MTU 517.
+5. **Accusés** : un accusé **reste** dans `pending_acks` tant qu'il n'est pas parti en session. Il est confié aux relais au plus 3 fois (`ACK_ENVELOPE_SENDS_MAX`), et rien n'est perdu sur un échec de scellement. Test : `accuse_perdu_en_route_repart_au_relais_suivant`.
+6. **Points légers :**
+   - `hand_off` propage de nouveau l'erreur de l'outbox sur le chemin de `send_message` ;
+   - le `catch` Android est ciblé sur `DeadObjectException` ;
+   - double lien vers le relais : supprimé, puisque le relais n'initie plus vers un téléphone ;
+   - liens ignorés par l'option debug : laissés ouverts, le contrat `Transport` n'a pas de fermeture ;
+   - carte locale dans logcat : c'est la carte publique, en build debug seulement ;
+   - Sonar : 6 remarques, toutes dans `dengon.kt` (généré par UniFFI).
+7. **Description de PR** : les cases non démontrées sont décochées.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check ; cargo clippy --workspace --exclude dengon-node --all-targets --locked -- -D warnings → OK
+$ cargo test --workspace --exclude dengon-node --locked → 553 passés, 0 échec (relais_client : 8)
+# Contre-épreuves : ACK_ENVELOPE_SENDS_MAX=1 → accuse_perdu… échoue ;
+# linked_relays sans relay_proven → les 2 tests de preuve échouent. Code remis.
+$ cargo check -p dengon-core --no-default-features → OK
+$ test_dengon_transport_core.elf (cible linux) → 45 Tests 0 Failures
+$ idf.py build + app-flash (carte) → 21 % libre, Hash of data verified
+$ gh run download … -n dengon-debug-apk ; adb.exe install → Success ×2 (CI android verte)
+```
+- **Non vérifiés :**
+  - le scénario 3 complet après les corrections 2 et 4 ;
+  - l'APK avec les corrections de revue : la CI doit le reconstruire ;
+  - le dashboard (VPS indisponible) ;
+  - les tests Gradle en local (pas de JDK).
+
+---
+
 ## 2026-09-29 — US-312 : le téléphone se sert du relais ESP32 (code prêt, essai matériel à faire)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
