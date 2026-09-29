@@ -4,16 +4,18 @@
 de fond BLE (US-109) possède maintenant une implémentation réelle du contrat
 `Transport` (US-213) : GATT server + advertiser + scanner, testée sur 2 vrais
 téléphones ; s'y ajoutent les écrans de messagerie (US-214) et d'appairage QR
-(US-215), sur le vrai FFI depuis l'US-302.
+(US-215), sur le vrai FFI depuis l'US-302 ; depuis l'US-306, le transport
+alimente le nœud (`Maillage`).
 **Correspond à la conception :** `docs/synthese/04-architecture.md` §3
 (impl Android du trait `Transport`) et §7 ; `docs/synthese/10-benchmarks-mvp-tests.md`
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109, US-213 ; `crates/dengon-ble/src/transport.rs` (le contrat, US-105) et
 `crates/dengon-ble/src/conformance.rs` (la suite de conformité).
-**Dernière mise à jour :** 2026-09-29 (US-302 : l'app tourne sur le vrai FFI ; corrections revue PR #109)
+**Dernière mise à jour :** 2026-09-29 (US-306 : radio branchée sur le nœud ; US-302 : corrections revue PR #109)
 **État :** partiel — service de fond (US-109) + transport BLE réel (US-213) +
 messagerie (US-214) + appairage QR (US-215), **sur le vrai FFI** depuis
-l'US-302 ; le transport n'est pas encore branché sur le nœud (US-306) — voir
+l'US-302 ; transport branché sur le nœud (US-306, testé en JVM et
+**démontré sur 2 téléphones** le 2026-09-29) — voir
 « Spike C » ci-dessous pour le code GATT jetable qui a dérisqué
 `AndroidTransport` avant cette US
 
@@ -589,7 +591,7 @@ Depuis l'US-302, l'app n'appelle plus aucun bouchon : `ffi/DengonTypes.kt` et
 
 | Élément | Fichier | Rôle |
 |---|---|---|
-| `DengonApplication.noeud` | `DengonApplication.kt` | **Le** `DengonNode` du processus (`lazy` synchronisé). Ouverture lancée dès `onCreate` sur un thread de fond (revue PR #109, risque d'ANR) : l'activité ne l'attend que si elle n'est pas finie. Partagé par l'UI et, à l'US-306, par le service de premier plan. |
+| `DengonApplication.noeud` | `DengonApplication.kt` | **Le** `DengonNode` du processus (`lazy` synchronisé). Ouverture lancée dès `onCreate` sur un thread de fond (revue PR #109, risque d'ANR) : l'activité ne l'attend que si elle n'est pas finie. Partagé par l'UI et par le service de premier plan (`Maillage`, US-306). |
 | `IdentiteLocale.ouvrirNoeud` | `identite/IdentiteLocale.kt` | `DengonNode.open(filesDir/dengon, cleDuCoffre(…), Build.MODEL)`. `cleDuCoffre` (testée en JVM avec une fausse source) réinitialise l'identité si la clé est irrécupérable ou si le coffre n'a plus de clé, au lieu d'un crash à chaque lancement (voir `03-ecarts-conception.md`). Le contournement US-215 (pseudo hexadécimal aléatoire pour distinguer les `peerId` du bouchon) disparaît : le `peerId` vient des vraies clés. |
 | `CleCoffre.cle` | `identite/CleCoffre.kt` | Clé de 32 o du coffre, tirée une fois, rangée **enveloppée** (AES-GCM par une clé du Keystore Android) dans les SharedPreferences. Écrite par `commit()` avant le coffre. Méthodes `@Synchronized` (course au premier lancement, revue PR #109) ; enveloppe illisible → `CleIrrecuperable` ; `oublier` efface clé et entrée Keystore. |
 | `AppairageViewModel(onContactVerifie)` | `ui/appairage/AppairageViewModel.kt` | À la confirmation du code 60 chiffres, la carte complète du contact est transmise à `noeud::addContact` — sans cela `sendMessage` répondrait `UnknownPeer`. |
@@ -600,12 +602,67 @@ Construction : `android/scripts/build-ffi.sh` (WSL / CI) avant Gradle — les
 `.so` ne sont pas versionnées. `abiFilters = arm64-v8a, x86_64`. Règles R8
 ajoutées pour JNA (`proguard-rules.pro`) ; `assembleRelease` vérifié.
 
-Ce qui reste pour l'US-306 : aucune radio n'alimente encore le nœud
+Ce qui restait pour l'US-306 : aucune radio n'alimentait encore le nœud
 (`AndroidTransport`, US-213, à brancher sur `onPeerConnected` /
-`onBytesReceived` / `takeOutgoing`), et contacts / messages ne survivent pas
-à un redémarrage. Les appels du `ConversationsViewModel` restent synchrones
-alors qu'ils prennent le `Mutex` du nœud, bientôt partagé avec le service :
-à passer sur un dispatcher d'E/S (TODO dans le KDoc).
+`onBytesReceived` / `takeOutgoing`) — fait, section suivante. Contacts /
+messages ne survivent toujours pas à un redémarrage. Les appels du
+`ConversationsViewModel` restent synchrones alors qu'ils prennent le `Mutex`
+du nœud, désormais partagé avec le service : à passer sur un dispatcher d'E/S
+(TODO dans le KDoc).
+
+## Radio branchée sur le nœud (US-306)
+
+Le service de fond fait maintenant circuler les vrais paquets : la boucle de
+`TransportActif` (50 ms) passe chaque lot d'événements du transport au
+`Maillage`, qui parle au nœud.
+
+| Élément | Fichier | Rôle |
+|---|---|---|
+| `Maillage` | `ble/Maillage.kt` | Pont `Transport` ↔ `DengonNodeInterface`. `PeerConnected` → écrit `noeud.announceFrame()` ; 1ʳᵉ trame d'un lien non identifié → `lireAnnonce` (par défaut `identityFromAnnounce`, vérifie la signature) → lien ↔ `peerID` + `onPeerConnected` ; trames suivantes → `onBytesReceived` ; `PeerDisconnected` → `onPeerDisconnected` ; `takeOutgoing` → `send` sur le lien du pair. Un 2ᵉ lien vers un pair déjà relié est ignoré. `@Synchronized` (boucle du service + UI). |
+| `peerIdDeLAnnonce` | `ble/Maillage.kt` | Lecture d'ANNOUNCE par le vrai FFI ; `null` si refusé. |
+| `PeerIdOctets.depuisBase32` | `ble/PeerIdOctets.kt` | `peerID` du FFI (13 car. base32) → 8 octets pour `TransportConfig` ; refuse longueur, alphabet et bit de remplissage non nul. |
+| `TransportActif` | `ble/transport/TransportActif.kt` | Démarre le transport avec le **vrai** `peerID` du nœud (plus de tirage aléatoire en SharedPreferences), possède le `Maillage`, expose `vider()`. |
+| `ConversationsViewModel(apresEnvoi)` | `ui/conversations/ConversationsViewModel.kt` | Après un envoi accepté, `TransportActif.vider()` : la trame part tout de suite, sans attendre la boucle. |
+| Écran de debug | `ble/transport/TransportDebugScreen.kt` | Affiche les pairs identifiés ; les envois bruts et le battement de l'US-213 sont **retirés** (le nœud jetterait ces octets). |
+
+**Scénario 1 côté code :** Alice envoie → `QUEUED` → trame écrite
+(`IN_FLIGHT`) → Bob la reçoit, renvoie un `Ack` dans la session →
+`DELIVERED` chez Alice. Couvert en JVM par
+`DengonNodeIntegrationTest` (« deux maillages reliés par la radio vont
+jusqu'à DELIVERED ») : deux **vrais** nœuds, deux `AndroidTransport`, une
+radio de test qui fragmente à 20 o. `MaillageTest` (8 cas) couvre le pont
+seul avec un faux nœud.
+
+**Démontré sur 2 vrais téléphones (2026-09-29)** — Pixel 8 Pro (Android 17)
+et OnePlus 7 Pro (Android 12), pilotés par `adb` : appairage QR par les
+caméras, code 60 chiffres identique des deux côtés ; messages dans les deux
+sens « Distribué » en < 1 s ; service du OnePlus arrêté → « En attente »,
+redémarré → « Distribué » ; OnePlus écran éteint (relevé 33/33 `OFF`) en
+Doze forcé pendant ~6 min → message « Distribué » sans réveil. Détail et
+heures : `00-journal.md`. Deux pièges de l'essai : l'**horloge** du OnePlus
+(2019 : tout paquet rejeté par la fenêtre de fraîcheur du routeur) et
+l'absence de moyen d'écrire à un contact tout juste appairé (corrigé dans
+`add_contact`, `03-ecarts-conception.md`).
+
+Checklist d'essai (pour la rejouer) :
+
+0. Vérifier l'**heure** des deux téléphones (`adb shell date -u`) et que le
+   Bluetooth est actif.
+1. Installer l'APK debug sur les deux téléphones, accorder les permissions.
+2. Appairage : chacun scanne le QR de l'autre, comparer les 60 chiffres,
+   confirmer des deux côtés.
+3. Écran de debug : « Pairs identifiés : 1 » des deux côtés (sinon
+   `adb logcat -s dengon-transport`).
+4. Envoyer un message : il doit passer en attente → parti → distribué ;
+   répondre depuis l'autre téléphone.
+5. Éteindre l'écran du destinataire, le **débrancher**, attendre ≥ 5 min,
+   envoyer ; rallumer : le message est là, l'expéditeur voit « distribué ».
+6. Consigner heures, modèles, versions Android et extraits de logcat dans le
+   journal.
+
+**Limites :** l'UI reste seule lectrice de `pollEvents` (pas de
+notification app fermée) ; accusé en session seulement ; contacts perdus au
+redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
 
 ## Pour l'oral
 

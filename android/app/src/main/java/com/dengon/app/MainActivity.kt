@@ -30,6 +30,7 @@ import androidx.core.content.ContextCompat
 import com.dengon.app.ble.BlePermissions
 import com.dengon.app.ble.MeshForegroundService
 import com.dengon.app.ble.spike.HelloMeshSpikeScreen
+import com.dengon.app.ble.transport.TransportActif
 import com.dengon.app.ble.transport.TransportDebugScreen
 import com.dengon.app.ui.appairage.AppairageScreen
 import com.dengon.app.ui.appairage.AppairageViewModel
@@ -44,9 +45,9 @@ class MainActivity : ComponentActivity() {
     private val noeud get() = (application as DengonApplication).noeud
 
     // Messagerie (US-214) sur le vrai nœud. Le ViewModel survit aux rotations
-    // d'écran.
+    // d'écran. Chaque envoi part aussitôt sur la radio (US-306).
     private val conversationsViewModel: ConversationsViewModel by viewModels {
-        ConversationsViewModel.fabrique(noeud)
+        ConversationsViewModel.fabrique(noeud, apresEnvoi = TransportActif::vider)
     }
 
     // Appairage (US-215) : un contact confirmé devient un correspondant du

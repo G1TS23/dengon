@@ -86,3 +86,26 @@ def jwt_secret() -> str:
             f"{JWT_SECRET_ENV_VAR} doit faire au moins {MIN_JWT_SECRET_BYTES} octets"
         )
     return raw
+
+
+RELAY_SILENT_MINUTES_ENV_VAR = "DENGON_DASHBOARD_RELAY_SILENT_MINUTES"
+# docs/synthese/09-dashboard-et-donnees.md §5 : alerte `relay_silent` = pas de
+# `relay.health` depuis 5 min (le relais en émet un toutes les 60 s).
+DEFAULT_RELAY_SILENT_MINUTES = 5
+
+
+def relay_silent_ms() -> int:
+    """Durée sans `relay.health` au-delà de laquelle un relais est « muet »
+    (alerte `relay_silent`, US-311), en millisecondes."""
+    raw = os.environ.get(RELAY_SILENT_MINUTES_ENV_VAR)
+    if raw is None:
+        return DEFAULT_RELAY_SILENT_MINUTES * 60_000
+    try:
+        minutes = float(raw)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"{RELAY_SILENT_MINUTES_ENV_VAR}={raw!r} n'est pas un nombre valide"
+        ) from exc
+    if minutes <= 0:
+        raise RuntimeError(f"{RELAY_SILENT_MINUTES_ENV_VAR} doit être > 0")
+    return int(minutes * 60_000)

@@ -27,7 +27,9 @@ import com.dengon.app.ble.transport.TransportActif
  *
  * Depuis l'US-213, il possède le transport BLE réel ([TransportActif] :
  * `AndroidTransport` + `GattRadio`) : c'est ce qui garde les liens GATT
- * ouverts écran éteint.
+ * ouverts écran éteint. Depuis l'US-306, ce transport alimente le vrai nœud
+ * (`Maillage`) : messages reçus et accusés continuent de circuler écran
+ * éteint, l'UI les affiche à son retour.
  */
 class MeshForegroundService : Service() {
 

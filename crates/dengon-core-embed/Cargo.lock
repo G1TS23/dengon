@@ -166,6 +166,7 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "dengon-core",
+ "rand_core",
 ]
 
 [[package]]

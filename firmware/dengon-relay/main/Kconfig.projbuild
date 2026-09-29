@@ -1,13 +1,14 @@
 menu "dengon — relais"
 
     config DENGON_TRANSPORT_DEMO
-        bool "Tâche de démonstration du transport (US-220)"
-        default y
+        bool "Tâche de démonstration du transport (US-220), à la place du relais"
+        default n
         help
             Poll le transport, journalise chaque événement et diffuse
             périodiquement une trame opaque de test. C'est la preuve « octets
-            relayés entre deux cartes » de l'US-220. À couper quand
-            dengon-core prendra la boucle en main (US-308).
+            relayés entre deux cartes » de l'US-220. Activée, elle REMPLACE
+            le relais dengon (US-308) : pas de dengon-core, pas de journal,
+            peerID bouchon tiré de la MAC.
 
     config DENGON_DEMO_PERIOD_MS
         int "Période de diffusion de la trame de démo (ms)"

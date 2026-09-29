@@ -85,6 +85,46 @@ pub fn parse_sealed_payload(payload: &[u8]) -> Result<(SealedHeader, &[u8]), Cou
     ))
 }
 
+/// Encode le payload d'un `ENVELOPE_OFFER` / `ENVELOPE_REQUEST` :
+/// `count(2) ‖ recipient_tag(16)[count]` (`synthese/05` §4), `count`
+/// big-endian. Au-delà de `u16::MAX` tags, la liste est tronquée (jamais en
+/// pratique : le magasin est borné à `ENVELOPE_STORE_MAX`).
+#[must_use]
+pub fn encode_tag_list(tags: &[RecipientTag]) -> Vec<u8> {
+    let tags = &tags[..tags.len().min(usize::from(u16::MAX))];
+    let count = u16::try_from(tags.len()).unwrap_or(u16::MAX);
+    let mut out = Vec::with_capacity(2 + tags.len() * RECIPIENT_TAG_LEN);
+    out.extend_from_slice(&count.to_be_bytes());
+    for tag in tags {
+        out.extend_from_slice(tag);
+    }
+    out
+}
+
+/// Décode un payload `ENVELOPE_OFFER` / `ENVELOPE_REQUEST`.
+///
+/// # Errors
+///
+/// [`CourierError::MalformedEnvelope`] si le payload ne fait pas exactement
+/// `2 + count × 16` octets.
+pub fn decode_tag_list(payload: &[u8]) -> Result<Vec<RecipientTag>, CourierError> {
+    let (tete, reste) = payload
+        .split_first_chunk::<2>()
+        .ok_or(CourierError::MalformedEnvelope)?;
+    let count = usize::from(u16::from_be_bytes(*tete));
+    if reste.len() != count * RECIPIENT_TAG_LEN {
+        return Err(CourierError::MalformedEnvelope);
+    }
+    Ok(reste
+        .chunks_exact(RECIPIENT_TAG_LEN)
+        .map(|c| {
+            let mut tag = [0; RECIPIENT_TAG_LEN];
+            tag.copy_from_slice(c);
+            tag
+        })
+        .collect())
+}
+
 /// Que faire quand le magasin est plein.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EvictionPolicy {

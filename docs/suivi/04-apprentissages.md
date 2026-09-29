@@ -23,6 +23,34 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### Relier un lien radio à un pair : l'`ANNOUNCE` signé en tête de lien
+
+**C'est quoi :** une connexion BLE ne dit pas **qui** est en face : le
+transport ne rend qu'un `LinkId` (et au mieux 4 octets de `peerID` dans
+l'annonce BLE, vus seulement par le côté qui scanne). Chaque côté écrit donc
+son `ANNOUNCE` (clés publiques + pseudo, **signé** Ed25519) en première trame
+du lien ; l'autre le vérifie et en déduit le `peerID`
+(`SHA-256(pub_static)[0..8]`) à donner au nœud.
+**Pourquoi dans dengon :** `api::Node` ne raisonne qu'en `peerID` ; sans cette
+liaison, aucun octet radio ne pouvait atteindre le nœud (US-306).
+**Piège / surprise :**
+1. L'ordre suffit, pas besoin d'état « en attente » côté nœud : le transport
+   garantit l'ordre **par lien**, et un pair écrit son `ANNOUNCE` avant de
+   connaître le nôtre — donc avant tout autre paquet.
+2. La signature seule ne prouve rien sur le `peerID` : il faut aussi vérifier
+   `peerID == SHA-256(pub_static)[0..8]` (test « `peerID` usurpé »). Et même
+   là, c'est le handshake `XX` qui prouve la possession de la clé statique.
+3. Fin de handshake : l'initiateur écrit le message 3 **et** passe en session
+   dans la même fonction. Tout ce que la session débloque (accusés) doit être
+   mis en sortie **après** le message 3, sinon le répondeur reçoit un
+   ciphertext avant d'avoir fini son handshake et le jette.
+**Où c'est utilisé :** `crates/dengon-core/src/api.rs` (`announce_packet`,
+`parse_announce`, `handle_handshake_message`),
+`android/app/src/main/java/com/dengon/app/ble/Maillage.kt`.
+**Pour aller plus loin :** `docs/synthese/07-cycle-de-vie-et-statuts.md` §6.
+
+---
+
 ### UniFFI côté Kotlin : JNA, deux artefacts, et une lib hôte pour les tests JVM
 
 **C'est quoi :** les bindings Kotlin qu'UniFFI génère n'utilisent pas JNI mais
@@ -49,6 +77,39 @@ Kotlin ↔ Rust (US-302) de tourner en `testDebugUnitTest`, sans téléphone ni
 **Pour aller plus loin :** <https://mozilla.github.io/uniffi-rs/latest/kotlin/gradle.html>
 
 ---
+### Pile FreeRTOS et crypto Rust : mesurer, pas deviner (US-308)
+
+Une tâche FreeRTOS a une pile **fixe**, choisie à sa création. Le code Rust
+appelé par FFI met ses variables sur cette pile. Une signature Ed25519
+(`ed25519-dalek`) plus les cadres du routeur ont pris ≈ 7,8 Ko dans
+`dengon_route`, créée avec 6 Ko : `stack overflow in task dengon_route` à la
+première ouverture de lien, invisible sur PC où les piles font des Mo. ESP-IDF
+le détecte (canari de fin de pile) et redémarre. Le correctif est double :
+plus de pile (16 Ko), et une **mesure** permanente,
+`uxTaskGetStackHighWaterMark()` (plus petite marge jamais vue, en octets sur
+ESP-IDF), imprimée dans le bilan de santé.
+
+### ESP-IDF : `OK` est déjà pris, et `esp_fill_random` n'est pas toujours aléatoire (US-308)
+
+- **Collision de noms C.** `rom/ets_sys.h`, inclus par la plupart des en-têtes
+  système d'ESP-IDF, déclare un énumérateur `OK`. Un header généré par
+  `cbindgen` avec `prefix_with_name = false` déclarait lui aussi `OK`,
+  d'où `redeclaration of enumerator 'OK'` au premier `#include` côté
+  firmware. En C, les énumérateurs partagent l'espace de noms global : un
+  header de bibliothèque doit **toujours** préfixer (`DENGON_STATUS_OK`).
+  Le test hôte (C sur PC) ne pouvait pas le voir.
+- **Aléa.** `esp_fill_random()` n'est un vrai générateur matériel que si le
+  Wi-Fi ou le Bluetooth est allumé, ou si `bootloader_random_enable()` a été
+  appelé (bruit du SAR ADC). Sinon c'est un PRNG. `bootloader_random_enable()`
+  doit être **coupé** avant d'allumer la radio. D'où l'ordre du relais :
+  secrets tirés au tout début (source ADC), puis radio, puis auto-test Noise.
+- **Reprise d'un journal chaîné après coupure.** Deux écritures (le fichier
+  et le curseur) ne sont jamais atomiques ensemble. L'ordre choisi rend
+  chaque coupure réparable : fichier fsync-é **d'abord**, curseur **ensuite**.
+  Au boot, le fichier fait foi, sa fin incomplète est tronquée, et le curseur
+  ne sert que quand le fichier est vide (après une rotation).
+  `dengon-verify` refuse un fichier tronqué (code 65) : la réparation est
+  indispensable, pas cosmétique.
 
 ### Noise `XX` : c'est l'**écriture**, pas la lecture, qui termine le handshake côté initiateur
 
@@ -1476,3 +1537,28 @@ propre callback lié à une connexion précise).
 **Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ble/transport/GattRadio.kt`
 (`RadioPeer.generation`, `pairActuel()`), corrigé en revue de la PR #98
 (US-213).
+
+### Un petit trait sous `Transport` rend la logique de liens testable sans radio (US-303)
+
+**Ce que c'est :** `btleplug` est asynchrone et demande un adaptateur ; le contrat
+`Transport` est synchrone et non bloquant. Plutôt que d'écrire `Transport`
+directement sur `btleplug`, on met dessous un trait `CentralRadio` (4 méthodes)
+et une implémentation générique `CentralTransport<R>` qui porte tout ce que le
+contrat exige (identifiants de lien, quota, ordre des événements, coupure).
+**Pourquoi dans dengon :** la suite de conformité peut ainsi tourner en CI sur
+une fausse radio ; seule la fine couche de traduction `btleplug` reste sans test
+automatique.
+**Piège / surprise :** la suite lit l'événement `PeerConnected` avec `poll` *après*
+`connecter_un_pair` : le banc ne doit pas consommer l'événement lui-même. Il
+s'appuie sur le fait que le premier `LinkId` attribué vaut 0 (compteur monotone).
+**Où c'est utilisé :** `crates/dengon-ble/src/central.rs`,
+`crates/dengon-ble/tests/conformite_central.rs`.
+
+### Windows refuse de supprimer une base SQLite encore ouverte (US-303)
+
+**Ce que c'est :** `remove_dir_all` échoue (erreur 32) tant qu'une connexion
+SQLite vit dans le même processus ; Linux l'aurait accepté.
+**Pourquoi dans dengon :** le test `etat::tests::le_peer_id_survit_a_un_redemarrage`
+doit `drop` le nœud (donc son `Store`) avant de nettoyer le dossier.
+**Où c'est utilisé :** `crates/dengon-node/src/etat.rs`.
+

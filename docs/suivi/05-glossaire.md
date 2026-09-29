@@ -15,6 +15,9 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Déduplication / seen-set** | Mémoire des messages déjà vus (par leur `msgID`) pour ne pas les relayer en boucle. |
 | **Jitter de relais** | Petit délai aléatoire avant de relayer, pour que les doublons s'annulent. |
 | **Flood contrôlé** | Diffusion à tous les voisins, mais bornée par TTL + dedup + budget. |
+| **littlefs** | Système de fichiers pour flash, résistant aux coupures (copie sur écriture). Porte le journal chaîné du relais ESP32 (`/lfs/ledger.bin`, US-308). |
+| **Curseur (du journal)** | `seq` de la prochaine entrée + hash de la dernière, gardé en NVS. Permet au relais de reprendre sa chaîne après un redémarrage sans relire le fichier. Synonyme d'**ancre** (`ledger::Anchor`). |
+| **NVS** | *Non-Volatile Storage* d'ESP-IDF : petit magasin clé → valeur en flash. Le relais y garde ses secrets et le curseur du journal. |
 | **Sans-IO** (*sans-IO*) | Code qui décide sans faire lui-même d'entrée/sortie : l'appelant lui passe l'heure, les paquets, la graine, et exécute ses décisions. Cas de `sync::routing`. |
 | **Anti-inondation** | Plafond de nouveaux `msgID` acceptés par voisin et par minute (`FLOOD_MAX_PER_MIN_PEER = 20`) : un voisin qui inonde est ignoré jusqu'à ce que son débit retombe. |
 | **Clamp de densité** | Avec 6 voisins ou plus, le TTL relayé est plafonné à 5 : en zone dense, pas besoin d'aller loin. |
@@ -155,3 +158,9 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **cargo-ndk** | Sous-commande Cargo qui compile une crate Rust pour les ABI Android (`arm64-v8a`, `x86_64`…) avec le bon compilateur du NDK, et range les `.so` dans l'arborescence `jniLibs/<abi>/` attendue par Gradle. |
 | **ABI (Android)** | Famille de processeur visée par une bibliothèque native : `arm64-v8a` (quasi tous les téléphones récents), `armeabi-v7a` (anciens), `x86_64` (émulateur). Un APK doit fournir chaque `.so` pour chaque ABI qu'il déclare. |
 | **Coffre d'identité** | Fichier `identity.vault` : les clés privées de l'appareil, chiffrées XChaCha20-Poly1305 par `dengon-core` (US-205). Sur Android, sa clé est elle-même chiffrée par une clé du Keystore (`CleCoffre`, US-302). |
+| **ANNOUNCE (de lien)** | Paquet `0x01`, signé : `peerID`, clés publiques, pseudo, hauteur de journal. À l'US-306, chaque côté l'écrit en première trame d'un lien BLE qui s'ouvre ; l'autre le vérifie pour savoir quel `peerID` est au bout du lien (le transport ne connaît que des `LinkId`). |
+| **Maillage (classe Android)** | `ble/Maillage.kt` (US-306) : le pont entre le transport BLE et le nœud Rust — relie chaque lien à un `peerID` par l'ANNOUNCE, pousse les trames reçues au nœud, écrit sur la radio ce qu'il produit. À ne pas confondre avec le maillage au sens réseau. |
+| **Accusé (Ack) de réception** | `AppFrame::Ack{Delivered}` renvoyé par le destinataire dans la session Noise ; c'est lui qui fait passer un message envoyé de « parti » (`InFlight`) à « distribué » (`Delivered`), US-306. |
+| **Central / Peripheral (BLE)** | Les deux rôles d'une connexion GATT : le *central* scanne et initie ; le *peripheral* annonce et sert les caractéristiques. `btleplug` ne fait que central (Spike B), d'où `dengon-node` qui ne peut pas être découvert (US-303). |
+| **`CentralRadio`** | Trait de `dengon-ble` : la radio en rôle central (scan/connexion, événements, écriture). `CentralTransport<R>` le transforme en `Transport`. |
+

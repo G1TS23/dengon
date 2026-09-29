@@ -38,6 +38,55 @@ et le mentionner dans l'entrée de journal.
 - **Conséquence :** les pairs qui avaient appairé l'ancienne identité doivent
   refaire l'appairage QR. À revoir quand contacts et messages seront persistés
   (la réinitialisation les rendrait alors orphelins).
+### 2026-09-29 — Relais ESP32 (US-308) : pas de `CryptoResolver`, pas de trait `Store`, heure apprise, client pas prêt
+
+- **Prévu :** l'issue #46 demande un « `CryptoResolver` custom branché sur
+  `esp_fill_random()` » et un « `Store` implémenté sur NVS + littlefs ».
+  `docs/synthese/08-relais-esp32.md` §3 prévoit un NVS **chiffré par eFuse**,
+  le journal en littlefs, et le Wi-Fi/SNTP pour l'heure. §4 prévoit un relais
+  qui dialogue avec les téléphones (`INVENTORY`, `ENVELOPE_OFFER/REQUEST`).
+- **Réel :**
+  1. **Pas de second `CryptoResolver`.** `crypto::rng::CallerResolver`
+     (US-204) remet déjà à `snow` n'importe quel `RngCore + CryptoRng`.
+     `dengon-core-ffi` fournit `PlatformRng` (au-dessus d'un pointeur de
+     fonction C) et `dengon_noise_selftest`, que le firmware appelle au boot
+     avec `esp_fill_random`, radio allumée. Les secrets du premier boot sont
+     tirés sous `bootloader_random_enable()`, avant la radio.
+  2. **Pas de trait `Store` générique.** La persistance reste au firmware,
+     comme le prévoyait la doc de `ledger.rs`. Le composant C `dengon_store`
+     met les secrets et le curseur en NVS, et le journal (anneau de 2 × 96 Ko)
+     en littlefs. `ledger::Ledger::resume` permet de reprendre depuis la seule
+     ancre.
+  3. **NVS non chiffré** (pas d'eFuse brûlé) : irréversible sur la carte,
+     trop tôt pour un prototype.
+  4. **Heure apprise d'un `ANNOUNCE` authentique** tant que celle de l'ESP32
+     est antérieure à 2024 (pas de SNTP avant US-309). Sans heure, le relais
+     ignore les paquets : le routeur les rejetterait tous en `ClockSkew`.
+     Risque : un pair légitime qui annonce une heure future peut faire
+     avancer l'horloge du relais.
+  5. **Voisin identifié par le premier `ANNOUNCE` authentique reçu sur un
+     lien** : le transport ne donne pas le `peerID`. Un `ANNOUNCE` relayé
+     arrivé en premier lierait le lien au mauvais pair.
+  6. **Pas de fragmentation ni de réassemblage côté relais** : les fragments
+     sont relayés comme des paquets ordinaires, et les paquets du relais
+     sont bornés à une trame (13 `msgID` par `INVENTORY`, 26 tags par offre).
+  7. Remise d'enveloppe **considérée faite dès la mise en file d'émission**
+     (le transport ne confirme pas la réception).
+  8. `copy_budget` / `budget_after` journalisés à 0 (Spray-and-Wait = v2).
+  9. `peer.connected` / `peer.disconnected` non journalisés : le `peerID` est
+     inconnu à la connexion. `peer.announce_seen` en tient lieu.
+  10. `msg_log_id` du relais = `SHA-256(msgID)[0..8]` : il ne voit jamais le
+      `msg_uuid`, qui est chiffré.
+  11. **Côté client (hors périmètre, décidé avec Paul)** : `api.rs` ne pose
+      jamais `RELAY_OK` et n'émet ni `ANNOUNCE`, ni `INVENTORY`, ni
+      `ENVELOPE_REQUEST`. Un téléphone ne peut donc pas encore faire relayer
+      un message par ce relais. Le critère « un message traverse le relais »
+      n'est démontré qu'en Rust, avec des téléphones simulés.
+- **Pourquoi :** tenir la logique dans `dengon-core` (testable sous
+  `cargo test`) plutôt que dans le C, et ne pas élargir US-308 à la couche
+  client.
+- **Conséquence :** une US client doit poser `RELAY_OK`, émettre `ANNOUNCE`
+  et traiter `ENVELOPE_OFFER`. US-309 doit ajouter SNTP.
 
 ---
 
@@ -84,6 +133,109 @@ et le mentionner dans l'entrée de journal.
   exercée que par le job CI `firmware` — voir
   `docs/suivi/modules/dengon-core-ffi.md`, section Tests, pour ce qui a
   (et n'a pas) pu être vérifié en local sur ce poste Windows sans `espup`.
+### 2026-09-29 — Le `peerID` d'un lien n'est prouvé qu'à la fin du handshake (US-306, revue PR #111)
+
+- **Prévu :** la doc de `parse_announce` s'appuyait sur « le handshake `XX`
+  qui suit prouvera la possession de la clé » ; `on_peer_connected` liait le
+  lien au `peerID` (`bind_peer`) dès la connexion.
+- **Réel :** ce contrôle n'existait pas : la session était rangée sous le
+  `peerID` fourni par l'appelant sans comparer `remote_static`. Un ANNOUNCE
+  étant signé mais rejouable, un pair à portée pouvait le rejouer et
+  terminer le `XX` avec sa propre clé sous le `peerID` d'un tiers.
+  Corrigé : `Node::finish_handshake` refuse la session si
+  `peer_id_of(remote_static) != peerID` ou si `remote_static` diffère de la
+  clé du contact connu ; `bind_peer` n'a lieu qu'à ce moment-là.
+- **Conséquence :** tests `handshake_usurpant_un_peer_id_inconnu_est_rejete`
+  (échoue sans le contrôle sur le `peerID`) et
+  `handshake_avec_une_autre_cle_sous_le_peer_id_d_un_tiers_est_rejete`
+  (contact connu). L'anti-inondation compte par lien jusqu'à la preuve.
+- **Reste ouvert (déni de service) :** `Maillage` ignore un 2ᵉ lien vers un
+  pair déjà relié, donc un lien fantôme ou rejoué occupe la place jusqu'à
+  son `PeerDisconnected`. Le remplacer « si la session n'est pas établie »
+  demande un état de session que le `.udl` v1 n'expose pas, et un
+  remplacement systématique casserait le cas légitime des deux rôles GATT.
+  À traiter avec l'US-312. `pending_acks` est borné par pair mais pas en
+  nombre de pairs : idem. Une conversation ouverte par `add_contact` restera
+  orpheline si une US de suppression de contact ne la retire pas.
+
+---
+
+### 2026-09-29 — `add_contact` ouvre la conversation (US-306, trouvé sur téléphones)
+
+- **Prévu :** `api::Node` (US-301) ne crée une conversation qu'au premier
+  message envoyé ou reçu ; l'UI de messagerie (US-214) ne liste que les
+  conversations existantes.
+- **Réel :** `add_contact` ouvre aussi une conversation **vide** avec le
+  contact (et complète le pseudo d'une conversation ouverte par un message
+  reçu avant l'appairage).
+- **Pourquoi :** constaté pendant l'essai sur deux téléphones : après
+  l'appairage, « Aucune conversation » — **aucun moyen** d'écrire un premier
+  message. Le bouchon masquait le trou avec une conversation factice.
+  Correctif dans le cœur plutôt qu'un écran « nouveau message » : une ligne
+  d'état, aucune UI nouvelle.
+- **Conséquence :** tout contact appairé apparaît dans la liste, même sans
+  message. Test `un_contact_ajoute_a_sa_conversation_vide_nommee`.
+
+---
+
+### 2026-09-29 — `ANNOUNCE` de lien seulement, ajouté au `.udl` v1 (US-306)
+
+- **Prévu :** `synthese/07` §6 — à chaque lien : `ANNOUNCE` mutuels, puis
+  handshake ; `synthese/05` §2 — `ANNOUNCE` périodique (`ANNOUNCE_ISOLATED_S`
+  = 4 s, `ANNOUNCE_CONNECTED_S` = 15–30 s), TTL faible (2–3), traité par le
+  pipeline de réception du nœud.
+- **Réel :** l'`ANNOUNCE` n'est émis **qu'une fois**, en première trame de
+  chaque lien, avec **TTL 1**, et il est lu par l'**app** (`Maillage`, via
+  `identity_from_announce`) pour relier le `LinkId` au `peerID` — pas par
+  `Node::on_bytes_received`, qui l'ignore toujours. `ledger_height` est
+  renseigné, `caps` vaut 0. Deux appels ajoutés au `.udl` v1 :
+  `DengonNode.announce_frame()` et `identity_from_announce(frame)`.
+- **Pourquoi :** le seul besoin de l'US-306 est de savoir qui est au bout du
+  lien ; `api::Node` identifie un lien par `PeerId` (doc de module US-301).
+  L'annonce périodique sert la découverte à plusieurs sauts, hors scénario 1.
+  Alternative écartée (avec Paul) : une trame « hello » Kotlin non signée.
+- **Conséquence :** **à annoncer en point d'équipe** (même règle que
+  l'extension v1 de l'US-302). Le relais (US-308/US-312) devra lire le même
+  `ANNOUNCE` en tête de lien.
+
+---
+
+### 2026-09-29 — Accusés de réception : en session uniquement (US-306)
+
+- **Prévu :** `synthese/07` §4 — à réception : `Ack{msg_uuid, status=2}`
+  envoyé en session si possible, **sinon en enveloppe** vers l'expéditeur ;
+  l'`Ack` est soumis au store-and-forward.
+- **Réel :** l'`Ack` part **dans la session Noise** avec l'auteur (paquet
+  `ACK`). Sans session (message reçu par enveloppe avant la fin du
+  handshake), il attend dans `pending_acks` (64 max par pair, le plus ancien
+  oublié) et part dès que la session s'établit. Pas d'accusé par enveloppe.
+- **Pourquoi :** sceller une enveloppe demande un `rng`, absent du chemin de
+  réception (`on_bytes_received`) ; changer sa signature touchait tout le
+  FFI. Pour le scénario 1 (deux téléphones à portée), la session existe
+  toujours.
+- **Conséquence :** un auteur jamais connecté **en direct** au destinataire
+  (message passé par un relais, scénarios 2 et 3, US-312) ne recevra pas son
+  accusé : reste `InFlight`. À reprendre avec l'US-312.
+
+---
+
+### 2026-09-29 — L'UI reste seule lectrice de `pollEvents` (US-306)
+
+- **Prévu :** `docs/suivi/modules/android-app.md` (US-302) : le nœud est
+  « partagé par l'UI et, à l'US-306, par le service de premier plan ».
+- **Réel :** le service (`TransportActif` → `Maillage`) appelle
+  `onPeerConnected` / `onBytesReceived` / `takeOutgoing`, mais **jamais**
+  `pollEvents`. Écran fermé, les événements s'accumulent dans le nœud ; ils
+  sont lus au retour de l'UI. L'expiration des messages (faite dans
+  `poll_events`) ne tourne donc que quand l'UI est ouverte.
+- **Pourquoi :** deux lecteurs se partageraient les événements (chacun n'en
+  verrait qu'une partie). Le `Maillage` n'en a pas besoin.
+- **Conséquence :** pas de notification « message reçu » app fermée (hors
+  critères d'acceptation) ; à revoir si on en veut une (flux partagé
+  alimenté par un seul lecteur).
+
+---
+
 ### 2026-09-29 — Contrat FFI étendu en v1 : `open` + coffre, chemin des octets radio (US-302)
 
 - **Prévu :** US-302 — « bindings UniFFI générés depuis le `.udl` de US-106,
@@ -2184,3 +2336,92 @@ _(aucun écart pour l'instant)_
 - **Conséquences :** à revérifier visuellement dès qu'un navigateur est
   disponible, en particulier les nouveaux états de chargement/erreur.
 - **Doc de conception mise à jour ?** sans objet.
+
+
+---
+
+## US-311 — Flotte et carte réseau : périmètre réduit vs conception
+
+- **Conception :** `docs/synthese/09-dashboard-et-donnees.md` §5–6 prévoit
+  `GET /api/nodes/:id`, une table `links`, les alertes « version obsolète »,
+  et un alerting configurable vers webhook / e-mail.
+- **Réalisé :** `GET /api/nodes` et `GET /api/network/graph` seulement, liens
+  dérivés de `events` à la lecture, alertes `relay_silent` et `buffer_high`
+  affichées dans le dashboard (aucune notification sortante). Les pairs
+  (peerID) ne sont pas rapprochés des `node_id`.
+- **Pourquoi :** aucune version de référence pour « obsolète » ; webhook/e-mail
+  hors périmètre de l'US ; volume de démo.
+- **Conséquences :** un relais muet n'est vu que si quelqu'un regarde l'écran.
+- **Doc de conception mise à jour ?** non.
+---
+
+### 2026-09-29 — `pkt.relayed` et `sync::inventory` restent non câblés à `observability` (US-318)
+
+- **Prévu :** US-318 (issue #113) demandait de brancher `sync::routing` et
+  `sync::inventory` sur `observability` pour que « les événements du
+  catalogue sont émis aux bons endroits » (critère resté partiel de #22,
+  US-208, PR #89).
+- **Réel :** seuls `pkt.seen` (`on_bytes_received`) et `msg.queued`
+  (`send_message`) sont câblés, dans `dengon-core::api` (façade client,
+  US-301). `pkt.relayed` et les événements de `sync::inventory` restent
+  **non émis**.
+- **Raison :** `dengon-core::api` documente déjà (doc de module, §« Portée
+  de cette implémentation ») qu'elle n'appelle ni `Router::poll_due` (le
+  relais effectif) ni `sync::inventory` — ce sont des responsabilités du
+  firmware relais dédié (US-308, C/ESP-IDF), pas de la façade côté client
+  (téléphone). Câbler `pkt.relayed`/les événements d'inventaire à cet
+  endroit aurait été un contresens architectural (émettre un événement pour
+  une action que ce nœud n'effectue jamais), pas juste un oubli à corriger.
+- **Conséquences :** #22 (US-208) reste ouverte après cette US : sur les 28
+  événements du catalogue, seuls 2 ont un site d'appel réel démontré (contre
+  4 constructeurs disponibles au total). Le câblage `pkt.relayed`/
+  `sync::inventory` doit être fait côté firmware (US-308, C/ESP-IDF,
+  `crates/dengon-core-embed` ou les tâches FreeRTOS elles-mêmes) — hors
+  périmètre `core-rust`/`skill:rust`, nécessite `skill:c-embarqué`.
+- **Doc de conception mise à jour ?** non — `docs/powl/08` ne précise pas
+  quel composant émet quel événement, seulement le catalogue lui-même.
+
+---
+
+### 2026-09-29 — `dengon-node` : rôle central seul, règle anti-boucle non appliquée (US-303)
+
+- **Prévu :** `05-protocole-et-trame.md` §6 : chaque nœud est Peripheral **et**
+  Central ; le plus petit `peerID` initie la connexion.
+- **Réel :** `BtleplugRadio` n'annonce rien (Spike B : `btleplug` central-only).
+  Il se connecte à **tout** pair qui annonce le service, sans comparer les
+  `peerID`. Deux `dengon-node` ne se voient donc pas.
+- **Pourquoi :** appliquer la règle priverait de connexion tout pair au
+  `peerID` plus petit, qui attendrait vainement d'être joint par un nœud qui
+  n'annonce pas.
+- **Conséquence :** utile contre Android / ESP32, pas nœud à nœud. Le repli
+  `bluer` (Linux, peripheral) recommandé par B-6 reste à ratifier.
+
+### 2026-09-29 — `dengon-node` : un seul pair par session, désigné par `--peer` (US-303)
+
+- **Prévu :** un nœud dialogue avec tous les voisins du maillage.
+- **Réel :** `Session` attribue tout lien ouvert au pair donné par `--peer`
+  (`max_connections = 1`).
+- **Pourquoi :** `TransportEvent::PeerConnected` ne porte qu'un `LinkId`, et
+  `Node::on_peer_connected` exige un `peerID` ; l'`ANNOUNCE` qui associerait
+  les deux n'est pas câblé (`api.rs`, portée d'US-301). Banc de test à deux.
+- **À reprendre :** quand l'`ANNOUNCE` sera câblé, apprendre le `peerID` sur le
+  lien plutôt que de le passer en argument.
+
+### 2026-09-29 — `Transport` desktop : motif `Propre` jamais émis, pas de MTU négocié (US-303)
+
+- **Prévu :** le contrat distingue coupure propre / brutale / locale ; le MTU
+  517 est négocié (`preferred_mtu`).
+- **Réel :** `btleplug` n'expose ni la cause d'une déconnexion (toute perte de
+  lien est `Brutale`, une fermeture décidée localement est `Locale`) ni la
+  négociation du MTU (faite par l'OS). Taille max d'une trame = 512, limite
+  d'une valeur d'attribut GATT ; la pile refuse ce qui ne passe pas.
+- **Conséquence :** le cas `cas_deconnexion_propre_est_distinguee` passe sur la
+  fausse radio mais ne peut pas être satisfait par la radio réelle.
+
+### 2026-09-29 — `dengon-node` : clé locale en clair à côté de la base (US-303)
+
+- **Prévu :** clé du coffre issue d'un trousseau (Keystore Android, etc.).
+- **Réel :** `<db>.key` (32 octets aléatoires, `0600` sous Unix) sert de clé de
+  coffre et de clé des champs sensibles du `store`. Pas de trousseau desktop
+  dans le périmètre ; nœud de test uniquement.
+

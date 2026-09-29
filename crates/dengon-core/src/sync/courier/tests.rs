@@ -397,3 +397,26 @@ proptest! {
         prop_assert!(c.len() <= 1);
     }
 }
+
+#[test]
+fn liste_de_tags_aller_retour() {
+    let tags = vec![tag(1), tag(2), tag(3)];
+    let octets = encode_tag_list(&tags);
+    assert_eq!(octets.len(), 2 + 3 * RECIPIENT_TAG_LEN);
+    assert_eq!(decode_tag_list(&octets), Ok(tags));
+    assert_eq!(decode_tag_list(&encode_tag_list(&[])), Ok(vec![]));
+}
+
+#[test]
+fn liste_de_tags_mal_formee_refusee() {
+    let octets = encode_tag_list(&[tag(1), tag(2)]);
+    for n in 0..octets.len() {
+        assert_eq!(
+            decode_tag_list(&octets[..n]),
+            Err(CourierError::MalformedEnvelope)
+        );
+    }
+    let mut long = octets;
+    long.push(0);
+    assert_eq!(decode_tag_list(&long), Err(CourierError::MalformedEnvelope));
+}

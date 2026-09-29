@@ -39,7 +39,7 @@ static void check_accept(const DengonVector *v) {
     uint8_t out[4096];
     uintptr_t out_len = 0;
     DengonStatus status = dengon_decode_reencode(v->bytes, v->len, out, sizeof(out), &out_len);
-    if (status != OK) {
+    if (status != DENGON_STATUS_OK) {
         fail(v->name, "refuse alors qu'il devrait etre accepte");
         return;
     }
@@ -63,7 +63,7 @@ static void check_reject(const DengonVector *v) {
     uint8_t out[4096];
     uintptr_t out_len = 0;
     DengonStatus status = dengon_decode_reencode(v->bytes, v->len, out, sizeof(out), &out_len);
-    if (status == OK) {
+    if (status == DENGON_STATUS_OK) {
         fail(v->name, "accepte alors qu'il devrait etre refuse");
     }
 }

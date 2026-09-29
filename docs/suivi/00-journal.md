@@ -10,6 +10,488 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-311 : rebase de la PR #112 sur `main` (après US-308/US-306)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** branche `feat/US-311-web-reseau-flotte-alerting`, fichiers de
+suivi uniquement (aucun code applicatif modifié).
+
+### Fait
+- `git rebase origin/main` : aucun conflit textuel (code API et web fusionnés
+  automatiquement ; écrans Intégrité US-310 et Réseau/Flotte US-311 coexistent
+  dans `app.js` / `index.html`).
+- Le pilote `merge=union` avait mal rangé le journal : les deux entrées US-311
+  étaient insérées **au milieu** d'une entrée US-306 (coupée en deux), et la
+  seconde avait absorbé la fin de l'entrée US-214 (déjà présente sur la
+  branche avant le rebase). Journal reconstruit : version de `main` + les
+  entrées US-311 remises en haut, intactes.
+- `02-avancement.md` : les lignes US-311 ajoutées reprennent aussi US-310
+  (intégrité), sinon elles auraient effacé l'info de la ligne précédente.
+- `modules/_index.md` : ligne `dengon-core-ffi` dupliquée par l'union retirée ;
+  ligne `dashboard-web` fusionnée (US-111, US-219, US-310, US-311).
+
+### Vérification (commandes réellement exécutées)
+```
+$ git rebase origin/main                       → Successfully rebased
+$ uv run pytest (dashboard/api)                → 109 passed, 8 skipped
+$ uv run ruff check .                          → All checks passed
+$ node --check app.js && node --check api.js   → OK
+```
+- Non revérifié dans un navigateur après le rebase.
+
+---
+
+## 2026-09-29 — US-311 : suite revue PR #112 (`relay_silent`)
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `dashboard/api/app/network_api.py`,
+`dashboard/api/tests/test_network_api.py`, fiche `modules/dashboard-api.md`.
+
+Revue : `last_contact_ms` ignorait les événements plus récents que le dernier
+`relay.health` (ex. `relay.wifi_down`), d'où de faux « muet ». Correction :
+`last_contact_ms` = dernier événement du nœud, quelle qu'en soit la nature ;
+un relais sans événement reste muet. Tests adaptés + un test de non-régression.
+`pytest` dashboard/api : tout vert. `ruff format --check` signale 4 fichiers,
+déjà non formatés avant ce changement (non traité).
+
+---
+
+## 2026-09-29 — US-311 : carte réseau, flotte de relais, alerte `relay_silent`
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `dashboard/api/app/{network_api,config,main}.py`,
+`dashboard/api/tests/test_network_api.py`, `dashboard/web/{api,app}.js`,
+`index.html`, `style.css`.
+**Lot :** Lot 6 — Dashboard, branche `feat/US-311-web-reseau-flotte-alerting`.
+
+### Fait
+- API : `GET /api/nodes` (flotte : version, dernier contact, dernier
+  `relay.health`, alertes) et `GET /api/network/graph` (nœuds + liens
+  observés), dérivés de `events` à la lecture (`app/network_api.py`).
+- Alertes : `relay_silent` (aucun `relay.health` depuis N min, défaut 5,
+  réglable par `DENGON_DASHBOARD_RELAY_SILENT_MINUTES`) et `buffer_high`
+  (`log_buffer_pct` > 90).
+- Web : navigation Messages / Réseau / Flotte ; carte SVG (disposition
+  circulaire), cartes de relais triées avec les alertes en premier ; états
+  vides et champs de santé absents affichés « — » (vue partielle).
+
+### Pourquoi / décisions
+- Pas de table `links` ni de projection de santé : même choix qu'à
+  l'US-219 (dérivé à la lecture, volume de démo).
+- Le `peer` de `peer.connected` est un peerID, pas un `node_id` : les pairs
+  sont des nœuds `kind="peer"` rattachés à l'observateur, pas fusionnés
+  avec un nœud connu.
+- Un relais qui a booté sans jamais émettre de santé est muet à partir de son
+  `relay.boot` ; sans aucun événement, muet d'office.
+
+### Écarts vs conception
+- Routes `/api/nodes` et `/api/network/graph` sans le détail
+  `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
+  référence), et sans notification webhook/e-mail : voir
+  `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- Critères de l'US-311 couverts sauf « scénario 4 du DoD démontré » : le
+  texte du scénario 4 n'est défini nulle part dans `docs/synthese/` (seule
+  mention : `10-benchmarks-mvp-tests.md:190`) ; la détection d'un relais
+  muet est démontrée sur les fixtures golden (captures ci-dessous), pas sur
+  du matériel réel.
+- Fiches module mises à jour : `dashboard-api.md`, `dashboard-web.md`.
+- 01-etat-du-code.md mis à jour : non (aucune structure de crate touchée).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python -m pytest -q          (dashboard/api)   → tous verts, dont 9 nouveaux
+$ ruff check app tests                            → All checks passed
+$ node --check app.js && node --check api.js      → OK
+```
+- Rendu vérifié à 360 px avec `chrome-headless-shell` (API réelle sur :8765,
+  20 fixtures ingérées, web servi sur :8766) :
+  [`assets/us-311/reseau-360px.png`](assets/us-311/reseau-360px.png),
+  [`assets/us-311/flotte-360px.png`](assets/us-311/flotte-360px.png). Mode
+  sombre non vérifié.
+- `ruff format --check` signale 4 fichiers **préexistants** non formatés
+  (dont `config.py` avant ce changement) : non touchés.
+- Non vérifié : rafraîchissement live SSE sur ces deux écrans (mécanisme
+  inchangé, réutilisé tel quel), rendu à plus de 360 px.
+
+---
+
+## 2026-09-29 — US-308 : rebase de la PR #110 sur `main` + corrections de la revue
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/dengon_relay_app.c`,
+`.github/workflows/firmware.yml` (conflit), `docs/suivi/`
+**Lot :** Lot 3 — relais ESP32
+
+### Fait
+- **Revue de la PR #110 (2 constats mineurs dans `ledger_task`)** :
+  - une entrée de journal plus grande que le lot (`LEDGER_BATCH`, 4 096 o)
+    bloquait la file en silence : `dengon_relay_pop_ledger` rend
+    `BUFFER_TOO_SMALL` sans retirer l'entrée et la boucle sortait avec
+    `used == 0`. Elle est maintenant retirée dans un tampon alloué à sa
+    taille (même repli que `flush_outgoing`) et écrite seule ; un échec
+    d'allocation est journalisé en `ESP_LOGE` (l'entrée reste en file pour
+    le réveil suivant) ;
+  - un lot rempli **exactement** sortait sur la condition du `while` avec
+    `st == OK` et la tâche attendait `LEDGER_WAIT_MS` (2 s) alors qu'il
+    restait des entrées : on relance maintenant un tour dès que le lot est
+    plein (`used == sizeof(lot)`) ou trop petit pour l'entrée suivante.
+  - écriture d'un lot extraite dans `persister_lot()` (commune aux deux
+    chemins).
+- **Rebase** : #108 (US-307) a été mergée en squash (`11ac5b5`) ; branche
+  rejouée avec `git rebase --onto origin/main 14bc99e` pour retirer le
+  commit US-307 hérité.
+  - Conflit dans `.github/workflows/firmware.yml` : `main` garde l'ancien
+    bloc « 4. `libdengon_core.a` » filtré par `core_ffi` ; la PR le fusionne
+    dans le job `firmware` → bloc de `main` supprimé, version de la PR gardée.
+  - Fusion `union` du suivi : 7 lignes anciennes ré-ajoutées en bas de
+    `modules/_index.md` supprimées, lignes `firmware-relay` et
+    `dengon-core-ffi` mises à jour sur place ; les trois entrées US-308 du
+    journal, restées sous celles d'US-302/US-214, remontées en tête.
+- `02-avancement.md` : mentions « empilée sur #108 » et « CI jamais
+  exécutée » corrigées (la revue constate 9 jobs verts, dont `firmware`).
+
+### Pourquoi / décisions
+- Allocation dynamique plutôt qu'un lot statique plus grand : une entrée peut
+  atteindre ~8 Ko (`name` + `payload` à 4 096 o chacun), et agrandir le
+  tampon statique coûterait cette RAM en permanence pour un cas aujourd'hui
+  jamais déclenché (seul `relay.boot`, petit, passe par
+  `dengon_relay_record_event`).
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rien de nouveau (le comportement de `union` est déjà consigné).
+
+### État après cette session
+- Branche à jour de `main`, 9 commits propres à US-308 + ce correctif.
+- Fiche(s) module mise(s) à jour : non (comportement externe inchangé).
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ git rebase --onto origin/main 14bc99e      → 1 conflit (firmware.yml), résolu
+$ cargo fmt --all -- --check ; cargo clippy --workspace --all-targets --all-features -- -D warnings
+(aucune sortie)
+$ cargo test --workspace
+500 passed, 0 failed
+$ firmware/dengon-relay/tools/build_core.sh   (cargo +esp)
+libdengon_core.a 1 580 290 o
+$ docker espressif/idf:v5.5.5 … idf.py -B build-us308 build
+Project build complete — 0xf2960 o, 53 % libre (aucun avertissement de compilation C)
+```
+- **Non vérifié :** le nouveau chemin `ledger_task` n'a pas tourné sur carte
+  (pas d'entrée > 4 096 o à produire aujourd'hui, pas de test Unity de
+  `dengon_relay_app.c`) ; relu à la main uniquement.
+
+---
+
+## 2026-09-29 — US-308 : CI de la PR #110 (espup, SonarCloud)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `.github/workflows/firmware.yml`, `firmware/dengon-relay/tools/dump_ledger.py`, `docs/suivi/`.
+**Lot :** US-308 (issue #46). Branche `feat/US-308-relay`, PR #110.
+
+### Fait
+- Conflits : aucun — `origin/main` (`e3efa95`) est déjà l'ancêtre de la
+  branche, GitHub la déclare `MERGEABLE`. Rien à rebaser.
+- Job `firmware` : premier passage réel, échec à l'étape espup sur
+  `rustup component add rust-src --toolchain esp` (« invalid value 'esp' for
+  '--toolchain': invalid toolchain name »). Ligne retirée : `espup install`
+  pose déjà `rust-src` (visible dans le log CI) ; remplacée par une
+  vérification `test -d "$(rustc +esp --print sysroot)/lib/rustlib/src/rust"`.
+- SonarCloud : note sécurité C sur le nouveau code, 2 issues
+  `pythonsecurity:S8707` (path traversal) dans `tools/dump_ledger.py` (lignes
+  `open()` de la capture et du `.bin`). Les deux chemins sont maintenant
+  résolus et refusés s'ils sortent du répertoire courant (`chemin_sur`).
+
+### Pourquoi / décisions
+- Confinement au répertoire courant plutôt qu'un « won't fix » Sonar :
+  l'outil est lancé depuis `firmware/dengon-relay/`, la capture y est écrite
+  (`tee capture.log`) ; la contrainte ne gêne pas l'usage documenté.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rustup ≥ 1.28 refuse un nom de toolchain custom (`esp`, créée par espup)
+  pour `component add --toolchain` ; `cargo +esp` fonctionne toujours.
+
+### État après cette session
+- Correctifs locaux, pas encore poussés : le reste du job `firmware`
+  (`idf.py build`, tests Unity) n'a encore jamais tourné en CI.
+- Fiche(s) module mise(s) à jour : non
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ rustup component add rust-src --toolchain esp   # rustup 1.29.1, local
+error: invalid value 'esp' for '--toolchain <TOOLCHAIN>' (erreur CI reproduite)
+$ test -d "$(rustc +esp --print sysroot)/lib/rustlib/src/rust" && echo OK-src
+OK-src
+$ cargo +esp build --release --target xtensa-esp32-none-elf --locked  # dengon-core-embed
+Finished release
+$ python3 tools/dump_ledger.py cap.log -o out.bin   → 4 octets, contenu correct
+$ python3 tools/dump_ledger.py cap.log -o ../x.bin  → refusé
+$ cat cap.log | python3 tools/dump_ledger.py - -o o2.bin → 4 octets
+```
+- Quality gate SonarCloud non revérifiée (nécessite le push).
+
+---
+
+## 2026-09-29 — US-308 : essais sur carte réelle, débordement de pile corrigé
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/dengon_relay_app.c`, `docs/suivi/`.
+**Lot :** US-308 (issue #46), suite de l'entrée précédente. Branche `feat/US-308-relay`.
+
+### Fait
+- Carte ESP32-D0WD-V3 (CH340, `48:9d:31:00:83:de`) rattachée à WSL (`usbipd
+  attach --busid 2-1`). Pixel 8 Pro piloté par l'`adb.exe` de Windows depuis
+  WSL (`usbipd bind` du téléphone demande les droits administrateur), avec
+  nRF Connect via `uiautomator` + `input tap`. Lecture série par un script
+  pyserial dans le conteneur ESP-IDF, qui envoie aussi les commandes console.
+- **Tests Unity du Store sur la carte** (`erase-flash`, puis flash de
+  `dengon_store/test_apps`) : **9 Tests 0 Failures**, dont les 4 cas
+  NVS/littlefs réels. Le « Corrupted dir pair » de littlefs au premier
+  montage suit l'effacement ; le formatage automatique le résout.
+- **Relais flashé** (`erase-flash flash`) : `relais-9309 peerID=9309e55ed9e33b46
+  (nouvelle identité)`, auto-test Noise XX sur `esp_fill_random` **OK** à
+  chaque boot. Trois `restart` par la console : `identité relue`, reprise à
+  `seq=1`, `2`, `3`. Export `ledger` → `tools/dump_ledger.py` →
+  `dengon-verify --pubkey 9182…32c0` : `{"verdict":"ok","entries":4,…,"signatures":"verified"}`.
+- **Bug trouvé sur carte** : au premier abonnement du téléphone,
+  `link_up` → signature Ed25519 de l'`ANNOUNCE` → **`stack overflow in task
+  dengon_route`** puis redémarrage. Pile de 6 Ko trop petite. Correctif : route
+  et courier (qui signe les entrées d'expiration) à 16 Ko, inventory et ledger
+  à 8 Ko ; marge minimale de chaque tâche ajoutée au bilan de santé.
+  Mesuré après correctif, marge minimale en octets : route 8 596 (≈ 7,8 Ko
+  utilisés au pic : 6 Ko ne pouvaient pas suffire), courier 14 068,
+  inventory 7 448, ledger 6 072. Tas libre : 128 Ko.
+- **Téléphone après correctif** : connexion, abonnement à `…0002` →
+  `PeerConnected`, `lien 1 ouvert`, pas de crash ; écriture `DE-AD-BE-EF` sur
+  `…0001` → compteur `illisibles=1` et entrée `pkt.rejected
+  {"reason":"malformed"}` ; déconnexion `HCI 0x13 -> Propre`, `lien 1 fermé`.
+- **Journal à travers le crash et le reflash sans effacement** : 10 entrées
+  (7 `relay.boot`, dont une avec `reset_reason:"panic"`, et le `pkt.rejected`),
+  verdict `ok`, signatures vérifiées. La chaîne a survécu au panic.
+
+### Pourquoi / décisions
+- 16 Ko plutôt qu'un réglage au plus juste : Noise/Ed25519 en Rust sur la pile
+  ; la marge se lit désormais dans le bilan de santé toutes les 30 s.
+
+### Écarts vs conception
+- Aucun nouveau. Constat : nRF Connect reste en MTU 23 (pas d'option « Request
+  MTU » dans son menu ici). L'`ANNOUNCE` du relais (174 o) n'est donc pas émis
+  vers ce pair (`trame trop grande (max 20)`) : un client doit négocier 517,
+  déjà noté en US-220 pour l'app Android.
+
+### Appris
+- `04-apprentissages.md` : pile des tâches FreeRTOS qui appellent de la
+  crypto Rust.
+
+### État après cette session
+- Critères US-308 démontrés sur carte : tâches, Store NVS + littlefs, survie à
+  `esp_restart()` (et à un panic) vérifiée par `dengon-verify`, tests Unity
+  cible verts, `CryptoResolver` / aléa matériel.
+- **Reste non démontré : 2 cartes réelles** (une seule carte disponible) et
+  un message qui traverse le relais depuis un téléphone (client pas prêt).
+
+### Vérification (commandes réellement exécutées)
+```
+$ usbipd.exe attach --wsl --busid 2-1        → /dev/ttyUSB0
+$ idf.py -p /dev/ttyUSB0 -B build-esp32 erase-flash flash   (dengon_store/test_apps)
+9 Tests 0 Failures 0 Ignored — OK
+$ idf.py -p /dev/ttyUSB0 -B build-us308 erase-flash flash ; console : relay, restart ×3, ledger
+reprise seq=0,1,2,3 ; dengon-verify → ok, 4 entrées, signatures verified
+$ (téléphone, avant correctif) → stack overflow in task dengon_route, Rebooting
+$ idf.py … build flash (sans effacement) ; téléphone : connect, notify, write DEADBEEF, disconnect
+illisibles=1 ; dengon-verify → ok, 10 entrées, signatures verified
+```
+- Pas vérifié : essai sur 2 cartes, coupure d'alimentation pendant une écriture
+  du journal (seuls des resets EN/RTS et un panic ont été subis).
+
+---
+
+## 2026-09-29 — US-308 : relais dengon sur ESP32 (tâches route/inventory/courier/ledger, Store NVS + littlefs)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/{relay.rs,relay/tests.rs,ledger.rs,protocol/codec/{announce.rs,mod.rs},sync/courier.rs,observability/mod.rs,api.rs}`,
+`crates/dengon-core-ffi/{src/relay.rs,src/rng.rs,tests/relay_c_api.rs,include/dengon_core.h,cbindgen.toml}`,
+`crates/dengon-core-embed/tests/c/host_test.c`,
+`firmware/dengon-relay/{main/,components/dengon_core_ffi/,components/dengon_store/,partitions.csv,sdkconfig.defaults,tools/}`,
+`.github/workflows/firmware.yml`, `.gitignore`, `docs/suivi/`.
+**Lot :** US-308 (issue #46). Branche `feat/US-308-relay`, **empilée sur la PR
+#108 (US-307, pas encore mergée)** et rebasée localement sur `main` (e3efa95).
+
+### Fait
+- **Vérification préalable « main peut-il accueillir US-308 ? » : non, pas
+  seul.** US-307 (#45) n'est pas mergée : la PR #108 est marquée
+  `CONFLICTING` par GitHub (un `git merge-tree` local est pourtant propre), n'a
+  aucune revue et ses jobs Actions n'ont jamais tourné. Elle n'exportait que
+  2 fonctions C et ne liait pas le `.a` au firmware. US-220 (#34) est codée
+  mais l'essai sur 2 cartes n'a pas été fait. Choix : empiler la branche sur
+  #108.
+- **`ledger` : reprise par l'ancre.** Ajout de `Ledger::resume(Anchor, signer)`,
+  `anchor()` et `take_entries()` (`crates/dengon-core/src/ledger.rs`). Le
+  journal ne garde en RAM que les entrées pas encore persistées ; après un
+  redémarrage, seule l'ancre (`seq` suivante + hash de la dernière) est
+  relue. `verify_chain` s'ancre sur la base de reprise.
+- **Codec `ANNOUNCE`** (`protocol/codec/announce.rs`, nouveau) : encode/decode
+  du payload de `synthese/05` §4, et `Announce::verify` (peerID =
+  `SHA-256(pub_static)[0..8]` = `sender_id`, signature Ed25519). Aucun code ne
+  décodait `ANNOUNCE` jusqu'ici.
+- `protocol::codec::msg_id` extrait de `api.rs` (qui l'appelle désormais) ;
+  `sync::courier::{encode,decode}_tag_list` pour `ENVELOPE_OFFER/REQUEST`.
+- **Module `dengon_core::relay`** (`no_std`, nouveau) : `Relay<L>` câble
+  `Router` + `Inventory` + `Courier` + `Ledger<SigningKey>` pour un nœud qui
+  transporte sans lire. Il s'annonce à chaque lien, lie un lien au premier
+  `ANNOUNCE` authentique, puis envoie `INVENTORY` + `ENVELOPE_OFFER`. Il
+  relaie les paquets `RELAY_OK` (TTL réécrit), dépose les
+  `SEALED_ENVELOPE` et les remet sur `ENVELOPE_REQUEST` signé. Il journalise
+  `peer.announce_seen`, `pkt.relayed`, `pkt.rejected`, `envelope.*` et
+  `relay.overloaded`. Il apprend l'heure murale d'un `ANNOUNCE` quand la
+  sienne est inconnue. Ses propres paquets tiennent en une trame BLE
+  (≤ 514 o : 13 msgID par `INVENTORY`, 26 tags par offre). `poll` est
+  découpé en `poll_routing` / `poll_inventory` / `poll_courier`.
+- **FFI** (`dengon-core-ffi/src/relay.rs`) : handle opaque `DengonRelay`,
+  sorties retirées une à une (`dengon_relay_pop_outgoing`/`_pop_ledger`,
+  `BUFFER_TOO_SMALL` sans perte), curseur, événements du firmware, compteurs.
+  **Aléa Noise** (`src/rng.rs`) : `PlatformRng` (`RngCore + CryptoRng` sur une
+  fonction C) et `dengon_noise_selftest(fill)` qui fait un handshake `XX`
+  complet et un aller-retour chiffré.
+- `cbindgen` : variantes d'énumération **préfixées** (`DENGON_STATUS_OK`…),
+  car `OK` nu entre en collision avec `rom/ets_sys.h` d'ESP-IDF (erreur trouvée
+  au premier lien). `host_test.c` de #108 est adapté.
+- **Firmware** :
+  - `components/dengon_core_ffi` lie `libdengon_core.a` (`add_prebuilt_library`) ;
+  - `components/dengon_store` : `dengon_ledger_file.c` (C pur : reprise après
+    écriture interrompue, append + fsync, anneau de 2 fichiers) et
+    `dengon_store.c` (montage littlefs, secrets et curseur en NVS,
+    réconciliation de l'ancre au boot) ;
+  - `main/dengon_relay_app.c` : tâches `route` (10 ms), `inventory` (1 s),
+    `courier` (30 s, avec un bilan de santé) et `ledger` (notifiée) autour du
+    handle sous mutex ; `relay.boot` journalisé ; auto-test Noise sur
+    `esp_fill_random` au démarrage ;
+  - `main/dengon_console.c` : commandes `ledger` (export hex), `restart` et
+    `relay` ;
+  - `partitions.csv` (factory 2 Mo, littlefs 256 Ko). La démo US-220 passe à
+    `n` par défaut et remplace le relais quand elle est activée.
+- `tools/build_core.sh` (produit le `.a`) et `tools/dump_ledger.py` (capture
+  série → `.bin` pour `dengon-verify`).
+- **CI `firmware.yml`** :
+  - la compilation xtensa passe avant `idf.py build` ;
+  - le filtre `core_ffi` est fusionné dans `firmware` ;
+  - tests Unity du Store sur `linux` et build `esp32` ;
+  - timeout porté à 45 min.
+- `.gitignore` : `firmware/**/managed_components/`, `firmware/*/build-*/`.
+  Les `dependencies.lock` sont versionnés, comme l'annonçait le commentaire.
+
+### Pourquoi / décisions
+- Logique en Rust (`relay`, testable avec `cargo test`), le C ne garde que la
+  radio, le stockage et les tâches. Le module `api` (client, `std`) n'était
+  pas réutilisable, comme le disait déjà sa propre doc.
+- Pas de nouveau `CryptoResolver` : `crypto::rng::CallerResolver` accepte déjà
+  n'importe quel `RngCore + CryptoRng` ; un pointeur de fonction C suffit.
+- Pas de trait `Store` générique : la persistance reste au firmware, fidèle à
+  la doc de `ledger.rs`. Le fichier fait foi, écrit **avant** le curseur NVS.
+- Les 4 tâches ont des cadences différentes ; un seul handle, donc un mutex.
+  La file d'entrée bornée est celle du transport (`DENGON_TC_EVQ_CAP`).
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (entrée US-308) :
+  - lien lié au premier `ANNOUNCE` ;
+  - heure apprise ;
+  - pas de réassemblage ni de fragmentation côté relais ;
+  - remise d'enveloppe considérée faite dès la mise en file ;
+  - `peer.connected`/`peer.disconnected` non journalisés (peer inconnu à la
+    connexion) ;
+  - `copy_budget`/`budget_after` à 0 ;
+  - NVS non chiffré ;
+  - `msg_log_id` du relais = `SHA-256(msgID)[0..8]`.
+- **Côté client (hors périmètre, décidé avec Paul)** : `api.rs` ne pose jamais
+  `RELAY_OK` et n'émet ni `ANNOUNCE`, ni `INVENTORY`, ni `ENVELOPE_REQUEST`.
+  Tant que le client ne suit pas, un téléphone ne peut rien faire relayer par
+  ce relais.
+
+### Appris
+- `04-apprentissages.md` :
+  - collision `OK` de `ets_sys.h` ;
+  - `bootloader_random_enable()` avant la radio ;
+  - ordre fichier → curseur pour une reprise sans rupture.
+
+### État après cette session
+- Côté hôte, tout est vert. Le firmware complet compile et se lie avec
+  `libdengon_core.a` (première compilation xtensa effective du projet).
+- **Rien n'a encore tourné sur une carte.**
+- Fiches mises à jour : `modules/firmware-relay.md`, `modules/dengon-core.md`,
+  `modules/dengon-core-ffi.md`, `modules/_index.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check ; cargo clippy --workspace --all-targets --all-features -- -D warnings
+(aucune sortie)
+$ cargo test --workspace
+dengon-core lib : 357 passed (dont relay:: 12, ledger 18, announce 5, courier tag_list 2) ; tout le workspace vert
+$ cargo test -p dengon-core-ffi
+decode_reencode 6 passed ; relay_c_api 5 passed
+$ cargo check -p dengon-core --no-default-features      → OK
+$ tools/build_core.sh   (espup 0.17.1, cargo +esp … --target xtensa-esp32-none-elf)
+libdengon_core.a 1 580 290 o
+$ RUSTUP_TOOLCHAIN=esp bash crates/dengon-core-embed/tests/c/run.sh
+vecteurs : 8 accept, 5 reject — OK
+$ docker … components/dengon_store/test_apps : set-target linux && build && ./build/test_dengon_store.elf
+5 Tests 0 Failures
+$ docker … idf.py -B build-us308 build ; idf.py size
+Project build complete — dengon-relay.bin 0xf27b0 (53 % libre sur 2 Mo), IRAM 78 %, DRAM 34 %
+$ docker … dengon_store/test_apps : set-target esp32 build → build OK (non exécuté)
+$ essai hôte jetable : journal via l'API C, redémarrage par l'ancre, export
+  au format console → tools/dump_ledger.py → cargo run -p dengon-verify -- --pubkey …
+{"verdict":"ok","entries":5,"first_seq":0,"last_seq":4,"signatures":"verified"}
+(fichier tronqué à 300 o : dengon-verify refuse, exit 65)
+```
+- **Pas vérifié (pas de carte pendant la session)** :
+  - tests Unity sur cible (`test_store_cible.c`) ;
+  - `esp_restart()` réel suivi de `dengon-verify` ;
+  - auto-test Noise sur `esp_fill_random` ;
+  - essai 2 cartes (US-220 et US-308).
+- `test_alea_materiel_non_constant` compare seulement deux tirages : c'est
+  une sonde, pas un test statistique d'entropie.
+- **CI jamais exécutée** sur cette branche ni sur #108 : l'étape `espup` en CI
+  reste non prouvée.
+- L'essai « un message traverse le relais » n'est démontré qu'en Rust
+  (`relay::tests::un_message_traverse_deux_relais`, téléphones simulés).
+## 2026-09-29 — US-306 : corrections de la revue de la PR #111
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `crates/dengon-core/src/api.rs` ; `docs/suivi/`.
+**Lot :** US-306, PR #111.
+
+- Rebase de la branche sur `main` après le merge (squash) de #109 : les 5
+  commits US-302 écartés (`git rebase --onto origin/main b09a00f`), conflits
+  résolus dans `DengonApplication.kt`, `ConversationsViewModel.kt` et les
+  fiches `android-app` / `dengon-ffi` (corrections de #109 conservées).
+- **Bloquant corrigé :** `finish_handshake` vérifie
+  `peer_id_of(remote_static) == peerID` et la clé du contact ; `bind_peer`
+  déplacé après la preuve. Deux tests négatifs ; le test « peerID inconnu »
+  a été vu échouer avec le contrôle désactivé (le test « contact connu »
+  passe aussi sans, la clé du contact suffisant — attendu).
+- Non corrigé, consigné dans `03-ecarts-conception.md` : squat du lien par
+  ANNOUNCE rejoué (US-312), `pending_acks` non borné en nombre de pairs,
+  conversation orpheline après suppression de contact.
+- `cargo test --workspace` vert (349 tests `dengon-core`), `clippy -D
+  warnings` vert. Kotlin non rejoué localement, aucun code Kotlin modifié en
+  dehors de la résolution de conflits.
+- Note : `cargo fmt --all` réécrit les fins de ligne de tout le dépôt sur ce
+  poste Windows ; les autres fichiers ont été laissés tels quels.
+
+---
+
 ## 2026-09-29 — US-302 : correctif SonarCloud sur la PR #109
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
@@ -107,6 +589,143 @@ laissé ouvert par la PR #87 (`Refs #28`, aucun appareil sur le poste).
 
 ### Écarts vs conception
 - Clé du coffre perdue → identité réinitialisée : reporté dans
+## 2026-09-29 — US-303 : correctifs de la revue de la PR #116
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `crates/dengon-node/src/session.rs`, `crates/dengon-ble/src/btleplug_radio.rs`.
+
+### Fait
+- `Session::vider_sortie` : une trame au-delà de `ATTENTE_MAX` (64) est toujours abandonnée, mais **loguée** (`eprintln!`), comme le chemin d'échec d'envoi.
+- `btleplug_radio::vivre` : connexion, découverte GATT, `notifications()` et `subscribe()` sont sous un `tokio::time::timeout` de 20 s (`DELAI_ETABLISSEMENT`). À l'expiration : message, `None` → `tache_lien` déconnecte et libère l'identifiant, le périphérique sera retenté.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all
+$ cargo clippy -p dengon-node -p dengon-ble --all-targets -- -D warnings   # OK, avec et sans --features btleplug
+$ cargo test -p dengon-ble -p dengon-node                                    # tout vert
+```
+- **Non vérifié :** le timeout n'a pas de test (il faudrait une vraie radio bloquante) ; toujours pas d'essai BLE réel après correctif. La file pleine reste une perte (pas de rétro-pression) : consignée comme limite du banc de test.
+
+---
+
+
+## 2026-09-29 — US-303 : essai réel du transport `btleplug` contre un téléphone
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** aucun code ; vérification de `BtleplugRadio` (PC Windows, adaptateur MediaTek) contre l'app Android (écran de debug du transport, US-213).
+
+### Fait
+- Premier essai : `HRESULT 0x800710DF` (« Le périphérique n'est pas prêt ») tant que le Bluetooth Windows était désactivé ; erreur propre, exit 1.
+- Bluetooth du PC activé, app Android en annonce : `dengon-node run --peer <QR factice> --duree 40` affiche « en écoute du pair … » puis **« lien ouvert »**. Scan filtré sur le service, connexion, découverte, abonnement à `CHAR_TX` : validés sur matériel.
+
+### Vérification (commandes réellement exécutées)
+```
+$ dengon-node run --name alice --db a.db --peer <QR de bob> --duree 40
+en écoute du pair h2csfte5rxb7i (rôle central : le pair doit annoncer)…
+lien ouvert
+exit=0
+```
+- **Non vérifié :** échange de message (l'app n'a pas le vrai cœur, US-306) ; réception d'une trame de battement (aucune ligne affichée : le nœud ne montre pas les octets bruts, et la fenêtre de 40 s pouvait précéder le battement de 30 s) ; côté téléphone, la connexion entrante n'a pas été confirmée sur son écran ; Linux/BlueZ ; déconnexion brutale réelle.
+
+---
+
+
+## 2026-09-29 — US-303 : nœud CLI `dengon-node` et transport `btleplug` (central)
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `crates/dengon-ble/src/{central,btleplug_radio,lib}.rs`,
+`crates/dengon-ble/tests/conformite_central.rs`, `crates/dengon-node/src/*`,
+`Cargo.toml`, `.github/workflows/core.yml`.
+**Lot :** Sprint S3 (US-303, `Should`), branche `feat/US-303-dengon-node-btleplug`.
+
+### Fait
+- `dengon-ble::central` : `CentralTransport<R: CentralRadio>` implémente
+  `Transport` (LinkId monotone, quota `max_connections`, trames fantômes
+  jetées, `send` après coupure non pollée → `UnknownPeer`). La radio est un
+  petit trait (`CentralRadio`) : la logique de liens est testable sans BLE.
+- `dengon-ble::btleplug_radio` (feature `btleplug`) : `BtleplugRadio` — fil
+  dédié + `tokio`, scan filtré sur `SERVICE_UUID`, connexion, abonnement à
+  `CHAR_TX`, écriture sans réponse sur `CHAR_RX`. `BtleplugTransport` = alias.
+- `dengon-node` : `identity` (peerID + QR) et `run --peer <QR> --send … --duree N`.
+  `Session<T: Transport>` (nœud ⇄ transport) ; `etat` : clé, coffre, base
+  SQLite à côté de `--db`.
+- CI `core` : installation de `libdbus-1-dev` (btleplug compile `dbus` sous
+  Linux, et `--all-features` l'active).
+
+### Pourquoi / décisions
+- `btleplug` étant central-only (Spike B), le nœud n'annonce rien : il joint un
+  Android / un relais ESP32, pas un autre `dengon-node`.
+- La suite de conformité passe sur `CentralTransport<FausseRadio>` : elle juge
+  la logique de liens, pas la pile BLE. Le backend réel n'a pas de test auto.
+- Un seul pair par session : `Transport` ne remonte pas de `peerID` et
+  `Node::on_peer_connected` en exige un → `--peer` désigne le pair, tout lien
+  lui est attribué.
+
+### Écarts vs conception
+- Règle anti-boucle non appliquée, un seul pair, motif `Propre` jamais émis,
+  pas de MTU négocié : voir `03-ecarts-conception.md` (4 entrées US-303).
+
+### Appris
+- Deux pièges Windows/`cargo fmt` : voir `04-apprentissages.md`.
+
+### État après cette session
+- Message envoyé et reçu de bout en bout entre deux `Node` reliés par deux
+  `MockTransport` (test `session::tests`). **Jamais essayé sur de vrais
+  appareils.**
+- Fiches mises à jour : `modules/dengon-ble.md`, `modules/dengon-node.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings   # OK
+$ cargo clippy -p dengon-node --no-default-features --all-targets -- -D warnings   # OK
+$ cargo test -p dengon-node -p dengon-ble --all-features
+  dengon-node 3 tests, dengon-ble 19 unitaires + conformité mock (4) +
+  conformité central (5) + doctests (2) : tous OK
+$ dengon-node identity --name alice --db …   # OK, affiche peerID + QR
+$ dengon-node run --peer <QR> --duree 4      # Windows : « Le périphérique n'est
+                                             #  pas prêt » (adaptateur inutilisable),
+                                             #  erreur propre, exit 1
+```
+- **Non vérifié :** aucune connexion BLE réelle (pas de pair annonçant à
+  disposition), pas de Linux/BlueZ (le spike demandait de le revalider ici),
+  `cargo deny`/`cargo audit` non installés en local (licences des dépendances
+  de `btleplug` non contrôlées), `cargo llvm-cov`/`nextest` non lancés.
+
+---
+
+
+## 2026-09-29 — US-311 : carte réseau, flotte de relais, alerte `relay_silent`
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `dashboard/api/app/{network_api,config,main}.py`,
+`dashboard/api/tests/test_network_api.py`, `dashboard/web/{api,app}.js`,
+`index.html`, `style.css`.
+**Lot :** Lot 6 — Dashboard, branche `feat/US-311-web-reseau-flotte-alerting`.
+
+### Fait
+- API : `GET /api/nodes` (flotte : version, dernier contact, dernier
+  `relay.health`, alertes) et `GET /api/network/graph` (nœuds + liens
+  observés), dérivés de `events` à la lecture (`app/network_api.py`).
+- Alertes : `relay_silent` (aucun `relay.health` depuis N min, défaut 5,
+  réglable par `DENGON_DASHBOARD_RELAY_SILENT_MINUTES`) et `buffer_high`
+  (`log_buffer_pct` > 90).
+- Web : navigation Messages / Réseau / Flotte ; carte SVG (disposition
+  circulaire), cartes de relais triées avec les alertes en premier ; états
+  vides et champs de santé absents affichés « — » (vue partielle).
+
+### Pourquoi / décisions
+- Pas de table `links` ni de projection de santé : même choix qu'à
+  l'US-219 (dérivé à la lecture, volume de démo).
+- Le `peer` de `peer.connected` est un peerID, pas un `node_id` : les pairs
+  sont des nœuds `kind="peer"` rattachés à l'observateur, pas fusionnés
+  avec un nœud connu.
+- Un relais qui a booté sans jamais émettre de santé est muet à partir de son
+  `relay.boot` ; sans aucun événement, muet d'office.
+
+### Écarts vs conception
+- Routes `/api/nodes` et `/api/network/graph` sans le détail
+  `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
+  référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
 
 ### Appris
@@ -133,6 +752,178 @@ $ adb … input tap / input text / uiautomator dump / screencap             OK
   progression des statuts au-delà de « En attente ».
 - Fiches mises à jour : `modules/android-app.md`, `modules/dengon-ffi.md`.
 - 01-etat-du-code.md mis à jour : non.
+## 2026-09-29 — US-306 : scénario 1 démontré sur 2 vrais téléphones (+ correctif `add_contact`)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** essai matériel piloté par `adb` ; `crates/dengon-core/src/api.rs`
+(`add_contact`), `docs/suivi/`.
+**Lot :** US-306 (issue #44), suite de l'entrée précédente, même branche.
+
+### Fait
+- **Matériel :** Pixel 8 Pro (Android 17, SDK 37, `3C181FDJG0024V`) et
+  OnePlus 7 Pro GM1913 (Android 12, SDK 31, `c365d658`), arm64, reliés en
+  USB au PC ; `adb.exe` Windows (l'`adb` de WSL ne voit pas l'USB). Le
+  OnePlus remplace le Galaxy A16 prévu.
+- **Préparation (à consigner, pas du code) :**
+  - Pixel : ancienne app signée par une autre clé de debug →
+    `INSTALL_FAILED_UPDATE_INCOMPATIBLE` → désinstallée (identité de test
+    perdue), APK de cette branche installée.
+  - OnePlus : **horloge au 12/07/2019** et aucun réseau. Le routeur refuse
+    un paquet de plus de 2 h dans le futur ou de plus de 24 h
+    (`sync::routing`) : rien ne serait passé. Remise à l'heure par
+    `adb shell cmd alarm set-time` ; Bluetooth activé par
+    `svc bluetooth enable` (le transport avait échoué au démarrage :
+    « Bluetooth désactivé »).
+- **Liaison ANNOUNCE sur radio réelle :** OnePlus `link#0 ↔ rpdmrfafwuoxw`
+  (Pixel), Pixel `link#1 ↔ aujth3bfurjeo` (OnePlus). Un 3ᵉ appareil
+  (`48:9D:31:00:83:DE`) ouvre des liens sans ANNOUNCE : jamais relié, comme
+  prévu.
+- **Trou trouvé :** après appairage, « Aucune conversation » : aucun moyen
+  d'écrire un premier message (le bouchon le masquait). Correctif :
+  `add_contact` ouvre une conversation vide nommée (+ test). `.so`, APK
+  reconstruits et réinstallés ; identités conservées (coffre), appairage
+  refait.
+- **Appairage par QR, caméras réelles :** le OnePlus scanne le QR du Pixel,
+  le Pixel celui du OnePlus ; code lu sur les deux écrans (dump UI) :
+  `76825 89045 47968 68760 48434 46262 40927 75210 71169 73504 88383 43361`,
+  **identique** ; « Les codes sont identiques » des deux côtés →
+  « ✔ GM1913 est vérifié » / « ✔ Pixel 8 Pro est vérifié ». (Un premier
+  appairage, avant le correctif, avait été confirmé à la main par Paul.)
+- **Messages :**
+  - 03:05:33 Pixel → OnePlus « Bonjour depuis le Pixel US-306 » :
+    « Distribué » en < 1 s ; reçu côté OnePlus (« 1 non lus »).
+  - 03:06:22 réponse OnePlus → Pixel : « Distribué », reçue côté Pixel.
+  - Service du OnePlus **arrêté** (Pixel : `link#1 fermé : PROPRE`), envoi
+    03:07:42 « Pendant la coupure » → **« En attente »** ; service
+    redémarré 03:07:59 → nouveau lien `link#2 ↔ aujth3bfurjeo` 03:08:03 →
+    **« Distribué »** relevé à 03:08:04 (enveloppe rejouée à la connexion,
+    accusé parti à l'établissement de la session).
+- **Écran éteint ≥ 5 min :** 1ᵉʳ essai **invalide** : l'écran s'était
+  rallumé 5 s après la mise en veille (`mLastWakeTime`) et est resté allumé.
+  2ᵉ essai : écran éteint (`input keyevent 223`), débranchement simulé
+  (`dumpsys battery unplug`) et Doze forcé (`dumpsys deviceidle
+  force-idle`) ; relevé toutes les 10 s de 03:15:51 à 03:21:45 :
+  **33/33 `mScreenState=OFF`, Doze `IDLE`, aucun réveil**. Envoi 03:22:16
+  « Ecran eteint depuis 6 min » → **« Distribué »** immédiat, OnePlus
+  toujours `OFF` + `IDLE`. Au réveil, message affiché (« 4 non lus »).
+  Remise en état : `deviceidle unforce`, `battery reset`.
+
+### Pourquoi / décisions
+- Doze **forcé** plutôt qu'un vrai débranchement : débrancher coupe `adb`
+  (plus de mesure) ; `force-idle` est plus sévère qu'un simple écran éteint
+  (restrictions de Doze profond appliquées d'emblée).
+- Correctif de la conversation dans le cœur (`add_contact`) plutôt qu'un
+  écran « nouveau message » : une ligne d'état, aucune UI nouvelle.
+
+### Écarts vs conception
+- `add_contact` ouvre la conversation → `03-ecarts-conception.md`.
+
+### Appris
+- Un téléphone de test à l'horloge fausse rend tout le protocole muet
+  (fenêtre de fraîcheur du routeur) — à vérifier en premier lors d'un essai.
+
+### État après cette session
+- Critères de l'US-306 : FFI réel ✔ ; scénario 1 sur 2 téléphones ✔
+  (QR + code 60 chiffres, statuts « En attente » → « Distribué ») ; service
+  de fond écran éteint ≥ 5 min ✔ (Doze forcé) ; `assembleDebug` + tests ✔ ;
+  démonstration consignée ici ✔.
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`,
+  `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all ; cargo test -p dengon-core -p dengon-ffi --all-features   405 passed, 2 ignored
+$ cargo clippy -p dengon-core -p dengon-ffi --all-targets --all-features -- -D warnings   OK
+$ android/scripts/build-ffi.sh bindings android hote       dengon.kt inchangé
+$ ./gradlew --no-daemon -q assembleDebug testDebugUnitTest -Pdengon.ffi.libHote=…   OK
+$ adb.exe -s <série> install -r dengon-us306.apk           Success (×2)
+$ adb.exe … uiautomator dump / input / screencap / logcat -s dengon-transport
+```
+- **Non vu :** le statut intermédiaire « Parti » (`IN_FLIGHT`) à l'écran :
+  il dure moins d'une seconde, sous la cadence de relevé (~1–3 s) ; la
+  progression est prouvée par les tests JVM/Rust (`[InFlight, Delivered]`).
+- Écran éteint avec **débranchement simulé**, pas physique ; OnePlus rechargé
+  pendant l'essai (4 → 16 %). Pas de vidéo : la démonstration est ce
+  journal.
+
+---
+
+## 2026-09-29 — US-306 : radio branchée sur le nœud, ANNOUNCE de lien, accusés → `Delivered`
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/` (`protocol/codec/announce.rs` créé,
+`protocol/codec/mod.rs`, `api.rs`, `tests/api_mock.rs`), `crates/dengon-ffi/`
+(`dengon.udl`, `lib.rs`), `android/` (`ble/Maillage.kt` et
+`ble/PeerIdOctets.kt` créés, `TransportActif`, `TransportDebugScreen`,
+`MeshForegroundService`, `ConversationsViewModel`, `MainActivity`,
+`DengonApplication`, `ffi/dengon.kt` régénéré, tests), `docs/suivi/`.
+**Lot :** US-306 (issue #44), jalon J2. Branche `feat/US-306-app-ffi-reel`,
+partie de `feat/US-302-ffi-reel` (US-302 pas encore sur `main`).
+
+### Fait
+- **Constat de départ :** depuis l'US-302 l'UI parle au vrai nœud, mais
+  aucune radio ne l'alimente (`TransportActif` tournait seul, `peerID`
+  aléatoire) et deux trous bloquaient le scénario 1 du DoD : un lien BLE
+  n'est connu que par son `LinkId`, et le cœur n'émettait aucun accusé
+  (`Delivered` jamais atteint).
+- **`ANNOUNCE` (core)** : payload `peerID ‖ pub_static ‖ pub_sign ‖
+  pseudo_len ‖ pseudo ‖ ledger_height ‖ caps` (`protocol::codec::announce`,
+  `synthese/05` §4) ; `Node::announce_packet` (signé, TTL 1) et
+  `api::parse_announce` (signature Ed25519 + `peerID` = `sender_id` =
+  `SHA-256(pub_static)[0..8]`).
+- **Accusés (core)** : `deliver_message` met un `Ack{Delivered}` en attente
+  pour l'auteur (`pending_acks`, 64 max par pair) ; il part **dans la
+  session** Noise, tout de suite si elle existe, sinon dès qu'elle
+  s'établit. Dans `handle_handshake_message`, le message 3 est désormais
+  mis en sortie **avant** ce que la session débloque (sinon l'accusé
+  précédait la fin du handshake chez le répondeur).
+- **FFI** : `DengonNode.announce_frame()` et `identity_from_announce(frame)`
+  (`[Throws]`), bindings Kotlin régénérés.
+- **Android** : `Maillage` relie `Transport` et nœud — `PeerConnected` →
+  on écrit notre `ANNOUNCE` ; 1ʳᵉ trame d'un lien non identifié → lue comme
+  `ANNOUNCE` → lien ↔ `peerID` + `onPeerConnected` ; trames suivantes →
+  `onBytesReceived` ; `takeOutgoing` → lien du pair. `TransportActif`
+  démarre le transport avec le **vrai** `peerID` (`PeerIdOctets`, base32 →
+  8 o) et passe chaque lot d'événements au `Maillage`. L'UI appelle
+  `TransportActif.vider()` après chaque envoi.
+- Écran de debug : liens identifiés affichés ; boutons d'envoi brut et
+  battement de l'US-213 **retirés** (ces octets iraient au nœud, qui les
+  jetterait).
+
+### Pourquoi / décisions
+- `ANNOUNCE` plutôt qu'une trame « hello » Kotlin non signée : c'est la
+  séquence de reconnexion prévue (`synthese/07` §6, étape 1), signée, et
+  réutilisable par le relais (US-312). Choix validé par Paul.
+- Vérification de l'`ANNOUNCE` injectée dans `Maillage` (`lireAnnonce`) :
+  testable en JVM pur sans la lib native.
+- Accusé **en session seulement** : un accusé par enveloppe scellée
+  demande un `rng` sur le chemin de réception (`on_bytes_received` n'en a
+  pas) ; pour le scénario 1 (deux téléphones à portée) la session existe
+  toujours. Choix validé par Paul (émission d'Ack dans `api.rs`).
+- `Maillage` ne lit pas `pollEvents` : l'UI en reste la seule lectrice,
+  sinon les événements seraient partagés entre deux consommateurs.
+
+### Écarts vs conception
+- `.udl` v1 encore étendu (2 appels) ; `ANNOUNCE` de lien seulement (TTL 1,
+  pas d'annonce périodique) ; accusé sans store-and-forward ; UI seule
+  lectrice de `pollEvents`. Reportés dans `03-ecarts-conception.md`.
+
+### Appris
+- Lier un lien radio à un pair par un `ANNOUNCE` signé ; l'ordre des
+  messages de fin de handshake → `04-apprentissages.md`.
+
+### État après cette session
+- Le chemin complet radio → nœud → radio est codé et testé en JVM avec deux
+  **vrais** nœuds (`Maillage` + `AndroidTransport` + radio de test qui
+  fragmente à 20 o) : message reçu, statuts `IN_FLIGHT` puis `DELIVERED`.
+- Manque pour clore l'US-306 : la **démonstration sur 2 téléphones**
+  (appairage QR + code 60 chiffres, statuts qui progressent, ≥ 5 min écran
+  éteint) — voir « Non vérifié ». Contacts et messages toujours non
+  persistés (réappairer après redémarrage de l'app).
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`,
+  `modules/dengon-ffi.md`, `modules/dengon-core.md`.
+- 01-etat-du-code.md mis à jour : non (commandes inchangées).
 
 ### Vérification (commandes réellement exécutées)
 ```
@@ -145,6 +936,199 @@ $ cargo test --workspace --all-features --locked        474 passed, 2 ignored
   tests de `IdentiteLocaleTest`) et le workflow fusionné ne sont vérifiés que
   par le job CI `android` de la PR. Rien testé sur téléphone, en particulier
   pas la perte réelle de la clé du Keystore.
+## 2026-09-29 — Revue de la PR #114 (Oswin) : `seq` non contigu et `msg_log_id` non corrélable, corrigés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/api.rs`.
+**Lot :** réponse à la revue « changements demandés » d'Oswin sur PR #114
+(US-318), avant merge.
+
+### Fait
+- **Bloquant corrigé** : `envelope_seq: u64` nouveau, dédié au `seq` des
+  `Envelope` (`record_observability`), séparé de `obs_seq` (toujours
+  utilisé par `record_ledger`, qui n'émet pas d'`Envelope`). Le `seq` du
+  flux d'`Envelope` d'un nœud est maintenant contigu par construction. Test
+  ajouté : `les_seq_des_envelope_restent_contigus_meme_avec_des_evenements_ledger_seuls`
+  (deux `send_message` de part et d'autre d'un `on_peer_connected` qui ne
+  journalise que dans `ledger`).
+- **Important corrigé** : `msg.queued` hachait `msg_uuid`, alors que
+  `pkt.seen` hache le `msgID` réseau (`compute_msg_id`) — deux
+  `msg_log_id` différents pour le même message. `send_message` recalcule
+  maintenant le `msgID` à partir des octets tout juste encodés (comme le
+  ferait le receveur), avant de le passer à `observability::msg_log_id`.
+  Test ajouté : `msg_queued_et_pkt_seen_partagent_le_meme_msg_log_id`
+  (corrélation croisée alice/bob, pas juste une valeur recalculée dans le
+  test).
+- **Mineur traité par la doc, pas par du code** : `obs_events` reste non
+  bornée — une borne avec éviction silencieuse perdrait des événements
+  d'observabilité, pire que la croissance mémoire. Doc de champ renforcée :
+  avertit explicitement que rien ne la vide encore aujourd'hui (ni
+  `dengon-node`, ni le `.udl`), à surveiller avant l'app Android (US-306).
+- **Tests renforcés** : `recevoir_un_paquet_emet_pkt_seen_meme_rejete_par_le_routeur`
+  vérifie maintenant le payload complet (`type`/`ttl_in`/`size_bucket`/
+  `from_peer`/`rssi`), pas seulement l'enveloppe (`name`/`node_kind`/
+  `node_id`).
+- Petit correctif au passage : un caractère invisible (soft hyphen `\xad`)
+  s'était glissé dans un commentaire de `api.rs` (« bat\xadche » au lieu de
+  « batche ») — corrigé.
+
+### Pourquoi / décisions
+- Compteur séparé plutôt que faire émettre un `Envelope` par
+  `record_ledger` (l'autre option proposée par Oswin) : `record_ledger`
+  journalise des transitions de statut (`queued`→`in_flight`→…) qui ne
+  correspondent à aucun nom d'événement du catalogue `pkt`/`msg`/`peer` —
+  inventer un `Envelope` dessus aurait été plus risqué qu'un compteur
+  dédié.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- PR #114 mise à jour, en attente d'une nouvelle revue d'Oswin.
+- Fiche module mise à jour : `modules/dengon-core.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+385 passed, 2 ignored (10 suites)
+
+$ cargo test --workspace
+473 passed, 2 ignored (31 suites)
+
+$ cargo fmt -p dengon-core -- --check
+(rien, après un premier passage cargo fmt)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+```
+
+---
+
+## 2026-09-29 — US-318 : câblage `api` → `observability` (`pkt.seen`, `msg.queued`)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/api.rs`, `docs/suivi/`.
+**Lot :** US-318 (issue #113), créée en réponse à un écart repéré en
+vérifiant si #22/US-208 (« observability ») et #28/US-214 étaient
+réellement fermables : PR #89 (US-208) et PR #85/#96 (US-209/US-210,
+`sync::routing`/`sync::inventory`) livrent chacun leur brique séparément,
+mais aucun site d'appel réel ne relie observability aux décisions de
+`sync::` — `grep -rln observability crates/dengon-core/src/` ne trouvait le
+mot que dans `lib.rs`.
+
+### Fait
+- `Node` (façade `api`, US-301) gagne `node_id: String` (`client-<6 hex>`
+  des 3 premiers octets de `peer_id`, format imposé par
+  `contracts/tools/catalogue.py::NODE_ID`) et une file `obs_events:
+  Vec<Envelope>`, vidée par `Node::take_observability_events()` (même
+  mécanique que `take_outgoing`).
+- `Node::record_observability` : construit un `Envelope` (`seq` partagé
+  avec `record_ledger`) et l'empile.
+- `on_bytes_received` émet `pkt.seen` **avant** `Router::on_packet` (le
+  catalogue le veut « avant dédup ») : `size_bucket` nouveau (palier
+  256/512/1024/2048), `rssi = None` (cette façade ne reçoit pas la radio,
+  voir écart ci-dessous).
+- `send_message` émet `msg.queued` à l'enqueue dans l'outbox ; `conv_hash`
+  réutilise `conv_id_of` (déjà exactement `SHA-256(min‖max)[0..8]`, pas
+  recalculé).
+- 3 tests ajoutés : `envoyer_un_message_emet_msg_queued`,
+  `recevoir_un_paquet_emet_pkt_seen_meme_rejete_par_le_routeur` (paquet
+  rejeté `UnknownLink` côté receveur — `pkt.seen` sort quand même),
+  `size_bucket_prend_le_plus_petit_palier_qui_couvre_la_taille`.
+
+### Pourquoi / décisions
+- Câblage posé dans `api.rs`, pas dans `sync::routing`/`sync::inventory`
+  eux-mêmes : ces modules sont des machines à états pures et `no_std`
+  (aucune notion de `node_id`/`seq`/`Envelope`, qui sont des concepts
+  côté façade client) ; `api.rs` est déjà le point qui « câble ensemble »
+  tout le reste (voir sa doc de module) et possède déjà `obs_seq`.
+- `rssi = None` plutôt qu'une valeur inventée : `on_bytes_received` ne
+  reçoit pas la RSSI (cette façade ne possède aucun `Transport`, décision
+  déjà documentée dans la doc de module de `api.rs`) — l'ajouter
+  demanderait un changement de signature qui remonte jusqu'au `.udl`
+  UniFFI déjà figé (US-302) et à l'app Android déjà branchée dessus
+  (US-306, en cours) : hors périmètre de cette US, écart consigné.
+
+### Écarts vs conception
+- Décrit + reporté dans `03-ecarts-conception.md` (nouvelle entrée
+  2026-09-29, US-318) : `pkt.relayed` reste **non câblé** ici — le relais
+  effectif (`Router::poll_due`) n'est délibérément pas appelé par cette
+  façade côté client (c'est le rôle du firmware relais dédié, US-308, déjà
+  documenté ainsi dans `api.rs`) ; les événements de `sync::inventory` (US-210)
+  restent aussi non câblés, `sync::inventory` n'étant lui-même pas encore
+  appelé par cette façade (doc de module `api.rs` §« Portée de cette
+  implémentation », toujours vraie après cette session).
+- `peer.connected` reste non câblé pour la même raison que `rssi` ci-dessus
+  (`role: Central|Peripheral` non plus disponible côté façade).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- `dengon-core::api` émet réellement `pkt.seen` et `msg.queued` ; les
+  fixtures golden existantes (US-107) restent la référence octet à octet,
+  non revérifiées ici (pas de nouvelle fixture ajoutée à `contracts/`).
+- Reste à faire pour clore #22 (US-208) : `pkt.relayed` +
+  `sync::inventory` côté firmware relais (US-308, C/ESP-IDF — hors de mes
+  compétences/area dans cette session), et une mesure de couverture
+  outillée (`cargo llvm-cov`, toujours pas posé ce sprint).
+- Fiche module mise à jour : `modules/dengon-core.md`.
+- `01-etat-du-code.md` mis à jour : non (portée trop locale à une façade
+  déjà référencée).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo build -p dengon-core
+Finished (6.13s)
+
+$ cargo clippy -p dengon-core --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo fmt -p dengon-core -- --check
+(rien)
+
+$ cargo test -p dengon-core
+383 passed, 2 ignored (10 suites)
+
+$ cargo test --workspace
+471 passed, 2 ignored (31 suites)
+
+$ cargo check -p dengon-core --no-default-features
+Finished — sans effet ici : `api.rs` reste entièrement derrière
+`#[cfg(feature = "std")]`, ces changements n'y touchent pas.
+```
+- Pas vérifié : conformité octet à octet d'un `pkt.seen`/`msg.queued` réel
+  contre une fixture golden dédiée (aucune fixture `contracts/` ne couvre
+  encore un événement produit par `api.rs` en conditions réelles,
+  contrairement aux fixtures unitaires déjà testées dans
+  `observability::tests`).
+- Critères de l'US-311 couverts sauf « scénario 4 du DoD démontré » : le
+  texte du scénario 4 n'est défini nulle part dans `docs/synthese/` (seule
+  mention : `10-benchmarks-mvp-tests.md:190`) ; la détection d'un relais
+  muet est démontrée sur les fixtures golden (captures ci-dessous), pas sur
+  du matériel réel.
+- Fiches module mises à jour : `dashboard-api.md`, `dashboard-web.md`.
+- 01-etat-du-code.md mis à jour : non (aucune structure de crate touchée).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python -m pytest -q          (dashboard/api)   → tous verts, dont 9 nouveaux
+$ ruff check app tests                            → All checks passed
+$ node --check app.js && node --check api.js      → OK
+```
+- Rendu vérifié à 360 px avec `chrome-headless-shell` (API réelle sur :8765,
+  20 fixtures ingérées, web servi sur :8766) :
+  [`assets/us-311/reseau-360px.png`](assets/us-311/reseau-360px.png),
+  [`assets/us-311/flotte-360px.png`](assets/us-311/flotte-360px.png). Mode
+  sombre non vérifié.
+- `ruff format --check` signale 4 fichiers **préexistants** non formatés
+  (dont `config.py` avant ce changement) : non touchés.
+- Non vérifié : rafraîchissement live SSE sur ces deux écrans (mécanisme
+  inchangé, réutilisé tel quel), rendu à plus de 360 px.
 
 ---
 
@@ -191,6 +1175,23 @@ $ cargo test --workspace --all-features --locked        474 passed, 2 ignored
 - Tests : `cargo build -p dengon-verify` puis, dans `dashboard/api`,
   `uv run pytest` → 107 passés ; `ruff check` OK ; `node --check` sur
   `app.js`/`api.js` OK. **Pas de vérification navigateur** après le rebase.
+$ cargo test --workspace --all-features --locked        479 passed, 2 ignored
+$ cargo check -p dengon-core --no-default-features --locked               OK
+$ android/scripts/build-ffi.sh bindings hote android    dengon.kt régénéré (+43 lignes), 3 .so
+$ ./gradlew --no-daemon assembleDebug testDebugUnitTest -Pdengon.ffi.libHote=…/target/debug
+  BUILD SUCCESSFUL — 89 tests, 0 échec, 0 ignoré (dont 8 MaillageTest,
+  4 PeerIdOctetsTest, 6 DengonNodeIntegrationTest)
+```
+- Gradle lancé dans WSL sur une copie de `android/` (scratchpad) avec son
+  propre `local.properties`, comme à l'US-302.
+- **Non vérifié :** l'APK n'a été installé sur **aucun** téléphone depuis
+  cette session. Le critère « scénario 1 démontré sur 2 vrais téléphones »,
+  le relais écran éteint ≥ 5 min et la démo filmée/consignée restent
+  **à faire** (Pixel 8 Pro + Galaxy A16) ; l'essai devrait se faire
+  **débranché** pour couvrir le Doze réel, trou déjà signalé à l'US-213.
+
+---
+
 ## 2026-09-29 — US-302 : `dengon-ffi` réel (UniFFI), l'app quitte le bouchon
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

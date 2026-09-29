@@ -1,8 +1,18 @@
 package com.dengon.app.ffi
 
+import com.dengon.app.ble.Maillage
+import com.dengon.app.ble.PeerIdOctets
+import com.dengon.app.ble.peerIdDeLAnnonce
+import com.dengon.app.ble.transport.AndroidTransport
+import com.dengon.app.ble.transport.BleRadio
+import com.dengon.app.ble.transport.DisconnectReason
+import com.dengon.app.ble.transport.RadioPeer
+import com.dengon.app.ble.transport.RappelsRadio
+import com.dengon.app.ble.transport.TransportConfig
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -15,8 +25,9 @@ import java.nio.file.Files
  * (Alice, Bob), à travers JNA et libdengon_ffi.so — aucun bouchon.
  *
  * La radio est remplacée par [pomper], qui recopie les trames de
- * `takeOutgoing` de l'un vers `onBytesReceived` de l'autre : exactement le
- * rôle qu'aura `AndroidTransport` (US-213) dans l'app (US-306).
+ * `takeOutgoing` de l'un vers `onBytesReceived` de l'autre — ou, depuis
+ * l'US-306, par le vrai chemin de l'app : `Maillage` + `AndroidTransport`
+ * sur une radio de test ([RadioReliee]).
  */
 class DengonNodeIntegrationTest {
 
@@ -88,12 +99,80 @@ class DengonNodeIntegrationTest {
             .filterIsInstance<NodeEvent.StatusChanged>()
             .filter { it.msgUuid == msgUuid }
             .map { it.status }
-        assertTrue("statuts vus : $statuts", MessageStatus.IN_FLIGHT in statuts)
+        // Scénario 1 du DoD : parti, puis distribué par l'accusé de Bob (US-306).
+        assertEquals(listOf(MessageStatus.IN_FLIGHT, MessageStatus.DELIVERED), statuts)
 
         // Même conversation des deux côtés.
         val convBob = bob.listConversations().single()
         assertEquals(alice.listConversations().single().convId, convBob.convId)
         assertEquals(listOf("bonjour Bob"), bob.listMessages(convBob.convId).map { it.body })
+    }
+
+    /**
+     * Le chemin complet de l'app (US-306), radio exceptée : deux vrais nœuds,
+     * chacun derrière son `AndroidTransport` et son [Maillage], reliés par
+     * deux [RadioReliee] (morceaux de 20 o : la fragmentation BLE est
+     * exercée). Aucun `peerID` n'est donné à la main : chaque côté l'apprend
+     * par l'`ANNOUNCE` de l'autre.
+     */
+    @Test
+    fun `deux maillages relies par la radio vont jusqu a DELIVERED`() {
+        val alice = ouvrir("alice")
+        val bob = ouvrir("bob")
+        val idAlice = alice.localIdentity().peerId
+        val idBob = bob.localIdentity().peerId
+        alice.addContact(bob.localIdentity())
+        bob.addContact(alice.localIdentity())
+
+        val radioA = RadioReliee()
+        val radioB = RadioReliee()
+        radioA.autre = radioB
+        radioB.autre = radioA
+        val tA = AndroidTransport(radioA).apply { start(TransportConfig(PeerIdOctets.depuisBase32(idAlice))) }
+        val tB = AndroidTransport(radioB).apply { start(TransportConfig(PeerIdOctets.depuisBase32(idBob))) }
+        val mA = Maillage(tA, alice)
+        val mB = Maillage(tB, bob)
+        fun tourner() = repeat(20) {
+            mA.traiter(tA.poll())
+            mB.traiter(tB.poll())
+        }
+
+        radioA.connecter()
+        radioB.connecter()
+        tourner()
+        assertEquals(idBob, mA.pairs.values.single())
+        assertEquals(idAlice, mB.pairs.values.single())
+        assertTrue(alice.pollEvents().contains(NodeEvent.PeerConnected(idBob)))
+        bob.pollEvents()
+
+        val msgUuid = alice.sendMessage(idBob, "par la radio")
+        mA.vider()
+        tourner()
+
+        val recu = bob.pollEvents().filterIsInstance<NodeEvent.MessageReceived>().single().message
+        assertEquals("par la radio", recu.body)
+        assertEquals(idAlice, recu.authorPeerId)
+        val statuts = alice.pollEvents()
+            .filterIsInstance<NodeEvent.StatusChanged>()
+            .filter { it.msgUuid == msgUuid }
+            .map { it.status }
+        assertEquals(listOf(MessageStatus.IN_FLIGHT, MessageStatus.DELIVERED), statuts)
+
+        radioA.couper()
+        radioB.couper()
+        tourner()
+        assertTrue(mA.pairs.isEmpty())
+        assertTrue(alice.pollEvents().contains(NodeEvent.PeerDisconnected(idBob)))
+    }
+
+    @Test
+    fun `le peerID base32 du FFI se decode en l identifiant du paquet`() {
+        val alice = ouvrir("alice")
+        val octets = PeerIdOctets.depuisBase32(alice.localIdentity().peerId)
+        // `sender_id` d'un paquet L3 : octets 12 à 20 (voir protocol::codec).
+        assertTrue(octets.contentEquals(alice.announceFrame().copyOfRange(12, 20)))
+        assertEquals(alice.localIdentity().peerId, peerIdDeLAnnonce(alice.announceFrame()))
+        assertNull(peerIdDeLAnnonce("pas un ANNOUNCE".toByteArray()))
     }
 
     @Test
@@ -130,4 +209,33 @@ class DengonNodeIntegrationTest {
     private companion object {
         val CLE = ByteArray(32) { 7 }
     }
+}
+
+/**
+ * Radio de test à un seul pair : chaque morceau écrit est livré tel quel à
+ * la radio [autre], comme une écriture GATT arriverait de l'autre côté.
+ */
+private class RadioReliee : BleRadio {
+    lateinit var autre: RadioReliee
+    private var rappels: RappelsRadio? = null
+    private val pair = RadioPeer("AA:BB:CC:DD:EE:FF", RadioPeer.Role.PERIPHERAL)
+
+    override fun demarrer(cfg: TransportConfig, rappels: RappelsRadio) {
+        this.rappels = rappels
+    }
+
+    override fun arreter() = Unit
+
+    override fun chargeUtile(pair: RadioPeer): Int = 20
+
+    override fun ecrire(pair: RadioPeer, morceau: ByteArray): Boolean {
+        autre.rappels!!.morceauRecu(autre.pair, morceau)
+        return true
+    }
+
+    override fun deconnecter(pair: RadioPeer) = Unit
+
+    fun connecter() = rappels!!.connecte(pair, -50)
+
+    fun couper() = rappels!!.deconnecte(pair, DisconnectReason.BRUTALE)
 }

@@ -14,6 +14,8 @@ Routes :
 * ``GET  /api/stream``    — diffusion en **SSE** des événements ingérés
   (US-218) : rattrapage depuis `Last-Event-ID` (ou depuis le début), puis
   diffusion live via `app/stream.py::Broadcaster`.
+* ``GET  /api/nodes``     — flotte, santé des relais, alertes (US-311).
+* ``GET  /api/network/graph`` — nœuds + liens observés (US-311).
 * ``GET  /api/messages``  — liste des messages suivis (US-219).
 * ``GET  /api/messages/{msg_log_id}`` — détail + parcours (`hops`, dérivés
   de `events` à la lecture, voir `app/messages_api.py`) d'un message
@@ -32,6 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -43,9 +46,10 @@ from starlette.concurrency import run_in_threadpool
 
 from . import ingest, integrity
 from .auth import InvalidToken, create_token, node_id_from_authorization_header
-from .config import jwt_secret, max_batch_bytes
+from .config import jwt_secret, max_batch_bytes, relay_silent_ms
 from .db import LockedConnection, connect, run_migrations
 from .messages_api import get_message, get_message_hops, list_messages
+from .network_api import list_fleet, network_graph
 from .stream import Broadcaster, StreamEvent
 
 
@@ -505,3 +509,18 @@ async def integrity_route(request: Request) -> JSONResponse:
             for v in verdicts
         ],
     )
+
+@app.get("/api/nodes")
+def list_nodes_route(request: Request) -> JSONResponse:
+    """Flotte : nœuds enregistrés, santé des relais, alertes (US-311)."""
+    now_ms = int(time.time() * 1000)
+    silent_ms = relay_silent_ms()
+    fleet = list_fleet(request.app.state.db, now_ms, silent_ms)
+    return JSONResponse(content={"now_ms": now_ms, "silent_after_ms": silent_ms, "nodes": fleet})
+
+
+@app.get("/api/network/graph")
+def network_graph_route(request: Request) -> JSONResponse:
+    """Snapshot de la carte du réseau : nœuds + liens observés (US-311)."""
+    now_ms = int(time.time() * 1000)
+    return JSONResponse(content=network_graph(request.app.state.db, now_ms, relay_silent_ms()))

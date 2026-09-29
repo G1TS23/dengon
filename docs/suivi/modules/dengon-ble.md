@@ -2,8 +2,8 @@
 
 **Rôle en une phrase :** la couche qui cache la radio Bluetooth au reste du programme.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §3.
-**Dernière mise à jour :** 2026-09-25
-**État :** **contrat livré et gelé** (US-105) ; aucune implémentation radio.
+**Dernière mise à jour :** 2026-09-29
+**État :** **contrat livré et gelé** (US-105) ; transport desktop `btleplug` (central seul) livré par US-303, **non essayé sur matériel**.
 
 ## À quoi ça sert
 
@@ -136,6 +136,12 @@ et remplit la file en arrière-plan.
 
 ## Limites connues / TODO
 
+- **US-303 : la suite passe contre `CentralTransport` sur fausse radio, pas
+  contre `BtleplugRadio` sur matériel.** Aucun pair BLE n'était disponible ; sur
+  le poste Windows de dev l'adaptateur répond « Le périphérique n'est pas prêt »
+  (erreur propre, `TransportError::Backend`). Le spike demandait aussi de
+  revalider sur Linux/BlueZ : **non fait**. Écarts de la radio réelle (central
+  seul, pas de `Propre`, pas de MTU négocié) : `03-ecarts-conception.md`.
 - **La suite n'a encore été exécutée contre aucune implémentation réelle.**
   Elle *peut* les atteindre toutes les trois — `btleplug` directement,
   `AndroidTransport` parce que `Transport` est une **callback interface**

@@ -2,8 +2,8 @@
 
 **Rôle en une phrase :** la bibliothèque qui contient **tout le protocole** dengon, sans aucune entrée/sortie.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §2 et §5 (décision A-2) ; [`docs/synthese/05-protocole-et-trame.md`](../../synthese/05-protocole-et-trame.md) (format de trame) ; [`docs/synthese/06-securite.md`](../../synthese/06-securite.md) (crypto, identité §2) ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md) §11.3 (QR, code de vérification).
-**Dernière mise à jour :** 2026-09-28
-**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::inventory` (US-210) + `sync::courier` (US-212) + `observability` (US-208).
+**Dernière mise à jour :** 2026-09-29 (US-306 : ANNOUNCE de lien, accusés émis ; revue PR #111 : `peerID` prouvé par le handshake)
+**État :** en cours — squelette (US-104) + `protocol::{consts, types}` (US-108) + `ledger` (US-206) + `store` (US-207) + `crypto` : Ed25519 (US-203) + Noise `XX`/`X`, `recipient_tag`, padding (US-204) + `protocol::codec` (US-201) + `protocol::fragment` (US-202) + `identity` : clés, QR, code de vérification, coffre (US-205) + `sync::status` (US-211) + `sync::routing` (US-209) + `sync::inventory` (US-210) + `sync::courier` (US-212) + `observability` (US-208) + `relay`, codec `ANNOUNCE`, `Ledger::resume` (US-308) + ANNOUNCE de lien, accusés émis (US-306).
 
 ## À quoi ça sert
 
@@ -526,6 +526,31 @@ encore le codec (US-201).
   représentatifs du domaine `pkt`/`msg`/`peer`, mais pas exhaustifs. Chaque
   événement restant suit le même patron mécanique (un `BTreeMap` de champs
   redactés) — écart consigné, pas un blocage technique.
+- **`api::Node` câble `pkt.seen`/`msg.queued`, pas `pkt.relayed`** (US-318,
+  issue #113) : les deux premiers sont des décisions du nœud **client**
+  (paquet reçu, message mis en file) — `api.rs` les émet dans
+  `on_bytes_received`/`send_message` via un `obs_events: Vec<Envelope>` vidé
+  par `take_observability_events()`, symétrique de `take_outgoing()`.
+  `pkt.relayed` resterait un contresens ici : `api.rs` n'appelle jamais
+  `Router::poll_due` (le relais effectif est le rôle du firmware relais
+  dédié, US-308), donc ce nœud ne relaie jamais rien à observer. `node_id`
+  (`client-<6 hex>`) et `rssi = None` (transport non possédé par cette
+  façade) — écarts consignés dans `03-ecarts-conception.md`.
+- **`seq` des `Envelope` séparé du `seq` de `record_ledger`** (revue de
+  PR #114, Oswin) : les deux méthodes partageaient au départ `obs_seq`, or
+  `record_ledger` n'émet jamais d'`Envelope` — chaque transition de statut
+  journalisée (ex. `mark_handed_off`) consommait un numéro sans laisser de
+  trace côté flux d'événements, créant de faux trous que
+  `integrity.gap` (`docs/powl/08` §8) aurait détectés côté dashboard.
+  `envelope_seq` (dédié, incrémenté uniquement par
+  `record_observability`) est maintenant contigu par construction.
+- **`msg_log_id` de `msg.queued` recalculé depuis le `msgID` réseau, pas
+  `msg_uuid`** (revue de PR #114, Oswin) : `pkt.seen` hache le `msgID`
+  (`compute_msg_id`, sur les octets décodés), `msg.queued` hachait
+  `msg_uuid` (l'identifiant applicatif) — deux `msg_log_id` différents
+  pour le même message, non corrélables côté dashboard. `send_message`
+  décode maintenant ses propres octets fraîchement encodés pour recalculer
+  le même `msgID` que le receveur calculera à la réception.
 - **`sync::inventory` (US-210) : push cadencé sous l'anti-inondation.**
   Le routeur du voisin refuse plus de 20 nouveaux `msgID`/min venant de
   nous ; pousser le manquant d'un bloc en ferait rejeter l'excédent. Chaque
@@ -1082,11 +1107,83 @@ initiale était à 88 % avant ces ajouts).
 - `ENVELOPE_OFFER`/`ENVELOPE_REQUEST` (porteur tiers) pas câblé : seul le
   cas « on est déjà connecté à qui on écrit » l'est.
 - Remise de ce que `sync::courier` porte pour un autre pair : pas câblée.
-- Aucun accusé de réception n'est **émis** par cette façade (seulement
-  reçu/traité) : le statut `Delivered` d'un message sortant n'est jamais
-  atteint ici, `InFlight` est le statut final observable.
+- ~~Aucun accusé de réception n'est émis~~ — corrigé à l'US-306, voir
+  ci-dessous.
 - `PeerId` utilisé directement comme identifiant de lien pour `Router`
   (simplification vs `dengon-ble::LinkId`, un nœud = une connexion active).
+  C'est à l'appelant de relier `LinkId` et `PeerId` — par l'`ANNOUNCE` de
+  lien depuis l'US-306.
+
+### Ajouts de l'US-306 : `ANNOUNCE` de lien et accusés
+
+| Élément | Fichier | Rôle |
+|---|---|---|
+| `AnnouncePayload`, `encode_announce`, `decode_announce` | `src/protocol/codec/announce.rs` | Payload `ANNOUNCE` de `synthese/05` §4 : `peerID(8) ‖ pub_static(32) ‖ pub_sign(32) ‖ pseudo_len(1) ‖ pseudo ‖ ledger_height(8) ‖ caps(1)`. Octets seulement, `no_std` ; refuse pseudo vide / > 255 o, tronqué, octets en trop, UTF-8 invalide. |
+| `Node::announce_packet(now)` | `src/api.rs` | `ANNOUNCE` signé de ce nœud, **TTL 1** (`ANNOUNCE_LINK_TTL`), à écrire en première trame d'un lien. |
+| `api::parse_announce(bytes)` | `src/api.rs` | Vérifie type, signature Ed25519 (avec le `pub_sign` annoncé) et `peerID` = `sender_id` = `SHA-256(pub_static)[0..8]` ; rend la `PublicIdentity`. TTL et horodatage non vérifiés (annonce de lien). |
+| `queue_ack` / `flush_pending_acks` | `src/api.rs` | `deliver_message` met un `Ack{Delivered}` en attente pour l'auteur (`pending_acks`, `PENDING_ACKS_MAX` = 64 par pair) ; il part en paquet `ACK` chiffré dans la session, tout de suite ou dès qu'elle s'établit. Un doublon est ré-accusé. |
+
+`add_contact` ouvre aussi la conversation, vide et nommée, avec le contact
+(trouvé pendant l'essai sur téléphones : sans elle, aucun moyen d'écrire un
+premier message) ; il complète le pseudo d'une conversation déjà ouverte
+par un message reçu. Test `un_contact_ajoute_a_sa_conversation_vide_nommee`.
+
+Correction au passage dans `handle_handshake_message` : le message 3 du
+handshake est mis en sortie **avant** ce que la session débloque, sinon un
+accusé chiffré pouvait précéder la fin du handshake chez le répondeur.
+
+Tests ajoutés : 4 (`codec::announce`) + 6 (`api` : ANNOUNCE vérifié,
+altéré / autre type, `peerID` usurpé, `Delivered` en session, `Delivered`
+après enveloppe, borne des accusés en attente) + 1 d'intégration
+(`tests/api_mock.rs` : `InFlight` puis `Delivered`).
+
+Limites : pas d'accusé par enveloppe scellée (auteur jamais connecté en
+direct → reste `InFlight`, à reprendre à l'US-312) ; `ANNOUNCE` jamais émis
+périodiquement ni traité par `on_bytes_received`.
+
+## Sous-module `relay` (US-308)
+
+**Rôle :** la logique complète du relais ESP32, en `no_std` + `alloc`, sans
+aucune I/O. Le firmware (C) lui passe trames, liens et heure, et récupère ce
+qu'il faut émettre et persister. `api` (côté client, `std`) n'était pas
+réutilisable, comme le disait sa propre documentation.
+
+| Élément | Fichier | Ce que ça fait |
+|---|---|---|
+| `Relay<L>` | `src/relay.rs` | Câble `Router`, `Inventory`, `Courier` et `Ledger<SigningKey>`. `L` = identifiant de lien du transport. |
+| `Relay::link_up` | `src/relay.rs` | Émet l'`ANNOUNCE` signé du relais (TTL 1, `caps = CAP_RELAY`). |
+| `Relay::on_frame` | `src/relay.rs` | Décode. Un `ANNOUNCE` authentique lie le lien au pair (puis `INVENTORY` + `ENVELOPE_OFFER`) et peut donner l'heure. Passe par le routeur : relais programmé, `INVENTORY`/`ENVELOPE_REQUEST` adressés au relais (signature vérifiée avec la clé annoncée), `SEALED_ENVELOPE` déposée, cache de réconciliation. |
+| `Relay::poll_routing` / `poll_inventory` / `poll_courier` | `src/relay.rs` | Relais jitterés (TTL réécrit), pushs cadencés, expirations. `poll` enchaîne les trois. |
+| `Relay::take_outgoing` / `take_ledger_entries` / `ledger_anchor` | `src/relay.rs` | Sorties : trames `(lien, octets)`, entrées de journal, curseur. |
+| `Relay::record_event` | `src/relay.rs` | Événement du firmware (`relay.boot`…), refusé hors catalogue. |
+| `Announce` / `Announce::verify` | `src/protocol/codec/announce.rs` | Payload `ANNOUNCE` et ses deux contrôles anti-usurpation. |
+| `Ledger::resume` / `anchor` / `take_entries` | `src/ledger.rs` | Journal qui reprend depuis la seule ancre et vide sa RAM au fil de l'eau. |
+| `codec::msg_id` | `src/protocol/codec/mod.rs` | `msgID` extrait d'`api.rs` pour être partagé. |
+| `courier::{encode,decode}_tag_list` | `src/sync/courier.rs` | Payload `ENVELOPE_OFFER` / `ENVELOPE_REQUEST`. |
+
+**Décisions :**
+- **Heure apprise.** Heure de l'appelant avant 2024 = inconnue : le relais
+  prend celle du plus récent `ANNOUNCE` authentique (décalage sur l'horloge
+  monotone, qui ne fait qu'avancer). Sans heure, il ignore les paquets (le
+  routeur les rejetterait tous en `ClockSkew`).
+- **Une trame BLE au plus** pour ses propres paquets : 13 `msgID` par
+  `INVENTORY`, 26 tags par offre.
+- **Enveloppes** : toute `SEALED_ENVELOPE` non rejetée est déposée, qu'elle
+  soit aussi relayée ou non. Chaque nouveau dépôt est offert aux voisins déjà
+  liés, sauf à celui qui l'a apportée.
+- `msg_log_id` du relais = `SHA-256(msgID)[0..8]`, faute de `msg_uuid` (chiffré).
+
+**Tests :** 12 dans `src/relay/tests.rs` (téléphones simulés par des
+identités qui forgent leurs paquets) ; 5 pour le codec `ANNOUNCE`,
+2 pour `Ledger::resume`/`take_entries`, 2 pour les listes de tags.
+
+**Limites :**
+- Lien lié au *premier* `ANNOUNCE` authentique : un `ANNOUNCE` relayé arrivé
+  en premier le lierait au mauvais pair.
+- Pas de réassemblage des fragments.
+- Remise d'enveloppe considérée faite dès la mise en file.
+- Aucun client n'émet encore `ANNOUNCE`/`RELAY_OK`. Voir
+  `03-ecarts-conception.md`.
 
 ## Pour l'oral
 

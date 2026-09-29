@@ -84,12 +84,22 @@
 //!   routeur, est déposée dans [`Courier`]. La remise de ce que je porte à
 //!   son vrai propriétaire n'est pas câblée, pour la même raison que
 //!   ci-dessus.
-//! - **Envoi d'accusés de réception** : [`Node::on_bytes_received`] sait
-//!   *traiter* un `AppFrame::Ack` reçu ([`Node::apply_ack`]), mais rien dans
-//!   cette façade n'en **émet** — un pair qui reçoit un message ne prévient
-//!   pas son expéditeur. Écart consigné : hors périmètre de cette US, sans
-//!   quoi le statut `Delivered` d'un message sortant n'est jamais atteint
-//!   par cette façade (`InFlight` est le statut final observable ici).
+//! - **Accusés de réception** (US-306) : chaque message livré produit un
+//!   `Ack{Delivered}` vers son auteur, **dans la session Noise** avec lui
+//!   (paquet `ACK`). Sans session établie (message reçu par enveloppe avant
+//!   la fin du handshake), l'accusé attend dans `pending_acks` et part dès
+//!   que la session s'établit. Pas d'accusé par enveloppe scellée : il
+//!   faudrait un `rng` sur le chemin de réception, et un auteur jamais
+//!   connecté en direct (relais, US-312) ne reçoit donc pas son accusé —
+//!   écart consigné.
+//! - **`ANNOUNCE` de lien** (US-306) : [`Node::announce_packet`] rend
+//!   l'`ANNOUNCE` signé de ce nœud (TTL 1 : il présente le nœud à son voisin
+//!   direct, il n'est pas relayé) et [`parse_announce`] vérifie celui d'un
+//!   voisin. C'est ce qui permet à l'appelant de relier un lien radio (qui
+//!   ne connaît qu'un `LinkId`) au `PeerId` attendu par
+//!   [`Node::on_peer_connected`]. Ni l'annonce périodique
+//!   (`ANNOUNCE_*_S`) ni le traitement d'un `ANNOUNCE` par
+//!   [`Node::on_bytes_received`] ne sont câblés.
 //! - **`sync::inventory`** (US-210) : **pas câblé** — la PR qui le livre
 //!   n'est pas encore mergée sur `main` au moment où cette US démarre (voir
 //!   `docs/suivi/00-journal.md`, entrée US-301). Écart consigné.
@@ -109,13 +119,15 @@ use core::fmt;
 use sha2::{Digest, Sha256};
 
 use crate::crypto::noise::{self, Handshake, Session};
-use crate::crypto::{CryptoError, SigningKey};
+use crate::crypto::{CryptoError, SigningKey, VerifyingKey};
 use crate::identity::{self, PublicIdentity};
 use crate::ledger::Ledger;
+use crate::observability::{self, Envelope, NodeKind};
+use crate::protocol::codec::announce::Announce;
 use crate::protocol::codec::app::{self, AckFrame, AppFrame, MessageFrame};
 use crate::protocol::codec::{self, Packet};
 use crate::protocol::consts::{PEER_ID_LEN, PROTO_VERSION, TTL_DEFAULT};
-use crate::protocol::types::{Flags, Header, PacketType};
+use crate::protocol::types::{AckStatus, Flags, Header, PacketType};
 use crate::protocol::{MsgId, PeerId};
 use crate::sync::courier::{Courier, CourierConfig};
 use crate::sync::routing::{Decision, Now as RoutingNow, Router, RoutingConfig};
@@ -131,6 +143,14 @@ use crate::store::{FixedKeySource, Store};
 /// `Conversation`) ; l'identité **locale**, avec secrets, reste
 /// [`crate::identity::Identity`], passée une seule fois à [`Node::new`].
 pub type Identity = PublicIdentity;
+
+/// TTL d'un `ANNOUNCE` de lien : il présente le nœud à son voisin direct,
+/// pas au maillage (voir la doc de module).
+const ANNOUNCE_LINK_TTL: u8 = 1;
+
+/// Accusés gardés au plus par pair en attendant une session : au-delà, le
+/// plus ancien est oublié (l'expéditeur rejouera, et le doublon sera ré-accusé).
+const PENDING_ACKS_MAX: usize = 64;
 
 /// Statut d'un message émis, tel qu'exposé par la façade (miroir de l'énum
 /// `MessageStatus` du `.udl` — sans `Cancelled`, hors périmètre de cette US
@@ -315,12 +335,48 @@ pub struct Node {
     peers: BTreeMap<PeerId, PeerState>,
     conversations: BTreeMap<ConvId, ConversationRecord>,
     messages: BTreeMap<MsgUuid, MessageRecord>,
-    /// Compteur de `seq` pour le journal d'observabilité (US-208) —
-    /// indépendant du `seq` de `ledger` (qui a le sien).
+    /// `node_id` du catalogue d'événements (US-208, US-318) —
+    /// `client-<6 hex>` d'après `contracts/tools/catalogue.py::NODE_ID`
+    /// (cette façade n'est jamais un relais, voir la doc de module).
+    /// Calculé une fois à la construction, jamais recalculé.
+    node_id: String,
+    /// Compteur consommé par [`Node::record_ledger`] — indépendant du `seq`
+    /// interne de `ledger` (qui a le sien) et de [`Node::envelope_seq`].
+    /// Historique : pensé au départ comme LE compteur de `seq`
+    /// d'observabilité, avant que la revue de cette PR (Oswin) ne montre
+    /// qu'un compteur partagé entre `record_ledger` (n'émet jamais
+    /// d'`Envelope`) et [`Node::record_observability`] (en émet) crée des
+    /// trous dans le `seq` des `Envelope` — `docs/powl/08` §8 dérive
+    /// `integrity.gap` de ces trous, donc de fausses alertes côté
+    /// dashboard. Les deux compteurs sont désormais séparés.
     obs_seq: u64,
+    /// Compteur `seq` des [`Envelope`] émis par
+    /// [`Node::record_observability`] — contigu par construction : c'est le
+    /// seul point d'incrémentation, chaque incrément produit exactement un
+    /// `Envelope`. Voir la doc de [`Node::obs_seq`].
+    envelope_seq: u64,
+    /// Événements d'observabilité en attente d'envoi (US-318), vidés par
+    /// [`Node::take_observability_events`] — même mécanique que
+    /// [`Node::take_outgoing`]. Cette façade ne sait pas signer/batcher/
+    /// envoyer au VPS : c'est le rôle de l'appelant (voir `docs/powl/08` §1
+    /// pts 1/4, hors périmètre de `dengon-core`).
+    ///
+    /// **Non bornée** (revue de cette PR, Oswin) : un appelant qui
+    /// n'appelle jamais [`Node::take_observability_events`] la laisse
+    /// grossir sans limite sur toute la durée de vie du processus. Aucune
+    /// borne posée ici plutôt qu'une éviction silencieuse (perdre des
+    /// événements d'observabilité serait pire que la croissance mémoire) :
+    /// c'est à l'appelant de la vider à intervalle régulier, exactement
+    /// comme pour [`Node::outgoing`]. Personne ne l'appelle encore
+    /// aujourd'hui (ni `dengon-node`, ni le `.udl`) — à surveiller avant que
+    /// l'app Android (US-306) n'en dépende.
+    obs_events: Vec<Envelope>,
     outgoing: Vec<(PeerId, Vec<u8>)>,
     events: VecDeque<NodeEvent>,
     store: Option<Store<FixedKeySource>>,
+    /// Accusés à envoyer dès qu'une session existe avec l'auteur du message
+    /// (voir la doc de module, « Accusés de réception »).
+    pending_acks: BTreeMap<PeerId, Vec<AckFrame>>,
 }
 
 impl fmt::Debug for Node {
@@ -354,6 +410,7 @@ impl Node {
         // de la crate. Une graine Ed25519 rederivée est exactement la même
         // clé, pas un secret distinct : aucun affaiblissement.
         let ledger_signer = SigningKey::from_seed(&identity.signing_key().to_seed());
+        let node_id = alloc::format!("client-{}", hex_string(&peer_id[..3]));
         Self {
             router: Router::new(RoutingConfig::new(peer_id), routing_seed),
             outbox: Outbox::open(MemoryStore::new())
@@ -365,10 +422,14 @@ impl Node {
             peers: BTreeMap::new(),
             conversations: BTreeMap::new(),
             messages: BTreeMap::new(),
+            node_id,
             obs_seq: 0,
+            envelope_seq: 0,
+            obs_events: Vec::new(),
             outgoing: Vec::new(),
             events: VecDeque::new(),
             store: None,
+            pending_acks: BTreeMap::new(),
         }
     }
 
@@ -382,6 +443,36 @@ impl Node {
     #[must_use]
     pub fn public_identity(&self) -> PublicIdentity {
         self.identity.public()
+    }
+
+    /// `ANNOUNCE` signé de ce nœud, à écrire en **première trame** de chaque
+    /// lien radio qui s'ouvre (`synthese/07` §6, étape 1). Le voisin le
+    /// vérifie avec [`parse_announce`] pour savoir quel `PeerId` est au bout
+    /// du lien.
+    ///
+    /// # Errors
+    ///
+    /// [`DengonError::Internal`] si l'encodage échoue (ne devrait pas
+    /// arriver : le pseudo a été validé à la création de l'identité).
+    pub fn announce_packet(&self, now: RoutingNow) -> Result<Vec<u8>, DengonError> {
+        let public = self.identity.public();
+        let payload = Announce {
+            peer_id: self.peer_id,
+            pub_static: public.pub_static(),
+            pub_sign: public.pub_sign().to_bytes(),
+            pseudo: public.pseudo().to_string(),
+            ledger_height: u64::try_from(self.ledger.len()).unwrap_or(u64::MAX),
+            caps: 0,
+        }
+        .encode()
+        .map_err(|_| DengonError::Internal)?;
+        self.encode_signed_broadcast(
+            PacketType::Announce,
+            ANNOUNCE_LINK_TTL,
+            now.wall_ms,
+            payload,
+        )
+        .ok_or(DengonError::Internal)
     }
 
     /// Fait persister les nouveaux messages/conversations dans `store` en
@@ -399,8 +490,24 @@ impl Node {
     /// permet de lui sceller une enveloppe (Noise `X`) avant même toute
     /// connexion directe (voir [`DengonError::UnknownPeer`], levée quand ni
     /// un contact ni une session ne fournissent cette clé).
+    ///
+    /// Ouvre aussi la conversation avec lui, vide (US-306) : sans elle,
+    /// l'UI, qui ne liste que les conversations, n'offrait aucun moyen
+    /// d'écrire un premier message à un contact tout juste appairé. Le
+    /// pseudo d'une conversation déjà ouverte par un message reçu avant
+    /// l'appairage (pseudo inconnu, donc vide) est complété.
     pub fn add_contact(&mut self, contact: PublicIdentity) {
         let peer_id = contact.peer_id();
+        let conv_id = conv_id_of(self.peer_id, peer_id);
+        let conv_is_new = !self.conversations.contains_key(&conv_id);
+        self.conversations
+            .entry(conv_id)
+            .or_insert_with(|| ConversationRecord {
+                peer_id,
+                ..ConversationRecord::default()
+            })
+            .peer_pseudo = contact.pseudo().to_string();
+        self.persist_conversation(conv_id, peer_id, conv_is_new);
         self.peers.entry(peer_id).or_default().identity = Some(contact);
     }
 
@@ -419,9 +526,9 @@ impl Node {
         R: rand_core::RngCore + rand_core::CryptoRng + Send + Sync + 'static,
     {
         self.router.link_up(peer_id);
-        // Le lien EST le pair (voir la doc de module) : authentifié tout de
-        // suite, l'anti-inondation compte par `peerID` dès la connexion.
-        self.router.bind_peer(peer_id, peer_id, now.mono_ms);
+        // Le lien n'est **pas** encore authentifié : le `peerID` vient de
+        // l'ANNOUNCE, rejouable. `bind_peer` attend la fin du handshake
+        // (`finish_handshake`) ; d'ici là l'anti-inondation compte par lien.
 
         let initiator = self.peer_id < peer_id;
         let handshake_result = if initiator {
@@ -507,6 +614,7 @@ impl Node {
     fn encode_signed_broadcast(
         &self,
         packet_type: PacketType,
+        ttl: u8,
         wall_ms: u64,
         payload: Vec<u8>,
     ) -> Option<Vec<u8>> {
@@ -515,7 +623,7 @@ impl Node {
             header: Header {
                 version: PROTO_VERSION,
                 packet_type,
-                ttl: TTL_DEFAULT,
+                ttl,
                 flags: Flags::SIGNED,
                 timestamp_ms: wall_ms,
                 sender_id: self.peer_id,
@@ -536,12 +644,7 @@ impl Node {
     /// `msgID` n'est jamais sur le fil, seul `sync::routing`/`sync::courier`
     /// le calculent localement pour dédupliquer).
     fn compute_msg_id(packet: &Packet) -> MsgId {
-        let mut hasher = Sha256::new();
-        hasher.update(packet.header.sender_id);
-        hasher.update(packet.header.timestamp_ms.to_be_bytes());
-        hasher.update([packet.header.packet_type.to_u8()]);
-        hasher.update(&packet.payload);
-        hasher.finalize().into()
+        codec::msg_id(packet)
     }
 
     // ----- Envoi -----------------------------------------------------------
@@ -648,7 +751,12 @@ impl Node {
             sealed_payload.extend_from_slice(&epoch_day.to_be_bytes());
             sealed_payload.extend_from_slice(&ciphertext);
             let bytes = self
-                .encode_signed_broadcast(PacketType::SealedEnvelope, now.wall_ms, sealed_payload)
+                .encode_signed_broadcast(
+                    PacketType::SealedEnvelope,
+                    TTL_DEFAULT,
+                    now.wall_ms,
+                    sealed_payload,
+                )
                 .ok_or(DengonError::Internal)?;
             (DeliveryKind::Envelope, bytes)
         };
@@ -665,6 +773,31 @@ impl Node {
         if let Some(change) = change {
             self.record_ledger(change.event_name(), &change.msg_uuid, now.wall_ms);
         }
+        // `msg.queued` — `docs/powl/08` §4 (US-318). `conv_id` suit déjà
+        // exactement `SHA-256(min(peerA,peerB) ‖ max(peerA,peerB))[0..8]`
+        // ([`conv_id_of`]) : c'est le `conv_hash` attendu par le catalogue,
+        // pas une valeur à recalculer.
+        //
+        // `msg_log_id` doit hacher le **`msgID` réseau** (`docs/powl/08` §1
+        // pt 3 : « msgID → msg_log_id »), pas `msg_uuid` (revue de cette PR,
+        // Oswin) : sinon `pkt.seen` (qui hache le `msgID`, via
+        // `compute_msg_id`) et `msg.queued` produisent deux `msg_log_id`
+        // différents pour le même message, et le dashboard ne peut plus
+        // corréler sa mise en file à sa réception côté pair. On recalcule
+        // le `msgID` à partir des octets tout juste encodés, exactement
+        // comme le ferait le receveur (`on_bytes_received` →
+        // `compute_msg_id`) — pas de valeur transmise à faire confiance.
+        let net_msg_id = codec::decode(&packet_bytes).map(|p| Self::compute_msg_id(&p));
+        let Ok(net_msg_id) = net_msg_id else {
+            unreachable!(
+                "packet_bytes tout juste produits par encode_unsigned/encode_signed_broadcast : decode ne peut pas échouer"
+            )
+        };
+        self.record_observability(
+            "msg.queued",
+            observability::msg_queued(observability::msg_log_id(&net_msg_id), conv_id),
+            now.wall_ms,
+        );
 
         self.messages.insert(
             msg_uuid,
@@ -726,6 +859,24 @@ impl Node {
             return; // paquet illisible : silencieusement jeté, comme un relais le ferait
         };
         let msg_id = Self::compute_msg_id(&packet);
+        // `pkt.seen` — `docs/powl/08` §2 : « paquet reçu (avant dédup) »,
+        // donc émis ici, avant [`Router::on_packet`] qui décide dédup/rejet
+        // (US-318). `rssi` : cette façade ne possède aucun `Transport` (voir
+        // la doc de module) et ne le reçoit pas en paramètre — `None`,
+        // écart consigné dans `03-ecarts-conception.md` plutôt qu'une valeur
+        // inventée.
+        self.record_observability(
+            "pkt.seen",
+            observability::pkt_seen(
+                observability::msg_log_id(&msg_id),
+                packet.header.packet_type.to_u8(),
+                packet.header.ttl,
+                size_bucket(bytes.len()),
+                from,
+                None,
+            ),
+            now.wall_ms,
+        );
         let decision = self.router.on_packet(from, &packet.header, &msg_id, now);
         match decision {
             Decision::Deliver => self.handle_addressed_packet(from, packet, now),
@@ -789,10 +940,7 @@ impl Node {
             let Some(PeerCrypto::Handshaking(handshake)) = peer.crypto.take() else {
                 unreachable!("vérifié juste au-dessus")
             };
-            if let Ok(session) = handshake.into_session() {
-                self.peers.entry(from).or_default().crypto = Some(PeerCrypto::Established(session));
-                self.redeliver_pending_envelopes(from, now.wall_ms);
-            }
+            self.finish_handshake(from, *handshake, now);
             return;
         }
         // Pas fini après cette lecture : on répond (message 2 côté répondeur,
@@ -808,20 +956,51 @@ impl Node {
         let vient_de_finir = handshake.is_finished();
         let bytes = self.encode_unsigned(PacketType::NoiseHs, from, now.wall_ms, reply);
 
+        // Le message 3 part AVANT tout ce que la session débloque : le
+        // répondeur doit la finir avant de recevoir un premier ciphertext.
+        if let Some(bytes) = bytes {
+            self.outgoing.push((from, bytes));
+        }
         if vient_de_finir {
             if let Some(PeerCrypto::Handshaking(handshake)) =
                 self.peers.get_mut(&from).and_then(|p| p.crypto.take())
             {
-                if let Ok(session) = handshake.into_session() {
-                    self.peers.entry(from).or_default().crypto =
-                        Some(PeerCrypto::Established(session));
-                    self.redeliver_pending_envelopes(from, now.wall_ms);
-                }
+                self.finish_handshake(from, *handshake, now);
             }
         }
-        if let Some(bytes) = bytes {
-            self.outgoing.push((from, bytes));
+    }
+
+    /// Range la session issue d'un handshake `XX` terminé — **si** la clé
+    /// statique prouvée par le handshake est bien celle du `peerID` `from`.
+    ///
+    /// Le `peerID` d'un lien vient de l'appelant (ANNOUNCE, rejouable) : seul
+    /// le handshake prouve une possession de clé. On exige donc
+    /// `peer_id_of(remote_static) == from` et, si le contact est connu,
+    /// `remote_static == pub_static` du contact. Sinon la session est jetée
+    /// (revue PR #111) : un pair qui joue un `XX` avec sa propre clé sous le
+    /// `peerID` d'un tiers ne reçoit ni message ni accusé.
+    fn finish_handshake(&mut self, from: PeerId, handshake: Handshake, now: RoutingNow) {
+        let Ok(session) = handshake.into_session() else {
+            return;
+        };
+        let remote = session.remote_static();
+        if identity::keys::peer_id_of(&remote) != from {
+            return;
         }
+        let peer = self.peers.entry(from).or_default();
+        if peer
+            .identity
+            .as_ref()
+            .is_some_and(|contact| contact.pub_static() != remote)
+        {
+            return;
+        }
+        peer.crypto = Some(PeerCrypto::Established(session));
+        // Clé prouvée : le lien EST bien ce pair, l'anti-inondation compte
+        // désormais par `peerID`.
+        self.router.bind_peer(from, from, now.mono_ms);
+        self.redeliver_pending_envelopes(from, now.wall_ms);
+        self.flush_pending_acks(from, now.wall_ms);
     }
 
     fn handle_session_ciphertext(&mut self, from: PeerId, ciphertext: &[u8], now: RoutingNow) {
@@ -939,6 +1118,57 @@ impl Node {
             sent_ms: m.sent_ms,
             status: MessageStatus::Delivered,
         }));
+
+        // Un doublon (rejeu de l'expéditeur) est ré-accusé : c'est souvent
+        // que le premier accusé s'est perdu (`synthese/07` §4).
+        self.queue_ack(
+            from,
+            AckFrame {
+                msg_uuid: m.msg_uuid,
+                status: AckStatus::Delivered,
+                at_ms: wall_ms,
+            },
+            wall_ms,
+        );
+    }
+
+    /// Met un accusé en attente pour `author` et l'envoie tout de suite si
+    /// une session existe déjà avec lui.
+    fn queue_ack(&mut self, author: PeerId, ack: AckFrame, wall_ms: u64) {
+        let pending = self.pending_acks.entry(author).or_default();
+        if pending.len() >= PENDING_ACKS_MAX {
+            pending.remove(0);
+        }
+        pending.push(ack);
+        self.flush_pending_acks(author, wall_ms);
+    }
+
+    /// Chiffre dans la session avec `peer_id` les accusés qui l'attendaient.
+    /// Sans session établie, ils restent en attente.
+    fn flush_pending_acks(&mut self, peer_id: PeerId, wall_ms: u64) {
+        let Some(PeerCrypto::Established(_)) =
+            self.peers.get(&peer_id).and_then(|p| p.crypto.as_ref())
+        else {
+            return;
+        };
+        let Some(acks) = self.pending_acks.remove(&peer_id) else {
+            return;
+        };
+        for ack in acks {
+            let plaintext = app::encode_app_frame(&AppFrame::Ack(ack));
+            let Some(PeerCrypto::Established(session)) =
+                self.peers.get_mut(&peer_id).and_then(|p| p.crypto.as_mut())
+            else {
+                unreachable!("session vérifiée juste au-dessus")
+            };
+            let Ok(ciphertext) = session.encrypt(&plaintext) else {
+                continue; // accusé perdu : le rejeu de l'expéditeur en redemandera un
+            };
+            if let Some(bytes) = self.encode_unsigned(PacketType::Ack, peer_id, wall_ms, ciphertext)
+            {
+                self.outgoing.push((peer_id, bytes));
+            }
+        }
     }
 
     fn apply_ack(&mut self, ack: AckFrame, wall_ms: u64) {
@@ -1072,6 +1302,38 @@ impl Node {
         self.ledger.append(event_name, &payload_json, ts_ms);
     }
 
+    /// Construit et met en attente un événement du catalogue d'observabilité
+    /// (US-208/US-318) — `docs/powl/08`. `self.envelope_seq` est le `seq`
+    /// du **flux d'`Envelope`** de ce nœud
+    /// (`event_id = hex(SHA-256(node_id ‖ seq))`) — voir sa doc de champ
+    /// pour pourquoi il est séparé de [`Node::obs_seq`] : contigu, car
+    /// c'est le seul point qui l'incrémente et il ne le fait qu'en même
+    /// temps qu'il pousse l'`Envelope` correspondant.
+    fn record_observability(
+        &mut self,
+        name: &'static str,
+        payload: observability::Value,
+        ts_ms: u64,
+    ) {
+        self.envelope_seq += 1;
+        self.obs_events.push(Envelope::new(
+            &self.node_id,
+            NodeKind::Client,
+            self.envelope_seq,
+            ts_ms,
+            name,
+            payload,
+        ));
+    }
+
+    /// Vide et renvoie les événements d'observabilité en attente (US-318).
+    /// L'appelant les batche, les signe et les envoie au VPS
+    /// (`docs/powl/08` §1 pts 1/4) — hors périmètre de `dengon-core`, voir
+    /// la doc de [`Node::obs_events`].
+    pub fn take_observability_events(&mut self) -> Vec<Envelope> {
+        core::mem::take(&mut self.obs_events)
+    }
+
     /// Un pair vient de se connecter : tout message en outbox à destination
     /// de ce pair et pas encore remis part maintenant (voie enveloppe —
     /// déjà scellée, pas besoin d'attendre une session ; voie session, si
@@ -1153,6 +1415,40 @@ impl Node {
             );
         }
     }
+}
+
+/// Vérifie l'`ANNOUNCE` d'un voisin et rend sa carte de contact.
+///
+/// Refusé si ce n'est pas un `ANNOUNCE`, si la signature Ed25519 ne se
+/// vérifie pas avec le `pub_sign` annoncé, ou si le `peerID` du payload
+/// ne vaut pas à la fois `sender_id` et `SHA-256(pub_static)[0..8]`. Un
+/// voisin ne peut donc pas se faire passer pour un autre `peerID` sans en
+/// avoir la clé statique — que le handshake `XX` qui suit prouvera.
+///
+/// Ni le TTL ni l'horodatage ne sont vérifiés : c'est une annonce de lien,
+/// lue une fois à l'ouverture, pas un paquet relayé.
+///
+/// # Errors
+///
+/// [`DengonError::Internal`] pour tout refus (le détail n'est pas exposé).
+pub fn parse_announce(bytes: &[u8]) -> Result<PublicIdentity, DengonError> {
+    let packet = codec::decode(bytes).map_err(|_| DengonError::Internal)?;
+    let payload = Announce::verify(&packet, bytes).map_err(|_| DengonError::Internal)?;
+    let pub_sign = VerifyingKey::from_bytes(&payload.pub_sign)?;
+    PublicIdentity::new(&payload.pseudo, payload.pub_static, pub_sign)
+        .map_err(|_| DengonError::Internal)
+}
+
+/// `size_bucket` de `pkt.seen`/`envelope.stored` (`docs/powl/08` §2 : « jamais
+/// la taille exacte ») — le plus petit de `{256,512,1024,2048}` qui couvre
+/// `len`, saturé au plus grand palier au-delà (un paquet L3 ne dépasse pas le
+/// MTU fragmenté, très en dessous de 2048 o en pratique).
+fn size_bucket(len: usize) -> u16 {
+    const BUCKETS: [u16; 4] = [256, 512, 1024, 2048];
+    BUCKETS
+        .into_iter()
+        .find(|&b| len <= usize::from(b))
+        .unwrap_or(2048)
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -1409,10 +1705,255 @@ mod tests {
     }
 
     #[test]
+    fn un_contact_ajoute_a_sa_conversation_vide_nommee() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+
+        // Bob écrit avant d'être appairé : conversation au pseudo inconnu.
+        bob.add_contact(alice.public_identity());
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(70));
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(71));
+        pomper(&mut alice, &mut bob, T0);
+        bob.send_message(alice.peer_id(), "coucou", now(T0), rng(72))
+            .unwrap();
+        pomper(&mut alice, &mut bob, T0);
+        assert_eq!(alice.list_conversations()[0].peer_pseudo, "");
+
+        // L'appairage complète le pseudo, sans dupliquer la conversation.
+        alice.add_contact(bob.public_identity());
+        let conversations = alice.list_conversations();
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].peer_pseudo, "bob");
+        assert_eq!(alice.list_messages(conversations[0].conv_id).len(), 1);
+
+        // Un contact tout juste appairé : conversation vide, prête à écrire.
+        let carol = noeud("carol", 3);
+        alice.add_contact(carol.public_identity());
+        let vide = alice
+            .list_conversations()
+            .into_iter()
+            .find(|c| c.peer_id == carol.peer_id())
+            .expect("conversation ouverte à l'appairage");
+        assert_eq!(vide.peer_pseudo, "carol");
+        assert!(vide.last_message.is_none());
+        assert_eq!(vide.unread_count, 0);
+    }
+
+    #[test]
     fn conversation_sans_message_encore_recu_est_vide_mais_pas_une_erreur() {
         let alice = noeud("alice", 1);
         assert!(alice.list_messages([0u8; 8]).is_empty());
         assert!(alice.list_conversations().is_empty());
+    }
+
+    /// Recopie les trames de chacun vers l'autre jusqu'au silence.
+    fn pomper(a: &mut Node, b: &mut Node, t: u64) {
+        for _ in 0..16 {
+            let de_a = a.take_outgoing();
+            let de_b = b.take_outgoing();
+            if de_a.is_empty() && de_b.is_empty() {
+                return;
+            }
+            for (_, bytes) in de_a {
+                b.on_bytes_received(a.peer_id(), &bytes, now(t));
+            }
+            for (_, bytes) in de_b {
+                a.on_bytes_received(b.peer_id(), &bytes, now(t));
+            }
+        }
+        panic!("les deux nœuds ne se taisent pas");
+    }
+
+    fn statut_de(node: &mut Node, msg_uuid: MsgUuid) -> Option<MessageStatus> {
+        node.poll_events(now(T0))
+            .into_iter()
+            .rev()
+            .find_map(|ev| match ev {
+                NodeEvent::StatusChanged(uuid, s) if uuid == msg_uuid => Some(s),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn announce_verifie_rend_la_carte_de_l_emetteur() {
+        let alice = noeud("alice", 1);
+        let raw = alice.announce_packet(now(T0)).unwrap();
+        let packet = codec::decode(&raw).unwrap();
+        assert_eq!(packet.header.packet_type, PacketType::Announce);
+        assert_eq!(packet.header.ttl, ANNOUNCE_LINK_TTL);
+        assert_eq!(parse_announce(&raw).unwrap(), alice.public_identity());
+    }
+
+    #[test]
+    fn announce_altere_ou_d_un_autre_type_est_refuse() {
+        let alice = noeud("alice", 1);
+        let raw = alice.announce_packet(now(T0)).unwrap();
+
+        // Un octet du pseudo modifié : la signature ne tient plus.
+        let mut altere = raw.clone();
+        let pseudo_at = crate::protocol::consts::HEADER_LEN_BROADCAST + PEER_ID_LEN + 32 + 32 + 1;
+        altere[pseudo_at] ^= 0x01;
+        assert_eq!(parse_announce(&altere), Err(DengonError::Internal));
+
+        // Signature altérée.
+        let mut signature = raw.clone();
+        let dernier = signature.len() - 1;
+        signature[dernier] ^= 0x01;
+        assert_eq!(parse_announce(&signature), Err(DengonError::Internal));
+
+        // Un TTL remonté reste accepté : il n'est pas signé (codec).
+        let mut ttl = raw;
+        ttl[codec::TTL_OFFSET] = 7;
+        assert!(parse_announce(&ttl).is_ok());
+
+        assert_eq!(parse_announce(&[]), Err(DengonError::Internal));
+        let enveloppe = alice
+            .encode_signed_broadcast(PacketType::SealedEnvelope, 1, T0, vec![0; 40])
+            .unwrap();
+        assert_eq!(parse_announce(&enveloppe), Err(DengonError::Internal));
+    }
+
+    #[test]
+    fn announce_signe_mais_peer_id_usurpe_est_refuse() {
+        // Mallory signe correctement un ANNOUNCE qui porte le `peerID` de
+        // bob : refusé, `peerID` ≠ SHA-256(pub_static)[0..8].
+        let mallory = noeud("mallory", 3);
+        let bob = noeud("bob", 2);
+        let public = mallory.public_identity();
+        let payload = Announce {
+            peer_id: bob.peer_id(),
+            pub_static: public.pub_static(),
+            pub_sign: public.pub_sign().to_bytes(),
+            pseudo: "bob".into(),
+            ledger_height: 0,
+            caps: 0,
+        }
+        .encode()
+        .unwrap();
+        let raw = mallory
+            .encode_signed_broadcast(PacketType::Announce, 1, T0, payload)
+            .unwrap();
+        assert_eq!(parse_announce(&raw), Err(DengonError::Internal));
+    }
+
+    #[test]
+    fn message_en_session_atteint_delivered_par_l_accuse() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(50));
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(51));
+        pomper(&mut alice, &mut bob, T0);
+
+        let msg_uuid = alice
+            .send_message(bob.peer_id(), "ping", now(T0), rng(52))
+            .unwrap();
+        assert_eq!(
+            statut_de(&mut alice, msg_uuid),
+            Some(MessageStatus::InFlight)
+        );
+        pomper(&mut alice, &mut bob, T0);
+        assert_eq!(
+            statut_de(&mut alice, msg_uuid),
+            Some(MessageStatus::Delivered)
+        );
+    }
+
+    #[test]
+    fn handshake_avec_une_autre_cle_sous_le_peer_id_d_un_tiers_est_rejete() {
+        usurpation_de_peer_id_rejetee(true);
+    }
+
+    #[test]
+    fn handshake_usurpant_un_peer_id_inconnu_est_rejete() {
+        // Sans contact connu, seul `peer_id_of(remote_static) == peerID` protège.
+        usurpation_de_peer_id_rejetee(false);
+    }
+
+    /// Revue PR #111 : mallory rejoue l'ANNOUNCE de bob (peerID de bob sur
+    /// le lien) mais joue le `XX` avec sa propre clé statique. Mallory est
+    /// initiatrice ; alice (répondeuse, car `bob < alice`) doit refuser de
+    /// ranger la session sous bob.
+    fn usurpation_de_peer_id_rejetee(bob_est_contact: bool) {
+        let mut alice = noeud("alice", 1);
+        let bob = (2..200)
+            .map(|seed| noeud("bob", seed))
+            .find(|b| b.peer_id() < alice.peer_id())
+            .unwrap();
+        let mallory = noeud("mallory", 300);
+        if bob_est_contact {
+            alice.add_contact(bob.public_identity());
+        }
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(70));
+
+        let mut hs = Handshake::initiator(mallory.identity.static_keypair(), rng(71)).unwrap();
+        let vers_alice = |hs: &mut Handshake, alice: &mut Node| {
+            let msg = hs.write_message(&[]).unwrap();
+            let paquet = mallory
+                .encode_unsigned(PacketType::NoiseHs, alice.peer_id(), T0, msg)
+                .unwrap();
+            // Le lien d'alice porte le peerID usurpé de bob.
+            alice.on_bytes_received(bob.peer_id(), &paquet, now(T0));
+        };
+        vers_alice(&mut hs, &mut alice);
+        let reponses = alice.take_outgoing();
+        assert_eq!(reponses.len(), 1, "alice répond au message 1");
+        let paquet = codec::decode(&reponses[0].1).unwrap();
+        hs.read_message(&paquet.payload).unwrap();
+        vers_alice(&mut hs, &mut alice);
+        assert!(hs.is_finished(), "le handshake de mallory va au bout");
+
+        assert!(
+            !matches!(
+                alice
+                    .peers
+                    .get(&bob.peer_id())
+                    .and_then(|p| p.crypto.as_ref()),
+                Some(PeerCrypto::Established(_))
+            ),
+            "aucune session ne doit être rangée sous le peerID de bob"
+        );
+    }
+
+    #[test]
+    fn message_par_enveloppe_est_accuse_quand_la_session_s_etablit() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+
+        // Écrit hors ligne : part en enveloppe à la connexion, avant la fin
+        // du handshake. Bob n'a pas encore de session pour accuser.
+        let msg_uuid = alice
+            .send_message(bob.peer_id(), "hors ligne", now(T0), rng(60))
+            .unwrap();
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(61));
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(62));
+        pomper(&mut alice, &mut bob, T0);
+
+        assert!(bob.pending_acks.is_empty(), "accusé envoyé à la session");
+        assert_eq!(
+            statut_de(&mut alice, msg_uuid),
+            Some(MessageStatus::Delivered)
+        );
+    }
+
+    #[test]
+    fn accuses_en_attente_sont_bornes() {
+        let mut bob = noeud("bob", 2);
+        let alice = [7u8; PEER_ID_LEN];
+        for i in 0..(PENDING_ACKS_MAX + 5) {
+            let mut msg_uuid = [0u8; 16];
+            msg_uuid[0] = u8::try_from(i).unwrap();
+            let ack = AckFrame {
+                msg_uuid,
+                status: AckStatus::Delivered,
+                at_ms: T0,
+            };
+            bob.queue_ack(alice, ack, T0);
+        }
+        let attente = &bob.pending_acks[&alice];
+        assert_eq!(attente.len(), PENDING_ACKS_MAX);
+        assert_eq!(attente[0].msg_uuid[0], 5, "les plus anciens sont oubliés");
     }
 
     #[test]
@@ -1431,5 +1972,199 @@ mod tests {
 
         let conv_id = conv_id_of(alice.peer_id(), bob.peer_id());
         assert_eq!(alice.list_messages(conv_id).len(), 1);
+    }
+
+    // --- observabilité (US-318 : câblage de `sync::` vers `observability`) --
+
+    fn msg_log_id_du_payload(payload: &observability::Value) -> String {
+        let observability::Value::Object(obj) = payload else {
+            panic!("payload pas un objet")
+        };
+        let Some(observability::Value::Str(s)) = obj.get("msg_log_id") else {
+            panic!("msg_log_id absent du payload")
+        };
+        s.clone()
+    }
+
+    #[test]
+    fn envoyer_un_message_emet_msg_queued() {
+        let mut alice = noeud("alice", 1);
+        let bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+
+        alice
+            .send_message(bob.peer_id(), "salut bob", now(T0), rng(3))
+            .expect("bob est un contact connu");
+
+        let events = alice.take_observability_events();
+        let trouve = events
+            .iter()
+            .find(|env| env.name == "msg.queued")
+            .expect("send_message doit émettre msg.queued");
+        let observability::Value::Object(obj) = &trouve.payload else {
+            panic!("payload pas un objet")
+        };
+        assert_eq!(
+            obj.get("conv_hash"),
+            Some(&observability::Value::Str(hex_string(&conv_id_of(
+                alice.peer_id(),
+                bob.peer_id()
+            ))))
+        );
+        assert_eq!(trouve.node_kind, NodeKind::Client);
+        assert_eq!(trouve.node_id, alice.node_id);
+    }
+
+    /// Revue de cette PR (Oswin) : `msg.queued` hachait `msg_uuid`
+    /// (identifiant applicatif) alors que `pkt.seen` hache le `msgID`
+    /// réseau (`compute_msg_id`) — deux `msg_log_id` différents pour le
+    /// même message, impossibles à corréler côté dashboard. Ce test
+    /// vérifie l'égalité **entre les deux nœuds** : le `msg_log_id` que
+    /// alice émet dans `msg.queued` doit être exactement celui que bob
+    /// émettra dans `pkt.seen` en recevant les mêmes octets.
+    #[test]
+    fn msg_queued_et_pkt_seen_partagent_le_meme_msg_log_id() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+        bob.add_contact(alice.public_identity());
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(10));
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(11));
+
+        alice
+            .send_message(bob.peer_id(), "salut bob", now(T0), rng(12))
+            .expect("bob est un contact connu et connecté");
+
+        let alice_events = alice.take_observability_events();
+        let queued = alice_events
+            .iter()
+            .find(|env| env.name == "msg.queued")
+            .expect("send_message doit émettre msg.queued");
+        let log_id_emetteur = msg_log_id_du_payload(&queued.payload);
+
+        let enveloppe = alice
+            .take_outgoing()
+            .into_iter()
+            .map(|(_, bytes)| bytes)
+            .find(|bytes| codec::decode(bytes).is_ok())
+            .expect("le paquet doit avoir été mis en file de sortie");
+        bob.on_bytes_received(alice.peer_id(), &enveloppe, now(T0));
+
+        let bob_events = bob.take_observability_events();
+        let seen = bob_events
+            .iter()
+            .find(|env| env.name == "pkt.seen")
+            .expect("on_bytes_received doit émettre pkt.seen");
+        let log_id_recepteur = msg_log_id_du_payload(&seen.payload);
+
+        assert_eq!(
+            log_id_emetteur, log_id_recepteur,
+            "msg.queued et pkt.seen doivent porter le même msg_log_id pour le même message"
+        );
+    }
+
+    /// Revue de cette PR (Oswin) : `record_ledger` incrémentait le même
+    /// compteur que `record_observability` sans jamais émettre
+    /// d'`Envelope`, créant des trous dans le `seq` du flux d'`Envelope` —
+    /// `docs/powl/08` §8 dérive `integrity.gap` de ces trous. Ce test
+    /// enchaîne un appel qui n'émet QUE du ledger (`mark_handed_off` via
+    /// `on_peer_connected`, remise immédiate d'un message en attente) entre
+    /// deux appels qui émettent chacun un `Envelope`, et vérifie la
+    /// contiguïté.
+    #[test]
+    fn les_seq_des_envelope_restent_contigus_meme_avec_des_evenements_ledger_seuls() {
+        let mut alice = noeud("alice", 1);
+        let bob = noeud("bob", 2);
+        let carol = noeud("carol", 3);
+        alice.add_contact(bob.public_identity());
+        alice.add_contact(carol.public_identity());
+
+        // 1er `Envelope` : `msg.queued` (hors ligne).
+        alice
+            .send_message(bob.peer_id(), "un", now(T0), rng(10))
+            .expect("bob est un contact connu");
+
+        // Événement ledger SEUL (`mark_handed_off`, pas d'`Envelope`) : bob
+        // se connecte, le message en attente part immédiatement.
+        alice.on_peer_connected(bob.peer_id(), now(T0 + 1), rng(11));
+
+        // 2e `Envelope` : `msg.queued` vers un autre contact.
+        alice
+            .send_message(carol.peer_id(), "deux", now(T0 + 2), rng(12))
+            .expect("carol est un contact connu");
+
+        let seqs: Vec<u64> = alice
+            .take_observability_events()
+            .iter()
+            .map(|env| env.seq)
+            .collect();
+        assert_eq!(
+            seqs,
+            vec![1, 2],
+            "le seq du flux d'Envelope doit rester contigu (1, 2, ...), \
+             sans trou laissé par l'événement ledger-seul intercalé"
+        );
+    }
+
+    #[test]
+    fn recevoir_un_paquet_emet_pkt_seen_meme_rejete_par_le_routeur() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+        bob.add_contact(alice.public_identity());
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(10));
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(11));
+
+        alice
+            .send_message(bob.peer_id(), "hors de portée", now(T0), rng(12))
+            .expect("bob est un contact connu");
+        let enveloppe = alice
+            .take_outgoing()
+            .into_iter()
+            .map(|(_, bytes)| bytes)
+            .find(|bytes| {
+                codec::decode(bytes)
+                    .is_ok_and(|p| p.header.packet_type == PacketType::SealedEnvelope)
+            })
+            .expect("l'enveloppe scellée doit avoir été mise en file de sortie");
+
+        // Un tiers non connecté à alice (aucun `link_up`) : le routeur de
+        // carol va rejeter le paquet (`UnknownLink`) — `pkt.seen` doit tout
+        // de même être émis, avant toute décision du routeur (`docs/powl/08`
+        // §2 : « paquet reçu (avant dédup) »).
+        let mut carol = noeud("carol", 4);
+        carol.on_bytes_received(alice.peer_id(), &enveloppe, now(T0));
+
+        let events = carol.take_observability_events();
+        let vu = events
+            .iter()
+            .find(|env| env.name == "pkt.seen")
+            .expect("on_bytes_received doit émettre pkt.seen même pour un paquet rejeté");
+        assert_eq!(vu.node_kind, NodeKind::Client);
+        assert_eq!(vu.node_id, carol.node_id);
+
+        // Revue de cette PR (Oswin) : vérifier le payload complet, pas
+        // seulement l'enveloppe — une régression sur `ttl_in`/`size_bucket`
+        // passerait inaperçue sinon.
+        let decoded = codec::decode(&enveloppe).expect("l'enveloppe a déjà été décodée plus haut");
+        let net_msg_id = Node::compute_msg_id(&decoded);
+        let attendu = observability::pkt_seen(
+            observability::msg_log_id(&net_msg_id),
+            decoded.header.packet_type.to_u8(),
+            decoded.header.ttl,
+            size_bucket(enveloppe.len()),
+            alice.peer_id(),
+            None,
+        );
+        assert_eq!(vu.payload, attendu);
+    }
+
+    #[test]
+    fn size_bucket_prend_le_plus_petit_palier_qui_couvre_la_taille() {
+        assert_eq!(size_bucket(0), 256);
+        assert_eq!(size_bucket(256), 256);
+        assert_eq!(size_bucket(257), 512);
+        assert_eq!(size_bucket(2048), 2048);
+        assert_eq!(size_bucket(9_000), 2048);
     }
 }

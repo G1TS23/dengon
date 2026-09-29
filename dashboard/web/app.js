@@ -291,6 +291,199 @@
     ]);
   }
 
+  // --- US-311 : carte du réseau, flotte de relais, alertes ---------------
+
+  var ALERTE_LABEL = {
+    relay_silent: "Relais muet",
+    buffer_high: "Tampon de journal presque plein",
+  };
+
+  var SVG_NS = "http://www.w3.org/2000/svg";
+
+  function svg(tag, attrs) {
+    var node = document.createElementNS(SVG_NS, tag);
+    Object.keys(attrs || {}).forEach(function (nom) {
+      if (nom === "text") node.textContent = attrs[nom];
+      else node.setAttribute(nom, attrs[nom]);
+    });
+    return node;
+  }
+
+  function formatAge(ms, maintenantMs) {
+    if (ms === null || ms === undefined) return "jamais";
+    var s = Math.max(0, Math.round((maintenantMs - ms) / 1000));
+    if (s < 60) return "il y a " + s + " s";
+    if (s < 3600) return "il y a " + Math.floor(s / 60) + " min";
+    return "il y a " + Math.floor(s / 3600) + " h";
+  }
+
+  function badgeAlerte(alerte) {
+    return el("span", { class: "alerte alerte--" + alerte.code, text: ALERTE_LABEL[alerte.code] || alerte.code });
+  }
+
+  // Disposition circulaire : pas de simulation de forces — au volume de la
+  // démo (5-8 appareils) c'est lisible, déterministe et sans dépendance.
+  function carteSvg(graphe) {
+    var largeur = 320;
+    var hauteur = 320;
+    var noeuds = graphe.nodes;
+    var positions = {};
+    noeuds.forEach(function (n, i) {
+      var angle = (2 * Math.PI * i) / noeuds.length - Math.PI / 2;
+      positions[n.id] = {
+        x: largeur / 2 + (noeuds.length === 1 ? 0 : 120 * Math.cos(angle)),
+        y: hauteur / 2 + (noeuds.length === 1 ? 0 : 120 * Math.sin(angle)),
+      };
+    });
+
+    var racine = svg("svg", {
+      viewBox: "0 0 " + largeur + " " + hauteur,
+      class: "carte-reseau",
+      role: "img",
+      "aria-label": "Carte du réseau : " + noeuds.length + " nœud(s), " + graphe.links.length + " lien(s) observé(s)",
+    });
+    graphe.links.forEach(function (lien) {
+      var a = positions[lien.source];
+      var b = positions[lien.target];
+      if (!a || !b) return;
+      racine.appendChild(
+        svg("line", {
+          x1: a.x,
+          y1: a.y,
+          x2: b.x,
+          y2: b.y,
+          class: "carte-reseau__lien" + (lien.active ? " carte-reseau__lien--actif" : ""),
+          "stroke-width": Math.min(1 + lien.sessions, 6),
+        }),
+      );
+    });
+    noeuds.forEach(function (n) {
+      var p = positions[n.id];
+      var g = svg("g", { class: "carte-reseau__noeud carte-reseau__noeud--" + n.kind + " noeud--" + n.status });
+      g.appendChild(svg("circle", { cx: p.x, cy: p.y, r: n.kind === "relay" ? 14 : 9 }));
+      g.appendChild(svg("text", { x: p.x, y: p.y + 26, "text-anchor": "middle", text: n.label || n.id.slice(0, 12) }));
+      racine.appendChild(g);
+    });
+    return racine;
+  }
+
+  async function renderReseau() {
+    document.title = "dengon · suivi — réseau";
+    var graphe = await window.DengonApi.fetchReseau();
+    if (graphe.nodes.length === 0) {
+      return el("section", { class: "ecran" }, [el("p", { class: "vide", text: "Aucun nœud n'a encore remonté d'événement." })]);
+    }
+    var actifs = graphe.links.filter(function (l) {
+      return l.active;
+    }).length;
+    var muets = graphe.nodes.filter(function (n) {
+      return n.status === "stale";
+    });
+    return el("section", { class: "ecran" }, [
+      el("p", {
+        class: "compteur",
+        text: graphe.nodes.length + " nœud(s) · " + graphe.links.length + " lien(s) observé(s) dont " + actifs + " actif(s)",
+      }),
+      muets.length
+        ? el("p", {
+            class: "alerte alerte--relay_silent",
+            text:
+              muets.length +
+              " relais muet(s) : " +
+              muets
+                .map(function (n) {
+                  return n.id;
+                })
+                .join(", "),
+          })
+        : null,
+      carteSvg(graphe),
+      el("p", { class: "legende", text: "Bleu = relais ou client enregistré, sarcelle = pair vu, gris = relais muet. Trait plein vert = lien actif ; pointillé = lien fermé ; plus épais = plusieurs connexions." }),
+    ]);
+  }
+
+  function ligneFlotte(noeud, maintenantMs) {
+    var sante = noeud.health;
+    var carte = el("div", { class: "carte-relais carte-relais--" + noeud.status }, [
+      el("div", { class: "carte-message__entete" }, [
+        el("code", { class: "id-noeud", text: noeud.label || noeud.node_id }),
+        el("span", {
+          class: "statut statut--" + (noeud.status === "online" ? "delivered" : "expired"),
+          text: noeud.status === "online" ? "En ligne" : "Muet",
+        }),
+      ]),
+      el("dl", { class: "carte-message__meta" }, [
+        el("dt", { text: "Version" }),
+        el("dd", { text: texteOuTiret(noeud.fw_version) }),
+        el("dt", { text: "Dernier contact" }),
+        el("dd", { text: formatAge(noeud.last_contact_ms, maintenantMs) }),
+        el("dt", { text: "Uptime" }),
+        el("dd", { text: sante ? formatDuree(sante.uptime_s * 1000) : "—" }),
+        el("dt", { text: "RSSI moyen" }),
+        el("dd", { text: sante && sante.rssi_avg !== null && sante.rssi_avg !== undefined ? sante.rssi_avg + " dBm" : "—" }),
+        el("dt", { text: "Pairs" }),
+        el("dd", { text: sante ? texteOuTiret(sante.peers) : "—" }),
+        el("dt", { text: "Tampon journal" }),
+        el("dd", { text: sante ? texteOuTiret(sante.log_buffer_pct) + " %" : "—" }),
+        el("dt", { text: "Journaux perdus" }),
+        el("dd", { text: sante ? texteOuTiret(sante.logs_dropped) : "—" }),
+      ]),
+    ]);
+    if (noeud.alerts.length) carte.appendChild(el("div", { class: "alertes" }, noeud.alerts.map(badgeAlerte)));
+    return carte;
+  }
+
+  async function renderFlotte() {
+    document.title = "dengon · suivi — flotte";
+    var flotte = await window.DengonApi.fetchFlotte();
+    var relais = flotte.nodes.filter(function (n) {
+      return n.kind === "relay";
+    });
+    if (relais.length === 0) {
+      return el("section", { class: "ecran" }, [el("p", { class: "vide", text: "Aucun relais enregistré." })]);
+    }
+    var enAlerte = relais.filter(function (n) {
+      return n.alerts.length > 0;
+    });
+    // Relais en alerte d'abord : c'est ce que l'opérateur cherche.
+    relais.sort(function (a, b) {
+      return b.alerts.length - a.alerts.length || a.node_id.localeCompare(b.node_id);
+    });
+    return el("section", { class: "ecran" }, [
+      el("p", {
+        class: enAlerte.length ? "compteur compteur--alerte" : "compteur",
+        text:
+          relais.length +
+          " relais · " +
+          enAlerte.length +
+          " en alerte (muet après " +
+          Math.round(flotte.silent_after_ms / 60000) +
+          " min sans santé)",
+      }),
+      el(
+        "div",
+        { class: "liste-messages" },
+        relais.map(function (n) {
+          return ligneFlotte(n, flotte.now_ms);
+        }),
+      ),
+    ]);
+  }
+
+  function marquerNavigation(hash) {
+    var actuel = /^#\/reseau/.test(hash)
+      ? "reseau"
+      : /^#\/flotte/.test(hash)
+        ? "flotte"
+        : /^#\/integrite/.test(hash)
+          ? "integrite"
+          : "messages";
+    document.querySelectorAll("[data-nav]").forEach(function (a) {
+      if (a.getAttribute("data-nav") === actuel) a.setAttribute("aria-current", "page");
+      else a.removeAttribute("aria-current");
+    });
+  }
+
   // Jeton de génération : une requête `fetch` en vol dont la réponse arrive
   // APRÈS qu'une navigation ou un rafraîchissement SSE plus récent a déjà
   // affiché autre chose ne doit pas écraser cet affichage plus récent avec
@@ -301,6 +494,8 @@
 
   function ecranCourant(hash) {
     if (hash === "#/integrite") return renderIntegrite();
+    if (hash === "#/reseau") return renderReseau();
+    if (hash === "#/flotte") return renderFlotte();
     var correspondanceMessage = /^#\/message\/(.+)$/.exec(hash);
     if (correspondanceMessage) return renderDetail(decodeURIComponent(correspondanceMessage[1]));
     return renderListe();
@@ -308,14 +503,16 @@
 
   async function route() {
     var generation = ++generationCourante;
+    var hash = window.location.hash;
     var racine = document.getElementById("app");
+    marquerNavigation(hash);
 
     racine.innerHTML = "";
     racine.appendChild(ecranChargement());
 
     var ecran;
     try {
-      ecran = await ecranCourant(window.location.hash);
+      ecran = await ecranCourant(hash);
     } catch (error_) {
       ecran = ecranErreur(error_);
     }

@@ -60,7 +60,7 @@ pub fn msg_log_id(msg_uuid: &[u8]) -> MsgLogId {
     out
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
     for &b in bytes {

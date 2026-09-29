@@ -16,7 +16,7 @@
 //! | Implémentation | Où | Techno |
 //! |---|---|---|
 //! | Bouchon | [`MockTransport`], ici | mémoire — livré par US-105 |
-//! | Desktop / CLI | `btleplug_transport.rs` | `btleplug` — US-303 |
+//! | Desktop / CLI | [`CentralTransport`] + `BtleplugRadio` (feature `btleplug`) | `btleplug`, rôle **central** seulement — US-303 |
 //! | Android | `AndroidTransport.kt` + `dengon-ffi` | `BluetoothGattServer` — US-213 |
 //! | ESP32 | `firmware/dengon-relay/src/transport_nimble.c` | NimBLE — US-220 |
 //!
@@ -24,15 +24,20 @@
 //!
 //! Le contrat est **gelé** (US-105, area `contract`) : le modifier demande un
 //! point d'équipe, parce que quatre implémentations et `dengon-sim` s'appuient
-//! dessus. La dépendance à `btleplug` et le transport desktop arrivent avec
-//! US-303.
+//! dessus. Le transport desktop (US-303) vit derrière la feature `btleplug`.
 //!
 //! [`docs/synthese/04-architecture.md`]: ../../../docs/synthese/04-architecture.md
 
+#[cfg(feature = "btleplug")]
+mod btleplug_radio;
+pub mod central;
 pub mod conformance;
 mod mock;
 mod transport;
 
+#[cfg(feature = "btleplug")]
+pub use btleplug_radio::{BtleplugRadio, BtleplugTransport};
+pub use central::{CentralRadio, CentralTransport, RadioEvent, RadioHandle};
 pub use mock::MockTransport;
 pub use transport::{
     DisconnectReason, LinkId, Result, Transport, TransportConfig, TransportError, TransportEvent,
