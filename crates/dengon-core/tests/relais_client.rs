@@ -14,6 +14,8 @@
 use dengon_core::api::{MessageStatus, Node, NodeEvent};
 use dengon_core::identity::Identity;
 use dengon_core::ledger::Anchor;
+use dengon_core::protocol::codec;
+use dengon_core::protocol::types::PacketType;
 use dengon_core::relay::{Relay, RelayConfig, RelaySecrets};
 use dengon_core::sync::routing::Now;
 use rand_chacha::ChaCha20Rng;
@@ -57,6 +59,9 @@ struct Reseau {
     a: Telephone,
     b: Telephone,
     t: u64,
+    /// Enveloppes émises par ce téléphone perdues avant d'atteindre le relais
+    /// (lien tombé juste après l'émission), le temps d'un `pomper`.
+    perdre_enveloppes_de: Option<char>,
 }
 
 impl Reseau {
@@ -82,6 +87,7 @@ impl Reseau {
             a,
             b,
             t: 0,
+            perdre_enveloppes_de: None,
         }
     }
 
@@ -151,18 +157,24 @@ impl Reseau {
                 }
             }
 
-            for tel in [&mut self.a, &mut self.b] {
+            for (qui, tel) in [('a', &mut self.a), ('b', &mut self.b)] {
                 for (dest, trame) in tel.node.take_outgoing() {
                     calme = false;
                     // Aucun lien direct entre téléphones : seul le relais
                     // reçoit quelque chose.
                     assert_eq!(dest, self.relais_id, "trame hors du lien relais");
+                    let enveloppe = codec::decode(&trame)
+                        .is_ok_and(|p| p.header.packet_type == PacketType::SealedEnvelope);
+                    if enveloppe && self.perdre_enveloppes_de == Some(qui) {
+                        continue;
+                    }
                     if tel.lie {
                         self.relais.on_frame(tel.link, &trame, n);
                     }
                 }
             }
             if calme {
+                self.perdre_enveloppes_de = None;
                 return;
             }
         }
@@ -304,4 +316,79 @@ fn texte_trop_long_pour_une_trame_du_relais_reste_en_attente() {
     let msg = r.envoyer('a', &court);
     assert_eq!(r.statut('a', msg), Some(MessageStatus::InFlight));
     assert_eq!(r.relais.stats().envelopes_stored, 1);
+}
+
+/// Revue PR #129 point 1 : un `ANNOUNCE` de relais rejoué (capté sur l'air,
+/// sans le relais derrière) ne suffit pas à se faire confier les enveloppes.
+/// Le relais doit d'abord prouver qu'il détient sa clé par un paquet signé,
+/// adressé à nous et frais.
+#[test]
+fn announce_de_relais_rejoue_ne_recoit_rien() {
+    let mut r = Reseau::nouveau();
+    let n = now(1_000);
+    r.relais.link_up(9, n);
+    let annonce = r.relais.take_outgoing().remove(0).1;
+
+    // Un « faux relais » rejoue cette annonce vers Alice, puis se tait.
+    let pair = r.a.node.on_neighbor_announced(&annonce, n, rng(9)).unwrap();
+    assert_eq!(pair, r.relais_id);
+    let _ = r.a.node.take_outgoing();
+    let dest = r.b.node.peer_id();
+    r.a.node
+        .send_message(dest, "pour personne", now(1_100), rng(10))
+        .unwrap();
+    assert!(
+        r.a.node.take_outgoing().is_empty(),
+        "rien n'est confié à un relais non prouvé"
+    );
+}
+
+/// Un paquet signé du relais mais trop ancien (rejoué plus tard) ne vaut
+/// pas preuve de possession.
+#[test]
+fn preuve_perimee_du_relais_refusee() {
+    let mut r = Reseau::nouveau();
+    let t0 = now(1_000);
+    let annonce_a = r.a.node.announce_packet(t0).unwrap();
+    r.relais.link_up(1, t0);
+    r.relais.on_frame(1, &annonce_a, t0);
+    let mut sorties = r.relais.take_outgoing().into_iter().map(|(_, t)| t);
+    let annonce_relais = sorties.next().unwrap();
+    let inventaire = sorties.next().unwrap();
+
+    // Rejouées dix minutes plus tard, hors de la fenêtre de fraîcheur.
+    let tard = now(1_000 + 600_000);
+    r.a.node
+        .on_neighbor_announced(&annonce_relais, tard, rng(11))
+        .unwrap();
+    r.a.node.on_bytes_received(r.relais_id, &inventaire, tard);
+    let _ = r.a.node.take_outgoing();
+    let dest = r.b.node.peer_id();
+    r.a.node
+        .send_message(dest, "toujours pas", now(1_000 + 600_100), rng(12))
+        .unwrap();
+    assert!(r.a.node.take_outgoing().is_empty());
+}
+
+/// Revue PR #129 point 5 : l'accusé de Bob part en enveloppe, mais le lien
+/// tombe avant qu'elle atteigne le relais. L'accusé est resté en attente :
+/// il repart à la liaison suivante, et Alice passe quand même à
+/// « distribué ».
+#[test]
+fn accuse_perdu_en_route_repart_au_relais_suivant() {
+    let mut r = Reseau::nouveau();
+    r.lier('a');
+    let msg = r.envoyer('a', "accuse-moi");
+    r.couper('a');
+
+    r.perdre_enveloppes_de = Some('b');
+    r.lier('b');
+    assert_eq!(r.recus('b'), vec![String::from("accuse-moi")]);
+    assert_eq!(r.relais.stats().envelopes_stored, 1, "l'accusé s'est perdu");
+    r.couper('b');
+
+    r.lier('b');
+    r.couper('b');
+    r.lier('a');
+    assert_eq!(r.statut('a', msg), Some(MessageStatus::Delivered));
 }

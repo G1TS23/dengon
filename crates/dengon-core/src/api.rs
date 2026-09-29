@@ -159,6 +159,18 @@ const ANNOUNCE_LINK_TTL: u8 = 1;
 /// plus ancien est oublié (l'expéditeur rejouera, et le doublon sera ré-accusé).
 const PENDING_ACKS_MAX: usize = 64;
 
+/// Enveloppes d'un même accusé confiées aux relais, au plus (US-312) : un
+/// accusé n'a pas de rejeu par l'outbox, on le renvoie donc à chaque nouveau
+/// relais lié, sans remplir leurs magasins d'un accusé que personne ne
+/// réclame. Il reste en attente pour la session tant qu'il n'y est pas parti.
+const ACK_ENVELOPE_SENDS_MAX: u8 = 3;
+
+/// Écart toléré entre l'horodatage du premier paquet signé d'un relais et
+/// notre horloge, pour qu'il vaille preuve de possession de sa clé (US-312,
+/// revue PR #129 point 1). Le relais date ses paquets avec l'heure apprise
+/// de notre propre `ANNOUNCE` ou de SNTP : quelques secondes d'écart.
+const RELAY_PROOF_MAX_SKEW_MS: u64 = 120_000;
+
 /// Statut d'un message émis, tel qu'exposé par la façade (miroir de l'énum
 /// `MessageStatus` du `.udl` — sans `Cancelled`, hors périmètre de cette US
 /// : aucune méthode `cancel_message` n'est encore exposée).
@@ -309,9 +321,23 @@ struct PeerState {
     /// `XX` : ce qu'il nous adresse est authentifié par cette clé, apprise de
     /// son `ANNOUNCE` signé.
     relay_key: Option<VerifyingKey>,
+    /// Le relais a prouvé qu'il détient `relay_key` : un paquet signé,
+    /// adressé à nous et frais ([`Node::prove_relay`]). Un `ANNOUNCE` se
+    /// rejoue ; tant que cette preuve manque, rien ne lui est confié (revue
+    /// PR #129 point 1).
+    relay_proven: bool,
     /// Clé statique X25519 apprise de l'enveloppe d'un auteur qui n'est pas
     /// un contact (US-312) : c'est vers elle qu'on scelle son accusé.
     static_key: Option<[u8; 32]>,
+}
+
+/// Accusé en attente d'une session avec son auteur (voir la doc de module).
+#[derive(Debug, Clone, Copy)]
+struct PendingAck {
+    ack: AckFrame,
+    /// Enveloppes déjà confiées à un relais pour cet accusé
+    /// (au plus [`ACK_ENVELOPE_SENDS_MAX`]).
+    envelope_sends: u8,
 }
 
 /// Un message reçu ou envoyé, gardé en mémoire par la façade (voir la note
@@ -392,7 +418,7 @@ pub struct Node {
     store: Option<Store<FixedKeySource>>,
     /// Accusés à envoyer dès qu'une session existe avec l'auteur du message
     /// (voir la doc de module, « Accusés de réception »).
-    pending_acks: BTreeMap<PeerId, Vec<AckFrame>>,
+    pending_acks: BTreeMap<PeerId, Vec<PendingAck>>,
 }
 
 impl fmt::Debug for Node {
@@ -602,35 +628,73 @@ impl Node {
         Ok(payload.peer_id)
     }
 
-    /// Un relais ESP32 vient de se lier (US-312, `synthese/07` §5).
+    /// Un relais ESP32 vient de s'annoncer sur un lien (US-312,
+    /// `synthese/07` §5).
     ///
     /// Pas de handshake : le relais n'ouvre de session avec personne (il
-    /// journaliserait `bad_sig` sur un `NOISE_HS` non signé). Il porte des
-    /// enveloppes scellées : on lui confie toutes celles en attente (quel
-    /// que soit leur destinataire) et les accusés qu'aucune session ne peut
-    /// porter. Ses `ENVELOPE_OFFER` seront vérifiés avec `key`.
-    pub fn on_relay_connected(&mut self, relay_id: PeerId, key: VerifyingKey, now: RoutingNow) {
+    /// journaliserait `bad_sig` sur un `NOISE_HS` non signé). Mais un
+    /// `ANNOUNCE` se rejoue : le relais reste **en attente** jusqu'à son
+    /// premier paquet signé, adressé à nous et frais (l'`INVENTORY` qu'il
+    /// envoie dès qu'il a lu notre `ANNOUNCE`), vérifié avec `key`
+    /// ([`Node::prove_relay`]). Alors seulement on lui confie les
+    /// enveloppes en attente (quel que soit leur destinataire) et les
+    /// accusés qu'aucune session ne peut porter.
+    pub fn on_relay_connected(&mut self, relay_id: PeerId, key: VerifyingKey, _now: RoutingNow) {
         self.router.link_up(relay_id);
-        // L'ANNOUNCE signé est la seule preuve qu'un relais donne : le lien
-        // compte par `peerID` dès maintenant pour l'anti-inondation.
-        self.router.bind_peer(relay_id, relay_id, now.mono_ms);
         let peer = self.peers.entry(relay_id).or_default();
         peer.relay_key = Some(key);
+        peer.relay_proven = false;
         peer.crypto = None;
-
-        self.hand_envelopes_to_relay(relay_id, now.wall_ms);
-        let authors: Vec<PeerId> = self.pending_acks.keys().copied().collect();
-        for author in authors {
-            self.flush_pending_acks(author, now.wall_ms);
-        }
         self.events.push_back(NodeEvent::PeerConnected(relay_id));
     }
 
-    /// Relais voisins actuellement liés.
+    /// Vérifie qu'un paquet adressé à nous vient bien du relais lié sur
+    /// `from` : émetteur, signature par sa clé, horodatage à moins de
+    /// [`RELAY_PROOF_MAX_SKEW_MS`] de notre horloge. Un paquet identique
+    /// rejoué est déjà écarté par la déduplication du routeur. Le premier
+    /// paquet authentique vaut preuve de possession : le relais est alors
+    /// promu et reçoit ce qui l'attendait. Rend `false` pour tout paquet non
+    /// authentique (ou si `from` n'est pas un relais).
+    fn prove_relay(&mut self, from: PeerId, packet: &Packet, raw: &[u8], now: RoutingNow) -> bool {
+        let Some(peer) = self.peers.get(&from) else {
+            return false;
+        };
+        let Some(key) = peer.relay_key else {
+            return false;
+        };
+        let frais = packet.header.timestamp_ms.abs_diff(now.wall_ms) <= RELAY_PROOF_MAX_SKEW_MS;
+        let authentique = packet.header.sender_id == from
+            && frais
+            && packet.signature.as_ref().is_some_and(|sig| {
+                codec::received_signing_input(raw)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|input| key.verify(&input, sig).is_ok())
+            });
+        if !authentique {
+            return false;
+        }
+        if !peer.relay_proven {
+            if let Some(peer) = self.peers.get_mut(&from) {
+                peer.relay_proven = true;
+            }
+            // Clé prouvée : le lien compte désormais par `peerID` pour
+            // l'anti-inondation.
+            self.router.bind_peer(from, from, now.mono_ms);
+            self.hand_envelopes_to_relay(from, now.wall_ms);
+            let authors: Vec<PeerId> = self.pending_acks.keys().copied().collect();
+            for author in authors {
+                self.flush_pending_acks(author, now.wall_ms);
+            }
+        }
+        true
+    }
+
+    /// Relais voisins liés **et** prouvés ([`Node::prove_relay`]).
     fn linked_relays(&self) -> Vec<PeerId> {
         self.peers
             .iter()
-            .filter(|(_, p)| p.relay_key.is_some())
+            .filter(|(_, p)| p.relay_key.is_some() && p.relay_proven)
             .map(|(id, _)| *id)
             .collect()
     }
@@ -644,6 +708,7 @@ impl Node {
         if let Some(peer) = self.peers.get_mut(&peer_id) {
             peer.crypto = None; // la session ne survit pas à la connexion (synthese/06 §3)
             peer.relay_key = None;
+            peer.relay_proven = false;
         }
         self.events.push_back(NodeEvent::PeerDisconnected(peer_id));
     }
@@ -955,14 +1020,14 @@ impl Node {
             .get(&dest_peer_id)
             .is_some_and(|p| p.crypto.is_some())
         {
-            self.hand_off(msg_uuid, dest_peer_id, packet_bytes.clone(), now.wall_ms);
+            self.hand_off(msg_uuid, dest_peer_id, packet_bytes.clone(), now.wall_ms)?;
         }
         // Une enveloppe part aussi chez chaque relais lié (US-312) : il la
         // gardera pour le destinataire hors de portée (`synthese/07` §5).
         if kind == DeliveryKind::Envelope && packet_bytes.len() <= RELAY_FRAME_MAX {
             for relay_id in self.linked_relays() {
                 if relay_id != dest_peer_id {
-                    self.hand_off(msg_uuid, relay_id, packet_bytes.clone(), now.wall_ms);
+                    self.hand_off(msg_uuid, relay_id, packet_bytes.clone(), now.wall_ms)?;
                 }
             }
         }
@@ -972,14 +1037,26 @@ impl Node {
 
     /// Met `packet` en sortie vers `to` et consigne la remise dans l'outbox
     /// (`QUEUED → IN_FLIGHT` à la première, « parti » dans l'UI).
-    fn hand_off(&mut self, msg_uuid: MsgUuid, to: PeerId, packet: Vec<u8>, wall_ms: u64) {
+    ///
+    /// # Errors
+    ///
+    /// [`DengonError::Internal`] si l'outbox ne peut pas persister la remise
+    /// (propagé par `send_message`, ignoré par les rejeux, comme avant).
+    fn hand_off(
+        &mut self,
+        msg_uuid: MsgUuid,
+        to: PeerId,
+        packet: Vec<u8>,
+        wall_ms: u64,
+    ) -> Result<(), DengonError> {
         self.outgoing.push((to, packet));
-        if let Ok(Some(change)) = self.outbox.mark_handed_off(&msg_uuid, &to, wall_ms) {
+        if let Some(change) = self.outbox.mark_handed_off(&msg_uuid, &to, wall_ms)? {
             self.record_ledger(change.event_name(), &change.msg_uuid, wall_ms);
             self.update_message_status(&msg_uuid, change.to, wall_ms);
             self.events
                 .push_back(NodeEvent::StatusChanged(msg_uuid, change.to.into()));
         }
+        Ok(())
     }
 
     /// Confie à un relais qui vient de se lier les enveloppes encore en
@@ -995,7 +1072,7 @@ impl Node {
             .map(|r| (r.msg_uuid, r.packet.clone()))
             .collect();
         for (msg_uuid, packet) in candidates {
-            self.hand_off(msg_uuid, relay_id, packet, wall_ms);
+            let _ = self.hand_off(msg_uuid, relay_id, packet, wall_ms);
         }
     }
 
@@ -1069,14 +1146,19 @@ impl Node {
                 self.handle_session_ciphertext(from, &packet.payload, now);
             }
             PacketType::EnvelopeOffer => self.handle_envelope_offer(from, &packet, raw, now),
+            // L'INVENTORY qu'un relais envoie dès qu'il a lu notre ANNOUNCE
+            // sert de preuve de possession de sa clé ; son contenu (la
+            // réconciliation d'inventaire) n'est pas câblé côté client.
+            PacketType::Inventory => {
+                let _ = self.prove_relay(from, &packet, raw, now);
+            }
             // `SealedEnvelope` n'est jamais adressé : il n'arrive jamais ici
             // (`Decision::Deliver` suppose un `recipient_id`), voir
             // `on_bytes_received`/`handle_sealed_envelope`.
             //
             // Hors périmètre de cette façade par ailleurs (voir la doc de
-            // module) : Announce/EnvelopeRequest/Inventory/LogAttest/
-            // Fragment/Gossip* ne sont ni émis ni traités ici. L'INVENTORY
-            // qu'un relais envoie à la liaison est donc ignoré.
+            // module) : Announce/EnvelopeRequest/LogAttest/Fragment/Gossip*
+            // ne sont ni émis ni traités ici.
             _ => {}
         }
     }
@@ -1093,17 +1175,7 @@ impl Node {
         raw: &[u8],
         now: RoutingNow,
     ) {
-        let Some(key) = self.peers.get(&from).and_then(|p| p.relay_key) else {
-            return;
-        };
-        let authentique = packet.header.sender_id == from
-            && packet.signature.as_ref().is_some_and(|sig| {
-                codec::received_signing_input(raw)
-                    .ok()
-                    .flatten()
-                    .is_some_and(|input| key.verify(&input, sig).is_ok())
-            });
-        if !authentique {
+        if !self.prove_relay(from, packet, raw, now) {
             return;
         }
         let Ok(offered) = courier::decode_tag_list(&packet.payload) else {
@@ -1346,7 +1418,10 @@ impl Node {
         if pending.len() >= PENDING_ACKS_MAX {
             pending.remove(0);
         }
-        pending.push(ack);
+        pending.push(PendingAck {
+            ack,
+            envelope_sends: 0,
+        });
         self.flush_pending_acks(author, wall_ms);
     }
 
@@ -1363,8 +1438,8 @@ impl Node {
         let Some(acks) = self.pending_acks.remove(&peer_id) else {
             return;
         };
-        for ack in acks {
-            let plaintext = app::encode_app_frame(&AppFrame::Ack(ack));
+        for pending in acks {
+            let plaintext = app::encode_app_frame(&AppFrame::Ack(pending.ack));
             let Some(PeerCrypto::Established(session)) =
                 self.peers.get_mut(&peer_id).and_then(|p| p.crypto.as_mut())
             else {
@@ -1385,6 +1460,13 @@ impl Node {
     /// possible, sinon enveloppe vers l'expéditeur »). L'auteur la récupère
     /// par `ENVELOPE_OFFER`/`ENVELOPE_REQUEST` à son retour près du relais.
     ///
+    /// L'accusé **reste** en attente (revue PR #129 point 5) : il n'a pas de
+    /// rejeu par l'outbox, et le lien du relais peut tomber avant l'envoi.
+    /// Il repartira donc au relais lié suivant, jusqu'à
+    /// [`ACK_ENVELOPE_SENDS_MAX`] enveloppes, et dans la session dès qu'elle
+    /// s'établit (l'auteur peut être en direct, handshake pas fini). Un
+    /// accusé reçu en double est sans effet (`Outbox::apply_ack`).
+    ///
     /// Aléa : `OsRng`. Le chemin de réception ne reçoit pas de RNG de
     /// l'appelant (signature d'[`Node::on_bytes_received`] gardée) ; `api`
     /// est `std` seulement, comme `store` qui tire déjà ses nonces ainsi.
@@ -1401,17 +1483,32 @@ impl Node {
         }) else {
             return; // clé inconnue : l'accusé attend une session
         };
-        let Some(acks) = self.pending_acks.remove(&author) else {
-            return;
-        };
-        for ack in acks {
+        let a_sceller: Vec<(usize, AckFrame)> = self
+            .pending_acks
+            .get(&author)
+            .map(|acks| {
+                acks.iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.envelope_sends < ACK_ENVELOPE_SENDS_MAX)
+                    .map(|(i, p)| (i, p.ack))
+                    .collect()
+            })
+            .unwrap_or_default();
+        for (i, ack) in a_sceller {
             let Ok(bytes) =
                 self.seal_envelope(&dest_static, &AppFrame::Ack(ack), wall_ms, rand_core::OsRng)
             else {
-                continue; // accusé perdu : le rejeu de l'expéditeur en redemandera un
+                continue; // reste en attente : retenté au prochain relais
             };
             for relay_id in &relays {
                 self.outgoing.push((*relay_id, bytes.clone()));
+            }
+            if let Some(pending) = self
+                .pending_acks
+                .get_mut(&author)
+                .and_then(|a| a.get_mut(i))
+            {
+                pending.envelope_sends += 1;
             }
         }
     }
@@ -1628,7 +1725,7 @@ impl Node {
             .map(|r| (r.msg_uuid, r.packet.clone()))
             .collect();
         for (msg_uuid, packet) in candidates {
-            self.hand_off(msg_uuid, peer_id, packet, wall_ms);
+            let _ = self.hand_off(msg_uuid, peer_id, packet, wall_ms);
         }
     }
 
@@ -2229,7 +2326,10 @@ mod tests {
         }
         let attente = &bob.pending_acks[&alice];
         assert_eq!(attente.len(), PENDING_ACKS_MAX);
-        assert_eq!(attente[0].msg_uuid[0], 5, "les plus anciens sont oubliés");
+        assert_eq!(
+            attente[0].ack.msg_uuid[0], 5,
+            "les plus anciens sont oubliés"
+        );
     }
 
     #[test]
