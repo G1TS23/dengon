@@ -29,9 +29,22 @@ data class ConversationsUiState(
     val renvoyes: Set<String> = emptySet(),
     /** Dernière erreur à afficher (envoi refusé…), `null` si aucune. */
     val erreur: String? = null,
+    /**
+     * Compteur `unreadCount` du cœur au moment où chaque conversation a été
+     * ouverte pour la dernière fois. Le cœur ne remet jamais son compteur à zéro
+     * (pas de `mark_read` dans le contrat) : les messages **non lus** sont ceux
+     * reçus depuis. En mémoire seulement, comme le reste de l'état du nœud.
+     */
+    val lus: Map<String, UInt> = emptyMap(),
 ) {
     /** Le bouton « Envoyer » n'est actif qu'avec un texte non blanc. */
     val peutEnvoyer: Boolean get() = conversationOuverte != null && brouillon.isNotBlank()
+
+    /** Messages reçus depuis la dernière ouverture de [conversation] (jamais négatif). */
+    fun nonLus(conversation: Conversation): Int {
+        val vus = lus[conversation.convId] ?: 0u
+        return if (conversation.unreadCount > vus) (conversation.unreadCount - vus).toInt() else 0
+    }
 }
 
 /**
@@ -81,6 +94,8 @@ class ConversationsViewModel(
                 conversations = conversations,
                 conversationOuverte = ouverte,
                 messages = ouverte?.let { noeud.listMessages(it.convId) } ?: emptyList(),
+                // Un message qui arrive dans le fil ouvert est lu : on suit le compteur.
+                lus = if (ouverte != null) e.lus + (ouverte.convId to ouverte.unreadCount) else e.lus,
             )
         }
     }
@@ -94,6 +109,7 @@ class ConversationsViewModel(
                 messages = noeud.listMessages(convId),
                 brouillon = "",
                 erreur = null,
+                lus = it.lus + (convId to conversation.unreadCount),
             )
         }
     }

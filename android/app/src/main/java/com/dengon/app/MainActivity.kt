@@ -290,7 +290,7 @@ private fun DengonScreen(
                     icone = Icons.Filled.Warning,
                     titre = "Autorisation refusée",
                     explication = stringResource(R.string.permissions_denied) +
-                        " Ouvrez les réglages de dengon, puis « Autorisations » pour l'accorder.",
+                        " Ouvrez les réglages de dengon, puis « Autorisations » et accordez « Appareils à proximité ».",
                     libelleAction = "Ouvrir les réglages de l'app",
                     onAction = { ouvrirReglagesApp(contexte) },
                 )

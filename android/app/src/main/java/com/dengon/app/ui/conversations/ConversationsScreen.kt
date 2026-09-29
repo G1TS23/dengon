@@ -98,6 +98,7 @@ fun MessagerieRoute(
     if (etat.conversationOuverte == null) {
         ListeConversations(
             conversations = etat.conversations,
+            nonLus = etat::nonLus,
             onOuvrir = viewModel::ouvrir,
             onQuitter = onQuitter,
             onAjouterContact = onAjouterContact,
@@ -119,6 +120,7 @@ fun ListeConversations(
     onOuvrir: (String) -> Unit,
     onQuitter: () -> Unit,
     onAjouterContact: () -> Unit = {},
+    nonLus: (Conversation) -> Int = { it.unreadCount.toInt() },
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         EnTeteEcran(titre = "Conversations", onRetour = onQuitter)
@@ -135,16 +137,19 @@ fun ListeConversations(
         }
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             items(conversations, key = { it.convId }) { conversation ->
-                LigneConversation(conversation = conversation, onClick = { onOuvrir(conversation.convId) })
+                LigneConversation(
+                    conversation = conversation,
+                    nonLus = nonLus(conversation),
+                    onClick = { onOuvrir(conversation.convId) },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun LigneConversation(conversation: Conversation, onClick: () -> Unit) {
+private fun LigneConversation(conversation: Conversation, nonLus: Int, onClick: () -> Unit) {
     val dernier = conversation.lastMessage
-    val nonLus = conversation.unreadCount.toInt()
     Row(
         modifier = Modifier
             .fillMaxWidth()
