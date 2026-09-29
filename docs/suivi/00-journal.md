@@ -10,6 +10,65 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-214 : rendu vérifié sur appareil réel (dernier critère)
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** aucun code applicatif modifié ; `docs/suivi/`.
+**Lot :** US-214 (#28), critère « Rendu vérifié sur la matrice d'appareils »,
+laissé ouvert par la PR #87 (`Refs #28`, aucun appareil sur le poste).
+
+### Fait
+- Worktree propre sur `origin/main` (`11ac5b5`, encore sur bouchon FFI :
+  #109 non mergée), APK debug compilé et installé sur le **OnePlus 7 Pro**
+  (GM1913, Android 12 / SDK 31, 1440×3120, densité 560, mode sombre système
+  actif).
+- Parcours piloté par `adb` (tap, `input text`, `uiautomator dump`,
+  `screencap`) : liste → fil → saisie → envoi → retour à la liste.
+
+### Constats
+- **Liste** : « Alice (canned) », dernier message, pastille de non-lus « 1 » ✅
+- **Fil** : message reçu (bulle grise, à gauche) et message envoyé (bulle
+  violette, à droite) ✅ ; saisie « Test US-214 », bouton « Envoyer » actif ✅
+- **Statut** : « En attente » sous le message envoyé, toujours « En attente »
+  5 s plus tard ✅ (le bouchon ne fait progresser un statut qu'à
+  `on_peer_connected`, non déclenché ici : conforme). La liste montre ensuite
+  « Vous : Test US-214 ».
+- **Défaut constaté, non corrigé** : **clavier ouvert, la zone au-dessus du
+  champ de saisie est blanche** (en-tête « Retour / Alice » et messages
+  invisibles ; `uiautomator` place leurs bornes à 0,0). Le champ et
+  « Envoyer » restent utilisables, et tout réapparaît clavier fermé. Piste
+  non vérifiée : `imePadding()` (`ConversationsScreen.kt:162`) cumulé avec le
+  redimensionnement de fenêtre par défaut. À traiter dans une issue à part.
+
+### Écarts vs conception
+- Un seul appareil, pas une « matrice » : un seul cas couvert (Android 12,
+  arm64, 6,7″).
+
+### Appris
+- Rien de nouveau.
+
+### État après cette session
+- Les 5 critères de #28 sont remplis ; l'issue peut être fermée.
+- Captures : `dengon-us214-verif/captures/01…07-*.png` (hors dépôt).
+- Fiche `modules/android-app.md` et ligne d'`02-avancement.md` mises à jour.
+- 01-etat-du-code.md mis à jour : non (aucune commande nouvelle).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd android && ./gradlew.bat --no-daemon assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 81 tests JVM, 0 échec, 0 ignoré
+$ adb -s c365d658 uninstall com.dengon.app ; adb install app-debug.apk   Success
+$ adb … input tap / input text / uiautomator dump / screencap             OK
+```
+- `INSTALL_FAILED_UPDATE_INCOMPATIBLE` au premier `install -r` (l'APK déjà
+  présent, celui de l'essai US-306, avait une autre signature) : désinstallé
+  d'abord, donc **données de l'app (identité, contacts) effacées** sur ce
+  téléphone.
+- Non vérifié : autres tailles d'écran, paysage, thème sombre de l'app,
+  progression des statuts au-delà de « En attente ».
+
+---
+
 ## 2026-09-29 — US-307 : rebase de la PR #108 sur `main` + correctif CI `firmware`
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
