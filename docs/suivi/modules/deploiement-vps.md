@@ -33,8 +33,10 @@ dashboard/
     Dockerfile              — build l'image API ; CONTEXTE DE BUILD = racine du
                                dépôt (pas dashboard/api/), voir Dépendances
   deploy/
-    docker-compose.yml      — services api + caddy, volumes nommés fixes
-    Caddyfile                — reverse-proxy TLS (voir Décisions)
+    docker-compose.yml      — services api + caddy + web, volumes nommés fixes
+    Caddyfile                — reverse-proxy TLS devant api (voir Décisions)
+    Caddyfile.web             — sert dashboard/web/ en statique, TLS séparé
+                                 (issue #125, voir Décisions)
     .env.example             — modèle non secret, copié en .env sur le VPS
     purge-demo.sh             — reset de la base de démo en une commande
 .github/workflows/
@@ -156,6 +158,41 @@ En session de démo, avant de commencer : `ssh vps "cd ~/dengon/dashboard/deploy
   - `purge-demo.sh` : `docker volume inspect` avant `rm` (distingue « absent »
     d'une autre erreur, ex. volume encore utilisé) ; `sleep 2` remplacé par
     un poll sur `/healthz`.
+- **Second conteneur Caddy dédié pour `dashboard/web/`** (issue #125) :
+  ajouté plutôt que d'ajouter une route au `Caddyfile` de l'API, pour qu'une
+  purge/un redéploiement de l'un ne touche jamais l'autre (le service `web`
+  n'a pas de base de données à purger, l'API n'a pas de fichiers statiques
+  à recharger). Deuxième instance Caddy plutôt que nginx : réutilise
+  directement `tls internal` + `default_sni` déjà éprouvés ci-dessus,
+  sans re-générer un certificat auto-signé à la main pour un serveur
+  différent. **Volumes de certificats séparés** (`dengon_web_caddy_data`/
+  `dengon_web_caddy_config`, distincts de `dengon_caddy_data`/`_config`) :
+  deux instances Caddy indépendantes ne peuvent pas partager le même
+  répertoire `/data`, chacune y gère son propre état de CA interne.
+  `dashboard/web/index.html` ne code plus en dur l'URL de l'API :
+  `config.js`, généré par l'entrypoint du conteneur `web` à partir de la
+  variable `DENGON_WEB_API_BASE` (`.env`), n'est jamais commité — voir
+  `dashboard/deploy/docker-compose.yml` (service `web`) et
+  `Caddyfile.web`.
+- **`--force-recreate web` après chaque redéploiement** (revue de PR #128,
+  POWLAIR — **piège reproduit et vérifié en local**) : `web` monte
+  `../web` et `./Caddyfile.web` en **bind mount**, qui suit l'inode, pas le
+  chemin. `deploy-vps.yml` fait `rm -rf ~/dengon/dashboard/web` puis
+  ré-extrait le `tar` : ça crée un **nouveau** répertoire. Un conteneur
+  `web` déjà en marche garde son montage sur l'**ancien** inode, supprimé —
+  ni l'image (`caddy:2-alpine`) ni la config Compose du service n'ayant
+  changé, `docker compose up -d --build` seul ne le recrée pas. Reproduit
+  en local : `rm -rf ../web && cp -r <sauvegarde> ../web` puis `up -d
+  --build` seul → **404** (`Container deploy-web-1 Running`, pas recréé) ;
+  `up -d --no-deps --force-recreate web` juste après → 200, `config.js`
+  correct. Invisible sur un premier déploiement, seulement au **second**.
+- **`DENGON_WEB_API_BASE` échappée avant injection dans `config.js`**
+  (revue de PR #128, POWLAIR) : un guillemet ou un antislash dans la
+  valeur casserait silencieusement la syntaxe JS générée. Pas une faille
+  (la valeur vient du `.env` de l'opérateur, pas d'une entrée réseau), mais
+  corrigé par un `sed 's/\\/\\\\/g; s/"/\\"/g'` avant le `printf` — vérifié
+  en local avec une valeur contenant `"` : le guillemet ressort bien
+  échappé (`\"`) dans `config.js`, pas casseur de syntaxe.
 - **Utilisateur non-root dans l'image `api`** (`USER app`, retour de revue
   SonarCloud — 4 findings sur `dashboard/api/Dockerfile` : image `python`
   tournant root par défaut, deux `uv`/`pip install` sans forcer les wheels
@@ -196,9 +233,19 @@ En session de démo, avant de commencer : `ssh vps "cd ~/dengon/dashboard/deploy
 ## Limites connues / TODO
 
 - **Certificat auto-signé** : un vrai navigateur affiche un avertissement de
-  sécurité sur `https://51.255.38.214:8443/`. Pour l'oral, prévoir de
-  cliquer « continuer » ou d'importer la CA interne de Caddy à l'avance
-  (`docker compose exec caddy cat /data/caddy/pki/authorities/local/root.crt`).
+  sécurité sur `https://51.255.38.214:8443/` (API) **et** sur
+  `https://51.255.38.214:8444/` (dashboard web, issue #125 — deux
+  instances Caddy, donc deux CA internes distinctes, deux avertissements à
+  accepter séparément). Pour l'oral, prévoir de cliquer « continuer » sur
+  les deux ou d'importer les CA internes de Caddy à l'avance
+  (`docker compose exec caddy cat /data/caddy/pki/authorities/local/root.crt`,
+  puis `docker compose exec web cat /data/caddy/pki/authorities/local/root.crt`).
+- **Second conteneur `web` (issue #125) pas encore vérifié sur le VPS réel**
+  au moment de cette entrée : la configuration (`docker-compose.yml`,
+  `Caddyfile.web`, workflow) est prête et vérifiable en local, mais le
+  dernier critère d'acceptation de l'issue — les 4 écrans chargent de
+  vraies données depuis un navigateur, sur le VPS — exige un accès SSH et
+  un run réel de `deploy-vps.yml`, non fait ici.
 - **Pas de pare-feu applicatif de notre côté** : sans `sudo`, impossible de
   configurer `ufw`/`iptables` sur ce VPS. On dépend entièrement du réseau
   déjà en place (et des autres groupes qui partagent la machine).

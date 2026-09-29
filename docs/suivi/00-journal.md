@@ -258,6 +258,37 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
 ### Pas vu
 - Non essayé sur le OnePlus 7 Pro (Android 12) : seul le Samsung a été utilisé pour ce point.
 - Le badge « non lu » resté à 1 (entrée précédente) n'a pas été réexaminé.
+## 2026-09-29 — Issue #125/#322 : les 4 écrans de `dashboard/web` capturés avec de vraies données (PR #128)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/assets/us-322/` (captures d'écran).
+**Lot :** suite de la PR #128, à la demande de l'utilisateur (captures pour
+la revue).
+
+### Fait
+- Pile complète (`api`+`caddy`+`web`) démarrée en local avec Docker, les 20
+  fixtures golden de `contracts/events/fixtures/` ingérées via le vrai
+  pipeline HTTP (`/api/nodes` puis `/ingest/batch`, script jetable non
+  commité, même logique que `dashboard/api/tests/conftest.py`).
+- Certificat auto-signé de l'instance Caddy `web` (et de `api`) approuvé
+  une fois manuellement dans Chrome (Claude in Chrome ne peut pas
+  interagir avec la page d'avertissement TLS — restriction volontaire de
+  Chrome sur l'automatisation CDP des interstitiels de sécurité).
+- 4 captures prises et commitées dans `docs/suivi/assets/us-322/` :
+  [`messages.jpg`](assets/us-322/messages.jpg),
+  [`reseau.jpg`](assets/us-322/reseau.jpg),
+  [`flotte.jpg`](assets/us-322/flotte.jpg),
+  [`integrite.jpg`](assets/us-322/integrite.jpg) — les 4 écrans chargent
+  bien de vraies données depuis le navigateur, via le second conteneur
+  Caddy, en HTTPS.
+- Environnement nettoyé après coup : conteneurs/volumes de test supprimés
+  (`down -v`), certificat de test retiré du trousseau macOS.
+
+### Pourquoi / décisions
+- Fixtures golden plutôt que des données inventées à la main : mêmes
+  octets que ceux déjà vérifiés ailleurs dans le projet (US-107/US-208),
+  pas de nouvelle source de vérité à maintenir juste pour une capture
+  d'écran.
 
 ### Écarts vs conception
 - Aucun.
@@ -291,12 +322,215 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
 - Contacts perdus à chaque réinstallation / arrêt de l'app (limite déjà consignée).
 - Toujours jamais vus sur appareil : statut « Échec » + « Renvoyer » (TTL de 24 h), « Bluetooth
   coupé », permission refusée sur appareil. Accessibility Scanner non lancé.
+### Appris
+- `docker compose down -v` supprime **tous** les volumes, y compris
+  `dengon_api_db` — un oubli en plein milieu d'une session de test a fait
+  perdre les données seedées une première fois, sans erreur visible avant
+  de recharger la page (juste « Aucun message suivi »). Sans conséquence
+  ici (données de test), mais bon réflexe : reseeder après tout `down -v`.
+
+### État après cette session
+- **Fait avancer un critère d'acceptation de l'issue #125** au-delà de ce
+  que la PR #128 couvrait seule : « les 4 écrans chargent de vraies
+  données depuis un navigateur » est maintenant démontré **en local**
+  (captures à l'appui). Le critère complet de l'issue exige encore la
+  même vérification **sur le VPS réel** — toujours hors de portée sans
+  accès SSH.
+- Fiche module : pas de changement (captures seules, pas de code).
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker compose --env-file .env.test up -d
+tous les services healthy
+
+$ python3 seed_demo.py   (script jetable, non commité)
+4 nœuds enregistrés, 20 batches ingérés (202)
+
+$ (Claude in Chrome) 4 captures sur https://localhost:8444/#/{,reseau,flotte,integrite}
+données réelles visibles dans chaque écran (3 messages, graphe à 5 nœuds,
+2 relais muets avec alertes, 4 nœuds en intégrité non vérifiée)
+
+$ docker compose --env-file .env.test down -v && rm .env.test
+$ security delete-certificate -c "Caddy Local Authority — 2026 ECC Root" ...
+nettoyage confirmé
+```
+
+## 2026-09-29 — Issue #125/#322 : revue de la PR #128 (POWLAIR), bug de redéploiement corrigé
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `.github/workflows/deploy-vps.yml`,
+`dashboard/deploy/docker-compose.yml`, `dashboard/web/index.html`,
+`docs/suivi/modules/deploiement-vps.md`.
+**Lot :** réponse à la revue « changements demandés » de POWLAIR sur PR
+#128 (US-322/issue #125).
+
+### Fait
+- **Bloquant corrigé** : `deploy-vps.yml` recrée maintenant explicitement
+  le conteneur `web` après chaque redéploiement
+  (`docker compose up -d --build && docker compose up -d --no-deps
+  --force-recreate web`). **Reproduit le bug en local avant de corriger** :
+  `rm -rf ../web` + copie fraîche (nouvel inode, comme le ferait
+  `deploy-vps.yml`), `up -d --build` seul → conteneur `web` pas recréé,
+  404 ; `--force-recreate web` juste après → 200. Le même mécanisme
+  concerne `Caddyfile.web`, monté en bind mount lui aussi.
+- **Non bloquant corrigé** : `DENGON_WEB_API_BASE` échappée (`sed`,
+  antislash puis guillemet) avant d'être injectée dans `config.js` —
+  vérifié avec une valeur contenant `"` : ressort bien `\"`, pas de casse
+  de syntaxe JS.
+- **Non bloquant corrigé** : commentaire d'`index.html` précise que le 404
+  de `config.js` en dev local est attendu et sans conséquence.
+- `docs/suivi/modules/deploiement-vps.md` : deux nouvelles entrées dans
+  Décisions, avec le détail de la reproduction locale.
+
+### Pourquoi / décisions
+- `--force-recreate` ciblé sur `web` seul (`--no-deps`), pas sur tout le
+  `docker compose up` : `api`/`caddy` n'ont pas ce problème (l'API n'a pas
+  de bind mount sur du contenu versionné, `Caddyfile` de l'API n'a pas
+  changé de comportement) — inutile de les redémarrer en plus à chaque
+  déploiement.
 
 ### Écarts vs conception
 - Aucun nouveau.
 
 ### État après cette session
 - Fiche module : `modules/android-app.md` (section US-321) à jour ; `01-etat-du-code.md` : non.
+### Appris
+- Un bind mount Docker suit l'**inode**, pas le chemin : un `rm -rf` +
+  recréation du même chemin sur l'hôte ne met pas à jour ce qu'un
+  conteneur déjà démarré voit, même si l'image et la config Compose du
+  service n'ont pas changé — seul un `--force-recreate` (ou `restart`, qui
+  ne suffit pas ici car le montage lui-même ne change pas de source sans
+  recréation) fait réévaluer le montage. À ajouter à
+  `04-apprentissages.md` si ça revient ailleurs dans le projet.
+
+### État après cette session
+- PR #128 mise à jour, en attente d'une nouvelle revue de POWLAIR.
+- Fiche module mise à jour : `modules/deploiement-vps.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker compose --env-file .env.test up -d
+tout démarre, healthy
+
+$ rm -rf ../web && cp -r <sauvegarde> ../web   # simule le rm -rf + tar du workflow
+$ docker compose --env-file .env.test up -d --build
+"Container deploy-web-1 Running" (pas recréé)
+$ curl -sk -o /dev/null -w '%{http_code}' https://localhost:8444/
+404   (bug reproduit)
+
+$ docker compose --env-file .env.test up -d --no-deps --force-recreate web
+$ curl -sk -o /dev/null -w '%{http_code}' https://localhost:8444/
+200   (corrigé)
+
+$ DENGON_WEB_API_BASE avec un " dedans, --force-recreate web
+$ curl -sk https://localhost:8444/config.js
+window.DENGON_API_BASE = "https://localhost:8443\"; alert(1); //";
+(guillemet bien échappé)
+
+$ git status --short dashboard/web/
+seul index.html modifié (la manipulation rm -rf/cp n'a rien laissé de
+parasite, contenu identique après recréation)
+```
+
+---
+
+## 2026-09-29 — Issue #125 : second conteneur Caddy pour servir `dashboard/web` sur le VPS
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/deploy/{docker-compose.yml,Caddyfile.web,.env.example}`,
+`dashboard/web/index.html`, `.github/workflows/deploy-vps.yml`,
+`docs/suivi/modules/deploiement-vps.md`.
+**Lot :** issue #125 (area `dashboard-web`/`process`, MoSCoW should).
+
+### Fait
+- Nouveau service `web` dans `docker-compose.yml` (`caddy:2-alpine`),
+  volumes TLS **séparés** de ceux du service `caddy` de l'API
+  (`dengon_web_caddy_data`/`_config` — deux instances Caddy ne peuvent pas
+  partager le même magasin de certificats), ports `WEB_HTTP_PORT`/
+  `WEB_HTTPS_PORT` (défaut 8081/8444, distincts de ceux de l'API).
+- `Caddyfile.web` (nouveau) : sert `dashboard/web/` en statique
+  (`root */srv/web` monté `:ro`), même mécanisme `tls internal` +
+  `default_sni` que l'API — pas de nouveau problème TLS à résoudre.
+- L'entrypoint du service `web` génère `dashboard/web/config.js` à chaque
+  démarrage, depuis `DENGON_WEB_API_BASE` (`.env`, requis, pas de défaut) —
+  jamais écrit dans le montage `:ro` de `dashboard/web/`.
+- `dashboard/web/index.html` : ajoute `<script src="config.js">` avant
+  `api.js` (aucune valeur codée en dur à retirer — vérifié que `main`, au
+  moment de cette session, n'avait déjà plus l'URL en dur trouvée par une
+  première exploration, qui lisait en fait un résidu **non commité** du
+  disque local, écarté avant d'éditer).
+- `.env.example` : `WEB_HTTP_PORT`, `WEB_HTTPS_PORT`, `DENGON_WEB_API_BASE`.
+- `deploy-vps.yml` : `dashboard/web` ajouté au transfert `tar`/`rm -rf`
+  distant, nouveau smoke test HTTPS sur `WEB_HTTPS_PORT` (vérifie que la
+  page contient bien « dengon »).
+- `docs/suivi/modules/deploiement-vps.md` : Structure, Décisions,
+  Limites connues mis à jour.
+- Aucun changement côté `dashboard/api` : CORS déjà `allow_origins=["*"]`,
+  `GET` seulement — couvre déjà la nouvelle origine sans modification.
+
+### Pourquoi / décisions
+- Deuxième instance **Caddy**, pas nginx (confirmé avec l'utilisateur) :
+  réutilise directement `tls internal`/`default_sni`, déjà éprouvés et
+  documentés pour l'API sur ce VPS — nginx aurait demandé de re-résoudre le
+  TLS auto-signé (génération de certificat, SNI) à la main, un risque
+  déjà réglé côté Caddy.
+- `DENGON_WEB_API_BASE` explicite dans `.env`, pas dérivé de
+  `CADDY_SITE_ADDRESS`+`CADDY_HTTPS_PORT` : plus direct à lire, pas de
+  risque de désynchronisation silencieuse si le port de l'API change un
+  jour sans qu'on pense à recalculer.
+- `config.js` généré par l'entrypoint plutôt que commité (même/`.gitignore`)
+  ou templaté par le workflow CI : garde le mécanisme entièrement du côté
+  du VPS, cohérent avec la façon dont `dashboard/deploy/.env` (secret JWT)
+  est déjà géré — rien de nouveau à apprendre pour l'équipe.
+
+### Écarts vs conception
+- Aucun (l'issue elle-même documente déjà l'écart d'origine — dashboard
+  web jamais déployé — que cette session referme).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- Reste hors de portée : la vérification finale sur le **VPS réel** (dernier
+  critère d'acceptation de #125 — les 4 écrans chargent de vraies données
+  dans un navigateur) exige un accès SSH et un run manuel de
+  `deploy-vps.yml` (`workflow_dispatch`, environment `vps-prod`) — à faire
+  par quelqu'un qui a cet accès (voir §Procédure d'accès).
+- Fiche module mise à jour : `modules/deploiement-vps.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker compose --env-file .env.test config
+(valide : services api/caddy/web, ports 8081/8444 distincts de 8080/8443,
+volumes web_caddy_data/config séparés de caddy_data/config)
+
+$ docker compose --env-file .env.test up -d web
+Container deploy-web-1 Started — Caddy obtient son certificat interne
+("certificate obtained successfully", issuer local) sans erreur
+
+$ curl -sk https://localhost:8444/config.js
+window.DENGON_API_BASE = "https://localhost:8443";   (valeur de .env.test)
+
+$ curl -sk -o /dev/null -w '%{http_code}' https://localhost:8444/{,style.css}
+200, 200 (index.html et un asset statique)
+
+$ curl -sI http://localhost:8081/
+301 → https://localhost:8444/   (redirection HTTP→HTTPS correcte)
+
+$ docker exec deploy-web-1 sh -c "touch /srv/web/test"
+Read-only file system   (montage :ro confirmé)
+
+$ docker compose --env-file .env.test down -v
+```
+- Vérifié en local (Docker Desktop) : le service `web` seul, sans builder
+  l'image `api` (pas nécessaire pour cette issue). `.env.test` était un
+  fichier local jetable, jamais commité, supprimé après le test.
+- Pas vérifié : le critère « sur le VPS réel » (voir ci-dessus) — nécessite
+  l'accès SSH réel, hors de portée de cette session.
+
+---
 
 ## 2026-09-29 — US-309 : retours de revue de la PR #120 (Oswin), mesures sur carte
 

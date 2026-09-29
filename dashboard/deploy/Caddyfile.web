@@ -1,0 +1,43 @@
+# Reverse-proxy TLS devant dashboard/web (issue #125), servi en statique par
+# une instance Caddy DÉDIÉE — pas la même que celle devant `api` (Caddyfile),
+# pour qu'une purge/un redéploiement de l'un ne touche jamais l'autre (voir
+# docker-compose.yml, service `web`).
+#
+# `tls internal` + `default_sni {$CADDY_SITE_ADDRESS}` : même raison et même
+# mécanisme que pour l'API — voir Caddyfile pour le détail des pièges déjà
+# rencontrés (`auto_https off` casse l'émission du certificat ; un client qui
+# se connecte à une IP littérale n'envoie pas de SNI). Reproduit ici tel
+# quel plutôt que ré-expliqué : les deux fichiers doivent rester synchronisés
+# sur ce point, voir docs/suivi/modules/deploiement-vps.md.
+{
+	admin off
+	default_sni {$CADDY_SITE_ADDRESS}
+}
+
+{$CADDY_SITE_ADDRESS}:443 {
+	tls internal
+
+	# `config.js` sert `window.DENGON_API_BASE`, généré au démarrage du
+	# conteneur (voir docker-compose.yml, entrypoint du service `web`) —
+	# jamais depuis le montage `:ro` de dashboard/web/, qui ne contient pas
+	# ce fichier (pas commité, voir index.html).
+	handle /config.js {
+		root * /srv/generated
+		file_server
+	}
+
+	# Tout le reste : dashboard/web/, monté en lecture seule (critère
+	# d'acceptation de l'issue #125 — ce conteneur ne doit jamais pouvoir
+	# écrire dans les fichiers commités du dépôt).
+	handle {
+		root * /srv/web
+		file_server
+	}
+}
+
+# Même logique de redirection que Caddyfile (API) : {$WEB_HTTPS_PORT} reprend
+# la variable du mapping de port hôte de docker-compose.yml
+# (`WEB_HTTPS_PORT: ${WEB_HTTPS_PORT:-8444}`), seule source de ce numéro.
+{$CADDY_SITE_ADDRESS}:80 {
+	redir https://{host}:{$WEB_HTTPS_PORT}{uri} permanent
+}

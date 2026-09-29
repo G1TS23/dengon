@@ -89,6 +89,54 @@ services:
       - caddy_data:/data
       - caddy_config:/config
 
+  # Sert `dashboard/web/` en statique (issue #125) — conteneur DÉDIÉ plutôt
+  # que d'ajouter une route dans le Caddy de l'`api` ci-dessus : une
+  # purge/un redéploiement de l'un ne doit jamais toucher l'autre. Deuxième
+  # instance Caddy plutôt que nginx : réutilise directement le mécanisme
+  # `tls internal` + `default_sni` déjà éprouvé pour `api` sur ce VPS
+  # (pièges déjà résolus, voir Caddyfile) au lieu de re-générer un
+  # certificat auto-signé à la main.
+  web:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      # Même IP/nom que l'API : un seul certificat auto-signé à faire
+      # confiance par navigateur, pas deux.
+      CADDY_SITE_ADDRESS: ${CADDY_SITE_ADDRESS:-localhost}
+      # Pour la redirection HTTP→HTTPS de Caddyfile.web (même logique que
+      # CADDY_HTTPS_PORT pour le Caddyfile de l'API).
+      WEB_HTTPS_PORT: ${WEB_HTTPS_PORT:-8444}
+      # URL publique de l'API (port différent de celui du web ci-dessous :
+      # pas de valeur par défaut qui aurait forcément tort une fois sur le
+      # vrai VPS — voir .env.example). Injectée dans dashboard/web/config.js
+      # au démarrage, jamais codée en dur dans index.html.
+      DENGON_WEB_API_BASE: ${DENGON_WEB_API_BASE:?DENGON_WEB_API_BASE manquant — copier .env.example vers .env et le renseigner}
+    # Même préoccupation que l'entrypoint de `caddy` ci-dessus (échapper
+    # `$$` pour que ce soit la variable du CONTENEUR qui soit lue, pas une
+    # substitution Compose) : en plus d'exec Caddy, génère `config.js` dans
+    # un répertoire à part (PAS dans le montage `:ro` de dashboard/web/ —
+    # voir Caddyfile.web) à chaque démarrage, pour que la valeur reflète
+    # toujours `DENGON_WEB_API_BASE` du `.env` courant.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mkdir -p /srv/generated
+        # Échappe `\` puis `"` (revue PR #128, POWLAIR) : `DENGON_WEB_API_BASE`
+        # vient du `.env` de l'opérateur (pas une entrée réseau — pas une
+        # faille), mais un guillemet ou un antislash dedans casserait
+        # silencieusement la syntaxe JS générée sans cette étape.
+        web_api_base_echappe=$$(printf '%s' "$$DENGON_WEB_API_BASE" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf 'window.DENGON_API_BASE = "%s";\n' "$$web_api_base_echappe" > /srv/generated/config.js
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    ports:
+      - "${WEB_HTTP_PORT:-8081}:80"
+      - "${WEB_HTTPS_PORT:-8444}:443"
+    volumes:
+      - ./Caddyfile.web:/etc/caddy/Caddyfile:ro
+      - ../web:/srv/web:ro
+      - web_caddy_data:/data
+      - web_caddy_config:/config
+
 volumes:
   dengon_api_db:
     name: dengon_api_db
@@ -96,3 +144,10 @@ volumes:
     name: dengon_caddy_data
   caddy_config:
     name: dengon_caddy_config
+  # Magasin de certificats SÉPARÉ de celui de `caddy` (l'API) : deux
+  # instances Caddy indépendantes ne peuvent pas partager le même
+  # répertoire `/data` — chacune y gère son propre état de CA interne.
+  web_caddy_data:
+    name: dengon_web_caddy_data
+  web_caddy_config:
+    name: dengon_web_caddy_config

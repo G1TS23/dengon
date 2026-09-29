@@ -32,9 +32,16 @@
 </div>
 
 <!-- Si dashboard/web n'est pas servi derrière le même reverse-proxy que
-     dashboard/api (US-224), définir window.DENGON_API_BASE (URL de l'API,
-     ex. https://mon-vps:8443) dans un script AVANT api.js/app.js — voir
-     docs/suivi/modules/dashboard-web.md. -->
+     dashboard/api, définir window.DENGON_API_BASE (URL de l'API, ex.
+     https://mon-vps:8443) AVANT api.js/app.js — voir
+     docs/suivi/modules/deploiement-vps.md (issue #125). Sur le VPS, ce
+     conteneur génère config.js au démarrage à partir de la variable d'env
+     DENGON_WEB_API_BASE (voir dashboard/deploy/docker-compose.yml) ; ce
+     fichier n'est jamais commité. En développement local sans ce
+     mécanisme, la requête échoue simplement (404 attendu, visible dans la
+     console du navigateur — sans conséquence) et api.js retombe sur la
+     même origine que la page. -->
+<script src="config.js"></script>
 <script src="api.js"></script>
 <script src="app.js"></script>
 </body>
