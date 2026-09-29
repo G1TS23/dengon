@@ -96,6 +96,11 @@ header.entete-app h1 {
   text-decoration: underline;
 }
 
+.nav-app a[aria-current="page"] {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
 .bandeau-portee {
   margin: 0;
   padding: 10px 12px;
@@ -363,4 +368,85 @@ a {
 
 .carte-integrite__meta dd {
   margin: 0;
+
+/* --- US-311 : navigation, carte du réseau, flotte de relais ------------ */
+
+.carte-reseau {
+  display: block;
+  width: 100%;
+  max-width: 480px;
+  margin-inline: auto;
+  background: var(--fond-carte);
+  border: 1px solid var(--bordure);
+  border-radius: 8px;
+}
+
+.carte-reseau__lien {
+  stroke: var(--texte-discret);
+  stroke-dasharray: 4 4;
+}
+
+.carte-reseau__lien--actif {
+  stroke: var(--statut-delivered);
+  stroke-dasharray: none;
+}
+
+.carte-reseau__noeud circle {
+  fill: var(--statut-in-flight);
+}
+
+.carte-reseau__noeud--peer circle {
+  fill: var(--statut-read);
+}
+
+.carte-reseau__noeud.noeud--stale circle {
+  fill: var(--statut-inconnu);
+}
+
+.carte-reseau__noeud text {
+  fill: var(--texte);
+  font-size: 10px;
+}
+
+.legende {
+  color: var(--texte-discret);
+  font-size: 13px;
+}
+
+.carte-relais {
+  padding: 12px;
+  background: var(--fond-carte);
+  border: 1px solid var(--bordure);
+  border-radius: 8px;
+}
+
+.carte-relais--stale {
+  border-color: var(--statut-expired);
+}
+
+.compteur--alerte {
+  color: var(--statut-expired);
+  font-weight: 600;
+}
+
+.alertes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-block-start: 8px;
+}
+
+.alerte {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--statut-expired-fond);
+  color: var(--statut-expired);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.alerte--buffer_high {
+  background: var(--statut-queued-fond);
+  color: var(--statut-queued);
 }

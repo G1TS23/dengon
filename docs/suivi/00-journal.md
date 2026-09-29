@@ -479,6 +479,38 @@ laissé ouvert par la PR #87 (`Refs #28`, aucun appareil sur le poste).
 
 ### Écarts vs conception
 - Clé du coffre perdue → identité réinitialisée : reporté dans
+## 2026-09-29 — US-311 : carte réseau, flotte de relais, alerte `relay_silent`
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `dashboard/api/app/{network_api,config,main}.py`,
+`dashboard/api/tests/test_network_api.py`, `dashboard/web/{api,app}.js`,
+`index.html`, `style.css`.
+**Lot :** Lot 6 — Dashboard, branche `feat/US-311-web-reseau-flotte-alerting`.
+
+### Fait
+- API : `GET /api/nodes` (flotte : version, dernier contact, dernier
+  `relay.health`, alertes) et `GET /api/network/graph` (nœuds + liens
+  observés), dérivés de `events` à la lecture (`app/network_api.py`).
+- Alertes : `relay_silent` (aucun `relay.health` depuis N min, défaut 5,
+  réglable par `DENGON_DASHBOARD_RELAY_SILENT_MINUTES`) et `buffer_high`
+  (`log_buffer_pct` > 90).
+- Web : navigation Messages / Réseau / Flotte ; carte SVG (disposition
+  circulaire), cartes de relais triées avec les alertes en premier ; états
+  vides et champs de santé absents affichés « — » (vue partielle).
+
+### Pourquoi / décisions
+- Pas de table `links` ni de projection de santé : même choix qu'à
+  l'US-219 (dérivé à la lecture, volume de démo).
+- Le `peer` de `peer.connected` est un peerID, pas un `node_id` : les pairs
+  sont des nœuds `kind="peer"` rattachés à l'observateur, pas fusionnés
+  avec un nœud connu.
+- Un relais qui a booté sans jamais émettre de santé est muet à partir de son
+  `relay.boot` ; sans aucun événement, muet d'office.
+
+### Écarts vs conception
+- Routes `/api/nodes` et `/api/network/graph` sans le détail
+  `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
+  référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
 
 ### Appris
@@ -689,6 +721,29 @@ $ cargo test --workspace --all-features --locked        474 passed, 2 ignored
   tests de `IdentiteLocaleTest`) et le workflow fusionné ne sont vérifiés que
   par le job CI `android` de la PR. Rien testé sur téléphone, en particulier
   pas la perte réelle de la clé du Keystore.
+- Critères de l'US-311 couverts sauf « scénario 4 du DoD démontré » : le
+  texte du scénario 4 n'est défini nulle part dans `docs/synthese/` (seule
+  mention : `10-benchmarks-mvp-tests.md:190`) ; la détection d'un relais
+  muet est démontrée sur les fixtures golden (captures ci-dessous), pas sur
+  du matériel réel.
+- Fiches module mises à jour : `dashboard-api.md`, `dashboard-web.md`.
+- 01-etat-du-code.md mis à jour : non (aucune structure de crate touchée).
+
+### Vérification (commandes réellement exécutées)
+```
+$ python -m pytest -q          (dashboard/api)   → tous verts, dont 9 nouveaux
+$ ruff check app tests                            → All checks passed
+$ node --check app.js && node --check api.js      → OK
+```
+- Rendu vérifié à 360 px avec `chrome-headless-shell` (API réelle sur :8765,
+  20 fixtures ingérées, web servi sur :8766) :
+  [`assets/us-311/reseau-360px.png`](assets/us-311/reseau-360px.png),
+  [`assets/us-311/flotte-360px.png`](assets/us-311/flotte-360px.png). Mode
+  sombre non vérifié.
+- `ruff format --check` signale 4 fichiers **préexistants** non formatés
+  (dont `config.py` avant ce changement) : non touchés.
+- Non vérifié : rafraîchissement live SSE sur ces deux écrans (mécanisme
+  inchangé, réutilisé tel quel), rendu à plus de 360 px.
 
 ---
 

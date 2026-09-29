@@ -56,6 +56,19 @@
     return reponse.json();
   }
 
+  // US-311 : flotte de relais (santé + alertes) et carte du réseau.
+  async function fetchFlotte() {
+    const reponse = await fetch(baseUrl() + "/api/nodes");
+    if (!reponse.ok) throw new Error("GET /api/nodes → " + reponse.status);
+    return reponse.json();
+  }
+
+  async function fetchReseau() {
+    const reponse = await fetch(baseUrl() + "/api/network/graph");
+    if (!reponse.ok) throw new Error("GET /api/network/graph → " + reponse.status);
+    return reponse.json();
+  }
+
   // Abonnement au flux SSE (US-218) : `onEvenement` est rappelé pour CHAQUE
   // événement reçu (rattrapage inclus, à la connexion). L'appelant décide
   // quoi en faire (ici : redemander l'écran courant, voir app.js) — ce
@@ -84,6 +97,8 @@
     fetchMessages: fetchMessages,
     fetchMessage: fetchMessage,
     fetchIntegrity: fetchIntegrity,
+    fetchFlotte: fetchFlotte,
+    fetchReseau: fetchReseau,
     abonnerFlux: abonnerFlux,
   };
 })();

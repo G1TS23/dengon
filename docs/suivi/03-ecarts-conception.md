@@ -2336,3 +2336,20 @@ _(aucun écart pour l'instant)_
 - **Conséquences :** à revérifier visuellement dès qu'un navigateur est
   disponible, en particulier les nouveaux états de chargement/erreur.
 - **Doc de conception mise à jour ?** sans objet.
+
+
+---
+
+## US-311 — Flotte et carte réseau : périmètre réduit vs conception
+
+- **Conception :** `docs/synthese/09-dashboard-et-donnees.md` §5–6 prévoit
+  `GET /api/nodes/:id`, une table `links`, les alertes « version obsolète »,
+  et un alerting configurable vers webhook / e-mail.
+- **Réalisé :** `GET /api/nodes` et `GET /api/network/graph` seulement, liens
+  dérivés de `events` à la lecture, alertes `relay_silent` et `buffer_high`
+  affichées dans le dashboard (aucune notification sortante). Les pairs
+  (peerID) ne sont pas rapprochés des `node_id`.
+- **Pourquoi :** aucune version de référence pour « obsolète » ; webhook/e-mail
+  hors périmètre de l'US ; volume de démo.
+- **Conséquences :** un relais muet n'est vu que si quelqu'un regarde l'écran.
+- **Doc de conception mise à jour ?** non.

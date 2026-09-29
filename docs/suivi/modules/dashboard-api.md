@@ -16,6 +16,17 @@ SSE, rattrapage + diffusion live (US-218) + `GET /api/messages`/
 Cette fiche tient aussi lieu de **note d'onboarding de l'area `dashboard-api`**
 (proposition d'organisation §10.3 point 3).
 
+## US-311 — Flotte, graphe et alertes (2026-09-29)
+
+`app/network_api.py` : `list_fleet()` (par nœud : version issue du dernier
+`relay.boot`, dernier `relay.health`, `last_contact_ms`, `status`
+`online`/`stale`, `alerts`) et `network_graph()` (nœuds + liens dérivés de la
+corrélation `peer.connected`/`peer.disconnected`). Exposés par
+`GET /api/nodes` et `GET /api/network/graph`, « maintenant » = horloge du
+serveur. Seuil `relay_silent` : `DENGON_DASHBOARD_RELAY_SILENT_MINUTES`
+(défaut 5, > 0, sinon `RuntimeError`). Tests : `tests/test_network_api.py`
+(`time.time` fixé par rapport aux fixtures golden, dont le seuil exact).
+
 ## À quoi ça sert
 
 Le dashboard **observe**, il n'agit pas : il ne route rien, n'injecte rien, ne
