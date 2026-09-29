@@ -10,12 +10,15 @@ tel quel :
     python3 tools/dump_ledger.py capture.log -o ledger.bin
     cargo run -p dengon-verify -- --pubkey <clé imprimée au boot> ledger.bin
 
-Si la capture contient plusieurs exports, le DERNIER est retenu.
+Si la capture contient plusieurs exports, le DERNIER est retenu. Les deux
+chemins doivent rester sous le répertoire courant (pas de `..` ni de chemin
+absolu qui en sort) : garde-fou contre la traversée de répertoires.
 """
 
 import argparse
 import re
 import sys
+from pathlib import Path
 
 DEBUT = "DENGON-LEDGER-BEGIN"
 FIN = "DENGON-LEDGER-END"
@@ -43,19 +46,30 @@ def extraire(lignes):
     return dernier
 
 
+def chemin_sur(brut):
+    """Résout `brut` et refuse tout chemin hors du répertoire courant."""
+    base = Path.cwd().resolve()
+    chemin = (base / brut).resolve()
+    if not chemin.is_relative_to(base):
+        sys.exit(f"chemin hors du répertoire courant refusé : {brut}")
+    return chemin
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("capture", help="capture de la console série (- pour stdin)")
     p.add_argument("-o", "--sortie", required=True, help="fichier .bin à écrire")
     args = p.parse_args()
 
-    source = sys.stdin if args.capture == "-" else open(args.capture, encoding="utf-8", errors="replace")
+    if args.capture == "-":
+        source = sys.stdin
+    else:
+        source = chemin_sur(args.capture).open(encoding="utf-8", errors="replace")
     with source:
         octets = extraire(source)
     if octets is None:
         sys.exit(f"aucun export {DEBUT}…{FIN} complet dans {args.capture}")
-    with open(args.sortie, "wb") as f:
-        f.write(octets)
+    chemin_sur(args.sortie).write_bytes(octets)
     print(f"{len(octets)} octets écrits dans {args.sortie}")
 
 
