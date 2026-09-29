@@ -325,6 +325,43 @@ bool dengon_relay_record_event(struct DengonRelay *relay,
                                struct DengonNow now);
 
 /**
+ * Écrit le `node_id` du relais côté dashboard (`relay-` + `peerID[0..3]` en
+ * hex, chaîne C de 12 caractères terminée par `\0`) dans `out` (US-309).
+ * Pas de constante exportée pour la taille : cbindgen lui ajouterait
+ * le préfixe `Dengon` ; le firmware définit `DENGON_NODE_ID_LEN` (13).
+ *
+ * # Safety
+ *
+ * `relay` valide ; `out` valide pour 13 octets écrits.
+ */
+DengonStatus dengon_relay_node_id(const struct DengonRelay *relay, char *out);
+
+/**
+ * Construit le corps signé de `POST /ingest/batch` (US-309) à partir
+ * d'entrées de journal **déjà retirées** par [`dengon_relay_pop_ledger`],
+ * concaténées telles quelles dans `entries` (`entries_len` octets). La
+ * signature Ed25519 est faite ici, avec la clé du relais, qui ne sort pas
+ * du handle.
+ *
+ * Écrit le JSON (non terminé par `\0`) dans `out` et sa longueur dans
+ * `*out_len`. [`Status::BufferTooSmall`] : `*out_len` porte la taille
+ * requise. [`Status::Decode`] : une entrée est tronquée, hors catalogue ou
+ * son payload n'est pas un objet JSON — le lot ne partira jamais tel quel.
+ * [`Status::Empty`] : aucune entrée.
+ *
+ * # Safety
+ *
+ * `relay`, `out_len` valides ; `entries` valide pour `entries_len` octets
+ * lus ; `out` valide pour `out_cap` octets écrits.
+ */
+DengonStatus dengon_relay_build_batch(const struct DengonRelay *relay,
+                                      const uint8_t *entries,
+                                      uintptr_t entries_len,
+                                      uint8_t *out,
+                                      uintptr_t out_cap,
+                                      uintptr_t *out_len);
+
+/**
  * Compteurs du relais dans `*out`.
  *
  * # Safety

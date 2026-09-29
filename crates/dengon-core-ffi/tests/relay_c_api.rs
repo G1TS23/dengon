@@ -228,3 +228,186 @@ fn autotest_noise_avec_l_alea_de_la_plateforme() {
         assert_eq!(dengon_noise_selftest(Some(alea_constant)), Status::Crypto);
     }
 }
+
+// ----- Export vers le dashboard (US-309) -----------------------------------
+
+/// `relay-xxxxxx` + `\0` (défini côté firmware, pas exporté par le header).
+const DENGON_NODE_ID_LEN: usize = 13;
+
+#[test]
+fn node_id_ecrit_en_chaine_c() {
+    unsafe {
+        let r = nouveau(1, 0, None);
+        let mut out = [0x55 as core::ffi::c_char; DENGON_NODE_ID_LEN];
+        assert_eq!(dengon_relay_node_id(r, out.as_mut_ptr()), Status::Ok);
+        let id = core::ffi::CStr::from_ptr(out.as_ptr()).to_str().unwrap();
+        let mut peer = [0u8; 8];
+        assert_eq!(dengon_relay_peer_id(r, peer.as_mut_ptr()), Status::Ok);
+        assert_eq!(
+            id,
+            format!("relay-{:02x}{:02x}{:02x}", peer[0], peer[1], peer[2])
+        );
+        assert_eq!(
+            dengon_relay_node_id(ptr::null(), out.as_mut_ptr()),
+            Status::NullPointer
+        );
+        dengon_relay_free(r);
+    }
+}
+
+#[test]
+fn le_journal_retire_part_en_batch_signe() {
+    unsafe {
+        let r = nouveau(1, 0, None);
+        assert!(dengon_relay_record_event(
+            r,
+            c"relay.boot".as_ptr(),
+            c"{\"reset_reason\":\"power_on\",\"fw_version\":\"0.1.0\",\"secure_boot\":false,\"flash_enc\":false}".as_ptr(),
+            now(0),
+        ));
+        assert!(dengon_relay_record_event(
+            r,
+            c"relay.wifi_up".as_ptr(),
+            c"{\"ssid\":\"ap\",\"duration_s\":0}".as_ptr(),
+            now(10),
+        ));
+        let lot = journal(r);
+        assert_eq!(entrees(&lot).len(), 2);
+
+        // Tampon trop petit : taille requise rendue, rien d'écrit.
+        let mut petit = [0u8; 16];
+        let mut len = 0usize;
+        assert_eq!(
+            dengon_relay_build_batch(
+                r,
+                lot.as_ptr(),
+                lot.len(),
+                petit.as_mut_ptr(),
+                petit.len(),
+                &mut len
+            ),
+            Status::BufferTooSmall
+        );
+        let requis = len;
+        assert!(requis > petit.len());
+
+        let mut out = vec![0u8; requis];
+        assert_eq!(
+            dengon_relay_build_batch(
+                r,
+                lot.as_ptr(),
+                lot.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len
+            ),
+            Status::Ok
+        );
+        assert_eq!(len, requis);
+
+        // Le corps est le JSON attendu par /ingest/batch, signé par le relais.
+        let batch: serde_json::Value = serde_json::from_slice(&out).unwrap();
+        let mut id = [0 as core::ffi::c_char; DENGON_NODE_ID_LEN];
+        dengon_relay_node_id(r, id.as_mut_ptr());
+        let id = core::ffi::CStr::from_ptr(id.as_ptr()).to_str().unwrap();
+        assert_eq!(batch["node_id"], id);
+        assert_eq!(batch["schema_version"], 1);
+        assert_eq!(batch["events"][0]["name"], "relay.boot");
+        assert_eq!(batch["events"][1]["seq"], 1);
+        assert_eq!(batch["events"][1]["node_kind"], "relay");
+
+        let mut sans_sig = batch.clone();
+        sans_sig.as_object_mut().unwrap().remove("sig");
+        let sig: [u8; 64] = b64(batch["sig"].as_str().unwrap()).try_into().unwrap();
+        let mut pk = [0u8; 32];
+        dengon_relay_verifying_key(r, pk.as_mut_ptr());
+        VerifyingKey::from_bytes(&pk)
+            .unwrap()
+            .verify(&serde_json::to_vec(&sans_sig).unwrap(), &sig)
+            .expect("signature du batch refusée");
+        dengon_relay_free(r);
+    }
+}
+
+#[test]
+fn lot_vide_tronque_ou_hors_contrat_refuse() {
+    unsafe {
+        let r = nouveau(1, 0, None);
+        let mut out = [0u8; 4096];
+        let mut len = 0usize;
+        assert_eq!(
+            dengon_relay_build_batch(r, ptr::null(), 0, out.as_mut_ptr(), out.len(), &mut len),
+            Status::Empty
+        );
+
+        assert!(dengon_relay_record_event(
+            r,
+            c"relay.wifi_up".as_ptr(),
+            c"{\"ssid\":\"ap\",\"duration_s\":0}".as_ptr(),
+            now(0),
+        ));
+        // Payload JSON que le contrat refuse (flottant) : enregistré au
+        // journal (record_event ne valide que le nom), refusé au batch.
+        assert!(dengon_relay_record_event(
+            r,
+            c"relay.wifi_down".as_ptr(),
+            c"{\"x\":1.5}".as_ptr(),
+            now(1),
+        ));
+        let lot = journal(r);
+        let premiere = entrees(&lot)[0].to_bytes().len();
+
+        assert_eq!(
+            dengon_relay_build_batch(
+                r,
+                lot.as_ptr(),
+                premiere - 1,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len
+            ),
+            Status::Decode,
+            "entrée tronquée"
+        );
+        assert_eq!(
+            dengon_relay_build_batch(
+                r,
+                lot.as_ptr(),
+                lot.len(),
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len
+            ),
+            Status::Decode,
+            "payload hors contrat"
+        );
+        assert_eq!(
+            dengon_relay_build_batch(
+                r,
+                lot.as_ptr(),
+                premiere,
+                out.as_mut_ptr(),
+                out.len(),
+                &mut len
+            ),
+            Status::Ok
+        );
+        dengon_relay_free(r);
+    }
+}
+
+/// base64 standard avec bourrage (décodage de test seulement).
+fn b64(s: &str) -> Vec<u8> {
+    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let (mut acc, mut bits, mut out) = (0u32, 0u32, Vec::new());
+    for c in s.bytes().filter(|&c| c != b'=') {
+        let v = u32::try_from(A.iter().position(|&a| a == c).expect("base64 invalide")).unwrap();
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(u8::try_from((acc >> bits) & 0xff).unwrap());
+        }
+    }
+    out
+}
