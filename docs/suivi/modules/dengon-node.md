@@ -3,7 +3,7 @@
 **Rôle en une phrase :** un nœud dengon sans interface graphique, lancé en ligne de commande, qui parle BLE (rôle central) à un pair qui annonce.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §5.
 **Dernière mise à jour :** 2026-09-29
-**État :** CLI fonctionnelle sur bouchon (US-303) ; **jamais essayée sur BLE réel**.
+**État :** CLI fonctionnelle sur bouchon (US-303) ; **lien BLE réel ouvert avec un téléphone Android** (essai du 2026-09-29), pas d'échange de message.
 
 ## À quoi ça sert
 

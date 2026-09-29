@@ -589,6 +589,27 @@ laissé ouvert par la PR #87 (`Refs #28`, aucun appareil sur le poste).
 
 ### Écarts vs conception
 - Clé du coffre perdue → identité réinitialisée : reporté dans
+## 2026-09-29 — US-303 : essai réel du transport `btleplug` contre un téléphone
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** aucun code ; vérification de `BtleplugRadio` (PC Windows, adaptateur MediaTek) contre l'app Android (écran de debug du transport, US-213).
+
+### Fait
+- Premier essai : `HRESULT 0x800710DF` (« Le périphérique n'est pas prêt ») tant que le Bluetooth Windows était désactivé ; erreur propre, exit 1.
+- Bluetooth du PC activé, app Android en annonce : `dengon-node run --peer <QR factice> --duree 40` affiche « en écoute du pair … » puis **« lien ouvert »**. Scan filtré sur le service, connexion, découverte, abonnement à `CHAR_TX` : validés sur matériel.
+
+### Vérification (commandes réellement exécutées)
+```
+$ dengon-node run --name alice --db a.db --peer <QR de bob> --duree 40
+en écoute du pair h2csfte5rxb7i (rôle central : le pair doit annoncer)…
+lien ouvert
+exit=0
+```
+- **Non vérifié :** échange de message (l'app n'a pas le vrai cœur, US-306) ; réception d'une trame de battement (aucune ligne affichée : le nœud ne montre pas les octets bruts, et la fenêtre de 40 s pouvait précéder le battement de 30 s) ; côté téléphone, la connexion entrante n'a pas été confirmée sur son écran ; Linux/BlueZ ; déconnexion brutale réelle.
+
+---
+
+
 ## 2026-09-29 — US-303 : nœud CLI `dengon-node` et transport `btleplug` (central)
 
 **Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
