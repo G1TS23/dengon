@@ -21,8 +21,9 @@ dengon_adv_parse_mfg(const uint8_t *data, size_t len, dengon_adv_info_t *out)
     uint16_t company;
 
     /* Plus long que 7 octets : accepté, pour qu'une version future puisse
-       ajouter des champs en queue sans rendre les relais existants aveugles. */
-    if (data == NULL || len < DENGON_ADV_MFG_LEN) {
+       ajouter des champs en queue sans rendre les relais existants aveugles.
+       6 octets (sans flags) : format de l'app Android, flags à 0 (US-312). */
+    if (data == NULL || len < DENGON_ADV_MFG_MIN_LEN) {
         return false;
     }
 
@@ -32,7 +33,7 @@ dengon_adv_parse_mfg(const uint8_t *data, size_t len, dengon_adv_info_t *out)
     }
 
     memcpy(out->peer_prefix, &data[2], DENGON_ADV_PEER_PREFIX_LEN);
-    out->flags = data[6];
+    out->flags = len >= DENGON_ADV_MFG_LEN ? data[6] : 0;
     return true;
 }
 

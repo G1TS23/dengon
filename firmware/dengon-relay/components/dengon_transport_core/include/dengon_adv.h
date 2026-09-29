@@ -21,6 +21,11 @@ extern "C" {
 #define DENGON_ADV_COMPANY_ID 0xFFFFu
 
 #define DENGON_ADV_MFG_LEN         7
+/** Plus courte annonce lisible : Company ID + préfixe, sans octet de flags.
+    C'est le format de l'app Android (`Annonce.donnees`, 4 octets après le
+    Company ID) : sans lui, le relais ne voyait jamais un téléphone de
+    préfixe plus grand que le sien et ne l'initiait pas (US-312). */
+#define DENGON_ADV_MFG_MIN_LEN     6
 #define DENGON_ADV_PEER_PREFIX_LEN 4
 
 /* Bitfield de l'octet `flags` de l'annonce — sans rapport avec les `flags` du

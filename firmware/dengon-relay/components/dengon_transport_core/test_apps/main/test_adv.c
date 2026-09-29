@@ -31,13 +31,26 @@ test_mfg_aller_retour(void)
 static void
 test_mfg_trop_court_ou_etranger_est_rejete(void)
 {
-    static const uint8_t court[] = { 0xFF, 0xFF, 1, 2, 3, 4 };
+    static const uint8_t court[] = { 0xFF, 0xFF, 1, 2, 3 };
     static const uint8_t apple[] = { 0x4C, 0x00, 1, 2, 3, 4, 5 };
     dengon_adv_info_t info;
 
     TEST_ASSERT_FALSE(dengon_adv_parse_mfg(court, sizeof(court), &info));
     TEST_ASSERT_FALSE(dengon_adv_parse_mfg(apple, sizeof(apple), &info));
     TEST_ASSERT_FALSE(dengon_adv_parse_mfg(NULL, 7, &info));
+}
+
+/* Annonce d'un téléphone Android : Company ID + préfixe, sans flags (US-312). */
+static void
+test_mfg_du_telephone_sans_flags_est_accepte(void)
+{
+    static const uint8_t tel[] = { 0xFF, 0xFF, 0xF1, 0xD6, 0xA8, 0x60 };
+    static const uint8_t prefixe[] = { 0xF1, 0xD6, 0xA8, 0x60 };
+    dengon_adv_info_t info;
+
+    TEST_ASSERT_TRUE(dengon_adv_parse_mfg(tel, sizeof(tel), &info));
+    TEST_ASSERT_EQUAL_UINT8_ARRAY(prefixe, info.peer_prefix, 4);
+    TEST_ASSERT_EQUAL_HEX8(0, info.flags);
 }
 
 /* Des champs ajoutés en queue par une version future ne rendent pas aveugle. */
@@ -85,6 +98,7 @@ run_adv(void)
     UnitySetTestFile(__FILE__);
     RUN_TEST(test_mfg_aller_retour);
     RUN_TEST(test_mfg_trop_court_ou_etranger_est_rejete);
+    RUN_TEST(test_mfg_du_telephone_sans_flags_est_accepte);
     RUN_TEST(test_mfg_plus_long_est_accepte);
     RUN_TEST(test_anti_boucle_le_plus_petit_initie);
     RUN_TEST(test_anti_boucle_egalite_departagee_par_adresse);
