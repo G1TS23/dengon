@@ -569,6 +569,18 @@ mod tests {
     }
 
     #[test]
+    fn carte_au_peer_id_en_majuscules_acceptee() {
+        // Même tolérance que `peer_id_from_str` (revue PR #109) : la casse
+        // du base32 ne change pas le pair désigné.
+        let alice = generate_identity("alice".into()).unwrap();
+        let majuscules = Identity {
+            peer_id: alice.peer_id.to_ascii_uppercase(),
+            ..alice.clone()
+        };
+        assert_eq!(identity_qr_code(majuscules), identity_qr_code(alice));
+    }
+
+    #[test]
     fn code_de_verification_symetrique_60_chiffres() {
         let alice = generate_identity("alice".into()).unwrap();
         let bob = generate_identity("bob".into()).unwrap();

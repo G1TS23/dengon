@@ -54,6 +54,9 @@ pub(crate) fn identity_to_ffi(identity: &PublicIdentity) -> Identity {
 /// que Kotlin a pu altérer : longueurs, clé Ed25519, pseudo, et surtout que
 /// le `peer_id` annoncé est bien celui qui dérive de `pub_static`.
 ///
+/// Le `peer_id` est comparé **décodé**, pas en chaîne : il est donc toléré en
+/// majuscules, comme partout ailleurs ([`peer_id_from_str`]).
+///
 /// # Errors
 ///
 /// [`DengonError::Internal`] si l'un de ces contrôles échoue.
@@ -64,7 +67,8 @@ pub(crate) fn identity_from_ffi(identity: &Identity) -> Result<PublicIdentity, D
         .map_err(|_| DengonError::Internal)?;
     let pub_sign = VerifyingKey::from_bytes(&pub_sign).map_err(|_| DengonError::Internal)?;
     let public = PublicIdentity::new(&identity.pseudo, pub_static, pub_sign)?;
-    if peer_id_to_string(&public.peer_id()) != identity.peer_id {
+    let annonce = peer_id_from_str(&identity.peer_id).map_err(|_| DengonError::Internal)?;
+    if public.peer_id() != annonce {
         return Err(DengonError::Internal);
     }
     Ok(public)
