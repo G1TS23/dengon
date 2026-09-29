@@ -36,6 +36,10 @@ object TransportActif {
         val liens: List<LinkId> = emptyList(),
         /** Liens identifiés par `ANNOUNCE` → `peerID` du pair. */
         val pairs: Map<LinkId, String> = emptyMap(),
+        /** `peerID` → pseudo annoncé des pairs reliés (écran réseau). */
+        val pseudos: Map<String, String> = emptyMap(),
+        /** Mode éco : scan à cycle réduit (US-313). */
+        val modeEco: Boolean = false,
         val trames: Int = 0,
         val erreur: String? = null,
         val journal: List<String> = emptyList(),
@@ -56,6 +60,8 @@ object TransportActif {
 
     @Volatile
     private var maillage: Maillage? = null
+    @Volatile
+    private var radio: GattRadio? = null
     private var boucle: ScheduledExecutorService? = null
 
     /** Démarre radio + transport + boucle. Sans effet s'il tourne déjà. */
@@ -65,7 +71,8 @@ object TransportActif {
         val noeud = (context.applicationContext as DengonApplication).noeud
         val peerIdTexte = noeud.localIdentity().peerId
         val peerId = PeerIdOctets.depuisBase32(peerIdTexte)
-        val t = AndroidTransport(GattRadio(context))
+        val r = GattRadio(context).also { it.definirModeEco(etatMutable.value.modeEco) }
+        val t = AndroidTransport(r)
         try {
             t.start(TransportConfig(localPeerId = peerId))
         } catch (e: TransportException) {
@@ -74,6 +81,7 @@ object TransportActif {
             return
         }
         transport = t
+        radio = r
         maillage = Maillage(t, noeud, journal = ::journaliser)
         etatMutable.update { it.copy(demarre = true, peerIdLocal = peerIdTexte, erreur = null) }
         journaliser("démarré, peerID $peerIdTexte (préfixe annoncé ${hex(peerId.copyOfRange(0, 4))})")
@@ -89,8 +97,9 @@ object TransportActif {
         transport?.stop()
         transport?.let { sonderAvec(it) } // dernières fermetures LOCALE, vues aussi par le nœud
         transport = null
+        radio = null
         maillage = null
-        etatMutable.update { it.copy(demarre = false, liens = emptyList(), pairs = emptyMap()) }
+        etatMutable.update { it.copy(demarre = false, liens = emptyList(), pairs = emptyMap(), pseudos = emptyMap()) }
         journaliser("arrêté")
     }
 
@@ -101,6 +110,16 @@ object TransportActif {
      */
     fun vider() {
         maillage?.vider()
+    }
+
+    /** Active / désactive le mode éco (US-313). Retenu même service arrêté. */
+    fun definirModeEco(eco: Boolean) {
+        // L'interrupteur n'affiche que ce qui est réellement en place.
+        if (radio?.definirModeEco(eco) == false) {
+            return journaliser("changement de mode de scan impossible, mode inchangé")
+        }
+        etatMutable.update { it.copy(modeEco = eco) }
+        journaliser(if (eco) "mode éco : scan à cycle réduit" else "mode normal : scan à faible latence")
     }
 
     private fun sonder() {
@@ -133,7 +152,8 @@ object TransportActif {
         }
         if (evenements.isNotEmpty()) {
             val pairs = maillage?.pairs ?: emptyMap()
-            etatMutable.update { it.copy(pairs = pairs) }
+            val pseudos = maillage?.pseudos ?: emptyMap()
+            etatMutable.update { it.copy(pairs = pairs, pseudos = pseudos) }
         }
     }
 

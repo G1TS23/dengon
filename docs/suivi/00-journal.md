@@ -152,6 +152,186 @@ déjà non formatés avant ce changement (non traité).
   `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
   référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
+## 2026-09-29 — US-313 : corrections après la revue de la PR #122
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `GattRadio.kt`, `TransportActif.kt`, `Maillage.kt`, `ConversationsViewModel.kt`,
+`ConversationsScreen.kt` + tests
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Mode éco** (`GattRadio.definirModeEco`) : ne garde le nouveau mode que si
+  le scan a pu être relancé. Sinon `modeEco` revient à l'ancienne valeur, l'ancien
+  scan est rétabli au mieux et la fonction rend `false` ; `TransportActif`
+  ne bascule alors pas l'interrupteur et journalise. Avant, un échec après
+  `stopScan` laissait la découverte morte avec l'interrupteur sur le nouvel état.
+- **« Renvoyer »** : `ConversationsUiState.renvoyes` retient les messages déjà
+  renvoyés ; un seul renvoi par message en échec, le bouton devient « Renvoyé ».
+  Un renvoi refusé par le nœud ne compte pas (on peut réessayer).
+- **`Maillage`** : `lireAnnonce` rend `AnnonceLue(peerId, pseudo)` en un seul
+  appel FFI ; plus de double vérification de signature par lien
+  (`lirePseudo` et `pseudoDeLAnnonce` supprimés).
+
+### Pourquoi / décisions
+- `renvoyes` vit en mémoire (ViewModel) : après un redémarrage de l'app le bouton
+  réapparaît. Le persister demanderait un état côté cœur.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- Un état d'interrupteur doit refléter ce que la radio a réellement fait,
+  pas ce qui a été demandé.
+
+### État après cette session
+- Le chemin d'échec du mode éco n'est pas testable en JVM (API Android BLE) ;
+  seul le chemin nominal a été essayé sur appareil.
+
+### Vérification (commandes réellement exécutées)
+```
+$ ./gradlew.bat assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 0 échec (3 tests de plus : un seul renvoi, renvoi refusé retentable, lecture d'ANNOUNCE unique)
+```
+
+---
+
+## 2026-09-29 — US-313 : essai avec le relais ESP32, incompatibilité de trame trouvée
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `ui/reseau/VueReseau.kt` (préfixe de pseudo), test ; aucun changement de transport
+**Lot :** Lot 3 — app Android / relais
+
+### Fait
+- Relais ESP32 (`dengon-relay-9309`, port COM8) allumé à côté des téléphones.
+  Le Samsung A16 ouvre un lien avec lui (`48:9D:31:00:83:DE`, rssi −34) ; le
+  relais journalise `lien 1 ouvert`, MTU 517, `notify`.
+- **Le relais n'apparaît pas dans l'écran Réseau** : « Relais atteints (0) ».
+  Log temporaire (retiré) dans `GattRadio.recu` : la notification du relais
+  arrive (`174 o`, lien `pret=true`) mais aucun `↔ peerID` ne suit et
+  `Maillage` ne journalise rien, donc aucun `FrameReceived` n'est produit.
+- **Cause (très probable, non prouvée par un test)** : le transport Android
+  (US-213, `FragmentationBle`) préfixe chaque morceau d'un octet d'en-tête
+  (bit 7 = SUITE, bits 0-6 = 0) ; le relais NimBLE (US-220) envoie la trame
+  brute (« 1 trame = 1 PDU ATT, aucune fragmentation BLE »,
+  `03-ecarts-conception.md`). Le premier octet de l'`ANNOUNCE` est lu comme
+  en-tête, `Reassembleur.ajouter` lève, `AndroidTransport.morceauRecu` jette la
+  trame en silence. Entre téléphones, ça marche (les deux ont l'en-tête).
+- Corrigé dans cette PR : le firmware annonce le pseudo **`relais-xxxx`**
+  (`dengon_relay_app.c:372`), pas `relay-` ; `vueReseau` accepte les deux.
+
+### Pourquoi / décisions
+- Incompatibilité **non corrigée ici** : trancher entre « le relais adopte
+  l'en-tête » et « le téléphone lit la trame brute » change le format sur le
+  fil, hors du périmètre d'une US d'écran. À traiter dans une US dédiée.
+
+### Écarts vs conception
+- Format des morceaux BLE Android ≠ NimBLE : déjà signalé en « proposition à
+  aligner » dans `FragmentationBle.kt`, **jamais aligné** ; bloque aussi le
+  scénario 4 du DoD (téléphone ↔ relais).
+
+### Appris
+- Un transport qui jette une trame invalide sans journal cache ce genre de
+  bug : `AndroidTransport.morceauRecu` devrait au moins journaliser.
+
+### État après cette session
+- « Relais atteints » **non vérifié** sur appareil : bloqué par l'écart ci-dessus.
+- Fiche module : inchangée.
+
+### Vérification (commandes réellement exécutées)
+```
+$ Get-CimInstance Win32_PnPEntity ... -> USB-SERIAL CH340 (COM8)
+$ lecture série COM8 115200 -> lien conn=0/1 prêt, notify, dengon-relay-9309
+$ adb -s R58Y10M1W8A logcat -s dengon-transport -> notif 174 o, pret=true, pas de "↔"
+$ ./gradlew.bat testDebugUnitTest -> BUILD SUCCESSFUL
+```
+
+---
+
+## 2026-09-29 — US-313 : essai sur appareils (OnePlus 7 Pro + Samsung A16)
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** aucun code ; essai de la PR #122, `.so` construites sous WSL
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Construction de `libdengon_ffi.so`** : le premier APK plantait au lancement
+  (`UnsatisfiedLinkError: libdengon_ffi.so not found`), les `.so` n'étant pas
+  versionnées. Construites sous WSL Ubuntu (rustup + cibles Android,
+  NDK r27c, `cargo-ndk 4.1.2`) avec `android/scripts/build-ffi.sh android`.
+- **Écran Réseau** sur 2 téléphones branchés (OnePlus 7 Pro GM1913,
+  Samsung A16 SM-A165F) + un Pixel 8 Pro à proximité : chacun liste les deux
+  autres sous « Pairs vus (2) » avec leur pseudo (`SM-A165F`, `GM1913`,
+  `Pixel 8 Pro`) et leur `peerID`. « Relais atteints (0) » : aucun relais
+  ESP32 sous la main.
+- **Mode éco** sur le OnePlus : logcat `mode éco : scan à cycle réduit`
+  (11:32:25) ; `dumpsys bluetooth_manager` montre le scan de l'app passé de
+  `LOW_LATENCY` à `LOW_POWER` (scan en cours `ScanMode=LOW_POWER` à 11:32:25).
+  Retour `mode normal` (11:32:48) ; les 2 pairs restent affichés.
+
+### Pourquoi / décisions
+- Le `.so` est construit hors du dossier `target/` du dépôt
+  (`CARGO_TARGET_DIR` dans le home WSL) : le dépôt est sur `/mnt/c`, lent.
+- Le script a été lancé via une copie sans CRLF (`sed 's/\r$//'`) : le
+  checkout Windows convertit ses fins de ligne et `bash` refuse `pipefail`.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- `build-ffi.sh` marche sous WSL Ubuntu à condition d'avoir `build-essential`
+  (le linker hôte des build scripts) et des fins de ligne LF.
+
+### État après cette session
+- Vérifié sur appareil : écran Réseau (pairs), mode éco (scan `LOW_POWER`).
+- **Toujours non vérifié** : « relais atteints » avec un vrai relais, et le
+  bouton « Renvoyer » (il faut un message `EXPIRED`, qu'on ne provoque pas
+  facilement en quelques minutes ; couvert par les tests ViewModel seulement).
+  Effet du mode éco sur la batterie non mesuré.
+- Fiche module et avancement : inchangés (le code n'a pas bougé).
+
+### Vérification (commandes réellement exécutées)
+```
+$ wsl -d Ubuntu ... bash build-ffi.sh android   -> libdengon_ffi.so arm64-v8a + x86_64
+$ ./gradlew.bat assembleDebug ; adb -s <id> install -r app-debug.apk   -> Success (x2)
+$ adb -s c365d658 logcat -s dengon-transport ; adb shell dumpsys bluetooth_manager
+```
+
+---
+
+## 2026-09-29 — US-313 : écran réseau, mode éco, « Renvoyer », statut « Échec »
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/` (`ui/reseau/`,
+`ui/conversations/`, `ble/Maillage.kt`, `ble/transport/{GattRadio,TransportActif}.kt`,
+`MainActivity.kt`), tests JVM correspondants
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Statut « Échec » explicite** : `Message.enEchec` (sortant + `EXPIRED`) ;
+  la bulle affiche « Échec » en couleur d'erreur, plus un message qui a l'air
+  d'être encore en route.
+- **« Renvoyer »** : bouton sur un message en échec ; `ConversationsViewModel.renvoyer`
+  réémet le même texte au même pair (`sendMessage`) puis vide la radio
+  (`apresEnvoi`). Refus du nœud → erreur « Renvoi impossible ».
+- **Écran réseau** (`ui/reseau/`) : `vueReseau()` (pure, testée) sépare les
+  **relais atteints** (pseudo annoncé `relay-…`) des **pairs vus** ; `Maillage`
+  retient maintenant le pseudo de l'`ANNOUNCE` (`lirePseudo`, `pseudos`).
+  Bouton « Réseau » sur l'écran d'accueil.
+- **Mode éco** : `GattRadio.definirModeEco` bascule le scan de
+  `SCAN_MODE_LOW_LATENCY` à `SCAN_MODE_LOW_POWER` (redémarre le scan en
+  cours) ; `TransportActif.definirModeEco` le retient et le réapplique au
+  prochain démarrage.
+
+### Pourquoi / décisions
+- Pas de « retry » côté cœur : `EXPIRED` est terminal (synthese/07). Renvoyer
+  = nouveau message, plutôt que d'étendre le contrat FFI v1 pour un `Should`.
+- Relais reconnu par convention de pseudo : l'`ANNOUNCE` ne porte pas de
+  capacité exploitable côté téléphone.
+- Mode éco non persisté (mémoire du processus).
+
+### Écarts vs conception
+- « Renvoyer » crée un nouveau message ; relais détecté par préfixe de
+  pseudo — reportés dans `03-ecarts-conception.md`.
 
 ### Appris
 - Rien de nouveau.
@@ -180,6 +360,19 @@ $ node --check app.js && node --check api.js      → OK
   (dont `config.py` avant ce changement) : non touchés.
 - Non vérifié : rafraîchissement live SSE sur ces deux écrans (mécanisme
   inchangé, réutilisé tel quel), rendu à plus de 360 px.
+- Les 5 critères d'acceptation de l'US-313 sont codés. **Non vérifié sur
+  appareil** : l'essai manuel prévu par l'US (relais réel, effet du mode éco
+  sur la découverte) n'a pas été fait.
+- Fiche module mise à jour : `modules/android-app.md`.
+- 01-etat-du-code.md mis à jour : non (`02-avancement.md` mis à jour).
+
+### Vérification (commandes réellement exécutées)
+```
+$ ./gradlew.bat assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 101 tests, 0 échec
+```
+- Le mode éco (`GattRadio`) n'a pas de test JVM (API Android BLE) ; seul
+  l'essai sur téléphone peut le vérifier.
 
 ---
 

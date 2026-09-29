@@ -664,6 +664,20 @@ Checklist d'essai (pour la rejouer) :
 notification app fermée) ; accusé en session seulement ; contacts perdus au
 redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
 
+## Écran réseau, mode éco, « Renvoyer » (US-313)
+
+- `ui/reseau/VueReseau.kt` : `vueReseau()` pure → `VueReseau` (relais = pseudo
+  `relay-…`, pairs = le reste, dédoublonnés par `peerID`). `ReseauScreen.kt`
+  l'affiche, avec l'interrupteur du mode éco.
+- `Maillage.pseudos` : pseudo de l'`ANNOUNCE` par `peerID`, retiré à la
+  déconnexion (injecté par `lirePseudo`, `pseudoDeLAnnonce` dans l'app).
+- Mode éco : `GattRadio.definirModeEco` → scan `LOW_POWER` ;
+  `TransportActif.definirModeEco` / `Etat.modeEco`. Non persisté.
+- `Message.enEchec` (`EXPIRED` sortant) → « Échec » en rouge + bouton
+  « Renvoyer » → `ConversationsViewModel.renvoyer` (nouveau `sendMessage`).
+- Tests : `VueReseauTest`, `ConversationsViewModelTest` (+4),
+  `MaillageTest` (+1). Mode éco non testable en JVM.
+
 ## Pour l'oral
 
 C'est le squelette qui prouve qu'Android peut faire tourner un service qui

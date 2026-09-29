@@ -2,6 +2,7 @@ package com.dengon.app.ui.conversations
 
 import com.dengon.app.ffi.Conversation
 import com.dengon.app.ffi.DengonException
+import com.dengon.app.ffi.Message
 import com.dengon.app.ffi.MessageStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -136,6 +137,101 @@ class ConversationsViewModelTest {
             listOf("En attente", "Parti", "Distribué", "Lu", "Échec", "Annulé"),
             MessageStatus.values().map(::libelleStatut),
         )
+    }
+
+    open class NoeudAvecEchec : FauxNoeud() {
+        val envois = mutableListOf<Pair<String, String>>()
+        private val echec = Message("m-echec", "c1", "moi", "urgent", outgoing = true, sentMs = 0L, status = MessageStatus.EXPIRED)
+        private val enCours = Message("m-cours", "c1", "moi", "patient", outgoing = true, sentMs = 1L, status = MessageStatus.QUEUED)
+
+        override fun listConversations() = listOf(Conversation("c1", "peer-1", "Bob", enCours, 0u))
+        override fun listMessages(convId: String) = listOf(echec, enCours)
+        override fun sendMessage(destPeerId: String, body: String): String {
+            envois += destPeerId to body
+            return "m-neuf"
+        }
+    }
+
+    @Test
+    fun `seul un message sortant expire est en echec`() {
+        val expire = Message("a", "c", "moi", "x", outgoing = true, sentMs = 0L, status = MessageStatus.EXPIRED)
+        assertTrue(expire.enEchec)
+        assertFalse(expire.copy(status = MessageStatus.QUEUED).enEchec)
+        assertFalse("un message reçu n'est jamais « Échec »", expire.copy(outgoing = false).enEchec)
+    }
+
+    @Test
+    fun `renvoyer reemet le texte d un message en echec au meme pair`() {
+        val noeud = NoeudAvecEchec()
+        var vides = 0
+        val vm = ConversationsViewModel(noeud, apresEnvoi = { vides++ })
+        vm.ouvrir("c1")
+
+        vm.renvoyer("m-echec")
+
+        assertEquals(listOf("peer-1" to "urgent"), noeud.envois)
+        assertEquals("la radio est vidée aussitôt", 1, vides)
+        assertNull(vm.etat.value.erreur)
+    }
+
+    @Test
+    fun `un message en echec ne se renvoie qu une fois`() {
+        val noeud = NoeudAvecEchec()
+        val vm = ConversationsViewModel(noeud)
+        vm.ouvrir("c1")
+
+        vm.renvoyer("m-echec")
+        vm.renvoyer("m-echec")
+        vm.renvoyer("m-echec")
+
+        assertEquals("pas de doublons", 1, noeud.envois.size)
+        assertEquals(setOf("m-echec"), vm.etat.value.renvoyes)
+    }
+
+    @Test
+    fun `un renvoi refuse peut etre retente`() {
+        var refuser = true
+        val noeud = object : NoeudAvecEchec() {
+            override fun sendMessage(destPeerId: String, body: String): String {
+                if (refuser) throw DengonException.UnknownPeer("hors de portée")
+                return super.sendMessage(destPeerId, body)
+            }
+        }
+        val vm = ConversationsViewModel(noeud)
+        vm.ouvrir("c1")
+
+        vm.renvoyer("m-echec")
+        assertTrue("un refus ne compte pas comme renvoyé", vm.etat.value.renvoyes.isEmpty())
+
+        refuser = false
+        vm.renvoyer("m-echec")
+        assertEquals(1, noeud.envois.size)
+    }
+
+    @Test
+    fun `renvoyer ignore un message qui n est pas en echec ou inconnu`() {
+        val noeud = NoeudAvecEchec()
+        val vm = ConversationsViewModel(noeud)
+        vm.ouvrir("c1")
+
+        vm.renvoyer("m-cours")
+        vm.renvoyer("inconnu")
+
+        assertTrue(noeud.envois.isEmpty())
+    }
+
+    @Test
+    fun `un renvoi refuse par le noeud affiche l erreur`() {
+        val noeud = object : NoeudAvecEchec() {
+            override fun sendMessage(destPeerId: String, body: String): String =
+                throw DengonException.UnknownPeer("pair inconnu")
+        }
+        val vm = ConversationsViewModel(noeud)
+        vm.ouvrir("c1")
+
+        vm.renvoyer("m-echec")
+
+        assertTrue(vm.etat.value.erreur!!.startsWith("Renvoi impossible"))
     }
 
     @Test

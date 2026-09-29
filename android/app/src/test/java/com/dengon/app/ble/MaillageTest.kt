@@ -52,7 +52,9 @@ class MaillageTest {
     private val maillage = Maillage(
         transport,
         noeud,
-        lireAnnonce = { octets -> String(octets).removePrefix("ANNOUNCE ").takeIf { String(octets).startsWith("ANNOUNCE ") } },
+        lireAnnonce = { octets ->
+            String(octets).takeIf { it.startsWith("ANNOUNCE ") }?.let { AnnonceLue(it.removePrefix("ANNOUNCE "), null) }
+        },
         journal = { journal += it },
     )
 
@@ -84,6 +86,27 @@ class MaillageTest {
         radio.faireRecevoir(pair, "paquet".toByteArray())
         tour()
         assertEquals(listOf("bob" to "paquet"), noeud.recus)
+    }
+
+    @Test
+    fun `le pseudo de l ANNOUNCE est retenu tant que le lien vit`() {
+        val radio = FauxRadio()
+        val transport = AndroidTransport(radio)
+        transport.start(TransportConfig(localPeerId = ByteArray(8)))
+        val avecPseudo = Maillage(
+            transport,
+            noeud,
+            lireAnnonce = { AnnonceLue("bob", "relay-3f2a9c") },
+        )
+        val pair = radio.nouveauPair()
+        radio.connecter(pair)
+        radio.faireRecevoir(pair, "ANNOUNCE bob".toByteArray())
+        avecPseudo.traiter(transport.poll())
+        assertEquals(mapOf("bob" to "relay-3f2a9c"), avecPseudo.pseudos)
+
+        radio.couper(pair, DisconnectReason.BRUTALE)
+        avecPseudo.traiter(transport.poll())
+        assertTrue(avecPseudo.pseudos.isEmpty())
     }
 
     @Test

@@ -20,6 +20,13 @@ data class ConversationsUiState(
     val messages: List<Message> = emptyList(),
     /** Texte en cours de saisie dans le fil. */
     val brouillon: String = "",
+    /**
+     * Messages en échec déjà renvoyés pendant cette session : le bouton
+     * « Renvoyer » ne leur est plus proposé (sinon chaque tap réémettrait un
+     * doublon, l'original restant « Échec » pour toujours). Non persisté : après
+     * un redémarrage de l'app, le bouton réapparaît.
+     */
+    val renvoyes: Set<String> = emptySet(),
     /** Dernière erreur à afficher (envoi refusé…), `null` si aucune. */
     val erreur: String? = null,
 ) {
@@ -122,6 +129,31 @@ class ConversationsViewModel(
         }
         apresEnvoi()
         _etat.update { it.copy(brouillon = "", erreur = null) }
+        rafraichir()
+    }
+
+    /**
+     * Renvoie un message **en échec** (US-313) : le cœur n'a pas de « retry »
+     * (un message `EXPIRED` est terminal), on réémet donc le même texte comme
+     * un **nouveau** message au même pair. L'ancien reste « Échec » dans le
+     * fil, trace de ce qui n'est pas parti.
+     *
+     * Sans effet si le message est inconnu, pas en échec, ou **déjà renvoyé** :
+     * un seul renvoi par message en échec.
+     */
+    fun renvoyer(msgUuid: String) {
+        val e = _etat.value
+        val conversation = e.conversationOuverte ?: return
+        val message = e.messages.firstOrNull { it.msgUuid == msgUuid && it.enEchec } ?: return
+        if (msgUuid in e.renvoyes) return
+        try {
+            noeud.sendMessage(conversation.peerId, message.body)
+        } catch (err: DengonException) {
+            _etat.update { it.copy(erreur = "Renvoi impossible : ${err.message ?: err::class.simpleName}") }
+            return
+        }
+        apresEnvoi()
+        _etat.update { it.copy(erreur = null, renvoyes = it.renvoyes + msgUuid) }
         rafraichir()
     }
 
