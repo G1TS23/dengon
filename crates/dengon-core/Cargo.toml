@@ -22,8 +22,11 @@ publish.workspace      = true
 # `rusqlite` et ajoute `getrandom` à `chacha20poly1305` (pour `aead::OsRng`).
 # `chacha20poly1305` lui-même n'est plus optionnel : le coffre d'`identity`
 # (US-205) s'en sert aussi en no_std, avec la RNG de l'appelant.
+# `rand_core/getrandom` (US-312) : `api` scelle l'accusé de réception d'un
+# message reçu par enveloppe sur le chemin de réception, où l'appelant ne
+# fournit pas de RNG ; il tire donc `OsRng`, comme `store` pour ses nonces.
 default = ["std"]
-std     = ["dep:rusqlite", "chacha20poly1305/getrandom"]
+std     = ["dep:rusqlite", "chacha20poly1305/getrandom", "rand_core/getrandom"]
 
 [dependencies]
 sha2 = { workspace = true }
