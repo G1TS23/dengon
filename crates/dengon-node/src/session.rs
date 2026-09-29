@@ -131,6 +131,8 @@ impl<T: Transport> Session<T> {
         for (_, octets) in self.node.take_outgoing() {
             if self.en_attente.len() < ATTENTE_MAX {
                 self.en_attente.push(octets);
+            } else {
+                eprintln!("dengon-node : file d'attente pleine, trame abandonnée");
             }
         }
         let Some(lien) = self.lien else { return };

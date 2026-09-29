@@ -589,6 +589,26 @@ laissé ouvert par la PR #87 (`Refs #28`, aucun appareil sur le poste).
 
 ### Écarts vs conception
 - Clé du coffre perdue → identité réinitialisée : reporté dans
+## 2026-09-29 — US-303 : correctifs de la revue de la PR #116
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `crates/dengon-node/src/session.rs`, `crates/dengon-ble/src/btleplug_radio.rs`.
+
+### Fait
+- `Session::vider_sortie` : une trame au-delà de `ATTENTE_MAX` (64) est toujours abandonnée, mais **loguée** (`eprintln!`), comme le chemin d'échec d'envoi.
+- `btleplug_radio::vivre` : connexion, découverte GATT, `notifications()` et `subscribe()` sont sous un `tokio::time::timeout` de 20 s (`DELAI_ETABLISSEMENT`). À l'expiration : message, `None` → `tache_lien` déconnecte et libère l'identifiant, le périphérique sera retenté.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all
+$ cargo clippy -p dengon-node -p dengon-ble --all-targets -- -D warnings   # OK, avec et sans --features btleplug
+$ cargo test -p dengon-ble -p dengon-node                                    # tout vert
+```
+- **Non vérifié :** le timeout n'a pas de test (il faudrait une vraie radio bloquante) ; toujours pas d'essai BLE réel après correctif. La file pleine reste une perte (pas de rétro-pression) : consignée comme limite du banc de test.
+
+---
+
+
 ## 2026-09-29 — US-303 : essai réel du transport `btleplug` contre un téléphone
 
 **Auteur :** Oswin Freyr + Claude (Sonnet 5.5)

@@ -59,6 +59,9 @@ const VALEUR_MAX: usize = 512;
 
 /// Délai d'attente du démarrage de l'adaptateur.
 const DELAI_DEMARRAGE: Duration = Duration::from_secs(10);
+/// Délai maximal de l'établissement d'un lien (connexion, découverte GATT,
+/// abonnement). Au-delà, on abandonne pour que le périphérique soit retenté.
+const DELAI_ETABLISSEMENT: Duration = Duration::from_secs(20);
 
 /// Ordres du côté synchrone vers la tâche d'une connexion.
 #[derive(Debug)]
@@ -334,15 +337,23 @@ async fn vivre(
     evt: &Sender<RadioEvent>,
     ordres: &mut UnboundedReceiver<OrdreLien>,
 ) -> Option<DisconnectReason> {
-    if pair.connect().await.is_err() || pair.discover_services().await.is_err() {
+    let etabli = tokio::time::timeout(DELAI_ETABLISSEMENT, async {
+        pair.connect().await.ok()?;
+        pair.discover_services().await.ok()?;
+        let caracs = pair.characteristics();
+        let rx: Characteristic = caracs.iter().find(|c| c.uuid == CHAR_RX)?.clone();
+        let tx: Characteristic = caracs.iter().find(|c| c.uuid == CHAR_TX)?.clone();
+        let notifications = pair.notifications().await.ok()?;
+        pair.subscribe(&tx).await.ok()?;
+        Some((rx, notifications))
+    })
+    .await;
+    let Ok(Some((rx, mut notifications))) = etabli else {
+        if etabli.is_err() {
+            eprintln!("dengon-ble : établissement du lien expiré, pair abandonné");
+        }
         return None;
-    }
-    let caracs = pair.characteristics();
-    let rx: Characteristic = caracs.iter().find(|c| c.uuid == CHAR_RX)?.clone();
-    let tx: Characteristic = caracs.iter().find(|c| c.uuid == CHAR_TX)?.clone();
-    let mut notifications = pair.notifications().await.ok()?;
-    pair.subscribe(&tx).await.ok()?;
-
+    };
     let rssi = pair.properties().await.ok().flatten().and_then(|p| p.rssi);
     let _ = evt.send(RadioEvent::Connected { handle, rssi });
 
