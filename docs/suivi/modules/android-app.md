@@ -714,8 +714,11 @@ redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
 - Écrans refaits : accueil (`MainActivity`), conversations/fil, « Appareils à
   proximité » (ex-Réseau), appairage en 3 étapes. Signatures : `ReseauScreen` prend
   `bluetoothActif`, `MessagerieRoute` prend `onAjouterContact`.
-- Tests : `LibelleStatutTest` ; 110 tests JVM verts. Rendu **non vérifié sur
-  appareil** (voir journal).
+- `MessagerieRoute` relit le nœud à l'ouverture (`rafraichir()`) : sans cela, un
+  contact appairé après la création du ViewModel n'avait pas sa conversation.
+- Tests : `LibelleStatutTest` ; 110 tests JVM verts. Essayé sur Samsung A16 +
+  OnePlus 7 Pro : appairage, messages dans les deux sens, clair/sombre, police 200 %
+  (voir journal). Clavier : le fil défile hors écran (pas d'`adjustResize`), non corrigé.
 
 ## Pour l'oral
 

@@ -207,6 +207,41 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
   - la mesure du tas du relais pendant un réassemblage.
 
 ---
+## 2026-09-29 — US-321 : essai à deux téléphones, correctif « conversation absente après appairage »
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `ConversationsScreen.kt` (`MessagerieRoute`), captures `docs/suivi/assets/us-321/`
+**Lot :** Lot 3 — app Android
+
+### Fait
+- Branche rebasée sur `main` après la fusion de la PR #122 (`git rebase --onto origin/main 8e3a183`), PR #126 repointée sur `main`. Build + 110 tests JVM inchangés (verts).
+- **Essai réel** Samsung A16 (Android 16, clair) + OnePlus 7 Pro (Android 12, sombre) : appairage
+  par caméra dans les deux sens, code de 60 chiffres, message Samsung → OnePlus puis réponse
+  OnePlus → Samsung. Les deux messages passent à « Distribué » ; fil, aperçu de liste et badge
+  « non lu » vus sur appareil.
+- **Bug trouvé, corrigé** : un contact appairé *après* la création du ViewModel n'apparaissait pas
+  dans « Conversations » (« Aucune conversation ») : `sonder()` ne relit le nœud que si `pollEvents`
+  rend un événement, et `add_contact` n'en émet aucun. Correctif côté écran : `MessagerieRoute`
+  appelle `viewModel.rafraichir()` à l'ouverture. Vérifié sur les deux téléphones après le correctif.
+  Aucune logique de ViewModel modifiée.
+- Le OnePlus portait une build signée avec une autre clé de debug : désinstallée (données
+  dengon de ce téléphone effacées, avec l'accord d'Oswin) avant d'installer.
+
+### Constaté, pas corrigé
+- **Clavier** : sur le Samsung, à l'ouverture du clavier le fil défile hors écran (l'en-tête et les
+  messages disparaissent au-dessus du champ) : le `windowSoftInputMode` n'est pas défini (pan par
+  défaut). `adjustResize` dans le manifeste devrait corriger ; non essayé (réinstaller efface les
+  contacts, qui ne sont qu'en mémoire).
+- Le badge « non lu » reste à 1 sur le Samsung alors que la réponse a été lue dans le fil.
+- Contacts perdus à chaque réinstallation / arrêt de l'app (limite déjà consignée).
+- Toujours jamais vus sur appareil : statut « Échec » + « Renvoyer » (TTL de 24 h), « Bluetooth
+  coupé », permission refusée sur appareil. Accessibility Scanner non lancé.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### État après cette session
+- Fiche module : `modules/android-app.md` (section US-321) à jour ; `01-etat-du-code.md` : non.
 
 ## 2026-09-29 — US-309 : retours de revue de la PR #120 (Oswin), mesures sur carte
 
