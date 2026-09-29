@@ -52,7 +52,9 @@ class MaillageTest {
     private val maillage = Maillage(
         transport,
         noeud,
-        lireAnnonce = { octets -> String(octets).removePrefix("ANNOUNCE ").takeIf { String(octets).startsWith("ANNOUNCE ") } },
+        lireAnnonce = { octets ->
+            String(octets).takeIf { it.startsWith("ANNOUNCE ") }?.let { AnnonceLue(it.removePrefix("ANNOUNCE "), null) }
+        },
         journal = { journal += it },
     )
 
@@ -94,8 +96,7 @@ class MaillageTest {
         val avecPseudo = Maillage(
             transport,
             noeud,
-            lireAnnonce = { "bob" },
-            lirePseudo = { "relay-3f2a9c" },
+            lireAnnonce = { AnnonceLue("bob", "relay-3f2a9c") },
         )
         val pair = radio.nouveauPair()
         radio.connecter(pair)

@@ -175,6 +175,40 @@ class ConversationsViewModelTest {
     }
 
     @Test
+    fun `un message en echec ne se renvoie qu une fois`() {
+        val noeud = NoeudAvecEchec()
+        val vm = ConversationsViewModel(noeud)
+        vm.ouvrir("c1")
+
+        vm.renvoyer("m-echec")
+        vm.renvoyer("m-echec")
+        vm.renvoyer("m-echec")
+
+        assertEquals("pas de doublons", 1, noeud.envois.size)
+        assertEquals(setOf("m-echec"), vm.etat.value.renvoyes)
+    }
+
+    @Test
+    fun `un renvoi refuse peut etre retente`() {
+        var refuser = true
+        val noeud = object : NoeudAvecEchec() {
+            override fun sendMessage(destPeerId: String, body: String): String {
+                if (refuser) throw DengonException.UnknownPeer("hors de portée")
+                return super.sendMessage(destPeerId, body)
+            }
+        }
+        val vm = ConversationsViewModel(noeud)
+        vm.ouvrir("c1")
+
+        vm.renvoyer("m-echec")
+        assertTrue("un refus ne compte pas comme renvoyé", vm.etat.value.renvoyes.isEmpty())
+
+        refuser = false
+        vm.renvoyer("m-echec")
+        assertEquals(1, noeud.envois.size)
+    }
+
+    @Test
     fun `renvoyer ignore un message qui n est pas en echec ou inconnu`() {
         val noeud = NoeudAvecEchec()
         val vm = ConversationsViewModel(noeud)

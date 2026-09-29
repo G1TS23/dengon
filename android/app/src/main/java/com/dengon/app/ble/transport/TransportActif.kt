@@ -5,7 +5,6 @@ import android.util.Log
 import com.dengon.app.DengonApplication
 import com.dengon.app.ble.Maillage
 import com.dengon.app.ble.PeerIdOctets
-import com.dengon.app.ble.pseudoDeLAnnonce
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -83,7 +82,7 @@ object TransportActif {
         }
         transport = t
         radio = r
-        maillage = Maillage(t, noeud, lirePseudo = ::pseudoDeLAnnonce, journal = ::journaliser)
+        maillage = Maillage(t, noeud, journal = ::journaliser)
         etatMutable.update { it.copy(demarre = true, peerIdLocal = peerIdTexte, erreur = null) }
         journaliser("démarré, peerID $peerIdTexte (préfixe annoncé ${hex(peerId.copyOfRange(0, 4))})")
         boucle = Executors.newSingleThreadScheduledExecutor().also { exec ->
@@ -115,8 +114,11 @@ object TransportActif {
 
     /** Active / désactive le mode éco (US-313). Retenu même service arrêté. */
     fun definirModeEco(eco: Boolean) {
+        // L'interrupteur n'affiche que ce qui est réellement en place.
+        if (radio?.definirModeEco(eco) == false) {
+            return journaliser("changement de mode de scan impossible, mode inchangé")
+        }
         etatMutable.update { it.copy(modeEco = eco) }
-        radio?.definirModeEco(eco)
         journaliser(if (eco) "mode éco : scan à cycle réduit" else "mode normal : scan à faible latence")
     }
 

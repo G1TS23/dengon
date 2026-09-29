@@ -38,10 +38,8 @@ import com.dengon.app.ffi.identityFromAnnounce
 class Maillage(
     private val transport: Transport,
     private val noeud: DengonNodeInterface,
-    /** `peerID` de l'émetteur si `trame` est un `ANNOUNCE` valide, `null` sinon. */
-    private val lireAnnonce: (ByteArray) -> String? = ::peerIdDeLAnnonce,
-    /** Pseudo de l'émetteur si `trame` est un `ANNOUNCE` valide (écran réseau, US-313). */
-    private val lirePseudo: (ByteArray) -> String? = { null },
+    /** Lecture de l'`ANNOUNCE` : `null` si `trame` n'en est pas un valide. */
+    private val lireAnnonce: (ByteArray) -> AnnonceLue? = ::annonceLue,
     private val journal: (String) -> Unit = {},
 ) {
     private val pairParLien = HashMap<LinkId, String>()
@@ -98,11 +96,12 @@ class Maillage(
             appelerNoeud("octets de $pair") { noeud.onBytesReceived(pair, octets) }
             return
         }
-        val annonce = lireAnnonce(octets)
-        if (annonce == null) {
+        val lue = lireAnnonce(octets)
+        if (lue == null) {
             journal("$lien : trame ignorée, ANNOUNCE attendu")
             return
         }
+        val annonce = lue.peerId
         if (annonce in lienParPair) {
             // Deux liens vers le même pair (course des deux rôles GATT) : le
             // premier reste le seul, le cœur n'en gère qu'un par pair.
@@ -111,7 +110,7 @@ class Maillage(
         }
         pairParLien[lien] = annonce
         lienParPair[annonce] = lien
-        lirePseudo(octets)?.let { pseudoParPair[annonce] = it }
+        lue.pseudo?.let { pseudoParPair[annonce] = it }
         journal("$lien ↔ $annonce")
         appelerNoeud("connexion de $annonce") { noeud.onPeerConnected(annonce) }
     }
@@ -141,18 +140,19 @@ class Maillage(
     }
 }
 
-/** Lecture d'`ANNOUNCE` par le vrai FFI (vérifie signature et `peerID`). */
-fun peerIdDeLAnnonce(trame: ByteArray): String? =
+/** Ce qu'un `ANNOUNCE` valide apprend sur son émetteur. */
+data class AnnonceLue(val peerId: String, val pseudo: String?)
+
+/**
+ * Lecture d'`ANNOUNCE` par le vrai FFI (vérifie signature et `peerID`), en un
+ * seul appel : `peerID` et pseudo viennent de la même vérification.
+ */
+fun annonceLue(trame: ByteArray): AnnonceLue? =
     try {
-        identityFromAnnounce(trame).peerId
+        identityFromAnnounce(trame).let { AnnonceLue(it.peerId, it.pseudo) }
     } catch (e: DengonException) {
         null
     }
 
-/** Pseudo annoncé par un `ANNOUNCE` valide, `null` sinon. */
-fun pseudoDeLAnnonce(trame: ByteArray): String? =
-    try {
-        identityFromAnnounce(trame).pseudo
-    } catch (e: DengonException) {
-        null
-    }
+/** `peerID` de l'émetteur si `trame` est un `ANNOUNCE` valide, `null` sinon. */
+fun peerIdDeLAnnonce(trame: ByteArray): String? = annonceLue(trame)?.peerId

@@ -152,6 +152,49 @@ déjà non formatés avant ce changement (non traité).
   `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
   référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
+## 2026-09-29 — US-313 : corrections après la revue de la PR #122
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `GattRadio.kt`, `TransportActif.kt`, `Maillage.kt`, `ConversationsViewModel.kt`,
+`ConversationsScreen.kt` + tests
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Mode éco** (`GattRadio.definirModeEco`) : ne garde le nouveau mode que si
+  le scan a pu être relancé. Sinon `modeEco` revient à l'ancienne valeur, l'ancien
+  scan est rétabli au mieux et la fonction rend `false` ; `TransportActif`
+  ne bascule alors pas l'interrupteur et journalise. Avant, un échec après
+  `stopScan` laissait la découverte morte avec l'interrupteur sur le nouvel état.
+- **« Renvoyer »** : `ConversationsUiState.renvoyes` retient les messages déjà
+  renvoyés ; un seul renvoi par message en échec, le bouton devient « Renvoyé ».
+  Un renvoi refusé par le nœud ne compte pas (on peut réessayer).
+- **`Maillage`** : `lireAnnonce` rend `AnnonceLue(peerId, pseudo)` en un seul
+  appel FFI ; plus de double vérification de signature par lien
+  (`lirePseudo` et `pseudoDeLAnnonce` supprimés).
+
+### Pourquoi / décisions
+- `renvoyes` vit en mémoire (ViewModel) : après un redémarrage de l'app le bouton
+  réapparaît. Le persister demanderait un état côté cœur.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- Un état d'interrupteur doit refléter ce que la radio a réellement fait,
+  pas ce qui a été demandé.
+
+### État après cette session
+- Le chemin d'échec du mode éco n'est pas testable en JVM (API Android BLE) ;
+  seul le chemin nominal a été essayé sur appareil.
+
+### Vérification (commandes réellement exécutées)
+```
+$ ./gradlew.bat assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 0 échec (3 tests de plus : un seul renvoi, renvoi refusé retentable, lecture d'ANNOUNCE unique)
+```
+
+---
+
 ## 2026-09-29 — US-313 : essai avec le relais ESP32, incompatibilité de trame trouvée
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)

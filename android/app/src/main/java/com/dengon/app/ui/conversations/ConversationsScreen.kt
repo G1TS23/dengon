@@ -168,7 +168,9 @@ fun FilConversation(
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(etat.messages, key = { it.msgUuid }) { message -> BulleMessage(message, onRenvoyer) }
+            items(etat.messages, key = { it.msgUuid }) { message ->
+                BulleMessage(message, dejaRenvoye = message.msgUuid in etat.renvoyes, onRenvoyer = onRenvoyer)
+            }
         }
         etat.erreur?.let { erreur ->
             Text(
@@ -194,7 +196,7 @@ fun FilConversation(
 }
 
 @Composable
-private fun BulleMessage(message: Message, onRenvoyer: (String) -> Unit) {
+private fun BulleMessage(message: Message, dejaRenvoye: Boolean, onRenvoyer: (String) -> Unit) {
     Box(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = if (message.outgoing) Alignment.CenterEnd else Alignment.CenterStart,
@@ -218,7 +220,9 @@ private fun BulleMessage(message: Message, onRenvoyer: (String) -> Unit) {
                         modifier = Modifier.align(Alignment.End),
                     )
                 }
-                if (message.enEchec) {
+                if (message.enEchec && dejaRenvoye) {
+                    Text("Renvoyé", style = MaterialTheme.typography.labelSmall, modifier = Modifier.align(Alignment.End))
+                } else if (message.enEchec) {
                     TextButton(onClick = { onRenvoyer(message.msgUuid) }, modifier = Modifier.align(Alignment.End)) {
                         Text("Renvoyer")
                     }
