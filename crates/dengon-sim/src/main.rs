@@ -1,6 +1,7 @@
 //! Point d'entrée du simulateur.
 //!
 //! `dengon-sim [--graine N] crates/dengon-sim/scenarios/*.ron`
+//! `dengon-sim --demo` — les 5 scénarios réels du DoD (US-304), narrés.
 //! — toute la logique est dans [`dengon_sim::cli`], testée.
 
 use std::process::ExitCode;

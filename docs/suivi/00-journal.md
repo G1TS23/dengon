@@ -10,6 +10,236 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-304 : mode `--demo`, narration des 5 scénarios réels pour l'oral
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-sim/src/{lib.rs,demo.rs,cli.rs,main.rs}`,
+`docs/suivi/`.
+**Lot :** US-304 (issue #42), complément demandé par l'utilisateur après
+avoir demandé « pratiquement, il y a un truc à faire pour la démo ? ».
+
+### Fait
+- `dengon-sim --demo` (nouveau, `src/demo.rs`) : rejoue les 5 scénarios
+  réels (mêmes graines, mêmes assertions que `tests/scenarios_reel.rs`/
+  `tests/scenarios_relais.rs` — ces deux fichiers restent la source de
+  vérité pour la correction) avec une narration ligne par ligne (« alice
+  envoie… », « ✓ bob a reçu… »), au lieu du silence habituel de
+  `cargo test`.
+- `--demo` refuse d'être combiné avec des fichiers `.ron` (deux modes
+  distincts).
+- `docs/suivi/modules/dengon-sim.md` : commande exacte pour l'oral ajoutée
+  en tête de « Pour l'oral ».
+
+### Pourquoi / décisions
+- **Constat qui a motivé cette session** : `dengon-sim` ne sait lire que
+  des fichiers `.ron` — les 5 scénarios réels (tests Rust) n'avaient
+  **aucun** affichage narratif, contrairement aux 4 scénarios `.ron`
+  existants (`✓ nom graine=… empreinte=…`). Sans ce complément, la
+  « sécurité de la soutenance si le matériel lâche » (mission déclarée de
+  l'issue #42) se serait résumée à un `cargo test` vert, pas montrable
+  tel quel devant un jury.
+- **Pas de duplication de la logique de correction** : `demo.rs` reconstruit
+  les mêmes simulations avec les mêmes graines que les tests, il n'invente
+  rien — si les tests passent, la démo passe avec le même résultat.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- `cargo run -p dengon-sim -- --demo` est la commande à lancer devant le
+  jury, vérifiée déterministe sur 3 exécutions indépendantes en dehors de
+  `cargo test` (`diff` identique, code de sortie 0).
+- Fiche module mise à jour : `modules/dengon-sim.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo run -p dengon-sim -- --demo
+(narration complète des 5 scénarios, tous ✓, exit 0)
+
+$ ./target/debug/dengon-sim --demo > run1.txt   (×3)
+diff run1.txt run2.txt && diff run2.txt run3.txt
+IDENTIQUE sur 3 runs
+
+$ cargo test --workspace
+572 passed, 2 ignored (36 suites)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo fmt --all -- --check
+(rien)
+
+$ cargo llvm-cov -p dengon-sim --summary-only
+TOTAL 96.59 % régions / 96.94 % lignes ; demo.rs 99.52 % lignes
+```
+
+---
+
+## 2026-09-29 — US-304 (2/2) : `NoeudRelais`, le vrai `relay::Relay` — les 5 scénarios sont livrés
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-sim/{src/{lib.rs,noeud_relais.rs},tests/scenarios_relais.rs}`,
+`docs/suivi/`.
+**Lot :** US-304 (issue #42), 2ᵉ moitié — complète la 1ʳᵉ (`NoeudClient`,
+entrée précédente du même jour).
+
+### Fait
+- `NoeudRelais` (`src/noeud_relais.rs`) : `dengon-core::relay::Relay<LinkId>`
+  câblé en `Comportement`. Plus simple que `NoeudClient` : `Relay` gère
+  lui-même la découverte de pair et le cache d'inventaire en interne
+  (`link_up`/`on_frame`, génériques sur `L`) — pas d'ANNOUNCE à
+  réimplémenter côté simulateur.
+- 2 scénarios réels (`tests/scenarios_relais.rs`) : `multihop` (chaîne à 3
+  relais, un paquet injecté au premier maillon est **relayé** par le
+  second, **reçu** par le troisième, qui ne le relaie pas plus loin faute
+  de cible), `partition_merge` (chaîne à 4 relais partitionnée en deux,
+  confinement vérifié, traversée complète vérifiée après réunion).
+- Observabilité via `ctx.livrer` détourné (`MARQUEUR_CACHE`/
+  `MARQUEUR_RELAYE`), puisque `Simulation` ne rend aucun accès à un
+  `Comportement` une fois ajouté.
+- `paquet_diffuse` : construit un paquet signé (`SealedEnvelope`,
+  `RELAY_OK`) à injecter — un tiers non modélisé qui vient de le déposer.
+
+### Pourquoi / décisions
+- **Continué dans la foulée plutôt que de s'arrêter** (l'entrée précédente
+  du jour anticipait une session séparée, par prudence avant exploration) :
+  une fois `Relay` exploré, le câblage s'est avéré plus simple que prévu.
+- **Deux pièges rencontrés et corrigés avant de finaliser, pas après coup**
+  (détail complet dans `modules/dengon-sim.md`) :
+  1. `Relay` refuse toute décision de routage sous `WALL_CLOCK_MIN_MS`
+     (2024-01-01) — l'horloge virtuelle du simulateur part de zéro.
+     Compensé en décalant l'horloge murale transmise, pas la monotone.
+  2. Le premier essai injectait un `LogAttest` : bien relayé
+     (`MARQUEUR_RELAYE` sortait), mais jamais mis en cache
+     (`MARQUEUR_CACHE` absent) — `sync::inventory::cacheable` ne retient
+     que `SealedEnvelope`/`NoiseMsg`/`Ack`. Corrigé en passant à
+     `SealedEnvelope`.
+- **`multihop`/`partition_merge` restent relais-à-relais**, pas un
+  téléphone traversant un relais (discuté et confirmé avec l'utilisateur
+  avant de commencer cette moitié) : `api::Node` ne pose jamais
+  `Flags::RELAY_OK` (écart déjà documenté côté `api.rs`) — y toucher
+  aurait été un changement de `dengon-core`, hors périmètre choisi.
+
+### Écarts vs conception
+- Consigné : aucun scénario ne mélange `NoeudClient`/`NoeudRelais` (voir
+  ci-dessus, entrée `03-ecarts-conception.md` du jour, complétée).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md` (les deux pièges ci-dessus sont
+  déjà détaillés dans la fiche module, suffisant).
+
+### État après cette session
+- **Les 5 scénarios du DoD de l'issue #42 sont réels, vérifiés, stables**
+  (rejoués 3× de suite). Reste à faire avant de fermer l'issue : merger
+  cette PR et la 1ʳᵉ moitié (#130).
+- Fiche module mise à jour : `modules/dengon-sim.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-sim --test scenarios_relais
+2 passed (×3, pour la stabilité)
+
+$ cargo test --workspace
+570 passed, 2 ignored (36 suites)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo fmt --all -- --check
+(rien)
+
+$ cargo llvm-cov -p dengon-sim --summary-only
+TOTAL 96.41 % régions / 96.52 % lignes ; noeud_relais.rs 97.46 % lignes
+```
+
+---
+
+## 2026-09-29 — US-304 (1/2) : `NoeudClient`, le vrai `dengon-core::api::Node` dans `dengon-sim`
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-sim/{Cargo.toml,src/{lib.rs,noeud_client.rs},tests/scenarios_reel.rs}`,
+`docs/suivi/`.
+**Lot :** US-304 (issue #42), 1ʳᵉ moitié — voir découpage ci-dessous.
+
+### Fait
+- `NoeudClient` (`src/noeud_client.rs`) : `dengon-core::api::Node` câblé en
+  `Comportement` du harness. Découverte de pair par `ANNOUNCE`
+  (`Node::announce_packet`, déjà livré par US-306, `api::parse_announce`
+  pour le vérifier) — le harness ne donne aucune correspondance
+  `LinkId`↔`PeerId` d'avance, exactement la limite du vrai Bluetooth.
+- Convention `charge_adressee` (8 octets `PeerId` ‖ texte UTF-8) pour
+  adresser un envoi : `Comportement::emettre` reste une charge opaque, le
+  format `.ron` existant n'est pas touché.
+- 3 scénarios réels (`tests/scenarios_reel.rs`), écrits en Rust (pas RON) :
+  `direct` (remise immédiate, lien déjà ouvert), `recipient_offline`
+  (destinataire jamais connecté à l'envoi → rien n'arrive → remise
+  automatique dès la connexion), `sender_offline` (émetteur déconnecté
+  puis reconnecté → chemin enveloppe → remise à la reconnexion).
+- RNG déterministe (`ChaCha20Rng` à graine fixe, jamais `OsRng`) pour les
+  poignées de main Noise et UUID de message — 3 graines distinctes par
+  nœud (identité/routage/RNG), pour qu'une seule ne fasse pas dériver les
+  deux autres.
+- `docs/suivi/modules/dengon-sim.md` et `03-ecarts-conception.md` mis à
+  jour.
+
+### Pourquoi / décisions
+- **Aucun changement côté `dengon-core`** : `Node::announce_packet` et
+  `api::parse_announce` existaient déjà (US-306) — vérifié avant d'écrire
+  quoi que ce soit, pour ne pas réinventer un mécanisme déjà livré.
+- **Découpage en deux sessions** (discuté et validé avec l'utilisateur
+  avant de commencer) : `multihop`/`partition_merge` ont besoin d'un nœud
+  **relais** (`relay::Relay`), pas `api::Node` (qui n'appelle jamais
+  `Router::poll_due` — ce n'est pas son rôle). Écrire les deux
+  `Comportement` dans la même session aurait doublé la taille du
+  changement sans bénéfice pour les 3 premiers scénarios.
+- **Contacts pré-partagés** (`add_contact`) à la construction du scénario,
+  pas découverts par le réseau : reproduit la vraie contrainte de `api.rs`
+  (un correspondant inconnu ne peut pas recevoir de message chiffré) —
+  pas une simplification du simulateur, le comportement réel.
+
+### Écarts vs conception
+- Consigné : `multihop`/`partition_merge` restent sur `Inondation`
+  jusqu'au `Comportement` relais (entrée détaillée dans
+  `03-ecarts-conception.md`).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- 3 des 5 scénarios de l'issue #42 sont réels, vérifiés, stables (rejoués
+  3× de suite). Issue **non fermée** : reste `multihop`/`partition_merge`,
+  qui attendent le `Comportement` relais dans une session séparée.
+- Fiche module mise à jour : `modules/dengon-sim.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-sim
+34 passed (6 suites)
+
+$ cargo test -p dengon-sim --test scenarios_reel   (×3, pour la stabilité)
+3 passed à chaque fois
+
+$ cargo test --workspace
+564 passed, 2 ignored (35 suites)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo fmt --all -- --check
+(rien)
+
+$ cargo llvm-cov -p dengon-sim --summary-only
+TOTAL 96.25 % régions / 96.43 % lignes ; noeud_client.rs 92.73 % lignes
+```
+
+---
+
 ## 2026-09-29 — US-312 : essai sur carte et 2 téléphones, bugs trouvés, retours de revue (PR #129)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
