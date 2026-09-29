@@ -2425,3 +2425,23 @@ _(aucun écart pour l'instant)_
   coffre et de clé des champs sensibles du `store`. Pas de trousseau desktop
   dans le périmètre ; nœud de test uniquement.
 
+### 2026-09-29 — Couverture `dengon-core` déjà mesurée en CI, contrairement à ce que disait PR #89 (US-319)
+
+- **Prévu :** PR #89 (US-208) et l'issue #22 affirmaient que la couverture
+  n'avait « jamais été mesurée avec un outil dédié (`cargo llvm-cov` pas
+  encore posé ce sprint) ».
+- **Réel :** `cargo-llvm-cov` est installé et exécuté dans le job CI `core`
+  depuis `PR #57` (US-104), bien avant US-208 — chaque run publie un
+  résumé (`$GITHUB_STEP_SUMMARY`) et un artefact `lcov.info`. Mesure locale
+  (US-319) : `dengon-core` à 96.29 % régions / 97.46 % lignes, largement
+  au-dessus des 85 % visés.
+- **Raison :** l'auteur de PR #89 n'a probablement pas relu le job CI
+  existant, ou l'a confondu avec l'absence d'un **seuil bloquant** (qui,
+  lui, n'existe effectivement pas — voir le commentaire dans
+  `.github/workflows/core.yml`, « Pas de seuil bloquant pour l'instant »).
+- **Conséquences :** le critère « couverture ≥ 85 % » de #22 est
+  maintenant vérifiable par un chiffre réel, pas une estimation. Reste
+  ouvert (décision d'équipe, pas traité ici) : ajouter
+  `--fail-under-lines 85` scopé à `dengon-core` dans le workflow `core`
+  pour le rendre bloquant.
+- **Doc de conception mise à jour ?** sans objet.

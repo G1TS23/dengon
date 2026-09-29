@@ -982,12 +982,60 @@ $ cargo test --workspace --all-features --locked        474 passed, 2 ignored
 
 ### Écarts vs conception
 - Aucun nouveau.
+## 2026-09-29 — US-319 : `peer.connected` → `observability` + vraie mesure de couverture
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/api.rs`, `docs/suivi/`.
+**Lot :** US-319 (issue #117), suite de US-318 (#113, PR #114) : sur les 4
+constructeurs représentatifs de `observability`, `peer.connected` restait
+le seul sans site d'appel après #114 (`pkt.relayed` restant hors
+périmètre `core-rust`, voir écart US-318).
+
+### Fait
+- `Node::record_peer_connected(peer_id, rssi, role, wall_ms)` : nouvelle
+  méthode, émet `peer.connected` via `record_observability`.
+- 1 test ajouté (`record_peer_connected_emet_peer_connected`).
+- Mesure réelle de couverture `dengon-core` avec `cargo llvm-cov -p
+  dengon-core --summary-only` : **96.29 % régions / 97.46 % lignes** —
+  bien au-dessus du seuil de 85 % visé par US-208.
+
+### Pourquoi / décisions
+- **`record_peer_connected` en méthode séparée, pas un paramètre ajouté à
+  `on_peer_connected`** : `on_peer_connected(peer_id, now, rng)` orchestre
+  le handshake `XX` et est déjà appelé avec cette signature par la PR #109
+  (US-302, vrai FFI UniFFI, ouverte par Paul, en cours). Changer sa
+  signature aurait cassé cette PR en vol le jour de la soutenance. RSSI et
+  rôle radio sont des données que seul le transport possède (pas cette
+  façade, par conception) — une méthode additive, appelée séparément par
+  qui a l'information, est cohérente avec le style déjà en place
+  (`on_bytes_received`/`take_outgoing`, extensions Rust hors `.udl` v0).
+- **Pas de nouvel outillage de couverture à poser** : `cargo-llvm-cov` est
+  déjà dans le job CI `core` depuis US-104 (PR #57, bien avant US-208) —
+  mesuré à chaque run, publié en résumé de job + artefact `lcov.info`, mais
+  sans seuil bloquant. La prémisse de #22/#319 (« jamais mesuré avec un
+  outil dédié ») était donc fausse : le chiffre existait déjà, personne ne
+  l'avait relevé. Je ne touche pas au workflow (ajouter un seuil bloquant
+  scopé à `dengon-core` est une décision d'équipe, pas un simple constat).
+- Petit correctif au passage : un caractère invisible (`\xad`, soft
+  hyphen) s'était glissé dans un commentaire de `api.rs` lors de la session
+  US-318 précédente (`bat\xadche` au lieu de `batche`) — corrigé.
+
+### Écarts vs conception
+- Aucun nouveau. `pkt.relayed` reste l'unique événement représentatif
+  encore sans site d'appel (US-320, area `firmware`, écart déjà consigné
+  dans `03-ecarts-conception.md` à l'entrée US-318).
 
 ### Appris
 - Rien de nouveau pour `05-glossaire.md`.
 
 ### État après cette session
 - PR #114 mise à jour, en attente d'une nouvelle revue d'Oswin.
+- 3 des 4 constructeurs représentatifs de `observability` ont maintenant
+  un site d'appel réel côté `dengon-core::api` (`pkt.seen`, `msg.queued`,
+  `peer.connected`). Seul `pkt.relayed` reste à câbler, côté firmware
+  (US-320).
+- La couverture de #22 est désormais un fait vérifié (96.29 %/97.46 %),
+  pas une estimation à l'œil.
 - Fiche module mise à jour : `modules/dengon-core.md`.
 - `01-etat-du-code.md` mis à jour : non.
 
@@ -1005,6 +1053,29 @@ $ cargo fmt -p dengon-core -- --check
 $ cargo clippy --workspace --all-targets --all-features -- -D warnings
 No issues found
 ```
+$ cargo build -p dengon-core
+Finished
+
+$ cargo test -p dengon-core
+384 passed, 2 ignored (10 suites)
+
+$ cargo test --workspace
+472 passed, 2 ignored (31 suites)
+
+$ cargo fmt -p dengon-core -- --check
+(rien)
+
+$ cargo clippy -p dengon-core --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo llvm-cov -p dengon-core --summary-only
+TOTAL: 96.29 % régions, 97.32 % fonctions, 97.46 % lignes
+(api.rs seul : 89.26 % régions / 90.81 % lignes — le fichier le plus bas du
+crate, cohérent avec le code de câblage/orchestration récemment ajouté)
+```
+- Pas vérifié : le chiffre `cargo llvm-cov` local peut légèrement différer
+  de celui de la CI (`--all-features`, `nextest`) — non recoupé ici, à
+  confirmer une fois la CI de la PR passée.
 
 ---
 

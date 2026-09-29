@@ -551,6 +551,21 @@ encore le codec (US-201).
   pour le même message, non corrélables côté dashboard. `send_message`
   décode maintenant ses propres octets fraîchement encodés pour recalculer
   le même `msgID` que le receveur calculera à la réception.
+- **`peer.connected` en méthode additive, pas un paramètre de plus sur
+  `on_peer_connected`** (US-319, issue #117) : `Node::record_peer_connected
+  (peer_id, rssi, role, wall_ms)` est indépendante de
+  `on_peer_connected(peer_id, now, rng)`, qui orchestre le handshake `XX`
+  et ne connaît ni RSSI ni rôle radio. Changer la signature de la seconde
+  aurait cassé la PR #109 (US-302, vrai FFI UniFFI) déjà ouverte et
+  l'appelant avec 3 arguments — l'appelant qui possède la radio invoque
+  les deux méthodes séparément. Les 4 constructeurs représentatifs de
+  `observability` ont maintenant un site d'appel côté client, sauf
+  `pkt.relayed` (US-320, firmware).
+- **Couverture `dengon-core` : déjà mesurée en CI, contrairement à ce que
+  disait PR #89** (US-319) : `cargo-llvm-cov` tourne dans le job `core`
+  depuis US-104 (PR #57), publié en résumé de job + `lcov.info`, sans
+  seuil bloquant. Chiffre réel : 96.29 % régions / 97.46 % lignes — écart
+  consigné (l'affirmation de PR #89 était fausse, pas juste optimiste).
 - **`sync::inventory` (US-210) : push cadencé sous l'anti-inondation.**
   Le routeur du voisin refuse plus de 20 nouveaux `msgID`/min venant de
   nous ; pousser le manquant d'un bloc en ferait rejeter l'excédent. Chaque
