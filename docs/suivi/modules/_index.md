@@ -26,8 +26,8 @@ de son area (proposition d'organisation §10.3 point 3).
 | `dengon-sim` | [dengon-sim.md](dengon-sim.md) | partiel (harness + réseau simulé + scénarios, US-221) | 2026-09-28 |
 | `dengon-verify` | [dengon-verify.md](dengon-verify.md) | esquisse | 2026-09-09 |
 | `deploiement-vps` (`dashboard/deploy/`, `.github/workflows/deploy-vps.yml`) | [deploiement-vps.md](deploiement-vps.md) | fait (US-224) | 2026-09-28 |
-| `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-28 |
-| `dengon-verify` | [dengon-verify.md](dengon-verify.md) | fonctionnel (US-305) | 2026-09-28 |
+| `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | messages_api + SSE + `GET /api/integrity` (US-217/US-219/US-310) | 2026-09-29 |
+| `dengon-verify` | [dengon-verify.md](dengon-verify.md) | fonctionnel (US-305), appelé par `dashboard/api` (US-310) | 2026-09-28 |
 | `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-25 |
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
 | `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **contrat v0 gelé** (US-106) | 2026-09-28 |
@@ -39,3 +39,4 @@ de son area (proposition d'organisation §10.3 point 3).
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
 | `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
 | `dengon-core-ffi` + `dengon-core-embed` (`crates/dengon-core-ffi/`, `crates/dengon-core-embed/`) | [dengon-core-ffi.md](dengon-core-ffi.md) | partiel (chaîne de compilation + header + vecteurs depuis le C, US-307 ; pas encore intégré au CMake ESP-IDF) | 2026-09-29 |
+| `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-219) + écran Intégrité (US-310) | 2026-09-29 |

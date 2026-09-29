@@ -31,6 +31,28 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
   `RUSTUP_TOOLCHAIN=esp crates/dengon-core-embed/tests/c/run.sh` → 8 accept
   / 5 reject OK ; `cargo +esp build --release --target
   xtensa-esp32-none-elf --locked` → `libdengon_core.a` 715 Ko.
+## 2026-09-29 — US-310 : rebase de la PR #106 sur `main` (après US-219/US-301)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `dashboard/web/{app.js,api.js}`, `dashboard/api/app/main.py`,
+`dashboard/api/tests/conftest.py`, `docs/suivi/`.
+**Lot :** US-310, branche `feat/US-310-integrity` (PR #106), base `main`.
+
+- Commit US-305 de la branche abandonné au rebase : déjà sur `main` (PR #92).
+- `app.js` : l'écran `#/integrite` réécrit sur le modèle US-219 —
+  `renderIntegrite()` async, appel via `DengonApi.fetchIntegrity()` (nouveau,
+  `api.js`), plus d'`API_BASE`/`DATA` locaux ni de garde `isConnected` (le
+  jeton de génération de `route()` couvre la course). L'écran est désormais
+  rafraîchi par le SSE comme les autres.
+- `main.py` : routes `GET /api/messages*` (US-219) et `GET /api/integrity`
+  conservées côte à côte ; CORS de `main` gardé (`Last-Event-ID`).
+- `conftest.py` : `FIXTURES_DIR`/clé de test (main) + fixture
+  `dengon_verify_bin` (US-310), `_REPO_ROOT` partagé.
+- `02-avancement.md`/`modules/_index.md` : lignes éditées en place au lieu
+  des lignes ajoutées en double par la PR.
+- Tests : `cargo build -p dengon-verify` puis, dans `dashboard/api`,
+  `uv run pytest` → 107 passés ; `ruff check` OK ; `node --check` sur
+  `app.js`/`api.js` OK. **Pas de vérification navigateur** après le rebase.
 
 ---
 
@@ -922,6 +944,92 @@ $ curl -sk https://51.255.38.214:8443/healthz
 ### État après cette session
 - PR #96 à jour sur `main`, retours de revue traités.
 - Fiche(s) module mise(s) à jour : `modules/dengon-core.md`
+## 2026-09-28 — US-310 : `GET /api/integrity` + écran web « Intégrité »
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `contracts/events/`, `dashboard/api/`, `dashboard/web/`, `.github/workflows/dashboard.yml`
+**Lot :** US-310 (issue GitHub #48)
+
+### Fait
+- Constat de départ : `dengon-verify` (US-305, PR #92) attend un export
+  binaire `Entry::to_bytes` avec `entry_hash`/`sig`, mais `/ingest/batch`
+  (US-216/US-217) ne transmettait que des champs JSON sans ces deux-là.
+  Décision utilisateur explicite (3 options présentées) : étendre
+  `envelope.schema.json` de façon additive plutôt que transmettre l'export
+  binaire brut ou écrire un vérificateur simplifié côté Python.
+- `contracts/events/envelope.schema.json` : ajout de `entry_hash` (hex 64,
+  optionnel) et `sig` (base64 64 octets, optionnel) par événement ;
+  `prev_hash` redéfini pour porter la sémantique de `ledger::Entry.prev_hash`.
+  Absence de ces champs → événement exclu de la vérification d'intégrité.
+- `dashboard/api/app/migrations.py` : migration `0004_entry_signature`
+  (`ALTER TABLE events ADD COLUMN sig BLOB`).
+- `dashboard/api/app/ingest.py` : stocke `entry_hash`/`prev_hash`/`sig`
+  reçus (sans les vérifier à l'ingestion — c'est le rôle de
+  `GET /api/integrity`, à la demande).
+- `dashboard/api/app/integrity.py` (nouveau) : reconstruit l'export binaire
+  `Entry::to_bytes` depuis les colonnes SQLite, appelle `dengon-verify` en
+  sous-processus (chemin configurable via `DENGON_VERIFY_BIN`), verdict par
+  nœud (`ok`/`broken`/`fork`/`gap`/`unverified`).
+- `dashboard/api/app/main.py` : route `GET /api/integrity`, middleware CORS
+  (`allow_methods=["GET"]`) pour que `dashboard/web` puisse l'appeler.
+  `.github/workflows/dashboard.yml` : compile `dengon-verify` avant les
+  tests pytest, pointe `DENGON_VERIFY_BIN` dessus.
+- `dashboard/web/` : nouvel écran `#/integrite` (`app.js`, `index.html`,
+  `style.css`) — seule exception à la règle « pas d'appel réseau » posée par
+  l'US-111, parce que le verdict d'intégrité n'existe nulle part à afficher
+  en dur.
+
+### Pourquoi / décisions
+- Extension additive du contrat plutôt que canal binaire séparé : pas de
+  rupture de compatibilité, et le dashboard a déjà tous les octets requis
+  pour reconstruire `Entry::to_bytes` (US-206 : encodage déterministe).
+- Vérification à la demande (`GET /api/integrity`), pas à l'ingestion : les
+  writes restent rapides, et un verdict `broken` déjà en base resterait de
+  toute façon `broken` — pas de valeur à revérifier à chaque batch reçu.
+
+### Écarts vs conception
+- Décrits dans `03-ecarts-conception.md` (nouvelle entrée US-310) : (1)
+  reconstruction du `payload_json` non vérifiée contre un vrai producteur
+  (Android/firmware encore des bouchons) ; (2) détection de `fork` non
+  démontrable via `/ingest/batch` normal (`event_id` déterministe sur
+  `(node_id, seq)`, `INSERT OR IGNORE` avale le doublon avant la
+  vérification de chaîne) ; (3) `dengon-verify` absent de l'image Docker du
+  dashboard (US-224) → `GET /api/integrity` répondrait `503` sur le VPS réel
+  aujourd'hui.
+
+### Appris
+- `INSERT OR IGNORE` sur une clé primaire dérivée déterministiquement des
+  mêmes champs qu'on veut justement détecter en conflit (`event_id =
+  SHA-256(node_id‖seq)`) empêche structurellement de stocker un vrai fork —
+  piège découvert en écrivant le test `fork`, pas anticipé à la conception.
+
+### État après cette session
+- `GET /api/integrity` fonctionnel et testé (8 tests dans
+  `test_integrity.py`, dont les 4 verdicts contre le vrai binaire
+  `dengon-verify`, pas un mock). Écran web vérifié en navigateur réel
+  (Chromium/Playwright, 500 px et 360 px, plus état d'erreur).
+- Fiche(s) module mise(s) à jour : `dashboard-api.md` (nouvelle section
+  US-310 + bullets « Limites connues » corrigés), `dengon-verify.md`
+  (état + section « Usage réel par `dashboard/api` »), `dashboard-web.md`
+  (nouvelle section US-310).
+- 01-etat-du-code.md mis à jour : non (pointeurs génériques, inchangés).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cd dashboard/api && uv run --extra dev pytest -q
+(voir détail dans dashboard-api.md — suite complète OK, dont les 8 nouveaux
+tests test_integrity.py)
+$ cargo build -p dengon-verify
+OK
+```
+- Vérification browser réelle via script Playwright jetable (non commité),
+  API réelle + `dengon-verify` compilé + données seedées manuellement
+  (nœud sain / altéré / non-vérifiable) : les 3 libellés de verdict
+  s'affichent correctement.
+- Pas encore vérifié : comportement réel sur le VPS de prod (le Dockerfile
+  ne construit pas `dengon-verify`, écart documenté plutôt que corrigé dans
+  cette session — hors périmètre US-310).
+
 ## 2026-09-28 — US-305 : rebase de la PR #92 sur `main` (après #90, #91, #99)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

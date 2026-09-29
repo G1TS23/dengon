@@ -5,10 +5,11 @@ messages suivis + écran de détail (parcours), branchée sur l'API réelle.
 **Correspond à la conception :** [`docs/olivier/dashboard.md`](../../olivier/dashboard.md)
 §3, §4, §8, §9 ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §5 (« Parcours d'un message »), §11.2 (schéma SQLite `messages`/`message_hops`).
-**Dernière mise à jour :** 2026-09-28 (US-219)
-**État :** fait (US-219) — les deux écrans de l'US-111 consomment
-`GET /api/messages`/`GET /api/messages/{id}` et se rafraîchissent seuls via
-`GET /api/stream` (SSE, US-218). Plus de données bidon.
+**Dernière mise à jour :** 2026-09-29 (US-310 — écran « Intégrité », rebasé sur US-219)
+**État :** fait (US-219 + US-310) — les deux écrans de l'US-111 consomment
+`GET /api/messages`/`GET /api/messages/{id}`, l'écran `#/integrite` consomme
+`GET /api/integrity` ; tous se rafraîchissent seuls via `GET /api/stream`
+(SSE, US-218). Plus de données bidon.
 
 ## Vérification visuelle à 360 px — faite le 2026-09-25 (US-111)
 
@@ -165,17 +166,53 @@ dans `index.html` — vide par défaut (même origine que la page).
   navigation disponible dans cette session) — écart consigné, à refaire dès
   que possible.
 
+## US-310 — écran « Intégrité »
+
+Ajoute un troisième écran, routé sur `#/integrite`, qui liste — un par
+nœud connu — le verdict de `GET /api/integrity` (`dengon-verify` côté
+`dashboard/api`, voir `dashboard-api.md`).
+
+- **Nav** : `index.html` gagne un bandeau `<nav class="nav-app">` avec deux
+  liens (`Messages` / `Intégrité`), au-dessus du `<h1>` existant.
+- **`api.js`** : `fetchIntegrity()` (même `DENGON_API_BASE` que les autres
+  appels US-219). Rebasée sur l'US-219 le 2026-09-29 : la version d'origine
+  faisait son propre `fetch` avec un `API_BASE` local et une garde
+  `section.isConnected` ; elle passe désormais par `api.js` et le `route()`
+  async de l'US-219, dont le jeton de génération ignore déjà une réponse
+  arrivée après une navigation plus récente.
+- **`renderIntegrite()`** (`app.js`) : async, comme `renderListe`/
+  `renderDetail` — chargement et erreur réseau gérés par `route()`
+  (`ecranChargement`/`ecranErreur` communs) ; succès = une carte par nœud
+  (verdict + plage + signatures), ou « aucun nœud » si la liste est vide.
+- **Libellés** : `ok` → « Intègre », `broken` → « Altéré », `fork` →
+  « Fourche détectée », `gap` → « Trou dans le journal », `unverified` →
+  « Non vérifiable » ; réutilise les classes `statut--*`
+  existantes (`--delivered`, `--expired`, `--inconnu`) plutôt que d'en créer
+  de nouvelles.
+- **Vérifié en navigateur (2026-09-28)**, via Chromium/Playwright
+  (`/opt/pw-browsers/chromium`), API réelle (FastAPI + `dengon-verify`
+  compilé) sur un jeu de nœuds seedés manuellement (sain / altéré /
+  non-vérifiable) : les 3 libellés s'affichent correctement, capturé à
+  500 px et 360 px, plus l'état d'erreur (API injoignable). Captures non
+  commitées (script jetable dans le répertoire de travail temporaire de la
+  session). Vérification faite **avant** le rebase sur l'US-219, pas refaite
+  depuis.
+
 ## Limites connues / TODO
 
 - Mode sombre non vérifié à 360 px depuis l'US-111 (seulement à ~500 px,
   voir en tête de fiche).
-- **Rendu US-219 pas revérifié dans un vrai navigateur** (voir Tests) — les
-  gabarits HTML/CSS n'ont pas changé depuis la vérification US-111, mais le
-  chemin de données si (fetch async + états chargement/erreur, absents de
-  la vérification de 2026-09-25).
-- Pas de carte réseau, flotte de relais, intégrité des journaux ni recherche
-  de logs (`docs/synthese/09` §5) : ces écrans sont des USs séparées
-  (US-310/US-311, sprint 3), pas couvertes ici.
+- **Rendu US-219/US-310 pas revérifié dans un vrai navigateur** après le
+  rebase de l'US-310 sur l'US-219 (voir Tests) — l'écran `#/integrite` passe
+  désormais par `api.js` (`fetchIntegrity`) et le `route()` async à jeton de
+  génération de l'US-219.
+- L'écran `#/integrite` est rafraîchi par le SSE comme les autres (débit
+  borné à 500 ms) : chaque rafraîchissement relance `dengon-verify` côté API
+  pour chaque nœud — acceptable au volume de démo, à revoir si la flotte
+  grossit.
+- Pas de carte réseau, flotte de relais ni recherche de logs
+  (`docs/synthese/09` §5) : ces écrans sont des USs séparées (US-311…), pas
+  couvertes ici.
 - Pas de test automatisé du JS (pas de framework de test en place) — même
   discipline que l'US-111, DoR n°7 de l'US-219 demande une vérification
   manuelle, pas une suite automatisée.

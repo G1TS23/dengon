@@ -54,9 +54,15 @@ Vérification : retirer `sig`, recalculer `canonical_json`, `Ed25519_verify` ave
 la **clé publique de signature du nœud** (connue du dashboard via la liste
 blanche, `POST /api/nodes`).
 
-> **Un seul `sig` par batch**, sur l'ensemble. Il n'y a pas de signature
-> par événement : l'intégrité fine vient du journal chaîné (`seq` + `prev_hash`,
-> recalculé par `dengon-verify`), et `event_id` assure la déduplication.
+> **Le `sig` de niveau batch porte sur l'ensemble**, il n'authentifie pas
+> individuellement chaque événement. `event_id` assure la déduplication ; le
+> journal chaîné (`seq` + `prev_hash`/`entry_hash`, recalculé par
+> `dengon-verify`, US-305/US-310) authentifie chaque entrée séparément, **si**
+> le nœud fournit `entry_hash`/`sig` par événement (`envelope.schema.json`,
+> les deux optionnels — absents, cet événement n'entre pas dans la
+> vérification d'intégrité). Ce `sig` par entrée est distinct du `sig` de
+> batch : il signe `entry_hash` seul (`ledger::Entry.sig`), pas l'événement
+> entier ni le batch.
 
 ## 3. Champs dérivés
 

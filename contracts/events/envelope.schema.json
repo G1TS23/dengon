@@ -43,7 +43,21 @@
       "pattern": "^[0-9a-f]{64}$",
       "minLength": 64,
       "maxLength": 64,
-      "description": "event_id de l'événement précédent du même node_id (seq - 1). Optionnel : absent, `integrity.chain_broken` (synthese/09 §D-…) n'est pas dérivable pour ce nœud — écart assumé, voir 03-ecarts-conception.md. Présent, il porte le `got_prev` que synthese/09:235 attend, recalculable nulle part ailleurs que côté nœud."
+      "description": "`ledger::Entry.prev_hash` du nœud : le `entry_hash` de l'entrée `seq - 1` de SON journal chaîné (`00…0` pour `seq = 0`), pas un hash dérivé côté dashboard — c'est justement ce que `dengon-verify` (US-305) recalcule pour détecter une altération. Optionnel : absent, cet événement n'entre pas dans la vérification d'intégrité de ce nœud (US-310) — écart assumé, voir 03-ecarts-conception.md."
+    },
+    "entry_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "minLength": 64,
+      "maxLength": 64,
+      "description": "`ledger::Entry.entry_hash` de cette entrée, tel que calculé par `dengon_core::ledger::Entry::compute_hash` sur l'appareil (encodage binaire à longueurs préfixées, PAS le JSON canonique — voir `docs/suivi/03-ecarts-conception.md`, entrée US-305). Optionnel, comme `prev_hash` : les deux vont ensemble (l'un sans l'autre exclut cet événement de la vérification d'intégrité, US-310)."
+    },
+    "sig": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]{86}==$",
+      "minLength": 88,
+      "maxLength": 88,
+      "description": "base64(Ed25519(entry_hash)) — signature de CETTE entrée par le nœud (`ledger::Entry.sig`, clé = `pub_sign` du nœud), distincte de la signature du batch entier (`sig` au niveau racine de `batch.schema.json`). Optionnel : absente, la signature de cette entrée n'est pas vérifiable (`dengon-verify` sans `--pubkey`, sortie `\"signatures\":\"unchecked\"`)."
     }
   },
   "$defs": {

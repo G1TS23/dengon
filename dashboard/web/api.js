@@ -45,6 +45,17 @@
     return reponse.json();
   }
 
+  // Verdict d'intégrité par nœud (US-310), calculé côté API par
+  // `dengon-verify` (503 si le binaire est indisponible : levé comme une
+  // panne, affiché par l'écran d'erreur commun).
+  async function fetchIntegrity() {
+    const reponse = await fetch(baseUrl() + "/api/integrity");
+    if (!reponse.ok) {
+      throw new Error("GET /api/integrity → " + reponse.status);
+    }
+    return reponse.json();
+  }
+
   // Abonnement au flux SSE (US-218) : `onEvenement` est rappelé pour CHAQUE
   // événement reçu (rattrapage inclus, à la connexion). L'appelant décide
   // quoi en faire (ici : redemander l'écran courant, voir app.js) — ce
@@ -72,6 +83,7 @@
   window.DengonApi = {
     fetchMessages: fetchMessages,
     fetchMessage: fetchMessage,
+    fetchIntegrity: fetchIntegrity,
     abonnerFlux: abonnerFlux,
   };
 })();
