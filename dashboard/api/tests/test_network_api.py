@@ -13,6 +13,8 @@ RELAY = "relay-3f2a9c"
 T0 = 1_725_800_000_000
 # Dernier `relay.health` des fixtures : T0 + 61_400 (voir 19-relay-health.json).
 HEALTH_MS = T0 + 61_400
+# Dernier événement du relais (`relay.overloaded`) : plus récent que la santé.
+LAST_MS = T0 + 92_100
 
 
 @pytest.fixture
@@ -36,11 +38,11 @@ def test_fleet_is_empty_on_a_fresh_database(client):
 
 
 def test_fleet_exposes_relay_health_and_version(ingested, monkeypatch):
-    _at(monkeypatch, HEALTH_MS + 60_000)
+    _at(monkeypatch, LAST_MS + 60_000)
     relay = _relay(ingested.get("/api/nodes").json())
     assert relay["kind"] == "relay"
     assert relay["fw_version"] == "0.1.0"
-    assert relay["last_contact_ms"] == HEALTH_MS
+    assert relay["last_contact_ms"] == LAST_MS
     assert relay["health"]["uptime_s"] == 60
     assert relay["health"]["rssi_avg"] == -61
     assert relay["status"] == "online"
@@ -48,20 +50,28 @@ def test_fleet_exposes_relay_health_and_version(ingested, monkeypatch):
 
 
 def test_silent_relay_is_flagged_after_the_threshold(ingested, monkeypatch):
-    _at(monkeypatch, HEALTH_MS + 5 * 60_000 + 1)
+    _at(monkeypatch, LAST_MS + 5 * 60_000 + 1)
     relay = _relay(ingested.get("/api/nodes").json())
     assert relay["status"] == "stale"
-    assert relay["alerts"] == [{"code": "relay_silent", "since_ms": HEALTH_MS}]
+    assert relay["alerts"] == [{"code": "relay_silent", "since_ms": LAST_MS}]
+
+
+def test_relay_still_emitting_events_is_not_silent(ingested, monkeypatch):
+    # Plus de `relay.health` frais depuis > 5 min, mais un événement récent.
+    _at(monkeypatch, HEALTH_MS + 5 * 60_000 + 1)
+    relay = _relay(ingested.get("/api/nodes").json())
+    assert relay["status"] == "online"
+    assert relay["alerts"] == []
 
 
 def test_relay_exactly_at_the_threshold_is_not_yet_silent(ingested, monkeypatch):
-    _at(monkeypatch, HEALTH_MS + 5 * 60_000)
+    _at(monkeypatch, LAST_MS + 5 * 60_000)
     assert _relay(ingested.get("/api/nodes").json())["alerts"] == []
 
 
 def test_silence_threshold_is_configurable(ingested, monkeypatch):
     monkeypatch.setenv("DENGON_DASHBOARD_RELAY_SILENT_MINUTES", "1")
-    _at(monkeypatch, HEALTH_MS + 90_000)
+    _at(monkeypatch, LAST_MS + 90_000)
     body = ingested.get("/api/nodes").json()
     assert body["silent_after_ms"] == 60_000
     assert _relay(body)["status"] == "stale"

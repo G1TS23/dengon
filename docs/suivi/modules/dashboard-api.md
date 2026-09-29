@@ -19,7 +19,8 @@ Cette fiche tient aussi lieu de **note d'onboarding de l'area `dashboard-api`**
 ## US-311 — Flotte, graphe et alertes (2026-09-29)
 
 `app/network_api.py` : `list_fleet()` (par nœud : version issue du dernier
-`relay.boot`, dernier `relay.health`, `last_contact_ms`, `status`
+`relay.boot`, dernier `relay.health`, `last_contact_ms` = dernier événement
+toutes natures confondues (revue PR #112), `status`
 `online`/`stale`, `alerts`) et `network_graph()` (nœuds + liens dérivés de la
 corrélation `peer.connected`/`peer.disconnected`). Exposés par
 `GET /api/nodes` et `GET /api/network/graph`, « maintenant » = horloge du

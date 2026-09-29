@@ -48,10 +48,10 @@ def _relay_alerts(
 def list_fleet(db: LockedConnection, now_ms: int, silent_ms: int) -> list[dict]:
     """Un dict par nœud enregistré ; les relais portent santé + alertes.
 
-    `last_contact_ms` = dernier `relay.health` pour un relais (règle de
-    l'alerte `relay_silent`), à défaut son `relay.boot`, à défaut son dernier
-    événement : un relais qui a booté mais n'a jamais émis de santé est
-    signalé muet une fois le délai écoulé depuis son boot.
+    `last_contact_ms` = ts du dernier événement, quel qu'il soit, du nœud
+    (règle de l'alerte `relay_silent`) : un relais qui émet encore
+    (`relay.wifi_down`, `peer.connected`…) sans `relay.health` frais n'est pas
+    « muet ». Un relais sans aucun événement est muet dès le départ.
     """
     fleet: list[dict] = []
     with db.locked() as conn:
@@ -80,9 +80,6 @@ def list_fleet(db: LockedConnection, now_ms: int, silent_ms: int) -> list[dict]:
                 health_row = _last_event(conn, node_id, "relay.health")
                 if health_row is not None:
                     entry["health"] = json.loads(health_row["payload"])
-                    entry["last_contact_ms"] = health_row["ts_ms"]
-                elif boot is not None:
-                    entry["last_contact_ms"] = boot["ts_ms"]
                 entry["alerts"] = _relay_alerts(
                     entry["last_contact_ms"], entry["health"], now_ms, silent_ms
                 )

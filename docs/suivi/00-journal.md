@@ -479,6 +479,21 @@ laissé ouvert par la PR #87 (`Refs #28`, aucun appareil sur le poste).
 
 ### Écarts vs conception
 - Clé du coffre perdue → identité réinitialisée : reporté dans
+## 2026-09-29 — US-311 : suite revue PR #112 (`relay_silent`)
+
+**Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
+**Périmètre :** `dashboard/api/app/network_api.py`,
+`dashboard/api/tests/test_network_api.py`, fiche `modules/dashboard-api.md`.
+
+Revue : `last_contact_ms` ignorait les événements plus récents que le dernier
+`relay.health` (ex. `relay.wifi_down`), d'où de faux « muet ». Correction :
+`last_contact_ms` = dernier événement du nœud, quelle qu'en soit la nature ;
+un relais sans événement reste muet. Tests adaptés + un test de non-régression.
+`pytest` dashboard/api : tout vert. `ruff format --check` signale 4 fichiers,
+déjà non formatés avant ce changement (non traité).
+
+---
+
 ## 2026-09-29 — US-311 : carte réseau, flotte de relais, alerte `relay_silent`
 
 **Auteur :** Oswin Freyr + Claude (Sonnet 5.5)
