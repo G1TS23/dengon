@@ -1334,6 +1334,32 @@ impl Node {
         core::mem::take(&mut self.obs_events)
     }
 
+    /// Émet `peer.connected` (`docs/powl/08` §5, US-208/US-319).
+    ///
+    /// Extension Rust **indépendante** de [`Node::on_peer_connected`], pas
+    /// un paramètre ajouté dessus : `on_peer_connected` orchestre le
+    /// handshake `XX` et ne connaît ni la RSSI ni le rôle
+    /// central/peripheral (données radio, hors de ce que cette façade
+    /// possède — voir sa doc de module, « Ce que cette façade N'est PAS »).
+    /// Coupler les deux forcerait un changement de signature qui casserait
+    /// tout appelant déjà câblé dessus (`dengon-node`, la PR #109 du vrai
+    /// FFI UniFFI en cours). L'appelant qui possède la radio (le transport,
+    /// ex. `AndroidTransport`) invoque cette méthode séparément, en plus de
+    /// [`Node::on_peer_connected`], quand il a l'information.
+    pub fn record_peer_connected(
+        &mut self,
+        peer_id: PeerId,
+        rssi: i8,
+        role: observability::Role,
+        wall_ms: u64,
+    ) {
+        self.record_observability(
+            "peer.connected",
+            observability::peer_connected(peer_id, rssi, role),
+            wall_ms,
+        );
+    }
+
     /// Un pair vient de se connecter : tout message en outbox à destination
     /// de ce pair et pas encore remis part maintenant (voie enveloppe —
     /// déjà scellée, pas besoin d'attendre une session ; voie session, si
@@ -2166,5 +2192,43 @@ mod tests {
         assert_eq!(size_bucket(257), 512);
         assert_eq!(size_bucket(2048), 2048);
         assert_eq!(size_bucket(9_000), 2048);
+    }
+
+    #[test]
+    fn record_peer_connected_emet_peer_connected() {
+        let mut alice = noeud("alice", 1);
+        let bob = noeud("bob", 2);
+
+        alice.record_peer_connected(bob.peer_id(), -58, observability::Role::Peripheral, T0);
+
+        let events = alice.take_observability_events();
+        let trouve = events
+            .iter()
+            .find(|env| env.name == "peer.connected")
+            .expect("record_peer_connected doit émettre peer.connected");
+
+        // Champs littéraux attendus par `docs/powl/08` §5 (`{ peer, rssi,
+        // role }`), pas une comparaison contre `observability::peer_connected`
+        // (revue de PR #119, Oswin : comparer un constructeur à lui-même ne
+        // prouve rien sur la forme réelle du payload).
+        let observability::Value::Object(obj) = &trouve.payload else {
+            panic!("payload pas un objet")
+        };
+        assert_eq!(
+            obj.len(),
+            3,
+            "peer.connected doit avoir exactement 3 champs"
+        );
+        assert_eq!(
+            obj.get("peer"),
+            Some(&observability::Value::Str(hex_string(&bob.peer_id())))
+        );
+        assert_eq!(obj.get("rssi"), Some(&observability::Value::Int(-58)));
+        assert_eq!(
+            obj.get("role"),
+            Some(&observability::Value::Str(String::from("peripheral")))
+        );
+        assert_eq!(trouve.node_kind, NodeKind::Client);
+        assert_eq!(trouve.node_id, alice.node_id);
     }
 }

@@ -2425,3 +2425,72 @@ _(aucun écart pour l'instant)_
   coffre et de clé des champs sensibles du `store`. Pas de trousseau desktop
   dans le périmètre ; nœud de test uniquement.
 
+### 2026-09-29 — Couverture `dengon-core` déjà mesurée en CI, contrairement à ce que disait PR #89 (US-319)
+
+- **Prévu :** PR #89 (US-208) et l'issue #22 affirmaient que la couverture
+  n'avait « jamais été mesurée avec un outil dédié (`cargo llvm-cov` pas
+  encore posé ce sprint) ».
+- **Réel :** `cargo-llvm-cov` est installé et exécuté dans le job CI `core`
+  depuis `PR #57` (US-104), bien avant US-208 — chaque run publie un
+  résumé (`$GITHUB_STEP_SUMMARY`) et un artefact `lcov.info`. Mesure locale
+  (US-319) : `dengon-core` à 96.29 % régions / 97.46 % lignes, largement
+  au-dessus des 85 % visés.
+- **Raison :** l'auteur de PR #89 n'a probablement pas relu le job CI
+  existant, ou l'a confondu avec l'absence d'un **seuil bloquant** (qui,
+  lui, n'existe effectivement pas — voir le commentaire dans
+  `.github/workflows/core.yml`, « Pas de seuil bloquant pour l'instant »).
+- **Conséquences :** le critère « couverture ≥ 85 % » de #22 est
+  maintenant vérifiable par un chiffre réel, pas une estimation. Reste
+  ouvert (décision d'équipe, pas traité ici) : ajouter
+  `--fail-under-lines 85` scopé à `dengon-core` dans le workflow `core`
+  pour le rendre bloquant.
+- **Doc de conception mise à jour ?** sans objet.
+
+---
+
+### 2026-09-29 — `pkt.relayed` était déjà câblé en parallèle par #110 (US-308), écart précédent corrigé
+
+- **Prévu (entrée précédente, US-318, même jour) :** « `pkt.relayed` reste
+  non émis... doit être fait côté firmware (US-308, C/ESP-IDF) — hors
+  périmètre `core-rust`/`skill:rust` » ; issue #118 créée en conséquence.
+- **Réel :** `crates/dengon-core/src/relay.rs` (Rust, `no_std`, pas C —
+  autre correction : le C ne garde que radio/stockage/ordonnancement) câble
+  déjà `pkt.relayed` dans `Relay::poll_routing`, sur `Router::poll_due`,
+  avec `fanout` = nombre de cibles réellement visées. Livré par Paul dans
+  la PR #110 (US-308, branche `feat/US-308-relay`), en cours au même
+  moment que ma propre session sur US-318/US-319, sans que je le sache.
+- **Raison :** travail concurrent non coordonné en temps réel — chacun
+  travaillait sur sa branche. Pas un problème de conception, juste un
+  besoin de vérifier l'état des PR en cours avant de créer une issue de
+  suivi.
+- **Conséquences :** #118 (US-320) refermée sans travail supplémentaire,
+  référencée vers PR #110. Une fois #110 mergée, il ne restera plus aucun
+  des 4 constructeurs représentatifs de `observability` sans site d'appel
+  réel (`pkt.seen`/`msg.queued`/`peer.connected` côté `api.rs`,
+  `pkt.relayed`/`pkt.rejected`/`envelope.expired` côté `relay.rs`) — #22
+  (US-208) redeviendra fermable une fois #114/#119/#110 tous mergés.
+- **Doc de conception mise à jour ?** sans objet.
+
+---
+
+### 2026-09-29 — `peer.connected` sans `peer.disconnected` côté client (US-319)
+
+- **Prévu :** `docs/powl/08` §5 : « le dashboard dérive `LINKS` de la
+  corrélation `peer.connected`/`disconnected` entre deux `node_id`
+  connus ». Les deux événements sont donc attendus en paire.
+- **Réel :** `Node::record_peer_connected` (US-319) émet `peer.connected`,
+  mais rien n'émet `peer.disconnected` côté façade client. Pas propre à
+  cette PR : `on_peer_disconnected` existe (`Node::on_peer_disconnected`,
+  US-301) mais n'a jamais construit d'`Envelope` non plus, avant comme
+  après US-318/US-319.
+- **Raison :** `record_peer_connected` n'a de toute façon aucun appelant
+  réel aujourd'hui (voir entrée `dengon-core.md` correspondante, revue de
+  PR #119) — le pendant `disconnected` n'a pas été priorisé avant que le
+  premier événement ait lui-même un site d'appel.
+- **Conséquences :** un lien resterait ouvert indéfiniment dans `LINKS` côté
+  dashboard une fois `peer.connected` réellement câblé, sans un
+  `peer.disconnected` symétrique. À traiter dans le même effort que le
+  câblage réel de `peer.connected` (probablement `dengon-node::session.rs`,
+  PR #116, qui a déjà `Node::on_peer_disconnected` appelé au bon endroit —
+  il suffirait d'y ajouter l'émission).
+- **Doc de conception mise à jour ?** non.
