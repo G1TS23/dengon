@@ -174,6 +174,25 @@ En session de démo, avant de commencer : `ssh vps "cd ~/dengon/dashboard/deploy
   variable `DENGON_WEB_API_BASE` (`.env`), n'est jamais commité — voir
   `dashboard/deploy/docker-compose.yml` (service `web`) et
   `Caddyfile.web`.
+- **`--force-recreate web` après chaque redéploiement** (revue de PR #128,
+  POWLAIR — **piège reproduit et vérifié en local**) : `web` monte
+  `../web` et `./Caddyfile.web` en **bind mount**, qui suit l'inode, pas le
+  chemin. `deploy-vps.yml` fait `rm -rf ~/dengon/dashboard/web` puis
+  ré-extrait le `tar` : ça crée un **nouveau** répertoire. Un conteneur
+  `web` déjà en marche garde son montage sur l'**ancien** inode, supprimé —
+  ni l'image (`caddy:2-alpine`) ni la config Compose du service n'ayant
+  changé, `docker compose up -d --build` seul ne le recrée pas. Reproduit
+  en local : `rm -rf ../web && cp -r <sauvegarde> ../web` puis `up -d
+  --build` seul → **404** (`Container deploy-web-1 Running`, pas recréé) ;
+  `up -d --no-deps --force-recreate web` juste après → 200, `config.js`
+  correct. Invisible sur un premier déploiement, seulement au **second**.
+- **`DENGON_WEB_API_BASE` échappée avant injection dans `config.js`**
+  (revue de PR #128, POWLAIR) : un guillemet ou un antislash dans la
+  valeur casserait silencieusement la syntaxe JS générée. Pas une faille
+  (la valeur vient du `.env` de l'opérateur, pas d'une entrée réseau), mais
+  corrigé par un `sed 's/\\/\\\\/g; s/"/\\"/g'` avant le `printf` — vérifié
+  en local avec une valeur contenant `"` : le guillemet ressort bien
+  échappé (`\"`) dans `config.js`, pas casseur de syntaxe.
 - **Utilisateur non-root dans l'image `api`** (`USER app`, retour de revue
   SonarCloud — 4 findings sur `dashboard/api/Dockerfile` : image `python`
   tournant root par défaut, deux `uv`/`pip install` sans forcer les wheels

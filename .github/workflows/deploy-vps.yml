@@ -108,7 +108,20 @@ jobs:
 
       - name: docker compose up -d --build
         run: |
-          ssh vps-deploy "cd ~/dengon/dashboard/deploy && docker compose up -d --build"
+          # `--force-recreate web` en plus (revue PR #128, POWLAIR) : le
+          # conteneur `web` monte `../web` et `./Caddyfile.web` en BIND
+          # MOUNT (pas un volume géré), qui suit l'inode, pas le chemin. Le
+          # `rm -rf ~/dengon/dashboard/web` + ré-extraction de l'étape
+          # précédente crée un NOUVEAU répertoire (nouvel inode) — un
+          # conteneur `web` déjà en marche garde son montage sur l'ANCIEN
+          # inode, maintenant supprimé. Ni l'image (`caddy:2-alpine`) ni la
+          # config Compose du service n'ont changé, donc `docker compose up
+          # -d --build` seul ne le recrée pas : au premier déploiement tout
+          # fonctionne, au suivant `web` sert un répertoire vide (404) —
+          # jusqu'à cette correction, invisible en test local à un seul
+          # déploiement. `--no-deps` : ne redémarre pas `api` en même temps
+          # (déjà à jour par le `--build` qui précède).
+          ssh vps-deploy "cd ~/dengon/dashboard/deploy && docker compose up -d --build && docker compose up -d --no-deps --force-recreate web"
 
       - name: Smoke test — /healthz en HTTPS depuis l'extérieur
         run: |

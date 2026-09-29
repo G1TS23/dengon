@@ -291,12 +291,86 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
 - Contacts perdus à chaque réinstallation / arrêt de l'app (limite déjà consignée).
 - Toujours jamais vus sur appareil : statut « Échec » + « Renvoyer » (TTL de 24 h), « Bluetooth
   coupé », permission refusée sur appareil. Accessibility Scanner non lancé.
+## 2026-09-29 — Issue #125/#322 : revue de la PR #128 (POWLAIR), bug de redéploiement corrigé
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `.github/workflows/deploy-vps.yml`,
+`dashboard/deploy/docker-compose.yml`, `dashboard/web/index.html`,
+`docs/suivi/modules/deploiement-vps.md`.
+**Lot :** réponse à la revue « changements demandés » de POWLAIR sur PR
+#128 (US-322/issue #125).
+
+### Fait
+- **Bloquant corrigé** : `deploy-vps.yml` recrée maintenant explicitement
+  le conteneur `web` après chaque redéploiement
+  (`docker compose up -d --build && docker compose up -d --no-deps
+  --force-recreate web`). **Reproduit le bug en local avant de corriger** :
+  `rm -rf ../web` + copie fraîche (nouvel inode, comme le ferait
+  `deploy-vps.yml`), `up -d --build` seul → conteneur `web` pas recréé,
+  404 ; `--force-recreate web` juste après → 200. Le même mécanisme
+  concerne `Caddyfile.web`, monté en bind mount lui aussi.
+- **Non bloquant corrigé** : `DENGON_WEB_API_BASE` échappée (`sed`,
+  antislash puis guillemet) avant d'être injectée dans `config.js` —
+  vérifié avec une valeur contenant `"` : ressort bien `\"`, pas de casse
+  de syntaxe JS.
+- **Non bloquant corrigé** : commentaire d'`index.html` précise que le 404
+  de `config.js` en dev local est attendu et sans conséquence.
+- `docs/suivi/modules/deploiement-vps.md` : deux nouvelles entrées dans
+  Décisions, avec le détail de la reproduction locale.
+
+### Pourquoi / décisions
+- `--force-recreate` ciblé sur `web` seul (`--no-deps`), pas sur tout le
+  `docker compose up` : `api`/`caddy` n'ont pas ce problème (l'API n'a pas
+  de bind mount sur du contenu versionné, `Caddyfile` de l'API n'a pas
+  changé de comportement) — inutile de les redémarrer en plus à chaque
+  déploiement.
 
 ### Écarts vs conception
 - Aucun nouveau.
 
 ### État après cette session
 - Fiche module : `modules/android-app.md` (section US-321) à jour ; `01-etat-du-code.md` : non.
+### Appris
+- Un bind mount Docker suit l'**inode**, pas le chemin : un `rm -rf` +
+  recréation du même chemin sur l'hôte ne met pas à jour ce qu'un
+  conteneur déjà démarré voit, même si l'image et la config Compose du
+  service n'ont pas changé — seul un `--force-recreate` (ou `restart`, qui
+  ne suffit pas ici car le montage lui-même ne change pas de source sans
+  recréation) fait réévaluer le montage. À ajouter à
+  `04-apprentissages.md` si ça revient ailleurs dans le projet.
+
+### État après cette session
+- PR #128 mise à jour, en attente d'une nouvelle revue de POWLAIR.
+- Fiche module mise à jour : `modules/deploiement-vps.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker compose --env-file .env.test up -d
+tout démarre, healthy
+
+$ rm -rf ../web && cp -r <sauvegarde> ../web   # simule le rm -rf + tar du workflow
+$ docker compose --env-file .env.test up -d --build
+"Container deploy-web-1 Running" (pas recréé)
+$ curl -sk -o /dev/null -w '%{http_code}' https://localhost:8444/
+404   (bug reproduit)
+
+$ docker compose --env-file .env.test up -d --no-deps --force-recreate web
+$ curl -sk -o /dev/null -w '%{http_code}' https://localhost:8444/
+200   (corrigé)
+
+$ DENGON_WEB_API_BASE avec un " dedans, --force-recreate web
+$ curl -sk https://localhost:8444/config.js
+window.DENGON_API_BASE = "https://localhost:8443\"; alert(1); //";
+(guillemet bien échappé)
+
+$ git status --short dashboard/web/
+seul index.html modifié (la manipulation rm -rf/cp n'a rien laissé de
+parasite, contenu identique après recréation)
+```
+
+---
+
 ## 2026-09-29 — Issue #125 : second conteneur Caddy pour servir `dashboard/web` sur le VPS
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

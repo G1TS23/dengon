@@ -121,7 +121,12 @@ services:
     command:
       - |
         mkdir -p /srv/generated
-        printf 'window.DENGON_API_BASE = "%s";\n' "$$DENGON_WEB_API_BASE" > /srv/generated/config.js
+        # Échappe `\` puis `"` (revue PR #128, POWLAIR) : `DENGON_WEB_API_BASE`
+        # vient du `.env` de l'opérateur (pas une entrée réseau — pas une
+        # faille), mais un guillemet ou un antislash dedans casserait
+        # silencieusement la syntaxe JS générée sans cette étape.
+        web_api_base_echappe=$$(printf '%s' "$$DENGON_WEB_API_BASE" | sed 's/\\/\\\\/g; s/"/\\"/g')
+        printf 'window.DENGON_API_BASE = "%s";\n' "$$web_api_base_echappe" > /srv/generated/config.js
         exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     ports:
       - "${WEB_HTTP_PORT:-8081}:80"
