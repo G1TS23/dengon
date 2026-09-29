@@ -43,7 +43,8 @@ use core::fmt;
 use crate::crypto::{SigningKey, VerifyingKey};
 use crate::identity::Identity;
 use crate::ledger::{Anchor, Entry, Ledger};
-use crate::observability::{catalog, hex, msg_log_id, Value};
+use crate::observability::batch::{self, BatchError};
+use crate::observability::{catalog, hex, msg_log_id, NodeKind, Value};
 use crate::protocol::codec::announce::{Announce, AnnounceError, CAP_RELAY};
 use crate::protocol::codec::{self, received_signing_input, Packet};
 use crate::protocol::consts::{
@@ -646,6 +647,24 @@ impl<L: Copy + Ord> Relay<L> {
     /// Ancre de la prochaine entrée : le curseur à persister.
     pub fn ledger_anchor(&self) -> Anchor {
         self.ledger.anchor()
+    }
+
+    // ----- Export vers le dashboard (US-309) -------------------------------
+
+    /// `node_id` du relais côté dashboard : `relay-` + `peerID[0..3]` en hex.
+    pub fn node_id(&self) -> String {
+        batch::relay_node_id(&self.peer_id())
+    }
+
+    /// Corps de `POST /ingest/batch` pour ces entrées du journal, signé par
+    /// la clé Ed25519 du relais (qui ne sort jamais de ce handle).
+    pub fn build_batch(&self, entries: &[Entry]) -> Result<Vec<u8>, BatchError> {
+        batch::signed_batch_from_entries(
+            entries,
+            &self.node_id(),
+            NodeKind::Relay,
+            self.identity.signing_key(),
+        )
     }
 
     // ----- Interne ---------------------------------------------------------
