@@ -28,7 +28,9 @@ static const char *TAG = "dengon-ship";
 #define NVS_NS      "dengon_net"
 #define NVS_JWT     "jwt"
 #define JWT_MAX     1024
-#define SHIP_STACK  8192
+/* 12 Ko : le handshake TLS (mbedTLS, ECDSA) passe sur cette pile. Avec 8 Ko,
+   marge mesurée sur carte : 1 188 o seulement (revue PR #120, point 10). */
+#define SHIP_STACK  12288
 #define SHIP_PRIO   2
 /* Lot d'entrées binaires passé à dengon_relay_build_batch : une entrée de
    journal pèse ~150 o + nom + payload (< 400 o en pratique). */

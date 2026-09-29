@@ -407,11 +407,14 @@ En fonctionnement :
 3. `POST CONFIG_DENGON_DASH_URL/ingest/batch` en HTTPS, racine épinglée,
    `Authorization: Bearer`. Une session TLS par batch (keep-alive coupé :
    les ~40 Ko de TLS sont rendus au tas entre deux envois).
-4. `dengon_ship_decide(statut)` : 2xx → `dengon_ring_commit` ; 400/413 →
-   retiré quand même et compté (sinon il bloquerait la file) ; 401/403 →
-   gardé, attente de 60 s ou d'un nouveau jeton ; réseau/TLS/5xx → gardé,
-   backoff 1 s → 60 s avec gigue.
-5. Hors ligne, le ring (12 Kio) se remplit puis écrase ses plus anciennes
+4. `dengon_ship_step()` (machine à états de `dengon_ship_policy.c`, revue
+   PR #120) : 2xx → `dengon_ring_commit` ; 400/413/422 → retiré et compté ;
+   401/403 → gardé, attente de 60 s ou d'un nouveau jeton ; 3xx, 404, autres
+   4xx → **gardé** (probable mauvaise configuration), attente de 60 s ;
+   réseau/TLS/408/429/5xx → gardé, backoff 1 s → 60 s avec gigue. Lot refusé
+   par dengon-core (entrée hors contrat) ou 5 × 5xx d'affilée → reprise
+   **une entrée par lot** pour isoler la fautive, seule retirée.
+5. Hors ligne, le ring (8 Kio) se remplit puis écrase ses plus anciennes
    entrées, comptées (`logs_dropped` de `relay.health`). Au retour du
    réseau il se vide dans l'ordre, 1 batch/s. Un `commit` après écrasement
    ne retire que les entrées encore présentes (identifiants croissants).
@@ -487,7 +490,7 @@ En fonctionnement :
   mémoire » : tampon statique fixe, jamais d'allocation. Le journal complet
   reste de toute façon sur littlefs. Conséquence : ce qui est dans le ring au
   moment d'un redémarrage n'est pas renvoyé. Écart consigné.
-- **12 Kio par défaut** (`CONFIG_DENGON_SHIP_RING_BYTES`) : ~50 entrées. Le tas
+- **8 Kio par défaut** (`CONFIG_DENGON_SHIP_RING_BYTES`) : ~33 entrées (12 Kio à l'origine, réduit quand la pile de la tâche d'envoi est passée de 8 à 12 Ko pour le TLS : marge mesurée 1 188 o → 5 288 o, revue PR #120). Le tas
   libre mesuré à l'US-308 (128 Ko, avant Wi-Fi) doit encore porter Wi-Fi
   (~50 Ko) et une session TLS (~35-40 Ko).
 - **Signature en Rust, pas en C.** Le JSON canonique et Ed25519 existent déjà

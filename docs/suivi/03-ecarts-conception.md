@@ -38,6 +38,24 @@ et le mentionner dans l'entrée de journal.
 - **Conséquence :** les pairs qui avaient appairé l'ancienne identité doivent
   refaire l'appairage QR. À revoir quand contacts et messages seront persistés
   (la réinitialisation les rendrait alors orphelins).
+### 2026-09-29 — US-309 : jeton et mot de passe Wi-Fi en clair sur la console série (revue PR #120)
+
+- **Prévu :** `docs/synthese/06-securite.md` : secrets protégés sur l'appareil
+  (NVS chiffré, clés hors de portée).
+- **Réel :** le JWT (`dash token <jwt>`) et le mot de passe Wi-Fi
+  (`wifi <ssid> <mdp>`) sont tapés **en clair** sur la console série, et
+  stockés en NVS **non chiffré** (écart NVS déjà consigné à l'US-308).
+  Quiconque branche un câble série lit l'écho de la console ou la NVS.
+- **Raison :** prototype sans provisionnement ; la console est le seul canal
+  d'administration.
+- **Conséquences :** relais de démo seulement. Le jeton ne donne que le droit
+  de poster les événements **de ce relais** (le dashboard vérifie en plus la
+  signature Ed25519, dont la clé ne sort pas du handle Rust). Pistes : NVS
+  chiffré (eFuse), provisionnement par BLE authentifié.
+- **Doc de conception mise à jour ?** non.
+
+---
+
 ### 2026-09-29 — US-309 sur carte : horodatage avant SNTP, reconnexion lente, intermédiaire TLS épinglé
 
 - **Prévu :** `docs/synthese/08` §6 : NTP au boot, événements horodatés en
@@ -68,7 +86,7 @@ et le mentionner dans l'entrée de journal.
   `docs/synthese/09` §7 : « enregistrer chaque relais via `POST /api/nodes` et
   lui remettre un JWT ». `09` §9 décrit une signature **par enveloppe**.
 - **Réel :**
-  1. **Buffer ring en RAM** (12 Kio par défaut, `CONFIG_DENGON_SHIP_RING_BYTES`),
+  1. **Buffer ring en RAM** (8 Kio par défaut depuis la revue #120, `CONFIG_DENGON_SHIP_RING_BYTES`),
      alimenté par `ledger_task`. Le journal complet reste en littlefs (US-308),
      mais le ring d'export est perdu à un redémarrage : ce qui n'était pas
      encore parti n'est pas renvoyé (le journal, lui, reste vérifiable par

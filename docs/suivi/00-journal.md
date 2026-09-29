@@ -10,6 +10,69 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-309 : retours de revue de la PR #120 (Oswin), mesures sur carte
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/components/dengon_ship_core/`,
+`main/{dengon_ship.c,dengon_wifi.c,dengon_relay_app.c,dengon_console.c,CMakeLists.txt,Kconfig.projbuild}`,
+`tools/register_relay.py`, `crates/dengon-core/src/observability/batch.rs`, `docs/suivi/`.
+**Lot :** US-309 (issue #47), PR #120.
+
+### Fait
+- **Politique d'envoi** refaite en machine à états C pure
+  (`dengon_ship_step`, `dengon_ship_policy.c`) : `DROP` limité à 400/413/422 ;
+  3xx, 404 et autres 4xx → `HOLD` (lot gardé, 60 s) ; entrée hors contrat ou
+  5 × 5xx d'affilée → lots d'une entrée pour isoler la fautive, seule
+  retirée ; compteurs remis à zéro après 401/HOLD. 6 tests Unity de plus.
+- `dengon_ship.c` : batch construit une fois (tampon estimé, reprise exacte
+  si trop court) ; compteurs, statut et jeton sous mutex ; message 401 avec
+  ses trois causes ; marge de pile exposée (`dash status`, bilan de santé,
+  qui affiche aussi `tas_min`).
+- `dengon_wifi.c` : SSID journalisé seulement en ASCII imprimable ; une seule
+  voie de reconnexion au changement d'identifiants (plus de
+  `esp_wifi_connect()` concurrent du minuteur).
+- `batch.rs` : événements sérialisés une fois ; `BatchError::NodeMismatch`.
+- CMake : `WARNING` si la racine du dashboard manque. `register_relay.py` : IP
+  unique marquée `NOSONAR` (Sonar S1313), hôtes autorisés, TLS 1.2 minimum
+  (Sonar S4423/S8703, commit précédent).
+- **Mesure sur carte** (point 10 de la revue) : marge de pile de
+  `dengon_ship` = **1 188 o** sur 8 Ko → pile à 12 Ko, marge **5 288 o** ; ring
+  ramené de 12 à 8 Kio pour garder le même tas. Tas minimal ~10,2 Ko.
+- Écart consigné : jeton et mot de passe Wi-Fi en clair sur la console série.
+
+### Pourquoi / décisions
+- `HOLD` plutôt que `RETRY` pour 3xx/404 : une mauvaise configuration ne se
+  répare pas plus vite en réessayant toutes les secondes.
+- Isolement plutôt que plafond d'essais qui jetterait tout le lot.
+- Pile 12 Ko + ring 8 Kio : un débordement de pile plante la carte, un tas
+  court fait seulement échouer un envoi (réessayé).
+
+### Écarts vs conception
+- Ajout : secrets en clair sur la console → `03-ecarts-conception.md`.
+
+### Appris
+- rien de nouveau
+
+### État après cette session
+- Retours de revue traités sauf la racine CA définitive (à poser depuis le
+  VPS avant le 2026-10-05).
+- Fiche(s) module mise(s) à jour : `firmware-relay.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker … dengon_ship_core/test_apps (linux)          → 16 Tests 0 Failures
+$ cargo fmt --check ; cargo clippy --workspace --all-targets --all-features -D warnings → OK
+$ cargo test --workspace --all-features --locked        → 534 passed, 0 failed
+$ cargo llvm-cov -p dengon-core --summary-only          → observability/batch.rs : lignes 90,80 %, régions 92,31 %
+$ idf.py build flash (carte relay-9309e5)               → OK
+carte, 1er flash : « pile_min …/ship=…/1188 », tas_min=11276, 202 ×4
+carte, pile 12 Ko + ring 8 Kio : ship=5288, tas_min=10196 ;
+  coupure hotspot ~45 s → reconnexion, 202 ×4, envoyés 9, perdus 0
+```
+- Non vérifié : chemins `HOLD`/isolement sur carte (couverts en Unity).
+
+---
+
 ## 2026-09-29 — US-311 : rebase de la PR #112 sur `main` (après US-308/US-306)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

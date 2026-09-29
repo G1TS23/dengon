@@ -39,11 +39,14 @@ menu "dengon — relais"
 
         config DENGON_SHIP_RING_BYTES
             int "Taille du buffer ring d'export (octets)"
-            default 12288
+            default 8192
             range 2048 65536
             help
                 RAM réservée aux entrées de journal en attente d'envoi. Une
-                entrée pèse ~250 o (préfixe compris) : 12 Kio ≈ 50 entrées.
+                entrée pèse ~250 o (préfixe compris) : 8 Kio ≈ 33 entrées.
+                8 Kio et non 12 depuis que la pile de la tâche d'envoi est
+                passée à 12 Ko (TLS) : même tas libre qu'avant (tas minimal
+                mesuré ~11 Ko).
                 Plein, le ring écrase les plus anciennes (comptées dans
                 `logs_dropped`). Sur WROOM (sans PSRAM), BLE + Wi-Fi + TLS
                 laissent peu de tas : surveiller `heap_free`.
