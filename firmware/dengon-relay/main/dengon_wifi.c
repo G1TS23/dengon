@@ -36,6 +36,9 @@ static char               s_password[PASSWORD_MAX + 1];
 static unsigned           s_failures;
 static bool               s_was_up;
 static bool               s_sntp_started;
+/* Posé par la console (nouveaux identifiants), consommé par le gestionnaire
+   d'événements : seul ce dernier écrit `s_failures` et `s_was_up`. */
+static volatile bool      s_reset_backoff;
 /* Instant (µs, horloge monotone) du dernier changement d'état, pour le
    `duration_s` des événements. */
 static int64_t            s_since_us;
@@ -53,10 +56,19 @@ duree_s(void)
 static void
 journaliser(const char *name)
 {
-    /* SSID échappé a minima : un `"` ou `\` casserait le JSON. On ne met
-       pas le SSID s'il en contient (champ facultatif au contrat). */
+    /* Le SSID n'est journalisé que s'il est en ASCII imprimable, sans `"` ni
+       `\` : un SSID peut légalement contenir des octets de contrôle ou non
+       UTF-8, qui donneraient un JSON invalide, refusé ensuite par dengon-core
+       (revue PR #120). Le champ est facultatif au contrat. */
     char payload[96];
-    bool ssid_sur = strpbrk(s_ssid, "\"\\") == NULL;
+    bool ssid_sur = true;
+
+    for (const char *c = s_ssid; *c != '\0'; c++) {
+        if (*c < 0x20 || *c > 0x7e || *c == '"' || *c == '\\') {
+            ssid_sur = false;
+            break;
+        }
+    }
 
     if (ssid_sur) {
         snprintf(payload, sizeof(payload), "{\"duration_s\":%" PRIu64 ",\"ssid\":\"%s\"}",
@@ -87,6 +99,10 @@ sur_evenement(void *arg, esp_event_base_t base, int32_t id, void *data)
         uint32_t                             delai;
 
         xEventGroupClearBits(s_events, BIT_UP);
+        if (s_reset_backoff) {
+            s_reset_backoff = false;
+            s_failures      = 0;
+        }
         if (s_was_up) {
             s_was_up = false;
             ESP_LOGW(TAG, "Wi-Fi perdu (raison %u)", d->reason);
@@ -233,14 +249,21 @@ dengon_wifi_set_credentials(const char *ssid, const char *password)
     }
     strlcpy(s_ssid, ssid, sizeof(s_ssid));
     strlcpy(s_password, password, sizeof(s_password));
-    s_failures = 0;
     esp_timer_stop(s_retry_timer);
-    esp_wifi_disconnect();
     err = appliquer();
-    if (err == ESP_OK) {
-        err = esp_wifi_connect();
+    if (err != ESP_OK) {
+        return err;
     }
-    return err;
+    /* Une seule voie de (re)connexion, le minuteur : connecté, on coupe et le
+       gestionnaire STA_DISCONNECTED réarme le minuteur ; sinon on l'arme
+       nous-mêmes. Appeler aussi esp_wifi_connect() ici lancerait deux
+       tentatives concurrentes (revue PR #120). Remettre `s_failures` à zéro
+       se fait dans le gestionnaire, seul à l'écrire. */
+    s_reset_backoff = true;
+    if (dengon_wifi_is_up()) {
+        return esp_wifi_disconnect();
+    }
+    return esp_timer_start_once(s_retry_timer, 1000);
 }
 
 bool

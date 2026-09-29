@@ -50,7 +50,10 @@ set(dengon_root_ca "${COMPONENT_DIR}/certs/dashboard_root.pem")
 if(NOT EXISTS "${dengon_root_ca}")
     set(dengon_root_ca "${CMAKE_CURRENT_BINARY_DIR}/dashboard_root_absent.pem")
     file(WRITE "${dengon_root_ca}" "")
-    message(STATUS "dengon: main/certs/dashboard_root.pem absent, export HTTPS coupé")
+    # WARNING et pas STATUS (revue PR #120) : un firmware sans racine
+    # n'exporte rien, ça doit se voir dans le journal de build.
+    message(WARNING "dengon : main/certs/dashboard_root.pem absent — ce firmware "
+                    "N'EXPORTERA RIEN vers le dashboard (voir main/certs/README.md)")
 endif()
 target_add_binary_data(${COMPONENT_TARGET} "${dengon_root_ca}" TEXT
                        RENAME_TO dashboard_root_pem)

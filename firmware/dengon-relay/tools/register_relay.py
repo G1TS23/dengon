@@ -29,7 +29,6 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-URL_DEFAUT = "https://51.255.38.214:8443"
 RACINE_DEFAUT = (
     Path(__file__).resolve().parent.parent / "main" / "certs" / "dashboard_root.pem"
 )
@@ -37,7 +36,10 @@ NODE_ID = re.compile(r"^relay-[0-9a-f]{6}$")
 PUB_SIGN = re.compile(r"^[0-9a-f]{64}$")
 # Seuls hôtes joignables : le dashboard de démo, ou un dashboard local de dev
 # (le script ne doit pas pouvoir servir à poster ailleurs).
-HOTE_VPS = "51.255.38.214"
+# Adresse publique du dashboard de démo (US-224), pas un secret ; la liste
+# d'hôtes autorisés est voulue (revue PR #120, Sonar python:S1313).
+HOTE_VPS = "51.255.38.214"  # NOSONAR
+URL_DEFAUT = f"https://{HOTE_VPS}:8443"
 HOTES_LOCAUX = ("127.0.0.1", "localhost")
 
 

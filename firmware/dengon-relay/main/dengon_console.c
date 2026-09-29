@@ -139,11 +139,12 @@ dash_status(void)
     printf("dashboard : " CONFIG_DENGON_DASH_URL "\n"
            "jeton     : %s\nracine CA : %s\nwifi      : %s (« %s », %d dBm)\n"
            "ring      : %u %% plein, %u en attente\n"
-           "envoyés   : %" PRIu64 "  perdus/refusés : %" PRIu64 "  dernier statut HTTP : %d\n",
+           "envoyés   : %" PRIu64 "  perdus/refusés : %" PRIu64 "  dernier statut HTTP : %d\n"
+           "pile_min tâche d'envoi : %u o\n",
            st.has_token ? "présent" : "absent", st.has_root_ca ? "embarquée" : "absente",
            dengon_wifi_is_up() ? "connecté" : "non connecté", dengon_wifi_ssid(),
            dengon_wifi_rssi(), st.fill_pct, (unsigned)st.pending, st.sent, st.dropped,
-           st.last_status);
+           st.last_status, st.stack_min);
 }
 
 static int

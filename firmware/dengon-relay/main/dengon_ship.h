@@ -35,6 +35,7 @@ typedef struct {
     int      last_status;    /* dernier statut HTTP (<= 0 : pas de réponse) */
     bool     has_token;
     bool     has_root_ca;
+    unsigned stack_min;      /* marge de pile minimale de la tâche d'envoi, octets */
 } dengon_ship_stats_t;
 
 /** Prépare le ring (avant la première entrée de journal) et relit le jeton. */

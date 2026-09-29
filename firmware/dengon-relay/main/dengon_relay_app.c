@@ -251,7 +251,10 @@ courier_task(void *arg)
         UBaseType_t pile_inventory = uxTaskGetStackHighWaterMark(s_inventory_task);
         UBaseType_t pile_ledger = uxTaskGetStackHighWaterMark(s_ledger_task);
 
+        dengon_ship_stats_t ship;
+
         vTaskDelay(pdMS_TO_TICKS(COURIER_PERIOD_MS));
+        dengon_ship_get_stats(&ship);
         dengon_relay_app_lock();
         dengon_relay_poll_courier(s_relay, maintenant());
         dengon_relay_stats(s_relay, &st);
@@ -265,11 +268,13 @@ courier_task(void *arg)
                  "santé : relayés=%" PRIu64 " enveloppes=%" PRIu32 " (déposées %" PRIu64
                  ", remises %" PRIu64 ") cache=%" PRIu32 " rejets=%" PRIu64 "/%" PRIu64
                  " sans_heure=%" PRIu64 " tas=%" PRIu32
-                 " pile_min route/courier/inventory/ledger=%u/%u/%u/%u",
+                 " tas_min=%" PRIu32
+                 " pile_min route/courier/inventory/ledger/ship=%u/%u/%u/%u/%u",
                  st.relayed, st.envelopes_held, st.envelopes_stored, st.envelopes_handed_off,
                  st.cache_len, st.malformed, st.unauthentic, st.clock_unknown,
-                 esp_get_free_heap_size(), (unsigned)pile_route, (unsigned)pile_courier,
-                 (unsigned)pile_inventory, (unsigned)pile_ledger);
+                 esp_get_free_heap_size(), esp_get_minimum_free_heap_size(),
+                 (unsigned)pile_route, (unsigned)pile_courier, (unsigned)pile_inventory,
+                 (unsigned)pile_ledger, ship.stack_min);
     }
 }
 
