@@ -1611,3 +1611,20 @@ importance pour quelques Ko de JSON par seconde.
 n'est relu que sans `sdkconfig` existant (piège n°1 de la fiche) : il faut
 un build propre pour voir l'effet.
 **Où c'est utilisé :** `firmware/dengon-relay/sdkconfig.defaults` §8.
+
+### Ancre TLS qui n'est pas une racine : mbedTLS l'accepte, OpenSSL non (par défaut)
+
+**C'est quoi :** mbedTLS (ESP-IDF) considère tout certificat de sa liste de
+confiance comme une ancre, même un intermédiaire. OpenSSL (donc Python
+`ssl`) exige par défaut une chaîne jusqu'à un certificat auto-signé, sauf avec
+`-partial_chain` / `ssl.VERIFY_X509_PARTIAL_CHAIN`.
+**Pourquoi dans dengon :** faute de la racine Caddy, l'essai US-309 a épinglé
+l'intermédiaire envoyé par le serveur. La carte a réussi du premier coup ;
+`register_relay.py` échouait (« unable to get issuer certificate ») jusqu'à
+l'ajout du drapeau.
+**Piège / surprise :** l'intermédiaire Caddy expire en 7 jours : un firmware
+qui l'épingle cesse d'exporter à cette date sans autre symptôme que des
+échecs TLS.
+**Où c'est utilisé :** `firmware/dengon-relay/tools/register_relay.py`,
+`main/certs/README.md`.
+

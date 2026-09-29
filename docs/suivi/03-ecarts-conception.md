@@ -38,6 +38,28 @@ et le mentionner dans l'entrée de journal.
 - **Conséquence :** les pairs qui avaient appairé l'ancienne identité doivent
   refaire l'appairage QR. À revoir quand contacts et messages seront persistés
   (la réinitialisation les rendrait alors orphelins).
+### 2026-09-29 — US-309 sur carte : horodatage avant SNTP, reconnexion lente, intermédiaire TLS épinglé
+
+- **Prévu :** `docs/synthese/08` §6 : NTP au boot, événements horodatés en
+  temps réel ; racine du dashboard embarquée.
+- **Réel :**
+  1. Tant que le Wi-Fi n'a pas donné l'heure (ou qu'aucun `ANNOUNCE` ne l'a
+     apprise), `ts_ms` = uptime en ms : sur le VPS, `relay.boot` et les
+     premiers `relay.health` sont datés de 1970.
+  2. Reconnexion Wi-Fi par backoff 1 s → 60 s (+ 25 % de gigue) : jusqu'à
+     ~75 s d'attente après le retour du réseau (mesuré ~45 s).
+  3. Essai fait avec l'**intermédiaire** Caddy épinglé (valide jusqu'au
+     2026-10-05) faute d'accès à la racine dans la session.
+- **Raison :** (1) pas d'horloge RTC sauvegardée sur WROOM ; (2) le backoff
+  ménage l'antenne partagée avec le BLE ; (3) contrainte d'accès.
+- **Conséquences :** (1) dates fausses au dashboard pour les événements de
+  démarrage — piste : ne pas exporter avant heure connue, ou recaler au
+  moment de l'envoi ; (2) acceptable pour un export différé ; (3) reflasher
+  avec la racine avant le 2026-10-05.
+- **Doc de conception mise à jour ?** non.
+
+---
+
 ### 2026-09-29 — Export du relais vers le dashboard (US-309) : ring en RAM, jeton manuel, `rssi_avg` Wi-Fi
 
 - **Prévu :** `docs/synthese/08-relais-esp32.md` §4-5 : une tâche `ship_task`

@@ -19,9 +19,9 @@ au contrat `Transport` d'US-105 (US-220), sur le squelette d'US-114.
   téléphone).
 - L'essai sur 2 cartes n'a jamais été fait (ni US-220, ni US-308).
 - Export vers le dashboard (US-309, branche `feat/US-309-https-dashboard`
-  empilée sur US-308) : codé, compilé, cœur testé sur l'hôte, batch accepté
-  par le dashboard lancé en local. **Jamais exécuté sur carte ni contre le
-  VPS** (racine CA du VPS à récupérer, voir `main/certs/README.md`).
+  empilée sur US-308) : vérifié sur **une** carte contre le dashboard du VPS
+  (2026-09-29) : 202, coupure réseau sans perte. Ancre TLS de l'essai =
+  intermédiaire Caddy (valide jusqu'au 2026-10-05), voir `main/certs/README.md`.
 
 ---
 
@@ -647,10 +647,16 @@ carte). Noter le peerID de chacune (`dengon-peer` au boot).
 
 ## Limites connues / TODO
 
-- **US-309 pas exécuté sur carte.** Restent à vérifier : connexion Wi-Fi avec
-  BLE actif (coexistence), tas libre avec une session TLS ouverte, que
-  mbedTLS accepte le certificat au nom d'une IP (sinon
-  `CONFIG_DENGON_DASH_SKIP_CN_CHECK`), 202 contre le VPS, coupure réseau.
+- **US-309 sur carte (2026-09-29)** : Wi-Fi + BLE en coexistence OK, mbedTLS
+  accepte le certificat au nom d'une IP (pas besoin de
+  `CONFIG_DENGON_DASH_SKIP_CN_CHECK`), 202 contre le VPS, coupure ~190 s sans
+  perte. **Tas serré** : ~31–34 Ko libres en régime Wi-Fi, 24,8 Ko relevé
+  pendant une reconnexion + TLS. Pas encore d'essai avec trafic BLE réel
+  (deux téléphones) ni de débordement du ring sur carte.
+- **Horodatage avant SNTP** : les événements produits avant la première
+  connexion Wi-Fi portent l'uptime en ms (le dashboard les date de 1970).
+- **Reconnexion Wi-Fi** : backoff plafonné à 60 s + gigue, donc jusqu'à ~75 s
+  après le retour du point d'accès (mesuré : ~45 s).
 - **`rssi_avg` de `relay.health` = RSSI Wi-Fi** du point d'accès (-120 hors
   connexion) : le transport ne remonte pas le RSSI des voisins BLE.
 - **Jeton de 24 h sans renouvellement** (limite du dashboard US-216) : il

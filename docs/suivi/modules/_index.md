@@ -51,6 +51,8 @@ de son area (proposition d'organisation §10.3 point 3).
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | partiel (transport NimBLE US-220 ; relais dengon US-308 vérifié sur une carte ; essais 2 cartes à faire ; export HTTPS vers le dashboard US-309 codé, pas encore sur carte) | 2026-09-29 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + appairage QR, US-215) | 2026-09-28 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (transport BLE réel, US-213) | 2026-09-28 |
+| `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | partiel (transport NimBLE US-220 ; relais dengon US-308, vérifié sur une carte ; export HTTPS vers le dashboard US-309, vérifié sur une carte contre le VPS ; essais 2 cartes à faire) | 2026-09-29 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
 | `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
 | `dengon-core-ffi` + `dengon-core-embed` (`crates/dengon-core-ffi/`, `crates/dengon-core-embed/`) | [dengon-core-ffi.md](dengon-core-ffi.md) | partiel (US-307 chaîne + header + vecteurs ; US-308 API relais + auto-test Noise, liée par le firmware ; US-309 `build_batch` / `node_id`) | 2026-09-29 |
+| `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-219) + écran Intégrité (US-310) | 2026-09-29 |

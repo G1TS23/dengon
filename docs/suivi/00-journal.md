@@ -188,6 +188,96 @@ Project build complete — 0xf2960 o, 53 % libre (aucun avertissement de compila
 - **Non vérifié :** le nouveau chemin `ledger_task` n'a pas tourné sur carte
   (pas d'entrée > 4 096 o à produire aujourd'hui, pas de test Unity de
   `dengon_relay_app.c`) ; relu à la main uniquement.
+## 2026-09-29 — US-309 : essais sur carte contre le VPS, coupure réseau, redéploiement du dashboard
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/dengon_relay_app.c` (pile ledger),
+`firmware/dengon-relay/tools/register_relay.py`, `main/certs/README.md`,
+`docs/suivi/` ; branche séparée `fix/deploy-vps-uv-version` (`.github/workflows/deploy-vps.yml`).
+**Lot :** US-309 (issue #47), suite de l'entrée précédente.
+
+### Fait
+- Carte ESP32 (`relay-9309e5`, identité US-308 conservée : flash sans
+  effacement) attachée à WSL (`usbipd attach --busid 1-1`), console pilotée
+  par un script pyserial dans le conteneur ESP-IDF.
+- **Dashboard du VPS redéployé** : il tournait encore sur le squelette US-110
+  (`/healthz` + `/ingest/batch` permissif, pas de `/api/nodes`). Deux échecs
+  de `deploy-vps.yml` avant réussite : (1) secret `VPS_KNOWN_HOSTS` sans la
+  clé ED25519 du VPS → remplacé par la ligne `ssh-keyscan -p 2221 -t ed25519`
+  fournie par Paul ; (2) `COPY .uv-version` introuvable : le workflow
+  n'envoyait pas ce fichier de la racine → correctif d'une ligne sur
+  `fix/deploy-vps-uv-version`, déploiement lancé depuis cette branche (= `main`
+  + ce correctif). Le smoke test `/healthz` du workflow a échoué par course
+  (conteneurs en redémarrage) ; revérifié à la main 20 s plus tard : `/healthz`
+  200, routes US-216→219 présentes, `/ingest/batch` sans jeton → 401.
+- **Ancre TLS pour l'essai** : la racine Caddy n'est pas envoyée par le serveur
+  et l'accès SSH au VPS n'était pas disponible dans la session ; on a épinglé
+  l'**intermédiaire** Caddy (envoyé par le serveur, valide jusqu'au
+  2026-10-05) dans `main/certs/dashboard_root.pem` (non versionné). mbedTLS
+  l'accepte comme ancre ; `register_relay.py` active
+  `VERIFY_X509_PARTIAL_CHAIN` pour faire de même.
+- Enregistrement : `dash id` → `register_relay.py` → **201**, `dash token`.
+  Point d'accès : hotspot mobile Windows du PC (SSID/mot de passe générés,
+  jamais écrits dans le dépôt), piloté par PowerShell pour la coupure.
+- **Bout en bout** : Wi-Fi connecté, `N événements acceptés (202)` ; mbedTLS
+  accepte le certificat au nom d'une IP (`SKIP_CN_CHECK` inutile). Côté VPS
+  (`GET /api/stream`) : les événements de `relay-9309e5` sont là.
+- **Coupure réseau** (hotspot arrêté ~190 s) : `relay.wifi_down`, POST
+  `ESP_ERR_HTTP_CONNECT` → réessai, reconnexions Wi-Fi 1 s → 69 s ; ring
+  0 % → 7 % → 10 % → 12 % (5 en attente), 0 perdu ; au retour : 5 puis 2
+  acceptés (202), ring 0 %, 15 envoyés, 0 perdu/refusé. Côté VPS, `event_id`
+  recalculés : **seq 37 → 52 continus, 16/16**.
+- **Bug trouvé sur carte** : marge de pile de `ledger_task` tombée à 1 308 o
+  (elle signe maintenant les événements différés) → pile 8 → 12 Ko, marge
+  mesurée ensuite 5 404 o.
+
+### Pourquoi / décisions
+- Intermédiaire plutôt que `skip`/pas de vérification : la chaîne reste
+  vérifiée ; à remplacer par la racine avant le 2026-10-05 (le firmware
+  livré en CI n'embarque rien, cf. `main/certs/README.md`).
+- Correctif de `deploy-vps.yml` sur une branche dédiée, pas dans la PR US-309
+  (hors périmètre firmware).
+
+### Écarts vs conception
+- `03-ecarts-conception.md` : horodatage des événements d'avant SNTP en temps
+  d'uptime, délai de reconnexion jusqu'à ~75 s, intermédiaire épinglé pour
+  l'essai.
+
+### Appris
+- `04-apprentissages.md` : ancre TLS non auto-signée (mbedTLS vs OpenSSL).
+
+### État après cette session
+- Critères US-309 démontrés sur carte contre le dashboard déployé : HTTPS,
+  JWT, signature Ed25519 acceptée par US-216, buffer ring (accumulation puis
+  vidage sans perte).
+- **Pas fait** : essai avec deux téléphones faisant traverser un message par
+  le relais (Galaxy A16 non visible par adb) ; débordement réel du ring sur
+  carte (couvert par les tests Unity seulement) ; racine CA définitive.
+- Tas libre : ~31–34 Ko en régime Wi-Fi, **24,8 Ko** relevé pendant une
+  reconnexion + envoi TLS. Serré ; à surveiller avec du trafic BLE réel.
+- Fiche(s) module mise(s) à jour : `firmware-relay.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ usbipd attach --wsl --busid 1-1                 (Paul, PowerShell admin) → /dev/ttyUSB0
+$ openssl s_client -connect 51.255.38.214:8443 -CAfile main/certs/dashboard_root.pem -partial_chain
+  → Verify return code: 0 (ok)
+$ idf.py -B build-us309 build flash                → OK (sans erase-flash)
+$ curl …/openapi.json (avant)                      → ['/healthz', '/ingest/batch'] (squelette US-110)
+$ gh workflow run deploy-vps.yml --ref main        → échec : Host key verification failed
+$ gh secret set VPS_KNOWN_HOSTS --env vps-prod     (ligne ssh-keyscan fournie par Paul)
+$ gh workflow run deploy-vps.yml --ref main        → échec : "/.uv-version": not found
+$ gh workflow run deploy-vps.yml --ref fix/deploy-vps-uv-version
+  → build/up OK, smoke /healthz en échec (course) ; à la main : 200, 7 routes, ingest sans jeton 401
+$ python3 tools/register_relay.py --node-id relay-9309e5 --pub-sign 9182…32c0 → 201
+console : dash token … → enregistré ; wifi … → IP 192.168.137.73 ; « 6 événements acceptés (202) »
+hotspot stop → ring 12 % / 5 en attente, 0 perdu ; hotspot start → 202 ×2, 15 envoyés, 0 perdu
+$ curl -N …/api/stream + recalcul event_id         → seq 37→52 continus, 16/16
+```
+- Non vérifié : trafic BLE entre deux téléphones via le relais.
+
+---
+
 ## 2026-09-29 — US-309 : export du relais vers le dashboard (HTTPS, buffer ring, JWT, batchs signés)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
