@@ -19,7 +19,7 @@ de son area (proposition d'organisation §10.3 point 3).
 
 | Module | Fiche | État | Dernière mise à jour |
 |---|---|---|---|
-| `dengon-core` | [dengon-core.md](dengon-core.md) | en cours (+ `sync::status` US-211, `sync::routing` US-209, `protocol::fragment` US-202, `observability` US-208, `api` US-301, `relay` + codec `ANNOUNCE` + `Ledger::resume` US-308, `observability::batch` US-309) | 2026-09-29 |
+| `dengon-core` | [dengon-core.md](dengon-core.md) | en cours (+ `sync::status` US-211, `sync::routing` US-209, `protocol::fragment` US-202, `observability` US-208, `api` US-301, `relay` + codec `ANNOUNCE` + `Ledger::resume` US-308, `observability::batch` US-309, client du relais US-312) | 2026-09-29 |
 | `dengon-core` | [dengon-core.md](dengon-core.md) | en cours (+ `sync::status` US-211, `sync::routing` US-209, `protocol::fragment` US-202, `observability` US-208, `api` US-301 ; ANNOUNCE de lien + accusés US-306) | 2026-09-29 |
 | `dengon-core` | [dengon-core.md](dengon-core.md) | en cours (+ `sync::status` US-211, `sync::routing` US-209, `sync::inventory` US-210, `protocol::fragment` US-202, `observability` US-208) | 2026-09-28 |
 | `dengon-core` | [dengon-core.md](dengon-core.md) | en cours (+ `sync::status` US-211, `sync::routing` US-209, `protocol::fragment` US-202, `observability` US-208, `api` US-301) | 2026-09-28 |
@@ -35,13 +35,15 @@ de son area (proposition d'organisation §10.3 point 3).
 | `dengon-verify` | [dengon-verify.md](dengon-verify.md) | fonctionnel (US-305), appelé par `dashboard/api` (US-310) | 2026-09-28 |
 | `dashboard/api` (FastAPI) | [dashboard-api.md](dashboard-api.md) | esquisse | 2026-09-25 |
 | `contracts/events` (schémas + fixtures) | [contracts-events.md](contracts-events.md) | fonctionnel | 2026-09-10 |
-| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **fonctionnel** : vrai FFI sur `dengon-core::api`, contrat v1 (US-302, + ANNOUNCE US-306) | 2026-09-29 |
+| `dengon-ffi` | [dengon-ffi.md](dengon-ffi.md) | **fonctionnel** : vrai FFI sur `dengon-core::api`, contrat v1 (US-302, + ANNOUNCE US-306 ; + `on_neighbor_announced`/`announce_is_relay` US-312) | 2026-09-29 |
 | `process` (`.github/`) | [processus-github.md](processus-github.md) | 4 workflows requis présents (US-222) ; checks requis de `main` pas encore élargis | 2026-09-28 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + transport BLE réel US-213 + messagerie + appairage QR, sur le **vrai FFI** US-302 ; transport pas encore branché sur le nœud) | 2026-09-29 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | partiel (transport NimBLE US-220 ; relais dengon US-308, vérifié sur une carte ; export HTTPS vers le dashboard US-309, vérifié sur une carte contre le VPS ; essais 2 cartes à faire) | 2026-09-29 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + transport BLE réel US-213 + messagerie + appairage QR, sur le **vrai FFI** US-302 ; transport branché sur le nœud par `Maillage` US-306, scénario 1 démontré sur 2 téléphones) | 2026-09-29 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | partiel (transport NimBLE US-220 ; relais dengon US-308, vérifié sur une carte ; essais 2 cartes à faire) | 2026-09-29 |
 | `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + transport BLE réel US-213 + messagerie + appairage QR, sur le **vrai FFI** US-302 ; transport branché sur le nœud par `Maillage` US-306, scénario 1 démontré sur 2 téléphones ; écran réseau, mode éco, « Renvoyer » US-313) | 2026-09-29 |
+| `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | partiel (transport NimBLE US-220 ; relais dengon US-308, vérifié sur une carte ; export HTTPS vers le dashboard US-309, vérifié sur une carte contre le VPS ; essais 2 cartes à faire ; découpage L1 Android US-312) | 2026-09-29 |
+| `android-app` (`android/`) | [android-app.md](android-app.md) | partiel (service de fond + transport BLE réel US-213 + messagerie + appairage QR, sur le **vrai FFI** US-302 ; transport branché sur le nœud par `Maillage` US-306, scénario 1 démontré sur 2 téléphones ; relais lié par `onNeighborAnnounced` + option « Relais seulement » US-312) | 2026-09-29 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | partiel (transport NimBLE US-220 ; essai 2 cartes à faire) | 2026-09-28 |
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
 | `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |

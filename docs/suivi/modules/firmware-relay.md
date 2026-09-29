@@ -699,6 +699,37 @@ carte). Noter le peerID de chacune (`dengon-peer` au boot).
 - Le workflow `firmware` n'est **pas** dans les checks requis de `main`.
 - US-114 : critères n°2 et n°3 (capture nRF Connect) toujours non démontrés.
 
+## Découpage L1 au format Android (US-312)
+
+Le relais applique maintenant le format de morceau de l'app. L'US-220 posait
+« 1 trame = 1 PDU ATT » sans en-tête, ce qui rendait le relais et les
+téléphones mutuellement illisibles.
+
+- `dengon_transport_core.c` :
+  - **`dengon_tc_on_chunk`** : un morceau = `en-tête:u8 ‖ données`
+    (bit 7 = suite, autres bits à 0) ;
+  - une trame d'un seul morceau part directement à `dengon_tc_on_rx`, sans
+    tampon, ce qui est le cas courant au MTU 517 ;
+  - au-delà, un tampon de 514 o est alloué au premier morceau « suite » et
+    libéré à la fin de la trame, sur morceau invalide ou à la fermeture du
+    lien (règle n°3) ;
+  - morceau vide, bits réservés ou trame > 514 o : réassemblage abandonné,
+    compté dans `bad_chunks`.
+- Émission : `dengon_tc_chunk_count` / `dengon_tc_chunk_at` calculent les
+  morceaux. `transport_nimble.c:emit_chunk` pose l'en-tête puis les données
+  dans un mbuf (`os_mbuf_append`), sans tampon sur la pile de la tâche
+  appelante. Il utilise `ble_gattc_write_no_rsp` en central et
+  `ble_gatts_notify_custom` en périphérique.
+- `route_for_send` / `routes_for_broadcast` : la limite est
+  `DENGON_TC_FRAME_MAX` (514) quel que soit le MTU. Un lien à MTU 23 reçoit
+  une trame de 514 o en 28 morceaux.
+- Tests : `test_apps/main/test_morceaux.c`, 8 cas dont les vecteurs de
+  `FragmentationBleTest.kt`. `test_specifique.c` a été adapté (nouvelle
+  limite, broadcast sur tous les liens). **40 tests, 0 échec** sur la cible
+  `linux`.
+- Pas encore vérifié : sur carte, et la mesure du tas pendant un
+  réassemblage.
+
 ## Pour l'oral
 
 Deux cartes qui se parlent en Bluetooth Low Energy, ce n'est pas symétrique :

@@ -143,6 +143,21 @@ tests de `QrCodeTest`, sont **ignorés** si `libdengon_ffi.so` hôte manque
   redémarrage — l'écran d'appairage devra être rejoué tant que ce n'est pas fait.
 - Pas de SBOM ni de signature de l'APK release.
 
+## Ajouts de l'US-312 : relais
+
+- `on_neighbor_announced(bytes frame) -> string` (méthode de `DengonNode`) :
+  premier `ANNOUNCE` d'un lien → le cœur lie un **relais** (`CAP_RELAY`,
+  sans session) ou un pair (handshake `XX`), et rend le `peer_id` à
+  associer au lien. `Maillage.kt` l'appelle à la place d'`on_peer_connected`.
+- `announce_is_relay(bytes frame) -> boolean` (fonction libre) : `true` pour
+  un `ANNOUNCE` valide qui porte `CAP_RELAY`. Sert à l'option debug « Relais
+  seulement » de l'app.
+- Test `announce_d_un_relais_est_reconnu_et_lie_sans_session`
+  (`src/lib.rs`) : l'`ANNOUNCE` d'un vrai `relay::Relay` est reconnu, lié
+  sans `NOISE_HS` sortant, et `PeerConnected` est émis.
+- `dengon.kt` régénéré (`build-ffi.sh bindings`). Extension du `.udl` v1 à
+  annoncer en point d'équipe (écart US-312).
+
 ## Pour l'oral
 
 « Le FFI, c'est un traducteur, pas un cerveau : 300 lignes qui convertissent
