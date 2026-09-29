@@ -152,6 +152,57 @@ déjà non formatés avant ce changement (non traité).
   `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
   référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
+## 2026-09-29 — US-313 : essai sur appareils (OnePlus 7 Pro + Samsung A16)
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** aucun code ; essai de la PR #122, `.so` construites sous WSL
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Construction de `libdengon_ffi.so`** : le premier APK plantait au lancement
+  (`UnsatisfiedLinkError: libdengon_ffi.so not found`), les `.so` n'étant pas
+  versionnées. Construites sous WSL Ubuntu (rustup + cibles Android,
+  NDK r27c, `cargo-ndk 4.1.2`) avec `android/scripts/build-ffi.sh android`.
+- **Écran Réseau** sur 2 téléphones branchés (OnePlus 7 Pro GM1913,
+  Samsung A16 SM-A165F) + un Pixel 8 Pro à proximité : chacun liste les deux
+  autres sous « Pairs vus (2) » avec leur pseudo (`SM-A165F`, `GM1913`,
+  `Pixel 8 Pro`) et leur `peerID`. « Relais atteints (0) » : aucun relais
+  ESP32 sous la main.
+- **Mode éco** sur le OnePlus : logcat `mode éco : scan à cycle réduit`
+  (11:32:25) ; `dumpsys bluetooth_manager` montre le scan de l'app passé de
+  `LOW_LATENCY` à `LOW_POWER` (scan en cours `ScanMode=LOW_POWER` à 11:32:25).
+  Retour `mode normal` (11:32:48) ; les 2 pairs restent affichés.
+
+### Pourquoi / décisions
+- Le `.so` est construit hors du dossier `target/` du dépôt
+  (`CARGO_TARGET_DIR` dans le home WSL) : le dépôt est sur `/mnt/c`, lent.
+- Le script a été lancé via une copie sans CRLF (`sed 's/\r$//'`) : le
+  checkout Windows convertit ses fins de ligne et `bash` refuse `pipefail`.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- `build-ffi.sh` marche sous WSL Ubuntu à condition d'avoir `build-essential`
+  (le linker hôte des build scripts) et des fins de ligne LF.
+
+### État après cette session
+- Vérifié sur appareil : écran Réseau (pairs), mode éco (scan `LOW_POWER`).
+- **Toujours non vérifié** : « relais atteints » avec un vrai relais, et le
+  bouton « Renvoyer » (il faut un message `EXPIRED`, qu'on ne provoque pas
+  facilement en quelques minutes ; couvert par les tests ViewModel seulement).
+  Effet du mode éco sur la batterie non mesuré.
+- Fiche module et avancement : inchangés (le code n'a pas bougé).
+
+### Vérification (commandes réellement exécutées)
+```
+$ wsl -d Ubuntu ... bash build-ffi.sh android   -> libdengon_ffi.so arm64-v8a + x86_64
+$ ./gradlew.bat assembleDebug ; adb -s <id> install -r app-debug.apk   -> Success (x2)
+$ adb -s c365d658 logcat -s dengon-transport ; adb shell dumpsys bluetooth_manager
+```
+
+---
+
 ## 2026-09-29 — US-313 : écran réseau, mode éco, « Renvoyer », statut « Échec »
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)
