@@ -536,12 +536,7 @@ impl Node {
     /// `msgID` n'est jamais sur le fil, seul `sync::routing`/`sync::courier`
     /// le calculent localement pour dédupliquer).
     fn compute_msg_id(packet: &Packet) -> MsgId {
-        let mut hasher = Sha256::new();
-        hasher.update(packet.header.sender_id);
-        hasher.update(packet.header.timestamp_ms.to_be_bytes());
-        hasher.update([packet.header.packet_type.to_u8()]);
-        hasher.update(&packet.payload);
-        hasher.finalize().into()
+        codec::msg_id(packet)
     }
 
     // ----- Envoi -----------------------------------------------------------

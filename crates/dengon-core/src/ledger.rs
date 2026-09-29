@@ -233,6 +233,10 @@ pub enum Verdict {
 /// de module sur la dépendance différée à `crypto`.
 #[derive(Debug, Clone)]
 pub struct Ledger<S: Signer> {
+    /// Point d'accroche de la première entrée de `entries` : `GENESIS` pour
+    /// un journal complet, ou la dernière entrée déjà persistée pour un
+    /// journal repris ([`Ledger::resume`]) ou vidé ([`Ledger::take_entries`]).
+    base: Anchor,
     entries: Vec<Entry>,
     signer: S,
 }
@@ -240,7 +244,17 @@ pub struct Ledger<S: Signer> {
 impl<S: Signer> Ledger<S> {
     /// Journal vide, prêt à recevoir sa première entrée (`seq = 0`).
     pub fn new(signer: S) -> Self {
+        Self::resume(Anchor::GENESIS, signer)
+    }
+
+    /// Reprend un journal dont les entrées vivent ailleurs (littlefs côté
+    /// relais ESP32, US-308) : seule l'ancre — `seq` suivante et hash de la
+    /// dernière entrée persistée — est gardée en RAM. Le prochain `append`
+    /// prolonge la chaîne exactement là où elle s'était arrêtée, ce qui
+    /// permet de survivre à `esp_restart()` sans tout relire.
+    pub fn resume(anchor: Anchor, signer: S) -> Self {
         Self {
+            base: anchor,
             entries: Vec::new(),
             signer,
         }
@@ -250,7 +264,26 @@ impl<S: Signer> Ledger<S> {
     /// après redémarrage). N'appelle PAS `verify_chain` toute seule :
     /// l'appelant décide quand vérifier (voir le test de reprise).
     pub fn from_entries(entries: Vec<Entry>, signer: S) -> Self {
-        Self { entries, signer }
+        Self {
+            base: Anchor::GENESIS,
+            entries,
+            signer,
+        }
+    }
+
+    /// Ancre de la **prochaine** entrée : ce qu'il faut persister (curseur
+    /// NVS côté relais) pour pouvoir appeler [`Ledger::resume`] plus tard.
+    #[must_use]
+    pub fn anchor(&self) -> Anchor {
+        self.entries.last().map_or(self.base, Anchor::after)
+    }
+
+    /// Retire les entrées en RAM (pour les persister) et avance l'ancre en
+    /// conséquence : la chaîne continue sans elles. Garde la mémoire bornée
+    /// sur le relais (US-308).
+    pub fn take_entries(&mut self) -> Vec<Entry> {
+        self.base = self.anchor();
+        core::mem::take(&mut self.entries)
     }
 
     /// Nombre d'entrées dans le journal.
@@ -268,10 +301,6 @@ impl<S: Signer> Ledger<S> {
         &self.entries
     }
 
-    fn last_hash(&self) -> Hash {
-        self.entries.last().map_or(GENESIS_HASH, |e| e.entry_hash)
-    }
-
     /// Ajoute une entrée au journal et renvoie une référence dessus.
     ///
     /// `seq` est calculé automatiquement (dernière `seq` + 1, ou 0 pour la
@@ -285,8 +314,10 @@ impl<S: Signer> Ledger<S> {
         // pas `Result`), donc saturer est le choix le moins mauvais : au
         // pire, deux entrées consécutives partageraient `seq = u64::MAX`,
         // ce que `verify_chain()` détecte déjà comme `Fork`.
-        let seq = self.entries.last().map_or(0, |e| e.seq.saturating_add(1));
-        let prev_hash = self.last_hash();
+        let Anchor {
+            first_seq: seq,
+            prev_hash,
+        } = self.anchor();
         let entry_hash = Entry::compute_hash(seq, ts_ms, event_name, payload_json, &prev_hash);
         let sig = self.signer.sign(&entry_hash);
         self.entries.push(Entry {
@@ -307,11 +338,11 @@ impl<S: Signer> Ledger<S> {
 
     /// Vérifie la cohérence de la chaîne : hashes, absence de trou, absence
     /// de position dupliquée. Équivaut à [`verify_entries`] ancré sur
-    /// [`Anchor::GENESIS`].
+    /// [`Anchor::GENESIS`] (ou sur l'ancre de reprise, voir [`Ledger::resume`]).
     ///
     /// Ne vérifie PAS la signature : voir [`verify_signatures`] (US-305).
     pub fn verify_chain(&self) -> Verdict {
-        verify_entries(&self.entries, Anchor::GENESIS)
+        verify_entries(&self.entries, self.base)
     }
 
     /// Les entrées dont `seq` tombe dans `range`, dans l'ordre du journal.
@@ -520,6 +551,50 @@ mod tests {
     #[test]
     fn un_journal_vide_est_valide() {
         assert_eq!(ledger().verify_chain(), Verdict::Ok);
+    }
+
+    /// US-308 : le relais persiste les entrées puis redémarre avec la seule
+    /// ancre ; la chaîne complète (avant + après reprise) reste intègre.
+    #[test]
+    fn reprise_depuis_l_ancre_prolonge_la_chaine() {
+        let mut avant = ledger();
+        for i in 0..4 {
+            avant.append("pkt.relayed", "{}", i);
+        }
+        let ancre = avant.anchor();
+        assert_eq!(ancre, Anchor::after(&avant.entries()[3]));
+
+        let mut apres = Ledger::resume(ancre, NullSigner);
+        assert_eq!(apres.anchor(), ancre);
+        assert_eq!(apres.append("pkt.relayed", "{}", 10).seq, 4);
+        apres.append("pkt.relayed", "{}", 11);
+        assert_eq!(apres.verify_chain(), Verdict::Ok);
+
+        let mut tout = avant.entries().to_vec();
+        tout.extend_from_slice(apres.entries());
+        assert_eq!(verify_entries(&tout, Anchor::GENESIS), Verdict::Ok);
+    }
+
+    #[test]
+    fn take_entries_vide_la_ram_sans_casser_la_chaine() {
+        let mut l = ledger();
+        l.append("a", "{}", 0);
+        l.append("b", "{}", 1);
+        let lot1 = l.take_entries();
+        assert!(l.is_empty());
+        assert_eq!(l.anchor(), Anchor::after(&lot1[1]));
+        assert_eq!(l.verify_chain(), Verdict::Ok);
+
+        l.append("c", "{}", 2);
+        assert_eq!(l.verify_chain(), Verdict::Ok);
+        let lot2 = l.take_entries();
+        // Journal vide : `take_entries` ne fait pas reculer l'ancre.
+        assert!(l.take_entries().is_empty());
+        assert_eq!(l.anchor(), Anchor::after(&lot2[0]));
+
+        let mut tout = lot1;
+        tout.extend(lot2);
+        assert_eq!(verify_entries(&tout, Anchor::GENESIS), Verdict::Ok);
     }
 
     #[test]

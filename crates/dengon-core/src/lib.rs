@@ -47,6 +47,7 @@ pub mod identity;
 pub mod ledger;
 pub mod observability;
 pub mod protocol;
+pub mod relay;
 #[cfg(feature = "std")]
 pub mod store;
 pub mod sync;

@@ -50,6 +50,7 @@
 //!
 //! Les frames applicatives chiffrées (L4) sont dans [`app`].
 
+pub mod announce;
 pub mod app;
 
 use alloc::vec::Vec;
@@ -448,6 +449,20 @@ pub fn decode(raw: &[u8]) -> Result<Packet, DecodeError> {
         payload,
         signature,
     })
+}
+
+/// `msgID = SHA-256(sender_id ‖ timestamp_ms ‖ type ‖ payload)` (A-9,
+/// `synthese/05` §3) : jamais transmis, recalculé par chaque nœud à partir
+/// des octets reçus pour dédupliquer (`sync::routing`, `sync::courier`).
+#[must_use]
+pub fn msg_id(packet: &Packet) -> super::types::MsgId {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(packet.header.sender_id);
+    hasher.update(packet.header.timestamp_ms.to_be_bytes());
+    hasher.update([packet.header.packet_type.to_u8()]);
+    hasher.update(&packet.payload);
+    hasher.finalize().into()
 }
 
 /// Curseur de lecture qui ne panique jamais : toute lecture hors bornes
