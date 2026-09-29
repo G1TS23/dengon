@@ -298,6 +298,29 @@ n'avait aucun appelant réel. Empilée sur #119 (branche
 - Pas de nouvel événement `peer.disconnected` ici (écart déjà consigné,
   US-319) : aucun constructeur `observability::peer_disconnected` n'existe
   encore — en ajouter un est un autre travail que « câbler l'existant ».
+## 2026-09-29 — US-321 : essai sur appareil et captures avant/après
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `docs/suivi/assets/us-321/` (captures), suivi
+**Lot :** Lot 3 — app Android
+
+### Fait
+- Essai sur un **Samsung A16 (`SM_A165F`, Android 16)** : `avant.apk` (branche US-313)
+  puis `apres.apk` (US-321) installés par `adb install -r`, permissions accordées par
+  `adb shell pm grant`, captures par `adb exec-out screencap`.
+- Écrans vus : accueil, outils de développement dépliés, conversations (état vide),
+  appairage étape 1, « Appareils à proximité » ; en clair, en sombre
+  (`cmd uimode night yes`) et police 200 % (`settings put system font_scale 2.0`).
+  Réglages du téléphone remis à leur valeur d'origine ensuite.
+- Résultat : pas de texte tronqué à 200 % (les écrans défilent), thème sombre lisible,
+  état vide « Aucune conversation » avec action.
+
+### Pas vu / reste à faire
+- Fil de discussion avec bulles et statuts « Échec » / « Renvoyer » : aucun contact sur
+  ce téléphone, donc jamais affiché sur appareil (seulement en aperçu Compose).
+- États « Bluetooth coupé » et « permission refusée » non essayés.
+- Accessibility Scanner non lancé. Écran de comparaison des 60 chiffres non capturé.
+- Captures de l'accueil « avant » : bouton « Réseau » du build US-313, écran tel quel.
 
 ### Écarts vs conception
 - Aucun nouveau.
@@ -418,6 +441,9 @@ déjà non formatés avant ce changement (non traité).
   `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
   référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
+### État après cette session
+- Captures dans `docs/suivi/assets/us-321/` (`avant-*`, `apres-*`, suffixes `-sombre`, `-x2`).
+
 ## 2026-09-29 — US-321 : refonte du design de l'app (Material 3, accessibilité)
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)
