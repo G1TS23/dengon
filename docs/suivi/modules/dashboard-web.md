@@ -5,11 +5,12 @@ messages suivis + écran de détail (parcours), branchée sur l'API réelle.
 **Correspond à la conception :** [`docs/olivier/dashboard.md`](../../olivier/dashboard.md)
 §3, §4, §8, §9 ; [`docs/synthese/09-dashboard-et-donnees.md`](../../synthese/09-dashboard-et-donnees.md)
 §5 (« Parcours d'un message »), §11.2 (schéma SQLite `messages`/`message_hops`).
-**Dernière mise à jour :** 2026-09-29 (US-310 — écran « Intégrité », rebasé sur US-219)
-**État :** fait (US-219 + US-310) — les deux écrans de l'US-111 consomment
-`GET /api/messages`/`GET /api/messages/{id}`, l'écran `#/integrite` consomme
-`GET /api/integrity` ; tous se rafraîchissent seuls via `GET /api/stream`
-(SSE, US-218). Plus de données bidon.
+**Dernière mise à jour :** 2026-09-29 (US-311 — carte réseau et flotte, rebasé sur US-310)
+**État :** fait (US-219 + US-310 + US-311) — les deux écrans de l'US-111
+consomment `GET /api/messages`/`GET /api/messages/{id}`, `#/integrite`
+consomme `GET /api/integrity`, `#/reseau` et `#/flotte` consomment
+`GET /api/network/graph` et `GET /api/nodes` ; tous se rafraîchissent seuls
+via `GET /api/stream` (SSE, US-218). Plus de données bidon.
 
 ## Vérification visuelle à 360 px — faite le 2026-09-25 (US-111)
 
@@ -42,6 +43,21 @@ contre une vraie instance de l'API (les 20 fixtures golden ingérées,
 `GET /api/messages`/`GET /api/messages/{id}` renvoient la forme attendue,
 CORS vérifié avec un serveur web sur un port différent de l'API). À
 revérifier visuellement dès qu'un navigateur est disponible.
+
+## US-311 — Réseau, flotte, alertes (2026-09-29)
+
+Deux écrans de plus, routés par hash : `#/reseau` (carte SVG : nœuds
+enregistrés + pairs vus, liens pleins s'ils sont actifs, plus épais avec le
+nombre de connexions ; bandeau rouge listant les relais muets) et `#/flotte`
+(une carte par relais : version, dernier contact, uptime, RSSI, pairs,
+tampon de journal ; relais en alerte en premier). Une barre de navigation
+(`data-nav`, `aria-current`) relie les trois écrans. `DengonApi.fetchFlotte()` /
+`fetchReseau()` appellent `GET /api/nodes` / `GET /api/network/graph`. Les
+champs de santé absents s'affichent « — » (vue partielle). Disposition de la
+carte : cercle fixe, sans simulation de forces (lisible à 5-8 appareils).
+
+Vérifié à 360 px avec `chrome-headless-shell` contre l'API réelle :
+[`../assets/us-311/`](../assets/us-311/). Mode sombre non revu.
 
 ## À quoi ça sert
 

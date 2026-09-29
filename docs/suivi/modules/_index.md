@@ -40,4 +40,4 @@ de son area (proposition d'organisation §10.3 point 3).
 | `firmware-relay` (`firmware/dengon-relay/`) | [firmware-relay.md](firmware-relay.md) | esquisse | 2026-09-16 |
 | `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111) | 2026-09-25 |
 | `dengon-core-ffi` + `dengon-core-embed` (`crates/dengon-core-ffi/`, `crates/dengon-core-embed/`) | [dengon-core-ffi.md](dengon-core-ffi.md) | partiel (US-307 chaîne + header + vecteurs ; US-308 API relais + auto-test Noise, liée par le firmware) | 2026-09-29 |
-| `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-219) + écran Intégrité (US-310) | 2026-09-29 |
+| `dashboard-web` (`dashboard/web/`) | [dashboard-web.md](dashboard-web.md) | fait (US-111, US-219) + écran Intégrité (US-310) + réseau, flotte, alertes (US-311) | 2026-09-29 |
