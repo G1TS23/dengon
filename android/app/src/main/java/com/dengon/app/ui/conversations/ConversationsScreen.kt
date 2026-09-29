@@ -28,6 +28,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,6 +76,7 @@ fun MessagerieRoute(viewModel: ConversationsViewModel, onQuitter: () -> Unit) {
             onRetour = viewModel::fermer,
             onBrouillon = viewModel::modifierBrouillon,
             onEnvoyer = viewModel::envoyer,
+            onRenvoyer = viewModel::renvoyer,
         )
     }
 }
@@ -149,6 +151,7 @@ fun FilConversation(
     onRetour: () -> Unit,
     onBrouillon: (String) -> Unit,
     onEnvoyer: () -> Unit,
+    onRenvoyer: (String) -> Unit = {},
 ) {
     val conversation = etat.conversationOuverte ?: return
     val liste = rememberLazyListState()
@@ -165,7 +168,7 @@ fun FilConversation(
             modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            items(etat.messages, key = { it.msgUuid }) { message -> BulleMessage(message) }
+            items(etat.messages, key = { it.msgUuid }) { message -> BulleMessage(message, onRenvoyer) }
         }
         etat.erreur?.let { erreur ->
             Text(
@@ -191,7 +194,7 @@ fun FilConversation(
 }
 
 @Composable
-private fun BulleMessage(message: Message) {
+private fun BulleMessage(message: Message, onRenvoyer: (String) -> Unit) {
     Box(
         modifier = Modifier.fillMaxWidth(),
         contentAlignment = if (message.outgoing) Alignment.CenterEnd else Alignment.CenterStart,
@@ -211,8 +214,14 @@ private fun BulleMessage(message: Message) {
                     Text(
                         libelleStatut(message.status),
                         style = MaterialTheme.typography.labelSmall,
+                        color = if (message.enEchec) MaterialTheme.colorScheme.error else Color.Unspecified,
                         modifier = Modifier.align(Alignment.End),
                     )
+                }
+                if (message.enEchec) {
+                    TextButton(onClick = { onRenvoyer(message.msgUuid) }, modifier = Modifier.align(Alignment.End)) {
+                        Text("Renvoyer")
+                    }
                 }
             }
         }

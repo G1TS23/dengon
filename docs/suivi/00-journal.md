@@ -152,6 +152,40 @@ déjà non formatés avant ce changement (non traité).
   `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
   référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
+## 2026-09-29 — US-313 : écran réseau, mode éco, « Renvoyer », statut « Échec »
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/` (`ui/reseau/`,
+`ui/conversations/`, `ble/Maillage.kt`, `ble/transport/{GattRadio,TransportActif}.kt`,
+`MainActivity.kt`), tests JVM correspondants
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Statut « Échec » explicite** : `Message.enEchec` (sortant + `EXPIRED`) ;
+  la bulle affiche « Échec » en couleur d'erreur, plus un message qui a l'air
+  d'être encore en route.
+- **« Renvoyer »** : bouton sur un message en échec ; `ConversationsViewModel.renvoyer`
+  réémet le même texte au même pair (`sendMessage`) puis vide la radio
+  (`apresEnvoi`). Refus du nœud → erreur « Renvoi impossible ».
+- **Écran réseau** (`ui/reseau/`) : `vueReseau()` (pure, testée) sépare les
+  **relais atteints** (pseudo annoncé `relay-…`) des **pairs vus** ; `Maillage`
+  retient maintenant le pseudo de l'`ANNOUNCE` (`lirePseudo`, `pseudos`).
+  Bouton « Réseau » sur l'écran d'accueil.
+- **Mode éco** : `GattRadio.definirModeEco` bascule le scan de
+  `SCAN_MODE_LOW_LATENCY` à `SCAN_MODE_LOW_POWER` (redémarre le scan en
+  cours) ; `TransportActif.definirModeEco` le retient et le réapplique au
+  prochain démarrage.
+
+### Pourquoi / décisions
+- Pas de « retry » côté cœur : `EXPIRED` est terminal (synthese/07). Renvoyer
+  = nouveau message, plutôt que d'étendre le contrat FFI v1 pour un `Should`.
+- Relais reconnu par convention de pseudo : l'`ANNOUNCE` ne porte pas de
+  capacité exploitable côté téléphone.
+- Mode éco non persisté (mémoire du processus).
+
+### Écarts vs conception
+- « Renvoyer » crée un nouveau message ; relais détecté par préfixe de
+  pseudo — reportés dans `03-ecarts-conception.md`.
 
 ### Appris
 - Rien de nouveau.
@@ -180,6 +214,19 @@ $ node --check app.js && node --check api.js      → OK
   (dont `config.py` avant ce changement) : non touchés.
 - Non vérifié : rafraîchissement live SSE sur ces deux écrans (mécanisme
   inchangé, réutilisé tel quel), rendu à plus de 360 px.
+- Les 5 critères d'acceptation de l'US-313 sont codés. **Non vérifié sur
+  appareil** : l'essai manuel prévu par l'US (relais réel, effet du mode éco
+  sur la découverte) n'a pas été fait.
+- Fiche module mise à jour : `modules/android-app.md`.
+- 01-etat-du-code.md mis à jour : non (`02-avancement.md` mis à jour).
+
+### Vérification (commandes réellement exécutées)
+```
+$ ./gradlew.bat assembleDebug testDebugUnitTest
+BUILD SUCCESSFUL — 101 tests, 0 échec
+```
+- Le mode éco (`GattRadio`) n'a pas de test JVM (API Android BLE) ; seul
+  l'essai sur téléphone peut le vérifier.
 
 ---
 

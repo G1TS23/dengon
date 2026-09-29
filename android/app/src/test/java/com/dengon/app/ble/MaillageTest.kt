@@ -87,6 +87,28 @@ class MaillageTest {
     }
 
     @Test
+    fun `le pseudo de l ANNOUNCE est retenu tant que le lien vit`() {
+        val radio = FauxRadio()
+        val transport = AndroidTransport(radio)
+        transport.start(TransportConfig(localPeerId = ByteArray(8)))
+        val avecPseudo = Maillage(
+            transport,
+            noeud,
+            lireAnnonce = { "bob" },
+            lirePseudo = { "relay-3f2a9c" },
+        )
+        val pair = radio.nouveauPair()
+        radio.connecter(pair)
+        radio.faireRecevoir(pair, "ANNOUNCE bob".toByteArray())
+        avecPseudo.traiter(transport.poll())
+        assertEquals(mapOf("bob" to "relay-3f2a9c"), avecPseudo.pseudos)
+
+        radio.couper(pair, DisconnectReason.BRUTALE)
+        avecPseudo.traiter(transport.poll())
+        assertTrue(avecPseudo.pseudos.isEmpty())
+    }
+
+    @Test
     fun `une premiere trame qui n est pas un ANNOUNCE est jetee`() {
         val pair = radio.nouveauPair()
         radio.connecter(pair)

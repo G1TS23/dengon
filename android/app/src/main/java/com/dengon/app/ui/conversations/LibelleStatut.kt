@@ -1,5 +1,6 @@
 package com.dengon.app.ui.conversations
 
+import com.dengon.app.ffi.Message
 import com.dengon.app.ffi.MessageStatus
 
 /**
@@ -17,3 +18,10 @@ fun libelleStatut(statut: MessageStatus): String = when (statut) {
     MessageStatus.EXPIRED -> "Échec"
     MessageStatus.CANCELLED -> "Annulé"
 }
+
+/**
+ * Un message sortant est **en échec** quand le cœur l'a abandonné (TTL
+ * dépassé, `EXPIRED`) : l'UI l'affiche « Échec » et propose « Renvoyer »
+ * plutôt que de le laisser croire en cours d'acheminement (US-313).
+ */
+val Message.enEchec: Boolean get() = outgoing && status == MessageStatus.EXPIRED

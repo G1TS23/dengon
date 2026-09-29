@@ -395,12 +395,37 @@ class GattRadio(context: Context) : BleRadio {
 
     // --- Rôle central : scan + client GATT ------------------------------------
 
+    /**
+     * Mode éco (US-313) : scan `LOW_POWER` (fenêtres courtes, longues pauses)
+     * au lieu de `LOW_LATENCY`. Un pair est découvert plus lentement, la
+     * batterie tient plus longtemps. Effet immédiat si le scan tourne.
+     */
+    @Volatile
+    var modeEco = false
+        private set
+
+    fun definirModeEco(eco: Boolean) {
+        if (modeEco == eco) return
+        modeEco = eco
+        val (adaptateur, scanne) = synchronized(verrou) { gestionnaire?.adapter to (actif && cfg?.scan == true) }
+        if (adaptateur == null || !scanne) return
+        try {
+            adaptateur.bluetoothLeScanner?.stopScan(rappelScan)
+            demarrerScan(adaptateur)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "changement de mode de scan refusé : ${e.message}")
+        } catch (e: TransportException) {
+            Log.e(TAG, "changement de mode de scan impossible : ${e.message}")
+        }
+    }
+
     private fun demarrerScan(adaptateur: BluetoothAdapter) {
         val scanneur = adaptateur.bluetoothLeScanner
             ?: throw TransportException.Backend("scan BLE non pris en charge")
         // Le filtre est aussi ce qui autorise le scan écran éteint (Android 8.1+).
         val filtre = ScanFilter.Builder().setServiceUuid(ParcelUuid(GattDengon.SERVICE)).build()
-        val reglages = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+        val mode = if (modeEco) ScanSettings.SCAN_MODE_LOW_POWER else ScanSettings.SCAN_MODE_LOW_LATENCY
+        val reglages = ScanSettings.Builder().setScanMode(mode).build()
         scanneur.startScan(listOf(filtre), reglages, rappelScan)
     }
 

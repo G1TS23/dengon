@@ -36,6 +36,7 @@ import com.dengon.app.ui.appairage.AppairageScreen
 import com.dengon.app.ui.appairage.AppairageViewModel
 import com.dengon.app.ui.conversations.ConversationsViewModel
 import com.dengon.app.ui.conversations.MessagerieRoute
+import com.dengon.app.ui.reseau.ReseauRoute
 
 class MainActivity : ComponentActivity() {
 
@@ -106,6 +107,7 @@ private fun DengonApp(
     var showMessagerie by remember { mutableStateOf(false) }
     var showAppairage by remember { mutableStateOf(false) }
     var showTransport by remember { mutableStateOf(false) }
+    var showReseau by remember { mutableStateOf(false) }
 
     // Démarrage auto dès que les permissions sont accordées (une
     // seule fois par passage à `true`, pas à chaque recomposition).
@@ -124,6 +126,8 @@ private fun DengonApp(
                 HelloMeshSpikeScreen(onBack = { showSpike = false })
             } else if (showAppairage) {
                 AppairageScreen(viewModel = appairage, onRetour = { showAppairage = false })
+            } else if (showReseau) {
+                ReseauRoute(onRetour = { showReseau = false })
             } else if (showTransport) {
                 TransportDebugScreen(onRetour = { showTransport = false })
             } else {
@@ -143,6 +147,7 @@ private fun DengonApp(
                     onOpenMessagerie = { showMessagerie = true },
                     onOpenAppairage = { showAppairage = true },
                     onOpenTransport = { showTransport = true },
+                    onOpenReseau = { showReseau = true },
                 )
             }
         }
@@ -159,6 +164,7 @@ private fun DengonScreen(
     onOpenMessagerie: () -> Unit,
     onOpenAppairage: () -> Unit,
     onOpenTransport: () -> Unit,
+    onOpenReseau: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -194,6 +200,9 @@ private fun DengonScreen(
             )
             Button(onClick = onToggleService) {
                 Text(text = if (serviceRunning) "Arrêter" else "Démarrer")
+            }
+            Button(onClick = onOpenReseau) {
+                Text(text = "Réseau")
             }
             // Essais du transport réel sur deux téléphones (US-213).
             Button(onClick = onOpenTransport) {

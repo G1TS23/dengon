@@ -40,6 +40,8 @@ class Maillage(
     private val noeud: DengonNodeInterface,
     /** `peerID` de l'émetteur si `trame` est un `ANNOUNCE` valide, `null` sinon. */
     private val lireAnnonce: (ByteArray) -> String? = ::peerIdDeLAnnonce,
+    /** Pseudo de l'émetteur si `trame` est un `ANNOUNCE` valide (écran réseau, US-313). */
+    private val lirePseudo: (ByteArray) -> String? = { null },
     private val journal: (String) -> Unit = {},
 ) {
     private val pairParLien = HashMap<LinkId, String>()
@@ -48,6 +50,12 @@ class Maillage(
     /** Liens identifiés, pour l'écran de debug. */
     @get:Synchronized
     val pairs: Map<LinkId, String> get() = pairParLien.toMap()
+
+    private val pseudoParPair = HashMap<String, String>()
+
+    /** `peerID` → pseudo annoncé, pour les pairs actuellement reliés. */
+    @get:Synchronized
+    val pseudos: Map<String, String> get() = pseudoParPair.toMap()
 
     /** Traite un lot d'événements du transport, puis vide la sortie du nœud. */
     @Synchronized
@@ -103,6 +111,7 @@ class Maillage(
         }
         pairParLien[lien] = annonce
         lienParPair[annonce] = lien
+        lirePseudo(octets)?.let { pseudoParPair[annonce] = it }
         journal("$lien ↔ $annonce")
         appelerNoeud("connexion de $annonce") { noeud.onPeerConnected(annonce) }
     }
@@ -110,6 +119,7 @@ class Maillage(
     private fun fermer(lien: LinkId) {
         val pair = pairParLien.remove(lien) ?: return
         lienParPair.remove(pair)
+        pseudoParPair.remove(pair)
         appelerNoeud("déconnexion de $pair") { noeud.onPeerDisconnected(pair) }
     }
 
@@ -135,6 +145,14 @@ class Maillage(
 fun peerIdDeLAnnonce(trame: ByteArray): String? =
     try {
         identityFromAnnounce(trame).peerId
+    } catch (e: DengonException) {
+        null
+    }
+
+/** Pseudo annoncé par un `ANNOUNCE` valide, `null` sinon. */
+fun pseudoDeLAnnonce(trame: ByteArray): String? =
+    try {
+        identityFromAnnounce(trame).pseudo
     } catch (e: DengonException) {
         null
     }

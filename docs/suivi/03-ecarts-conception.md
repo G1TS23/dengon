@@ -18,6 +18,20 @@ et le mentionner dans l'entrée de journal.
 
 ---
 
+### 2026-09-29 — « Renvoyer » crée un nouveau message, relais reconnu par son pseudo (US-313)
+
+- **Prévu :** US-313 — bouton « Renvoyer » sur un message en échec ; écran
+  réseau avec « relais atteints ».
+- **Réel :** le cœur n'a pas de reprise d'un message `EXPIRED` (terminal) :
+  « Renvoyer » réémet le texte comme **nouveau** message, l'ancien reste
+  « Échec » dans le fil. Le téléphone ne sait pas qu'un pair est un relais
+  (l'`ANNOUNCE` n'a pas de capacité exploitable) : on le devine au pseudo
+  `relay-…`.
+- **Pourquoi :** évite d'étendre le contrat FFI v1 pour une US `Should`.
+- **Conséquence :** un pair qui choisit le pseudo `relay-x` apparaît comme
+  relais (affichage seulement, aucun effet de sécurité). À remplacer par le
+  champ `caps` de l'`ANNOUNCE` (synthese/09) quand il sera lu.
+
 ### 2026-09-29 — Clé du coffre perdue : l'identité est réinitialisée, sans écran dédié (US-302, revue PR #109)
 
 - **Prévu :** `docs/synthese/06-securite.md` — l'identité de l'appareil est
