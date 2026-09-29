@@ -70,6 +70,74 @@ carte, pile 12 Ko + ring 8 Kio : ship=5288, tas_min=10196 ;
   coupure hotspot ~45 s → reconnexion, 202 ×4, envoyés 9, perdus 0
 ```
 - Non vérifié : chemins `HOLD`/isolement sur carte (couverts en Unity).
+## 2026-09-29 — US-321 : `session.rs` câble `peer.connected`, dernier constructeur `observability` sans site d'appel
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-node/src/session.rs`, `docs/suivi/`.
+**Lot :** suite directe de la revue de PR #119 (Oswin) : `record_peer_connected`
+n'avait aucun appelant réel. Empilée sur #119 (branche
+`feat/US-321-peer-connected-session-wiring`, basée sur
+`feat/US-319-peer-connected-observability`, pas encore mergée).
+
+### Fait
+- `Session::tourner()` (boucle `dengon-node` ⇄ `Transport`) appelle
+  `Node::record_peer_connected` dans le bras `TransportEvent::PeerConnected`,
+  juste après `Node::on_peer_connected` — jusque-là `rssi` était ignorée
+  (`{ peer_link_id, .. }`).
+- `rssi_i8_sature` : conversion `i16` (transport) → `i8` (catalogue), par
+  saturation aux bornes plutôt qu'un `unwrap`/panic — les RSSI BLE réelles
+  tiennent largement dans `i8`, le cas hors plage n'est qu'une garantie de
+  ne jamais paniquer sur une valeur de plateforme imprévue.
+- Sans RSSI (`None`, fréquent sur Android/NimBLE — doc de
+  `TransportEvent::PeerConnected`) : aucun événement émis, pas de valeur
+  inventée.
+- `role` toujours `Central` : ce transport ne scanne qu'en central
+  (`demarrer()`, `advertise: false`), jamais en pair annoncé.
+- 2 tests ajoutés : `connexion_avec_rssi_emet_peer_connected` (vérifie
+  `rssi`/`role` dans le payload) et `connexion_sans_rssi_n_emet_pas_peer_connected`.
+
+### Pourquoi / décisions
+- Pas de nouvel événement `peer.disconnected` ici (écart déjà consigné,
+  US-319) : aucun constructeur `observability::peer_disconnected` n'existe
+  encore — en ajouter un est un autre travail que « câbler l'existant ».
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- Les **4 constructeurs représentatifs** de `observability` (`pkt_seen`,
+  `pkt_relayed`, `msg_queued`, `peer_connected`) ont maintenant chacun un
+  site d'appel réel en production : `pkt.seen`/`msg.queued` dans
+  `dengon-core::api`, `pkt.relayed` dans `relay.rs`/firmware (US-308,
+  mergée #110), `peer.connected` dans `dengon-node::session.rs` (cette
+  session). #22 (US-208) reste ouverte pour deux raisons résiduelles :
+  `peer.connected` sans `peer.disconnected` (écart consigné), et aucun de
+  ces sites d'appel n'est encore mergé sur `main` via cette pile de PR
+  (#114 et #116 le sont, #119 et cette branche ne le sont pas encore).
+- Fiche module mise à jour : `02-avancement.md` (lignes `dengon-core` et
+  `dengon-node`).
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo build -p dengon-node
+Finished
+
+$ cargo test -p dengon-node
+5 passed (1 suite)
+
+$ cargo test --workspace
+526 passed, 2 ignored (33 suites)
+
+$ cargo fmt --all -- --check
+(rien, après un premier passage cargo fmt)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+```
 
 ---
 
