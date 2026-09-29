@@ -43,6 +43,56 @@ laissé ouvert par la PR #87 (`Refs #28`, aucun appareil sur le poste).
 ### Écarts vs conception
 - Un seul appareil, pas une « matrice » : un seul cas couvert (Android 12,
   arm64, 6,7″).
+## 2026-09-29 — US-302 : rebase de la PR #109 sur `main` + corrections de la revue
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `.github/workflows/android.yml`, `crates/dengon-ffi/src/{convert.rs,lib.rs}`,
+`android/app/src/main/.../{DengonApplication.kt,identite/CleCoffre.kt,identite/IdentiteLocale.kt,ui/conversations/ConversationsViewModel.kt}`,
+`android/app/src/test/.../identite/IdentiteLocaleTest.kt`, `docs/suivi/`.
+**Lot :** US-302, branche `feat/US-302-ffi-reel` (PR #109), base `main`
+(après #106, #107, #108).
+
+### Fait
+- **Rebase** sur `main`. Conflit add/add sur `android.yml` (#107 l'avait créé
+  entre-temps) : les deux jobs **fusionnés à la main** sous le même nom de
+  check `android`. Gardé de #107 : en-tête et ses deux règles, `setup-java`
+  (JDK 17), `android-actions/setup-android`, cache `gradle/actions/setup-gradle`
+  (lecture seule hors `main`). Gardé de la PR : filtre étendu au FFI et au
+  cœur, Rust + cibles Android, `cargo-ndk`, `build-ffi.sh`, garde de dérive
+  de `dengon.kt`, garde `skipped="0"` du test d'intégration, APK publié. Le
+  commit `fix(ci)` (JDK/NDK lus dans le shell) s'est vidé au rebase : le JDK
+  vient désormais de `setup-java`, le NDK reste lu dans le shell.
+- `02-avancement.md` : lignes doublées par le rebase fusionnées (une seule
+  ligne `App Android`, `dengon-ffi`, workflow `android`).
+- Revue #2 — **clé du Keystore perdue = crash permanent** :
+  `CleCoffre.cle` lève `CleIrrecuperable` si l'enveloppe ne s'ouvre plus ;
+  `IdentiteLocale.cleDuCoffre` oublie alors clé + coffre et repart d'une
+  identité neuve (idem pour un coffre sans clé enregistrée). 3 tests JVM
+  avec une fausse source. Écart consigné.
+- Revue #3 — **`open` sur le thread principal** : `DengonApplication`
+  lance l'ouverture du nœud dans `onCreate` sur un thread de fond ; le
+  `lazy` synchronisé fait attendre l'UI seulement si elle n'est pas finie.
+- Revue #4 — **course au premier lancement** : méthodes de `CleCoffre`
+  `@Synchronized`.
+- Revue #5 — `identity_from_ffi` compare les `peer_id` **décodés** : les
+  majuscules sont tolérées comme dans `peer_id_from_str`. Test
+  `carte_au_peer_id_en_majuscules_acceptee`.
+- Revue #6 — TODO(US-306) dans le KDoc de `ConversationsViewModel` : le
+  `Mutex` du nœud sera partagé avec le service, appels à sortir de l'UI.
+- Revue #7 (annonce du contrat `.udl` v1 en point d'équipe) : **pas faite
+  ici**, à la charge de l'équipe avant le merge.
+
+### Pourquoi / décisions
+- Réinitialisation automatique plutôt qu'un écran « identité
+  irrécupérable » : le coffre est de toute façon illisible et contacts /
+  messages ne sont pas persistés ; un écran demanderait une ouverture
+  asynchrone côté UI (US-306).
+- Ouverture anticipée plutôt qu'un état « ouverture » dans l'UI : aucun
+  changement des ViewModels ni de leurs tests ; le reste suit l'US-306.
+
+### Écarts vs conception
+- Clé du coffre perdue → identité réinitialisée : reporté dans
+  `03-ecarts-conception.md`.
 
 ### Appris
 - Rien de nouveau.
@@ -66,6 +116,20 @@ $ adb … input tap / input text / uiautomator dump / screencap             OK
   téléphone.
 - Non vérifié : autres tailles d'écran, paysage, thème sombre de l'app,
   progression des statuts au-delà de « En attente ».
+- Fiches mises à jour : `modules/android-app.md`, `modules/dengon-ffi.md`.
+- 01-etat-du-code.md mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                              OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings   OK
+$ cargo test --workspace --all-features --locked        474 passed, 2 ignored
+```
+- **Non vérifié en local :** ni JDK ni SDK Android sur la machine (le SDK de
+  la session US-302 n'y est plus) : le code Kotlin (dont les 3 nouveaux
+  tests de `IdentiteLocaleTest`) et le workflow fusionné ne sont vérifiés que
+  par le job CI `android` de la PR. Rien testé sur téléphone, en particulier
+  pas la perte réelle de la clé du Keystore.
 
 ---
 

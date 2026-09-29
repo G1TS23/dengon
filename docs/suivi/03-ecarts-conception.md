@@ -18,6 +18,29 @@ et le mentionner dans l'entrée de journal.
 
 ---
 
+### 2026-09-29 — Clé du coffre perdue : l'identité est réinitialisée, sans écran dédié (US-302, revue PR #109)
+
+- **Prévu :** `docs/synthese/06-securite.md` — l'identité de l'appareil est
+  stable ; rien ne décrit le cas où la clé du Keystore qui protège le coffre
+  disparaît.
+- **Réel :** si l'enveloppe de la clé du coffre ne s'ouvre plus (clé du
+  Keystore effacée ou invalidée, `AEADBadTagException`/`InvalidKeyException`),
+  ou si le coffre existe sans clé enregistrée, `IdentiteLocale.cleDuCoffre`
+  **oublie** clé et coffre et en tire une neuve : nouvelle identité, nouveau
+  `peerId`, avertissement dans logcat seulement. Aucun écran « identité
+  irrécupérable » n'est montré.
+- **Pourquoi :** avant la revue, l'app plantait à chaque lancement, sans
+  issue (`by lazy` relance l'exception à chaque accès). Le coffre étant de
+  toute façon illisible, il n'y a rien à sauver ; les contacts et messages ne
+  sont pas persistés (écart ci-dessous), donc la perte se limite à l'identité.
+  Un écran de confirmation demanderait de rendre l'ouverture du nœud
+  asynchrone côté UI, prévu avec l'US-306.
+- **Conséquence :** les pairs qui avaient appairé l'ancienne identité doivent
+  refaire l'appairage QR. À revoir quand contacts et messages seront persistés
+  (la réinitialisation les rendrait alors orphelins).
+
+---
+
 ### 2026-09-29 — `dengon-core-embed` : racine de workspace séparée, hors du workspace principal (US-307)
 
 - **Prévu :** `docs/synthese/08-relais-esp32.md` §3 attend `libdengon_core.a`

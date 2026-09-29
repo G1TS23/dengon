@@ -10,7 +10,7 @@ téléphones ; s'y ajoutent les écrans de messagerie (US-214) et d'appairage QR
 §2.7 (contraintes d'arrière-plan Android 14/15) ; `docs/olivier/proposition-organisation-github.md`
 US-109, US-213 ; `crates/dengon-ble/src/transport.rs` (le contrat, US-105) et
 `crates/dengon-ble/src/conformance.rs` (la suite de conformité).
-**Dernière mise à jour :** 2026-09-29 (US-302 : l'app tourne sur le vrai FFI)
+**Dernière mise à jour :** 2026-09-29 (US-302 : l'app tourne sur le vrai FFI ; corrections revue PR #109)
 **État :** partiel — service de fond (US-109) + transport BLE réel (US-213) +
 messagerie (US-214) + appairage QR (US-215), **sur le vrai FFI** depuis
 l'US-302 ; le transport n'est pas encore branché sur le nœud (US-306) — voir
@@ -589,9 +589,9 @@ Depuis l'US-302, l'app n'appelle plus aucun bouchon : `ffi/DengonTypes.kt` et
 
 | Élément | Fichier | Rôle |
 |---|---|---|
-| `DengonApplication.noeud` | `DengonApplication.kt` | **Le** `DengonNode` du processus, ouvert au premier accès. Partagé par l'UI et, à l'US-306, par le service de premier plan. |
-| `IdentiteLocale.ouvrirNoeud` | `identite/IdentiteLocale.kt` | `DengonNode.open(filesDir/dengon, CleCoffre.cle(ctx), Build.MODEL)`. Le contournement US-215 (pseudo hexadécimal aléatoire pour distinguer les `peerId` du bouchon) disparaît : le `peerId` vient des vraies clés. |
-| `CleCoffre.cle` | `identite/CleCoffre.kt` | Clé de 32 o du coffre, tirée une fois, rangée **enveloppée** (AES-GCM par une clé du Keystore Android) dans les SharedPreferences. Écrite par `commit()` avant le coffre. |
+| `DengonApplication.noeud` | `DengonApplication.kt` | **Le** `DengonNode` du processus (`lazy` synchronisé). Ouverture lancée dès `onCreate` sur un thread de fond (revue PR #109, risque d'ANR) : l'activité ne l'attend que si elle n'est pas finie. Partagé par l'UI et, à l'US-306, par le service de premier plan. |
+| `IdentiteLocale.ouvrirNoeud` | `identite/IdentiteLocale.kt` | `DengonNode.open(filesDir/dengon, cleDuCoffre(…), Build.MODEL)`. `cleDuCoffre` (testée en JVM avec une fausse source) réinitialise l'identité si la clé est irrécupérable ou si le coffre n'a plus de clé, au lieu d'un crash à chaque lancement (voir `03-ecarts-conception.md`). Le contournement US-215 (pseudo hexadécimal aléatoire pour distinguer les `peerId` du bouchon) disparaît : le `peerId` vient des vraies clés. |
+| `CleCoffre.cle` | `identite/CleCoffre.kt` | Clé de 32 o du coffre, tirée une fois, rangée **enveloppée** (AES-GCM par une clé du Keystore Android) dans les SharedPreferences. Écrite par `commit()` avant le coffre. Méthodes `@Synchronized` (course au premier lancement, revue PR #109) ; enveloppe illisible → `CleIrrecuperable` ; `oublier` efface clé et entrée Keystore. |
 | `AppairageViewModel(onContactVerifie)` | `ui/appairage/AppairageViewModel.kt` | À la confirmation du code 60 chiffres, la carte complète du contact est transmise à `noeud::addContact` — sans cela `sendMessage` répondrait `UnknownPeer`. |
 | Aperçus Compose | `ui/conversations/ConversationsScreen.kt` | Données fixes : la lib native n'existe pas dans le rendu d'aperçu. |
 | `FauxNoeud` | `src/test/.../ui/conversations/FauxNoeud.kt` | L'ancien bouchon, déplacé dans les **tests** de l'UI de messagerie. |
@@ -603,7 +603,9 @@ ajoutées pour JNA (`proguard-rules.pro`) ; `assembleRelease` vérifié.
 Ce qui reste pour l'US-306 : aucune radio n'alimente encore le nœud
 (`AndroidTransport`, US-213, à brancher sur `onPeerConnected` /
 `onBytesReceived` / `takeOutgoing`), et contacts / messages ne survivent pas
-à un redémarrage.
+à un redémarrage. Les appels du `ConversationsViewModel` restent synchrones
+alors qu'ils prennent le `Mutex` du nœud, bientôt partagé avec le service :
+à passer sur un dispatcher d'E/S (TODO dans le KDoc).
 
 ## Pour l'oral
 

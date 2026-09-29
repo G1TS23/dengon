@@ -2,7 +2,7 @@
 
 **Rôle en une phrase :** le pont qui permet à l'application Android, écrite en Kotlin, d'appeler le cœur écrit en Rust.
 **Correspond à la conception :** [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §3 et §5 ; [`docs/powl/09-data-model.md`](../../powl/09-data-model.md) §1/§3 (formats QR, code de vérification).
-**Dernière mise à jour :** 2026-09-29 (US-302)
+**Dernière mise à jour :** 2026-09-29 (US-302 ; corrections revue PR #109)
 **État :** **fonctionnel** — vrai FFI branché sur `dengon_core::api` (US-301). Plus aucun bouchon, ni en Rust ni en Kotlin. Contrat étendu en v1 : écart consigné, **à annoncer en point d'équipe**.
 
 > Historique : l'US-106 avait livré un contrat v0 gelé et deux bouchons
@@ -54,7 +54,7 @@ android/app/src/test/.../ffi/
 | `generate_identity` | `src/lib.rs:319` | Vraies clés, mais **jetable** : seule la carte publique franchit le FFI. Pour les tests ; l'app passe par `open`. |
 | `identity_qr_code` / `identity_from_qr_code` / `verification_code` | `src/lib.rs:329-352` | Délèguent à `dengon_core::identity` (US-205) : QR `dengon:v1:`, code 60 chiffres SHA-512. |
 | `peer_id_to_string` / `peer_id_from_str` | `src/convert.rs:17-31` | `peerID` en base32 minuscules (13 caractères), le format affiché par `identity::peer_id_base32`. Chaîne mal formée → `UnknownPeer`. |
-| `identity_from_ffi` | `src/convert.rs:60` | Reconstruit une `PublicIdentity` depuis Kotlin en **revérifiant** tout : longueurs, clé Ed25519, pseudo, et `peer_id` annoncé = `peer_id` recalculé (sinon `Internal`). |
+| `identity_from_ffi` | `src/convert.rs:60` | Reconstruit une `PublicIdentity` depuis Kotlin en **revérifiant** tout : longueurs, clé Ed25519, pseudo, et `peer_id` annoncé = `peer_id` recalculé, comparés **décodés** : les majuscules sont tolérées comme dans `peer_id_from_str` (revue PR #109) ; sinon `Internal`. |
 | `status_to_ffi` | `src/convert.rs:73` | 4 statuts du cœur → 6 du contrat : `Read`/`Cancelled` ne sont jamais émis. |
 
 ## Flux principal (exemple)
@@ -109,7 +109,7 @@ par une boucle qui recopie les trames.
 
 ## Tests
 
-Rust (`cargo test -p dengon-ffi`, 12 tests) :
+Rust (`cargo test -p dengon-ffi`, 13 tests) :
 
 | Test | Vérifie |
 |---|---|
@@ -119,7 +119,7 @@ Rust (`cargo test -p dengon-ffi`, 12 tests) :
 | `mauvaise_cle_de_coffre_refusee` | mauvaise clé, clé de 31 octets → `Internal` |
 | `envoi_a_un_inconnu_refuse` | `UnknownPeer` |
 | `peer_id_mal_forme_refuse` | 4 chaînes invalides → `UnknownPeer` ; `list_messages` sur un `conv_id` non hexa → vide |
-| `qr_aller_retour`, `carte_au_peer_id_falsifie_refusee`, `code_de_verification_symetrique_60_chiffres`, `pseudo_vide_refuse` | fonctions libres |
+| `qr_aller_retour`, `carte_au_peer_id_falsifie_refusee`, `carte_au_peer_id_en_majuscules_acceptee`, `code_de_verification_symetrique_60_chiffres`, `pseudo_vide_refuse` | fonctions libres |
 | `convert::tests` (2) | base32 et hexadécimal, aller-retour et longueur stricte |
 
 Kotlin (`./gradlew testDebugUnitTest`) : `DengonNodeIntegrationTest` (4 tests,
