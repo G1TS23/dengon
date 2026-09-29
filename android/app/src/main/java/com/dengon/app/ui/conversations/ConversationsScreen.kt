@@ -80,8 +80,11 @@ fun MessagerieRoute(
 ) {
     val etat by viewModel.etat.collectAsState()
 
-    // Interrogation périodique du nœud, tant que l'écran est affiché.
+    // Interrogation périodique du nœud, tant que l'écran est affiché. Relecture
+    // d'abord : un contact appairé depuis la création du ViewModel n'émet aucun
+    // événement, et sa conversation n'apparaissait pas (constaté sur 2 téléphones).
     LaunchedEffect(viewModel) {
+        viewModel.rafraichir()
         while (true) {
             delay(PERIODE_SONDAGE_MS)
             viewModel.sonder()
