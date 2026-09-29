@@ -1,18 +1,23 @@
 # Module : `firmware-relay` (`firmware/dengon-relay/`)
 
-**Rôle en une phrase :** le firmware du relais ESP32 — un transport BLE NimBLE
-à rôle double (annonce + scan, serveur + client GATT) qui échange des **octets
-opaques** avec les autres nœuds, conforme au contrat `Transport` d'US-105
-(US-220), sur le squelette d'US-114.
+**Rôle en une phrase :** le firmware du relais ESP32 : un nœud dengon (routage,
+réconciliation d'inventaire, courrier d'enveloppes, journal chaîné, logique de
+`dengon-core` liée en `libdengon_core.a`, US-308). Il tourne au-dessus d'un
+transport BLE NimBLE à rôle double qui échange des **octets opaques**, conforme
+au contrat `Transport` d'US-105 (US-220), sur le squelette d'US-114.
 **Correspond à la conception :** [`docs/synthese/08-relais-esp32.md`](../../synthese/08-relais-esp32.md)
 §2-4, [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md)
 §3 et §5, [`docs/powl/03-network-protocol.md`](../../powl/03-network-protocol.md)
 §2 et §6 (UUID, rôle double, anti-boucle, MTU) — décision C-2 ; contrat
 [`crates/dengon-ble/src/transport.rs`](../../../crates/dengon-ble/src/transport.rs).
-**Dernière mise à jour :** 2026-09-28
-**État :** partiel — transport BLE complet ; testé sur l'hôte, sur carte
-(Unity) et en rôle périphérique contre un téléphone ; **essai sur 2 cartes
-(rôle central) pas encore fait** ; aucune logique dengon (US-307/308).
+**Dernière mise à jour :** 2026-09-29
+**État :** partiel.
+- Transport BLE : complet ; testé sur l'hôte, sur carte (Unity) et en rôle
+  périphérique contre un téléphone.
+- Relais dengon (US-308, branche empilée sur la PR #108 non mergée) :
+  vérifié sur **une** carte (Unity, redémarrages, `dengon-verify`,
+  téléphone).
+- L'essai sur 2 cartes n'a jamais été fait (ni US-220, ni US-308).
 
 ---
 
@@ -47,6 +52,10 @@ docker buildx imagetools inspect espressif/idf:v5.5.5 --format '{{.Manifest.Dige
 Toutes les commandes se lancent **depuis la racine du dépôt** :
 
 ```bash
+# 0. libdengon_core.a (Rust, xtensa) — AVANT tout build du firmware (US-308).
+#    Une fois : `espup install --targets esp32` (toolchain `esp`, ~2 Go).
+firmware/dengon-relay/tools/build_core.sh
+
 # Compiler
 docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD:/repo" -w /repo/firmware/dengon-relay "$IDF" idf.py build
@@ -70,6 +79,17 @@ docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp --device=/dev/ttyUSB0 -v
   idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build \
          -p /dev/ttyUSB0 flash monitor
 
+# Tests Unity du Store (US-308), sur l'HÔTE : journal sur fichier seulement
+docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo" \
+  -w /repo/firmware/dengon-relay/components/dengon_store/test_apps "$IDF" \
+  sh -ec 'idf.py --preview set-target linux && idf.py build && ./build/test_dengon_store.elf'
+
+# Les mêmes + NVS/littlefs réels, sur une carte de TEST (efface l'identité !)
+docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp --device=/dev/ttyUSB0 -v "$PWD:/repo" \
+  -w /repo/firmware/dengon-relay/components/dengon_store/test_apps "$IDF" \
+  idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build \
+         -p /dev/ttyUSB0 flash monitor
+
 # Explorer la configuration (écrit dans sdkconfig, PAS dans sdkconfig.defaults)
 docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp \
   -v "$PWD:/repo" -w /repo/firmware/dengon-relay "$IDF" idf.py menuconfig
@@ -77,6 +97,11 @@ docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp \
 
 `-u "$(id -u):$(id -g)"` et `-e HOME=/tmp` ne sont pas décoratifs : voir le
 piège n°2 plus bas.
+
+⚠ **US-308 change la table de partitions** (`partitions.csv`) : une carte
+flashée avant doit être effacée une fois (`idf.py erase-flash flash`). Sinon
+NVS et littlefs gardent l'ancien découpage. Et comme toujours après un
+changement de `sdkconfig.defaults` : `idf.py fullclean`.
 
 ### Rendre la carte visible (WSL2)
 
@@ -188,10 +213,20 @@ journaux au dashboard.
 Depuis l'US-220, la carte sait **parler BLE avec ses voisins dans les deux
 sens** : elle s'annonce, elle scanne, elle se connecte aux autres nœuds dengon
 (ou accepte leurs connexions), et elle échange avec eux des trames d'octets.
-Elle **ne comprend pas** ce qu'elle transporte — c'est voulu : le décodage, la
-déduplication et le routage viendront de `dengon-core` par FFI (US-307), branché
-sur ce transport en US-308. Cette US dérisque la radio embarquée avant d'y
-mettre de la logique.
+Le transport **ne comprend pas** ce qu'il transporte : c'est voulu.
+
+Depuis l'US-308, la logique vient de `dengon-core` (Rust, module `relay`), lié
+en `libdengon_core.a`. Le relais :
+- décode chaque trame et la déduplique ;
+- relaie ce que l'émetteur autorise (`RELAY_OK`, TTL − 1) ;
+- échange son inventaire avec chaque voisin identifié et lui pousse ce qui
+  lui manque ;
+- garde les enveloppes scellées et les remet à qui les réclame ;
+- consigne tout dans un journal chaîné et signé, écrit sur la flash
+  (littlefs), qui survit aux redémarrages.
+
+Le C ne garde que la radio, le stockage et l'ordonnancement (4 tâches
+FreeRTOS).
 
 ## Structure
 
@@ -203,15 +238,36 @@ firmware/dengon-relay/
   main/                 — l'application : tout ce qui touche NimBLE
     CMakeLists.txt      — composant `main` ; -Wall -Wextra -Werror sur NOTRE code
     Kconfig.projbuild   — menu « dengon — relais » : démo on/off, période
-    main.c              — app_main : NVS, peerID, dengon_transport_start(), démo
+    main.c              — app_main : NVS, relais (identité, journal), transport,
+                          tâches, console — ou la démo US-220 si activée
+    dengon_relay_app.{h,c} — US-308 : handle dengon-core sous mutex, tâches
+                          route / inventory / courier / ledger, relay.boot,
+                          auto-test Noise
+    dengon_console.{h,c}— US-308 : commandes série `ledger`, `restart`, `relay`
     dengon_transport.h  — API C publique = miroir du trait Rust `Transport`
     transport_nimble.c  — glue NimBLE : annonce, scan, connexion, découverte
                           GATT, abonnement, émission/réception, événements GAP
     dengon_gatt.{h,c}   — les 3 UUID et la table GATT ; les écritures sur
                           CHAR_RX partent au transport
-    dengon_peer_id.{h,c}— bouchon d'identité (SHA-256 de la MAC eFuse)
-    dengon_demo.{h,c}   — tâche de démo : poll + trames de test (preuve 2 cartes)
+    dengon_peer_id.{h,c}— peerID en cache : le vrai (US-308, `_set`) ou le
+                          bouchon SHA-256 de la MAC (démo)
+    dengon_demo.{h,c}   — tâche de démo : poll + trames de test (preuve 2 cartes),
+                          compilée seulement si CONFIG_DENGON_TRANSPORT_DEMO
+  partitions.csv        — US-308 : nvs, phy, factory 2 Mo, littlefs 256 Ko
+  dependencies.lock     — versions figées des composants gérés (littlefs)
+  tools/build_core.sh   — produit libdengon_core.a (cargo +esp, xtensa)
+  tools/dump_ledger.py  — capture série (`ledger`) → .bin pour dengon-verify
   components/
+    dengon_core_ffi/    — US-308 : lie libdengon_core.a + header cbindgen
+                          (crates/dengon-core-ffi/include/dengon_core.h)
+    dengon_store/       — US-308 : le `Store` du relais
+      dengon_ledger_file.c   — C PUR : relecture, réparation de fin tronquée,
+                               append + fsync, anneau de 2 fichiers
+      dengon_store.c         — littlefs (/lfs), secrets + curseur en NVS,
+                               ancre de reprise au boot (cible matérielle)
+      idf_component.yml      — joltwallet/littlefs (hors cible linux)
+      test_apps/             — Unity : test_ledger_file.c (linux + esp32),
+                               test_store_cible.c (esp32 seulement)
     dengon_transport_core/          — C PUR, sans NimBLE, testable sur l'hôte
       include/dengon_transport_core.h — types miroirs du contrat + API du cœur
       include/dengon_adv.h            — manufacturer data, règle anti-boucle
@@ -255,6 +311,13 @@ se vérifier qu'avec deux cartes est ainsi réduit au strict minimum.
 | `on_disc()` | `main/transport_nimble.c:301` | Résultat de scan : filtre UUID + Company ID, déjà connecté ?, quota, anti-boucle, puis `ble_gap_connect`. |
 | `on_connect()` / `on_disconnect()` | `main/transport_nimble.c:535` / `:599` | Ouvrent / ferment le lien dans le cœur, puis **réarment annonce et scan**. |
 | `on_mtu` → `on_svc` → `on_chr` → `on_dsc` → `on_subscribed` | `main/transport_nimble.c:506` → `:389` | Chaîne de découverte côté central (une procédure ATT à la fois). |
+| `dengon_relay_app_init()` | `main/dengon_relay_app.c` | US-308 : monte littlefs, relit ou génère les secrets, calcule l'ancre de reprise, crée le relais Rust, journalise `relay.boot`. **Avant** la radio. |
+| `route_task()` | `main/dengon_relay_app.c` | Poll transport → `dengon_relay_link_up/_down/_on_frame`, puis `poll_routing` (relais jitterés), sous mutex ; émission hors mutex. Période 10 ms. |
+| `inventory_task()` / `courier_task()` | `main/dengon_relay_app.c` | `poll_inventory` (1 s) / `poll_courier` + bilan de santé (30 s). |
+| `ledger_task()` | `main/dengon_relay_app.c` | Retire les entrées produites, les ajoute à `ledger.bin` (fsync), **puis** committe le curseur NVS recalculé depuis la dernière entrée écrite. |
+| `dengon_ledger_file_recover()` | `components/dengon_store/dengon_ledger_file.c` | Relit `ledger.bin` en flux, garde la dernière entrée complète, **tronque** ce qui suit (écriture coupée). |
+| `dengon_store_boot_anchor()` | `components/dengon_store/dengon_store.c` | Ancre de reprise : dernière entrée du fichier, sinon curseur NVS (fichier vide après rotation), sinon genèse. |
+| `dengon_store_load_secrets()` | `components/dengon_store/dengon_store.c` | Secrets X25519 + Ed25519 en NVS ; générés une fois par `esp_fill_random` sous `bootloader_random_enable()`. |
 | `demo_task()` | `main/dengon_demo.c:120` | Poll, journalise, diffuse une trame de 64 o toutes les 2 s, sonde MTU-3 / MTU-2 à chaque lien, bouton BOOT = tout fermer. |
 
 ## Flux principal (exemple)
@@ -281,14 +344,43 @@ Deux cartes A (peerID `1a2b…`) et B (peerID `7f00…`) sont allumées :
    `LinkId` **neuf** (link#2), même si NimBLE lui redonne le même
    `conn_handle`.
 
+## Flux US-308 : un message traverse le relais
+
+1. **Boot** : NVS → `dengon_relay_app_init()`. littlefs est monté ;
+   `ledger.bin` est relu (une fin tronquée par une coupure est retirée) et
+   l'ancre en est tirée. Les secrets sont relus de NVS, ou générés au premier
+   démarrage. `dengon_relay_new(…, ancre)` crée le relais, dont le `peerID`
+   est dérivé de sa clé statique. `relay.boot` est journalisé. Le transport
+   démarre avec ce `peerID`, puis vient l'auto-test Noise sur l'aléa
+   matériel, et enfin les 4 tâches et la console.
+2. Un téléphone P1 se connecte : `route_task` voit `PeerConnected` et appelle
+   `dengon_relay_link_up`. Le relais met en file son `ANNOUNCE` signé (TTL 1),
+   que `route_task` émet.
+3. P1 envoie son `ANNOUNCE` : le relais le vérifie, lie le lien à ce `peerID`
+   (et apprend l'heure si la sienne est inconnue), journalise
+   `peer.announce_seen`, puis émet `INVENTORY` et, s'il détient des
+   enveloppes, `ENVELOPE_OFFER`.
+4. P1 envoie un paquet `RELAY_OK` pour P2 (hors de portée) : le routeur
+   l'accepte et programme un relais jitteré. 10 à 220 ms plus tard,
+   `poll_routing` le rend avec TTL − 1 vers tous les autres liens.
+   `pkt.relayed` est journalisé.
+5. `ledger_task`, notifiée, écrit les nouvelles entrées dans `ledger.bin`
+   (fsync), puis le curseur en NVS.
+6. `esp_restart()` : au boot suivant, l'ancre est relue et la prochaine entrée
+   porte `seq` + 1 et le `prev_hash` de la dernière. La commande `ledger`
+   suivie de `dengon-verify` montre une chaîne intacte.
+
 ## Dépendances
 
-- **Internes :** `dengon_transport_core` (composant du projet). L'US-307
-  ajoutera `components/dengon_core_ffi/libdengon_core.a`.
+- **Internes :** `dengon_transport_core`, `dengon_core_ffi`
+  (`libdengon_core.a` + header), `dengon_store`.
+- **Gérées (registre ESP-IDF) :** `joltwallet/littlefs` 1.22.3 (figée dans
+  `dependencies.lock`).
 - **Externes (composants ESP-IDF) :** `bt` (NimBLE), `nvs_flash` (calibration
   radio), `esp_hw_support` (MAC eFuse), `mbedtls` (SHA-256 du bouchon),
   `esp_driver_gpio` (bouton BOOT de la démo), `esp_rom` (CRC32 de la démo),
-  `unity` (tests).
+  `console`, `esp_timer`, `esp_app_format`, `bootloader_support`
+  (`bootloader_random_enable`), `spi_flash` (`relay.boot`), `unity` (tests).
 
 ## Décisions d'implémentation
 
@@ -313,8 +405,28 @@ Deux cartes A (peerID `1a2b…`) et B (peerID `7f00…`) sont allumées :
   événement de cycle de vie (docs/synthese/08 §4).
 - **Démo désactivable** par Kconfig : `CONFIG_DENGON_TRANSPORT_DEMO`.
 - Hérités d'US-114 : `-Werror` sur nos seuls composants, nom d'annonce en
-  réponse de scan (paquet principal à 30/31 octets), partitionnement
-  `SINGLE_APP_LARGE`, MTU fixé deux fois.
+  réponse de scan (paquet principal à 30/31 octets), MTU fixé deux fois.
+- **US-308 — la logique reste en Rust.** Le firmware ne fait que brancher
+  `dengon_core::relay`, testé sous `cargo test`. Aucune règle de routage n'est
+  réécrite en C.
+- **US-308 — un seul handle, un mutex.** Les 4 tâches ont des cadences
+  différentes mais partagent l'état du relais. Les envois passent **hors
+  mutex** (`dengon_transport_send` est thread-safe).
+- **US-308 — le fichier fait foi, le curseur suit.** Entrées fsync-ées
+  d'abord, curseur NVS ensuite, recalculé depuis la dernière entrée *écrite*
+  (pas depuis le relais, qui a pu avancer entre-temps). Une coupure entre les
+  deux est rattrapée au boot.
+- **US-308 — anneau de 2 × 96 Ko.** Au-delà, `ledger.bin` devient
+  `ledger.old`. Juste après une rotation, c'est le curseur NVS qui porte
+  l'ancre.
+- **US-308 — aléa.** Secrets tirés sous `bootloader_random_enable()`, radio
+  éteinte (ESP-IDF interdit de le laisser actif ensuite). Noise est vérifié au
+  boot, radio allumée, par `dengon_noise_selftest(esp_fill_random)`.
+- **US-308 — heure.** `gettimeofday()` part de 1970 sans SNTP : le relais
+  Rust apprend l'heure du premier `ANNOUNCE` authentique. Avant cela, il
+  ignore les paquets (`sans_heure` dans les compteurs).
+- **US-308 — démo US-220 à `n` par défaut.** Activée, elle **remplace** le
+  relais (peerID bouchon, pas de dengon-core).
 
 ## Tests
 
@@ -376,6 +488,58 @@ Vérifications réellement exécutées le 2026-09-28 (image `espressif/idf:v5.5.
 | **Pile Bluetooth tuée** (`am force-stop com.google.android.bluetooth`) | ~5 s plus tard (supervision timeout) : `HCI 0x08 -> Brutale -> PeerDisconnected link#1, motif Brutale`, un seul événement, puis `send … -> pair inconnu` | ✅ |
 | Après la coupure brutale : nouveau scan + CONNECT | carte toujours annoncée, `PeerConnected link#2` | ✅ |
 
+### US-308 (2026-09-29)
+
+**Automatisés, sur l'hôte :**
+- `cargo test -p dengon-core --lib relay::`, 12 tests : deux relais se lient
+  par `ANNOUNCE` ; un message traverse deux relais (P1 → A → B → P2, TTL
+  décrémenté, pas de second relais du doublon) ; heure apprise ; enveloppe
+  déposée, offerte puis remise sur requête ; offre aux voisins déjà liés ;
+  `ANNOUNCE` usurpé et requête mal signée refusés ; trames hostiles ; journal
+  repris après redémarrage (chaîne `Ok`, signatures vérifiées) ; paquets
+  ≤ 514 o.
+- `cargo test -p dengon-core-ffi`, 5 tests d'API C : cycle de vie,
+  `BUFFER_TOO_SMALL` sans perte, journal persisté puis repris, pointeurs nuls,
+  auto-test Noise (aléa correct → OK, aléa constant → refus).
+- Tests Unity du Store, cible `linux` : **5 Tests 0 Failures** (longueur
+  d'entrée, fichier absent, ancre, fin tronquée réparée et idempotente,
+  rotation).
+- `idf.py build` du firmware complet : `Project build complete`. Binaire
+  0xf27b0 o (53 % libre sur 2 Mo). `idf.py size` : IRAM 78,2 %, DRAM 33,7 %
+  (22,6 % avant).
+- Test app du Store compilée pour `esp32` : OK.
+- Essai hôte jetable : journal produit via l'API C, redémarrage par l'ancre,
+  export au format de la console, `tools/dump_ledger.py`, puis
+  `dengon-verify --pubkey` → `{"verdict":"ok","entries":5,…,"signatures":"verified"}`.
+
+**Sur carte réelle, 2026-09-29** (ESP32-D0WD-V3 et Pixel 8 Pro avec nRF
+Connect, piloté par `adb.exe`) :
+- Tests Unity du Store sur cible : **9 Tests 0 Failures**.
+- Relais : auto-test Noise sur `esp_fill_random` OK à chaque boot ; 3
+  `restart` → reprise `seq=1,2,3` ; `dengon-verify` → `ok`, 4 entrées,
+  signatures vérifiées.
+- **Débordement de pile** de `dengon_route` (6 Ko) au premier `link_up`,
+  corrigé (16 Ko ; marge mesurée ensuite : 8,6 Ko libres).
+- Après correctif : abonnement du téléphone → lien ouvert sans crash ; trame
+  `DEADBEEF` → `pkt.rejected malformed` ; déconnexion propre. Journal de
+  10 entrées **à travers un panic et un reflash** → `ok`, signatures
+  vérifiées.
+- nRF Connect reste en MTU 23 : l'`ANNOUNCE` (174 o) n'est pas émis vers lui.
+
+**Reste non vérifié** : essai 2 cartes (une seule disponible), coupure
+d'alimentation pendant une écriture, message qui traverse le relais depuis un
+téléphone. Procédure :
+
+| # | Action | Attendu |
+|---|---|---|
+| 1 | `tools/build_core.sh`, puis `idf.py erase-flash flash monitor` sur A | `relais-xxxx peerID=… (nouvelle identité), journal reprend à seq=0`, `clé de journal (dengon-verify --pubkey) = …`, `auto-test Noise XX sur esp_fill_random : OK` |
+| 2 | `restart` dans la console de A, 3 fois | `identité relue`, `journal reprend à seq=N` croissant |
+| 3 | `ledger` dans la console, capture (`idf.py monitor \| tee capture.log`) | bloc `DENGON-LEDGER-BEGIN…END` |
+| 4 | `tools/dump_ledger.py capture.log -o l.bin` puis `cargo run -p dengon-verify -- --pubkey <clé> l.bin` | `{"verdict":"ok", …, "signatures":"verified"}` |
+| 5 | Couper l'alimentation de A pendant du trafic, rallumer, refaire 3-4 | éventuel `journal : N o d'écriture interrompue retirés`, verdict `ok` |
+| 6 | A et B flashées, allumées côte à côte | chez chacune `lien 1 ouvert`, puis `relay` → compteurs ; journal : `peer.announce_seen` de l'autre |
+| 7 | Un message traverse le relais | **Bloqué côté client** : `api.rs` ne pose pas `RELAY_OK` et n'émet pas `ANNOUNCE` (écart US-308). Faisable en injectant des paquets forgés (outil à écrire) ou après l'US client correspondante. |
+
 **Non vérifié — essai sur 2 cartes.** Une seule carte était disponible. Le
 rôle **central** (scan qui trouve un pair dengon, règle anti-boucle, chaîne
 MTU → service → caractéristiques → CCCD → abonnement, `NOTIFY_RX`) n'a
@@ -398,6 +562,21 @@ carte). Noter le peerID de chacune (`dengon-peer` au boot).
 
 ## Limites connues / TODO
 
+- **US-308 exécutée sur une seule carte** : l'essai à 2 cartes reste à faire.
+  La branche dépend de la PR #108 (US-307), non mergée, dont la CI n'a jamais
+  tourné.
+- **Un téléphone ne peut pas encore faire relayer un message** : le client
+  (`api.rs`) ne pose jamais `RELAY_OK` et n'émet ni `ANNOUNCE`, ni
+  `INVENTORY`, ni `ENVELOPE_REQUEST`. Écart consigné, hors périmètre US-308.
+- **Pas de fragmentation ni de réassemblage côté relais** : les fragments sont
+  relayés comme des paquets ordinaires. Une enveloppe fragmentée n'entre pas
+  au courrier.
+- **NVS non chiffré** (la conception dit « chiffré par eFuse ») : les secrets
+  du relais sont lisibles par qui dumpe la flash.
+- **Pas de SNTP** : heure apprise des `ANNOUNCE` (US-309 pour le Wi-Fi).
+- `peer.connected` / `peer.disconnected` ne sont pas journalisés (le `peerID`
+  n'est connu qu'à l'`ANNOUNCE`) ; `peer.announce_seen` en tient lieu.
+
 - **Essai 2 cartes à faire** (voir ci-dessus) — condition de clôture de l'US.
   Le rôle central n'a jamais tourné contre un vrai pair.
 - **nRF Connect ne négocie pas le MTU** tant qu'on ne le demande pas : un
@@ -412,8 +591,7 @@ carte). Noter le peerID de chacune (`dengon-peer` au boot).
 - **Anti-boucle unilatérale** : si le nœud au plus petit peerID a son quota
   plein ou son scan coupé, les deux ne se connectent jamais.
 - **RSSI absent côté périphérique** (`PeerConnected` sans RSSI).
-- Le `peerID` reste un **bouchon** sur la MAC eFuse (US-307).
-- Pas de Wi-Fi, pas de HTTPS, pas de journal chaîné, pas de littlefs.
+- Pas de Wi-Fi, pas de HTTPS (US-309).
 - `CONFIG_BT_NIMBLE_SECURITY_ENABLE` toujours à `y` (voir US-114).
 - Le workflow `firmware` n'est **pas** dans les checks requis de `main`.
 - US-114 : critères n°2 et n°3 (capture nRF Connect) toujours non démontrés.
@@ -436,3 +614,15 @@ la carte morte, et surtout **recommencer à s'annoncer** — sinon elle devient
 invisible pour toujours. Toute cette logique est isolée dans un morceau de C
 pur, testé automatiquement sur un PC, avec exactement les mêmes 12 scénarios
 que ceux écrits en Rust pour le contrat.
+
+**US-308, en une image.** La carte est un facteur qui ne sait pas lire. Elle
+reçoit des paquets fermés et regarde seulement l'enveloppe extérieure : l'a-t-il
+déjà vu ? Combien de sauts lui reste-t-il ? Est-il destiné à quelqu'un
+d'autre ? Si oui, elle le fait suivre. Elle garde les lettres scellées pour les
+absents et ne les rend qu'à celui qui prouve, par une étiquette du jour, qu'elles
+sont pour lui. Et elle tient un **registre signé** où chaque ligne contient
+l'empreinte de la précédente. Le point démontrable : on débranche la carte en
+plein travail, on la rallume, et l'outil `dengon-verify` confirme qu'aucune
+ligne n'a été perdue ni réécrite. C'est possible parce que le registre est
+écrit sur la flash *avant* le marque-page, et qu'au redémarrage la carte
+reprend à la dernière ligne complète.

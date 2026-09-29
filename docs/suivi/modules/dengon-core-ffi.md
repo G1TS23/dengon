@@ -6,8 +6,10 @@ le firmware ESP32 liera.
 **Correspond à la conception :** `docs/synthese/08-relais-esp32.md` §3
 (`libdengon_core.a`), Spike A (`docs/suivi/spikes/US-101-cross-compile-xtensa.md`).
 **Dernière mise à jour :** 2026-09-29
-**État :** partiel (US-307 : chaîne de compilation + header + vecteurs
-rejoués depuis le C ; pas encore intégré au CMake d'ESP-IDF)
+**État :** partiel. US-307 : chaîne de compilation, header et vecteurs
+rejoués depuis le C. US-308 : API du relais et auto-test Noise, **liée par le
+firmware** (`components/dengon_core_ffi`), première compilation xtensa
+effective (`libdengon_core.a` de 1,58 Mo, espup 0.17.1).
 
 ## À quoi ça sert
 
@@ -126,14 +128,32 @@ dengon-core-embed/           — racine de workspace SÉPARÉE (voir son Cargo.t
   `firmware/dengon-relay` (CMake) — hors périmètre de cette US, prévu en
   US-308/309.
 
+## US-308 : l'API C du relais
+
+| Fonction C | Rôle |
+|---|---|
+| `dengon_relay_new` / `_free` | Crée le relais depuis ses secrets (32 + 32 o) et l'ancre du journal (`seq`, hash ou `NULL` = genèse). |
+| `dengon_relay_peer_id` / `_verifying_key` | `peerID` (8 o) et clé Ed25519 (32 o, celle de `dengon-verify --pubkey`). |
+| `dengon_relay_link_up` / `_link_down` / `_on_frame` | Entrées du transport. |
+| `dengon_relay_poll` / `_poll_routing` / `_poll_inventory` / `_poll_courier` / `_next_deadline` | Échéances, par tâche. |
+| `dengon_relay_pop_outgoing` / `_pop_ledger` | Sorties **une à une** dans un tampon de l'appelant ; `DENGON_STATUS_EMPTY` quand c'est vide ; `BUFFER_TOO_SMALL` rend la taille requise **sans perdre** l'élément. |
+| `dengon_relay_ledger_anchor` | Curseur à persister. |
+| `dengon_relay_record_event` | Événement du firmware (catalogue vérifié). |
+| `dengon_relay_stats` | Compteurs (`DengonRelayStats`). |
+| `dengon_noise_selftest(fill)` | Handshake Noise `XX` complet et aller-retour chiffré avec l'aléa de `fill` (`esp_fill_random` côté firmware). `DENGON_STATUS_CRYPTO` si ça échoue ou si l'aléa est constant. |
+
+- `PlatformRng` (`src/rng.rs`) implémente `RngCore + CryptoRng` au-dessus d'un
+  pointeur de fonction C. C'est tout ce qu'il faut à `CallerResolver` pour
+  fournir l'aléa à `snow`, sans second `CryptoResolver`.
+- Les variantes C sont **préfixées** (`DENGON_STATUS_OK`…) depuis US-308 : un
+  `OK` nu collisionne avec `rom/ets_sys.h` d'ESP-IDF. `host_test.c` a été
+  adapté (il repasse : 8 accept, 5 reject).
+- Tests : `tests/relay_c_api.rs` (5).
+
 ## Limites connues / TODO
 
-- `libdengon_core.a` (xtensa) n'est pas encore lié par
-  `firmware/dengon-relay` : produit et publié comme artefact CI, pas encore
-  consommé.
-- Un seul `Signer`/`Anchor`/routage n'est pas exposé : seule la vérification
-  structurelle des paquets (`decode`/`encode`) traverse la frontière C pour
-  l'instant.
+- La CI (`cross-vectors`, `firmware`) n'a jamais tourné sur cette branche ni
+  sur #108.
 - `heap_caps_*` (SPIRAM, DMA) non évalué : `malloc`/`free` suffisent tant
   qu'aucun besoin mémoire spécifique ESP32 n'est identifié.
 
