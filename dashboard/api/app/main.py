@@ -18,6 +18,8 @@ Routes :
 * ``GET  /api/messages/{msg_log_id}`` — détail + parcours (`hops`, dérivés
   de `events` à la lecture, voir `app/messages_api.py`) d'un message
   (US-219), consommés par `dashboard/web`.
+* ``GET  /api/integrity`` — verdict d'intégrité par nœud (US-310), calculé
+  via `dengon-verify` en sous-processus (`app/integrity.py`).
 
 Les projections (`messages`) sont l'objet de l'US-217 ; `links` reste hors
 périmètre — voir `03-ecarts-conception.md`. `message_hops` (§11.2) n'est pas
@@ -39,7 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import ingest
+from . import ingest, integrity
 from .auth import InvalidToken, create_token, node_id_from_authorization_header
 from .config import jwt_secret, max_batch_bytes
 from .db import LockedConnection, connect, run_migrations
@@ -96,8 +98,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS **en lecture seule** (`GET`), toute origine : `dashboard/web` (US-219)
-# est une page statique, potentiellement servie depuis un autre
+# CORS **en lecture seule** (`GET`), toute origine : `dashboard/web` (US-219,
+# US-310) est une page statique, potentiellement servie depuis un autre
 # domaine/port que l'API (voire ouverte en `file://`, origine `null`) — sans
 # ça, le navigateur bloque `fetch`/`EventSource` avant même que la requête ne
 # parte. Sans risque ici : ces routes ne renvoient que des données déjà
@@ -469,3 +471,37 @@ def get_message_route(msg_log_id: str, request: Request) -> JSONResponse:
         )
     message["hops"] = get_message_hops(db, msg_log_id)
     return JSONResponse(content=message)
+
+
+@app.get("/api/integrity")
+async def integrity_route(request: Request) -> JSONResponse:
+    """Verdict d'intégrité par nœud (US-310) : `dengon-verify` (sous-
+    processus, `app/integrity.py`) rejoue le journal chaîné reconstruit
+    depuis `events` et rend `ok`/`broken`/`fork`/`gap`, ou `unverified` pour
+    un nœud sans aucun événement portant `entry_hash`/`prev_hash`.
+    """
+    try:
+        verdicts = await run_in_threadpool(integrity.check_all_nodes, request.app.state.db)
+    except integrity.IntegrityCheckError as exc:
+        # dengon-verify introuvable/en échec/hors délai : signalé à
+        # l'opérateur (503, comme le stockage momentanément occupé
+        # ci-dessus), pas un 500 générique — la cause est extérieure au
+        # traitement de la requête elle-même.
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"error": str(exc)},
+        )
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=[
+            {
+                "node_id": v.node_id,
+                "verdict": v.verdict,
+                "entries": v.entries,
+                "first_seq": v.first_seq,
+                "last_seq": v.last_seq,
+                "signatures": v.signatures,
+            }
+            for v in verdicts
+        ],
+    )

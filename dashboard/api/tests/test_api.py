@@ -727,7 +727,7 @@ def test_migrations_applied_once(client):
     assert run_migrations(conn) == []
     versions = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")]
     conn.close()
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
 
 
 def test_migrations_idempotent_after_partial_apply(tmp_path, monkeypatch):
@@ -742,9 +742,9 @@ def test_migrations_idempotent_after_partial_apply(tmp_path, monkeypatch):
     for statement in MIGRATIONS[0][2]:
         conn.execute(statement)
 
-    assert run_migrations(conn) == [1, 2, 3]  # se termine proprement grâce à IF NOT EXISTS
+    assert run_migrations(conn) == [1, 2, 3, 4]  # se termine proprement grâce à IF NOT EXISTS
     versions = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")]
-    assert versions == [1, 2, 3]
+    assert versions == [1, 2, 3, 4]
     conn.close()
 
 
@@ -820,4 +820,4 @@ def test_migrations_are_safe_across_processes(tmp_path, monkeypatch):
     conn = connect()
     versions = [r["version"] for r in conn.execute("SELECT version FROM schema_migrations")]
     conn.close()
-    assert versions == [1, 2, 3], "les migrations ne doivent être enregistrées qu'une seule fois"
+    assert versions == [1, 2, 3, 4], "les migrations ne doivent être enregistrées qu'une seule fois"

@@ -11,11 +11,14 @@ jeton JWT → nœud whitelisté, `pub_sign` connu → signature Ed25519 du batch
 `COMMIT`, jamais avant : un abonné ne doit jamais voir un événement que la
 base elle-même ne contient pas encore).
 
-Réf : `docs/synthese/09-dashboard-et-donnees.md` §3 (pipeline complet — la
-vérification de journal chaîné via `dengon-verify` n'est PAS dans le
-périmètre de l'US-216 : les événements sont insérés avec
-`integrity = 'unverified'`, la valeur par défaut de la colonne — écart
-consigné dans `03-ecarts-conception.md`).
+Réf : `docs/synthese/09-dashboard-et-donnees.md` §3 (pipeline complet).
+`entry_hash`/`prev_hash`/`sig` (US-310, si présents dans l'événement) sont
+stockés tels quels, mais la vérification de journal chaîné via
+`dengon-verify` ne se fait PAS ici, à l'ingestion — elle est recalculée à la
+demande par `GET /api/integrity` (`app/integrity.py`), pas par événement à
+chaque batch : les événements restent insérés avec `integrity = 'unverified'`
+(colonne encore inutilisée, valeur par défaut) — écart consigné dans
+`03-ecarts-conception.md`.
 """
 
 from __future__ import annotations
@@ -141,6 +144,20 @@ def _verify_event_ids(body: dict, expected_node_kind: str) -> None:
             )
 
 
+def _hex_or_none(value: object) -> bytes | None:
+    """`entry_hash`/`prev_hash` (US-310) : hex → octets, `None` si absent.
+
+    Le schéma (`envelope.schema.json`) garantit déjà 64 hex si le champ est
+    présent — pas de re-validation ici, juste le décodage.
+    """
+    return bytes.fromhex(value) if isinstance(value, str) else None
+
+
+def _b64_or_none(value: object) -> bytes | None:
+    """`sig` par entrée (US-310) : base64 → octets, `None` si absent."""
+    return base64.b64decode(value) if isinstance(value, str) else None
+
+
 def _touched_msg_log_ids(body: dict) -> set[str]:
     return {
         event["payload"]["msg_log_id"]
@@ -204,8 +221,9 @@ def _insert_events(db: LockedConnection, body: dict) -> list[StreamEvent]:
             for event in body["events"]:
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO events "
-                    "(event_id, ts_ms, node_id, name, seq, payload) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "(event_id, ts_ms, node_id, name, seq, payload, "
+                    " entry_hash, prev_hash, sig) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         event["event_id"],
                         event["ts_ms"],
@@ -213,6 +231,9 @@ def _insert_events(db: LockedConnection, body: dict) -> list[StreamEvent]:
                         event["name"],
                         event["seq"],
                         json.dumps(event["payload"], sort_keys=True, separators=(",", ":")),
+                        _hex_or_none(event.get("entry_hash")),
+                        _hex_or_none(event.get("prev_hash")),
+                        _b64_or_none(event.get("sig")),
                     ),
                 )
                 # `cur.lastrowid` n'est fiable que si CETTE instruction a

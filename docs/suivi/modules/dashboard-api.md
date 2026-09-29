@@ -560,6 +560,66 @@ dans `03-ecarts-conception.md`.
     chronologie exacte en cas d'égalité stricte, mais donne un résultat
     reproductible.
 
+## US-310 — `GET /api/integrity`
+
+**Le point dur de cette US n'était pas la route elle-même, mais un vrai trou
+de contrat découvert en la construisant** : `dengon-verify` (US-305,
+`crates/dengon-verify`) n'accepte que l'export binaire exact de
+`ledger::Entry::to_bytes()` (`entry_hash` calculé par la formule binaire de
+`ledger`, signature Ed25519 **par entrée**) — mais `POST /ingest/batch`
+(US-216) ne transportait ni l'un ni l'autre : seul le batch entier est
+signé, et `event_id` utilise une formule de hash différente
+(`SHA-256(node_id ‖ seq)`, pas celle de `ledger`). Déjà repéré et consigné
+comme écart « à trancher en équipe » par l'auteur de la PR #92
+(`03-ecarts-conception.md`, entrée US-305). Décision prise avec Olivier :
+**étendre `envelope.schema.json`** — `entry_hash`/`sig` ajoutés par
+événement (optionnels, rétrocompatibles), `prev_hash` redéfini au sens
+`ledger::Entry.prev_hash` (il ne servait jusque-là à rien : jamais stocké ni
+lu par `ingest.py`).
+
+| Élément | Fichier | Ce que ça fait |
+|---|---|---|
+| `entry_hash`/`prev_hash`/`sig` (par événement) | `contracts/events/envelope.schema.json`, `CANONICAL.md` | Optionnels ; absents pour un événement, il n'entre pas dans la vérification d'intégrité de son nœud. |
+| Migration 4 (`sig BLOB`) | `app/migrations.py` | `entry_hash`/`prev_hash` existaient déjà (US-216, jamais renseignés) ; `sig` est nouveau. |
+| `_hex_or_none`/`_b64_or_none` | `app/ingest.py` | Stockent les trois champs tels quels quand présents, `NULL` sinon. |
+| `app/integrity.py` | nouveau module | Reconstruit `Entry::to_bytes()` par nœud (événements triés par `seq`, filtrés sur `entry_hash`+`prev_hash` non NULL), appelle `dengon-verify` en sous-processus (`subprocess.run`, stdin = export binaire), parse le JSON de sortie. |
+| `GET /api/integrity` | `app/main.py` | Un verdict par nœud connu (`nodes`). 503 si `dengon-verify` est introuvable/en échec/hors délai — pas un 500 générique, la cause est extérieure à la requête. |
+| CORS `GET` | `app/main.py` | Ajouté pour cette US (`dashboard/web` peut être sur un port différent) — même config que celle déjà prévue pour US-219. |
+| `DENGON_VERIFY_BIN` | `app/config.py` | Nom/chemin du binaire, résolu par `PATH` par défaut. |
+
+**Ce qui NE PEUT PAS être stocké tel quel : `payload_json`.** Le texte
+réellement haché côté nœud (`ledger::Entry::compute_hash`) n'est jamais
+conservé en base — `app/integrity.py` le **re-dérive** à la demande via
+`canonical_json(json.loads(events.payload))`. Ça ne marche que parce que
+tout appelant de `ledger.append()` dans `dengon-core` lui passe déjà la
+forme canonique du payload (`Value::to_canonical_bytes()`,
+`crates/dengon-core/src/observability/mod.rs:159`, vérifié en lisant le
+code plutôt que supposé) — si un futur producteur envoyait un jour un
+payload dont le JSON haché sur l'appareil n'était pas déjà canonique, la
+reconstruction ne retomberait pas sur les mêmes octets et casserait le hash
+à tort (`Broken` pour une entrée en fait intacte). **Aucun producteur réel
+n'existe encore** (écran QR/firmware sont des bouchons) : à re-vérifier
+quand l'un l'atteindra pour de vrai.
+
+**Fork non démontrable via l'ingestion normale — trouvé en écrivant le test
+du verdict `fork`.** `event_id = SHA-256(node_id ‖ seq)` est déterministe :
+une resoumission pour la même position `(node_id, seq)`, même avec un
+contenu différent, produit le MÊME `event_id` et se fait donc dédupliquer
+par `INSERT OR IGNORE` **avant** d'atteindre la vérification de chaîne — un
+vrai fork ne peut structurellement pas naître de `POST /ingest/batch` avec
+le schéma actuel. Le test (`test_verdict_fork_on_two_entries_for_the_same_seq`)
+insère donc les deux lignes en conflit directement en base (contournant
+`event_id` comme clé), pour prouver que `GET /api/integrity` détecte bien un
+fork déjà présent — le scénario réaliste restant à câbler (édition manuelle
+d'une ligne, ou un second canal d'ingestion hors dédup) plutôt qu'une
+resoumission normale.
+
+**Image Docker pas mise à jour.** `dashboard/api/Dockerfile` (US-224) ne
+construit/copie que `contracts` + `dashboard/api` — le binaire Rust
+`dengon-verify` n'y est pas, donc `GET /api/integrity` échouerait (503,
+binaire introuvable) sur le VPS réel tel quel aujourd'hui. Hors périmètre de
+cette US (touche le déploiement, US-224) — écart consigné.
+
 ## Tests
 
 - `tests/test_api.py` — **38 tests**. Hérités et adaptés (auth ajoutée aux
@@ -667,13 +727,25 @@ dans `03-ecarts-conception.md`.
 
 ## Limites connues / TODO
 
-- **`POST /api/nodes`, `GET /api/stream` et `GET /api/messages*` sans auth
-  opérateur** : n'importe qui peut enregistrer un nœud, obtenir un JWT
-  valide, ou lire le flux d'événements/les projections. Aucune US actuelle
-  ne couvre l'auth admin/opérateur — écarts consignés dans
+- **`POST /api/nodes`, `GET /api/stream`, `GET /api/messages*` et
+  `GET /api/integrity` sans auth opérateur** : n'importe qui peut enregistrer
+  un `node_id` **inédit** et obtenir un JWT valide (**re**-enregistrer un
+  `node_id` déjà pris est bloqué depuis la revue de la PR #91 — 409, plus
+  d'upsert), ou lire le flux d'événements/les projections/les verdicts
+  d'intégrité. Aucune US actuelle ne couvre l'auth admin/opérateur — écarts
+  consignés dans `03-ecarts-conception.md`.
+- **Détection de fork non démontrable via l'ingestion normale** :
+  `event_id = SHA256(node_id ‖ seq)` est déterministe, donc deux entrées en
+  conflit sur le même `(node_id, seq)` produisent le même `event_id` — la
+  seconde est silencieusement ignorée par `INSERT OR IGNORE` avant même
+  d'atteindre la vérification de chaîne. Le verdict `fork` de `dengon-verify`
+  existe et est testé (insertion SQL directe dans les tests), mais ne peut
+  pas être obtenu par un vrai flux `/ingest/batch`. → voir US-310 ci-dessus
+  et `03-ecarts-conception.md`.
+- **`dengon-verify` absent de l'image Docker** : le `Dockerfile` (US-224) ne
+  construit/n'embarque pas le binaire Rust `dengon-verify` ; sur le VPS réel
+  tel que déployé aujourd'hui, `GET /api/integrity` répondrait `503`. → voir
   `03-ecarts-conception.md`.
-- **Pas de vérification de journal chaîné** : `dengon-verify` n'est pas
-  appelé, `integrity` reste toujours `'unverified'`. → hors périmètre US-216.
 - **Nœud inconnu traité comme un 401 direct**, pas comme la quarantaine +
   alerte décrite par la conception (`docs/synthese/09` §3) — écart consigné.
 - **`links` (§11.2) non créée** : topologie du réseau hors périmètre —

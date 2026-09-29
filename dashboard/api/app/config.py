@@ -18,6 +18,14 @@ MAX_BATCH_BYTES_ENV_VAR = "DENGON_DASHBOARD_MAX_BATCH_BYTES"
 # vrai volume de démo le justifie.
 DEFAULT_MAX_BATCH_BYTES = 2 * 1024 * 1024  # 2 MiB
 
+VERIFY_BIN_ENV_VAR = "DENGON_VERIFY_BIN"
+# Nom de commande, pas un chemin absolu : résolu via PATH par défaut (comme
+# tout binaire du workspace `cargo build` installé/copié à côté de `uv run`,
+# CI ou VPS). Ajustable pour pointer un binaire précis en test (retour de
+# revue — l'image Docker actuelle de dashboard/api, US-224, ne construit PAS
+# encore ce binaire : écart consigné dans 03-ecarts-conception.md).
+DEFAULT_VERIFY_BIN = "dengon-verify"
+
 JWT_SECRET_ENV_VAR = "DENGON_DASHBOARD_JWT_SECRET"
 # PyJWT lève InsecureKeyLengthWarning en dessous de 32 octets pour HS256 (la
 # taille de sortie de HMAC-SHA256) — vérifié au démarrage plutôt que laissé
@@ -47,6 +55,13 @@ def max_batch_bytes() -> int:
         raise RuntimeError(
             f"{MAX_BATCH_BYTES_ENV_VAR}={raw!r} n'est pas un entier valide"
         ) from exc
+
+
+def dengon_verify_bin() -> str:
+    """Commande (ou chemin) du binaire `dengon-verify` (US-310), appelé en
+    sous-processus par `app/integrity.py`.
+    """
+    return os.environ.get(VERIFY_BIN_ENV_VAR, DEFAULT_VERIFY_BIN)
 
 
 def jwt_secret() -> str:

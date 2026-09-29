@@ -104,9 +104,23 @@ _0003_MESSAGES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_messages_status ON messages (status, status_ms DESC)",
 ]
 
+# `sig` (US-310) : signature Ed25519 de CETTE entrée de journal chaîné
+# (`ledger::Entry.sig`), distincte de `sig` au niveau batch (jamais stockée,
+# vérifiée puis jetée par `ingest.py`). `entry_hash`/`prev_hash` existent
+# déjà depuis la migration 2 mais n'étaient jusqu'ici jamais renseignés par
+# `_insert_events` — app/integrity.py (US-310) en a besoin, avec `sig`, pour
+# reconstruire l'export binaire `ledger::Entry::to_bytes()` par nœud et le
+# passer à `dengon-verify`. Les trois restent NULL pour un événement qui ne
+# les fournit pas (`envelope.schema.json` : optionnels) : cet événement
+# n'entre alors simplement pas dans la vérification d'intégrité de son nœud.
+_0004_ENTRY_SIGNATURE: list[str] = [
+    "ALTER TABLE events ADD COLUMN sig BLOB",
+]
+
 # (version, nom, instructions) — ordre = ordre d'application.
 MIGRATIONS: list[tuple[int, str, list[str]]] = [
     (1, "initial", _0001_INITIAL),
     (2, "nodes_and_events", _0002_NODES_AND_EVENTS),
     (3, "messages", _0003_MESSAGES),
+    (4, "entry_signature", _0004_ENTRY_SIGNATURE),
 ]
