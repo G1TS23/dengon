@@ -292,6 +292,59 @@ $ unzip -l app-debug.apk | grep .so     lib/{arm64-v8a,x86_64}/{libdengon_ffi,li
   stabilité du `peerID` après redémarrage, ni le Keystore (`CleCoffre` n'a
   aucun test JVM). Le workflow `android` n'a jamais tourné sur GitHub
   (branche non poussée).
+## 2026-09-29 — US-308 : CI de la PR #110 (espup, SonarCloud)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `.github/workflows/firmware.yml`, `firmware/dengon-relay/tools/dump_ledger.py`, `docs/suivi/`.
+**Lot :** US-308 (issue #46). Branche `feat/US-308-relay`, PR #110.
+
+### Fait
+- Conflits : aucun — `origin/main` (`e3efa95`) est déjà l'ancêtre de la
+  branche, GitHub la déclare `MERGEABLE`. Rien à rebaser.
+- Job `firmware` : premier passage réel, échec à l'étape espup sur
+  `rustup component add rust-src --toolchain esp` (« invalid value 'esp' for
+  '--toolchain': invalid toolchain name »). Ligne retirée : `espup install`
+  pose déjà `rust-src` (visible dans le log CI) ; remplacée par une
+  vérification `test -d "$(rustc +esp --print sysroot)/lib/rustlib/src/rust"`.
+- SonarCloud : note sécurité C sur le nouveau code, 2 issues
+  `pythonsecurity:S8707` (path traversal) dans `tools/dump_ledger.py` (lignes
+  `open()` de la capture et du `.bin`). Les deux chemins sont maintenant
+  résolus et refusés s'ils sortent du répertoire courant (`chemin_sur`).
+
+### Pourquoi / décisions
+- Confinement au répertoire courant plutôt qu'un « won't fix » Sonar :
+  l'outil est lancé depuis `firmware/dengon-relay/`, la capture y est écrite
+  (`tee capture.log`) ; la contrainte ne gêne pas l'usage documenté.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rustup ≥ 1.28 refuse un nom de toolchain custom (`esp`, créée par espup)
+  pour `component add --toolchain` ; `cargo +esp` fonctionne toujours.
+
+### État après cette session
+- Correctifs locaux, pas encore poussés : le reste du job `firmware`
+  (`idf.py build`, tests Unity) n'a encore jamais tourné en CI.
+- Fiche(s) module mise(s) à jour : non
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ rustup component add rust-src --toolchain esp   # rustup 1.29.1, local
+error: invalid value 'esp' for '--toolchain <TOOLCHAIN>' (erreur CI reproduite)
+$ test -d "$(rustc +esp --print sysroot)/lib/rustlib/src/rust" && echo OK-src
+OK-src
+$ cargo +esp build --release --target xtensa-esp32-none-elf --locked  # dengon-core-embed
+Finished release
+$ python3 tools/dump_ledger.py cap.log -o out.bin   → 4 octets, contenu correct
+$ python3 tools/dump_ledger.py cap.log -o ../x.bin  → refusé
+$ cat cap.log | python3 tools/dump_ledger.py - -o o2.bin → 4 octets
+```
+- Quality gate SonarCloud non revérifiée (nécessite le push).
+
+---
+
 ## 2026-09-29 — US-308 : essais sur carte réelle, débordement de pile corrigé
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
