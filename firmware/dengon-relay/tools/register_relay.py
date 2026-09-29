@@ -25,6 +25,7 @@ import re
 import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -34,14 +35,39 @@ RACINE_DEFAUT = (
 )
 NODE_ID = re.compile(r"^relay-[0-9a-f]{6}$")
 PUB_SIGN = re.compile(r"^[0-9a-f]{64}$")
+# Seuls hôtes joignables : le dashboard de démo, ou un dashboard local de dev
+# (le script ne doit pas pouvoir servir à poster ailleurs).
+HOTE_VPS = "51.255.38.214"
+HOTES_LOCAUX = ("127.0.0.1", "localhost")
+
+
+def url_api(url):
+    """URL de `POST /api/nodes`, reconstruite à partir d'éléments vérifiés.
+
+    `https` vers le VPS de démo, ou `http`/`https` vers la boucle locale ;
+    tout le reste est refusé (ValueError).
+    """
+    u = urllib.parse.urlsplit(url)
+    hotes = (HOTE_VPS, *HOTES_LOCAUX)
+    hote = next((h for h in hotes if h == u.hostname), None)
+    if hote is None:
+        raise ValueError(
+            f"hôte non autorisé : {u.hostname!r} (attendu : {', '.join(hotes)})"
+        )
+    schema = next((s for s in ("https", "http") if s == u.scheme), None)
+    if schema is None or (schema == "http" and hote not in HOTES_LOCAUX):
+        raise ValueError("https obligatoire (http seulement vers la boucle locale)")
+    port = int(u.port or (443 if schema == "https" else 80))
+    return f"{schema}://{hote}:{port}/api/nodes", schema == "https"
 
 
 def enregistrer(url, node_id, pub_sign, cafile):
     """POST /api/nodes ; rend (statut, corps JSON décodé ou texte brut)."""
-    # `http://` n'a de sens qu'en local (dashboard de dev) : pas de TLS.
+    cible, tls = url_api(url)
     ctx = None
-    if url.startswith("https"):
+    if tls:
         ctx = ssl.create_default_context(cafile=str(cafile))
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
         # Comme mbedTLS côté firmware : le certificat fourni sert d'ancre même
         # s'il n'est pas auto-signé (intermédiaire Caddy épinglé pour un essai).
         ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
@@ -49,7 +75,7 @@ def enregistrer(url, node_id, pub_sign, cafile):
         {"node_id": node_id, "kind": "relay", "pub_sign": pub_sign}
     ).encode()
     req = urllib.request.Request(
-        url.rstrip("/") + "/api/nodes",
+        cible,
         data=corps,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -89,6 +115,10 @@ def main(argv=None):
         p.error("--node-id doit être de la forme relay-xxxxxx (6 hex)")
     if not PUB_SIGN.match(pub_sign):
         p.error("--pub-sign doit faire 64 caractères hexadécimaux")
+    try:
+        url_api(args.url)
+    except ValueError as err:
+        p.error(str(err))
     if not args.cacert.is_file():
         p.error(f"racine introuvable : {args.cacert} (voir main/certs/README.md)")
 
