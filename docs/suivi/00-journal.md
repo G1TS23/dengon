@@ -188,6 +188,103 @@ Project build complete — 0xf2960 o, 53 % libre (aucun avertissement de compila
 - **Non vérifié :** le nouveau chemin `ledger_task` n'a pas tourné sur carte
   (pas d'entrée > 4 096 o à produire aujourd'hui, pas de test Unity de
   `dengon_relay_app.c`) ; relu à la main uniquement.
+## 2026-09-29 — US-309 : export du relais vers le dashboard (HTTPS, buffer ring, JWT, batchs signés)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/observability/{batch.rs,batch/tests.rs,canonical.rs,catalog.rs,mod.rs}`,
+`crates/dengon-core/src/relay.rs` (+ tests), `crates/dengon-core/tests/event_fixtures.rs`,
+`crates/dengon-core-ffi/{src/relay.rs,include/dengon_core.h,tests/relay_c_api.rs}`,
+`firmware/dengon-relay/{main/*,components/dengon_ship_core/*,sdkconfig.defaults,tools/register_relay.py}`,
+`.github/workflows/firmware.yml`, `docs/suivi/`.
+**Lot :** US-309 (issue #47). Branche `feat/US-309-https-dashboard`, **empilée sur
+`feat/US-308-relay`** (PR #110, pas encore mergée ; elle contient aussi US-307).
+Dépendance US-216 (#30) déjà sur `main`.
+
+### Fait
+- **dengon-core** : `observability::batch` construit le corps de
+  `POST /ingest/batch` depuis des entrées du journal chaîné (`batch_id`,
+  `sig` = base64 d'Ed25519 sur le batch canonique sans `sig`, `node_id` =
+  `relay-` + `peerID[0..3]`). `canonical::parse` relit le JSON texte du
+  journal (payloads écrits en C) pour le re-canonicaliser. `Relay::build_batch`
+  / `Relay::node_id`. `\b`/`\f` sérialisés comme `json.dumps`.
+- **dengon-core-ffi** : `dengon_relay_node_id`, `dengon_relay_build_batch`
+  (signature faite dans le handle, la clé ne sort pas). Header régénéré.
+- **Firmware** : `dengon_wifi.c` (station, identifiants NVS, reconnexion avec
+  backoff, SNTP, `relay.wifi_up`/`wifi_down`), composant C pur
+  `dengon_ship_core` (buffer ring borné + politique de réessai),
+  `dengon_ship.c` (tâche d'envoi HTTPS, racine du dashboard épinglée, JWT en
+  NVS), `relay.health` toutes les 60 s, file d'événements différés
+  (`dengon_relay_app_record`) écrite par `ledger_task`, console `wifi` et
+  `dash id|status|token`, Kconfig « Export vers le dashboard »,
+  `sdkconfig.defaults` §8 (coexistence, tampons Wi-Fi réduits, mbedTLS
+  dynamique, IRAM).
+- `tools/register_relay.py` (enregistrement + jeton), `main/certs/README.md`
+  (récupérer la racine Caddy). CI : tests Unity `dengon_ship_core` sur `linux`,
+  et build `esp32` de la test app.
+
+### Pourquoi / décisions
+- Batch construit **en Rust** : JSON canonique et Ed25519 y existent déjà, et
+  la clé reste dans le handle. Une réécriture en C aurait été une deuxième
+  implémentation à garder identique octet pour octet.
+- Ring **en RAM statique** : borne mémoire par construction, testable sur
+  l'hôte ; le journal complet reste sur littlefs (écart consigné).
+- 400/413 → le lot est **retiré** (il bloquerait la file à jamais) ; 401 → il
+  est **gardé**, on attend un jeton ; réseau/5xx → backoff.
+- Événements Wi-Fi journalisés **via une file** : la tâche d'événements
+  ESP-IDF (~2,3 Ko de pile) ne supporte pas la signature du journal.
+- Première compilation : IRAM dépassée de 1,6 Ko (BLE + Wi-Fi). Optimisations
+  IRAM du Wi-Fi et de lwIP coupées.
+- `DENGON_NODE_ID_LEN` défini côté firmware : cbindgen préfixait la constante
+  Rust en `DengonDENGON_NODE_ID_LEN`.
+
+### Écarts vs conception
+- Ring en RAM au lieu de littlefs + curseur NVS, jeton manuel de 24 h sans
+  renouvellement, `rssi_avg` = RSSI Wi-Fi, signature par batch (doc `09` §9
+  périmée) → `03-ecarts-conception.md`.
+
+### Appris
+- `04-apprentissages.md` : racine Caddy `tls internal` (seule épinglable, non
+  envoyée par le serveur, feuille sans CN), pile de la tâche d'événements
+  ESP-IDF, IRAM BLE + Wi-Fi.
+
+### État après cette session
+- Codé, compilé, testé sur l'hôte ; le batch produit par le code du relais est
+  accepté par le code du dashboard. **Rien n'a tourné sur carte, rien n'a été
+  envoyé au VPS.**
+- Reste pour clore l'US : racine CA du VPS dans `main/certs/`, puis sur carte
+  enregistrement, 202 contre le VPS, coupure réseau (ring qui monte puis se
+  vide), mesure du tas avec TLS, et vérifier que mbedTLS accepte le
+  certificat au nom d'une IP.
+- Fiche(s) module mise(s) à jour : `firmware-relay.md`, `dengon-core.md`,
+  `dengon-core-ffi.md`, `_index.md`.
+- 01-etat-du-code.md mis à jour : non (plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                        → OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings → OK
+$ cargo test --workspace --all-features --locked                    → 515 passed, 0 failed
+  (dont le_relais_reproduit_chaque_batch_signe_des_fixtures : 20 fixtures
+   reconstruites depuis des entrées de journal, identiques octet pour octet,
+   signature comprise)
+$ cargo check -p dengon-core --no-default-features --locked           → OK
+$ sh firmware/dengon-relay/tools/build_core.sh                        → libdengon_core.a (xtensa) OK
+$ docker … espressif/idf:v5.5.5 idf.py -B build-us309 build           → 1er essai : IRAM0 dépassée de 1 595 o ;
+                                                                        après sdkconfig §8 : OK, 21 % libre, IRAM 81,7 %
+$ docker … dengon_ship_core/test_apps : set-target linux, build, ./build/test_dengon_ship_core.elf
+  → 10 Tests 0 Failures ; build esp32 de la test app OK
+$ openssl s_client -connect 51.255.38.214:8443 -showcerts            → feuille 12 h (SAN IP seule),
+                                                                        intermédiaire 7 j, racine non envoyée
+```
+- Bout en bout **local** (script jetable, non versionné) : un binaire Rust
+  génère avec `Relay::build_batch` un batch de 3 événements (dont un payload
+  `relay.boot` écrit « à la C », non trié) ; `TestClient` sur
+  `dashboard/api/app/main.py` : `POST /api/nodes` 201, batch **202**
+  (3 nouveaux), rejeu 202 (0 nouveau), sous-lot 202 (0 nouveau), batch
+  altéré **401** (signature), sans JWT 401.
+- `tools/register_relay.py` contre `uvicorn` local : 201 puis jeton affiché,
+  409 expliqué, racine invalide et serveur injoignable → message clair.
+- **Non vérifié** : tout ce qui demande la carte ou le VPS (voir « État »).
 
 ---
 

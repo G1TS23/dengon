@@ -164,3 +164,7 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Central / Peripheral (BLE)** | Les deux rôles d'une connexion GATT : le *central* scanne et initie ; le *peripheral* annonce et sert les caractéristiques. `btleplug` ne fait que central (Spike B), d'où `dengon-node` qui ne peut pas être découvert (US-303). |
 | **`CentralRadio`** | Trait de `dengon-ble` : la radio en rôle central (scan/connexion, événements, écriture). `CentralTransport<R>` le transforme en `Transport`. |
 
+| **Buffer ring (export)** | Tampon circulaire de taille fixe où le relais garde les événements pas encore envoyés au dashboard. Plein, il écrase les plus anciens (comptés dans `logs_dropped`) au lieu de grossir : la mémoire reste bornée hors ligne. `components/dengon_ship_core` (US-309). |
+| **Épinglage de racine (TLS)** | Faire confiance à **une seule** autorité, embarquée dans le firmware, au lieu d'un magasin de certificats public. Le relais épingle la racine Caddy du dashboard (US-309). |
+| **Coexistence Wi-Fi / BLE** | Partage dans le temps de l'unique antenne 2,4 GHz de l'ESP32 entre les deux radios (`CONFIG_ESP_COEX_SW_COEXIST_ENABLE`). Le BLE du maillage reste prioritaire. |
+| **SNTP** | *Simple Network Time Protocol* : met l'horloge murale à l'heure depuis un serveur de temps. Le relais s'en sert dès que le Wi-Fi monte (US-309) ; sans lui, il apprend l'heure d'un `ANNOUNCE`. |

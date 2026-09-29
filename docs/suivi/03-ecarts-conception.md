@@ -38,6 +38,43 @@ et le mentionner dans l'entrée de journal.
 - **Conséquence :** les pairs qui avaient appairé l'ancienne identité doivent
   refaire l'appairage QR. À revoir quand contacts et messages seront persistés
   (la réinitialisation les rendrait alors orphelins).
+### 2026-09-29 — Export du relais vers le dashboard (US-309) : ring en RAM, jeton manuel, `rssi_avg` Wi-Fi
+
+- **Prévu :** `docs/synthese/08-relais-esp32.md` §4-5 : une tâche `ship_task`
+  qui envoie un **anneau de logs en littlefs** (~256 Ko) avec un **curseur en
+  NVS** ; §6 : `relay.health` porte `rssi_avg` (RSSI moyen des voisins).
+  `docs/synthese/09` §7 : « enregistrer chaque relais via `POST /api/nodes` et
+  lui remettre un JWT ». `09` §9 décrit une signature **par enveloppe**.
+- **Réel :**
+  1. **Buffer ring en RAM** (12 Kio par défaut, `CONFIG_DENGON_SHIP_RING_BYTES`),
+     alimenté par `ledger_task`. Le journal complet reste en littlefs (US-308),
+     mais le ring d'export est perdu à un redémarrage : ce qui n'était pas
+     encore parti n'est pas renvoyé (le journal, lui, reste vérifiable par
+     `dengon-verify`). Hors ligne long, les plus anciens sont écrasés et
+     comptés (`logs_dropped`).
+  2. **Enregistrement manuel** : `dash id` sur la console →
+     `tools/register_relay.py` → `dash token <jwt>`. Le dashboard (US-216)
+     émet des jetons de **24 h**, sans renouvellement, et refuse de
+     réenregistrer un `node_id` connu (409) : il faut réenregistrer après
+     chaque purge de la base de démo, et un relais laissé plus de 24 h
+     s'arrête d'exporter (401, il garde ses événements et attend un jeton).
+  3. **`rssi_avg` = RSSI du point d'accès Wi-Fi** (-120 hors connexion) : le
+     transport NimBLE ne remonte pas le RSSI des voisins BLE.
+  4. Signature **par batch** (`CANONICAL.md` §2, ce que vérifie le
+     dashboard) : `09` §9 est périmé sur ce point.
+- **Raison :** (1) le critère de l'US est « sans dépasser la mémoire » ; un
+  ring statique en RAM le tient par construction et se teste sur l'hôte, sans
+  toucher au format du journal ni ajouter un second curseur à garder
+  cohérent. (2) le dashboard n'offre ni renouvellement ni réémission (hors
+  périmètre firmware). (3) pas d'API RSSI dans le contrat `Transport`.
+- **Conséquences :** perte possible des événements en attente au
+  redémarrage ; démo à préparer par un enregistrement le jour même. Pistes :
+  relire `ledger.bin` depuis un curseur NVS « dernier `seq` accepté » (le
+  format le permet), endpoint de renouvellement côté dashboard.
+- **Doc de conception mise à jour ?** non.
+
+---
+
 ### 2026-09-29 — Relais ESP32 (US-308) : pas de `CryptoResolver`, pas de trait `Store`, heure apprise, client pas prêt
 
 - **Prévu :** l'issue #46 demande un « `CryptoResolver` custom branché sur
