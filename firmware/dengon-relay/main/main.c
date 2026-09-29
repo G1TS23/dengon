@@ -8,8 +8,10 @@
 //      et reprise du journal chaîné ;
 //   3. transport NimBLE (transport_nimble.c, US-220), avec le vrai peerID ;
 //   4. auto-test Noise sur l'aléa matériel, tâches route / inventory /
-//      courier / ledger, console série.
-// Ce qui n'est PAS ici : Wi-Fi, SNTP, export HTTPS du journal (US-309+).
+//      courier / ledger ;
+//   5. Wi-Fi station + SNTP, puis tâche d'export HTTPS du journal vers le
+//      dashboard (US-309) — le relais fonctionne à l'identique sans eux ;
+//   6. console série.
 //
 // Références : docs/synthese/08-relais-esp32.md §3,
 //              docs/powl/03-network-protocol.md §6.
@@ -21,7 +23,9 @@
 #include "dengon_console.h"
 #include "dengon_peer_id.h"
 #include "dengon_relay_app.h"
+#include "dengon_ship.h"
 #include "dengon_transport.h"
+#include "dengon_wifi.h"
 #if CONFIG_DENGON_TRANSPORT_DEMO
 #include "dengon_demo.h"
 #endif
@@ -71,6 +75,11 @@ app_main(void)
     dengon_demo_start();
 #else
     ESP_ERROR_CHECK(dengon_relay_app_start());
+    /* Pas d'ESP_ERROR_CHECK : sans Wi-Fi, le relais doit continuer à
+       relayer ; l'export restera simplement en attente. */
+    if (dengon_wifi_start() != ESP_OK || dengon_ship_start() != ESP_OK) {
+        ESP_LOGE(TAG, "export vers le dashboard indisponible");
+    }
     ESP_ERROR_CHECK(dengon_console_start());
 #endif
 }

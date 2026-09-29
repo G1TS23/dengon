@@ -1562,3 +1562,69 @@ SQLite vit dans le même processus ; Linux l'aurait accepté.
 doit `drop` le nœud (donc son `Store`) avant de nettoyer le dossier.
 **Où c'est utilisé :** `crates/dengon-node/src/etat.rs`.
 
+### Caddy `tls internal` : seule la racine se laisse épingler
+
+**C'est quoi :** en `tls internal`, Caddy est sa propre autorité de
+certification : une **racine** (longue durée), un **intermédiaire** renouvelé
+tous les 7 jours, et un certificat **feuille** de 12 h. Pendant la poignée de
+main, le serveur n'envoie que feuille + intermédiaire, jamais la racine
+(`openssl s_client -showcerts` : « unable to get local issuer certificate »).
+**Pourquoi dans dengon :** le relais ESP32 doit vérifier le dashboard sans
+magasin de certificats public. Épingler la feuille ou l'intermédiaire
+casserait l'export en quelques heures ou jours ; on embarque la **racine**,
+copiée depuis le volume Caddy du VPS (`/data/caddy/pki/authorities/local/root.crt`).
+**Piège / surprise :** le VPS est joint par son IP : la feuille n'a **pas de
+CN**, seulement une SAN de type IP. Selon la version de mbedTLS, la
+vérification du nom peut échouer même avec la bonne racine — d'où l'option
+`CONFIG_DENGON_DASH_SKIP_CN_CHECK` (non vérifié sur carte à ce jour).
+**Où c'est utilisé :** `firmware/dengon-relay/main/certs/README.md`,
+`main/dengon_ship.c` (`poster`), `main/CMakeLists.txt` (racine facultative).
+
+### Pile de la tâche d'événements ESP-IDF : ne pas y signer
+
+**C'est quoi :** les gestionnaires `esp_event` (Wi-Fi, IP) tournent dans la
+tâche `sys_evt`, dont la pile par défaut fait ~2,3 Ko.
+**Pourquoi dans dengon :** journaliser `relay.wifi_up` depuis ce
+gestionnaire appellerait dengon-core, qui hache et signe l'entrée (Ed25519) :
+l'US-308 a déjà vu une pile de 6 Ko déborder pour moins que ça. Les
+événements sont donc mis en file (`dengon_relay_app_record`) et écrits par
+`ledger_task` (8 Ko).
+**Piège / surprise :** le débordement ne se produirait qu'à la première
+connexion Wi-Fi, loin de la ligne fautive — d'où la règle : tout appel à
+dengon-core depuis une tâche dont on ne maîtrise pas la pile passe par une
+file.
+**Où c'est utilisé :** `firmware/dengon-relay/main/dengon_relay_app.c`
+(`dengon_relay_app_record`, `vider_evenements_en_attente`),
+`main/dengon_wifi.c` (`journaliser`).
+
+### IRAM de l'ESP32 : BLE + Wi-Fi ne tiennent pas avec les réglages par défaut
+
+**C'est quoi :** l'IRAM (128 Ko) reçoit le code qui doit tourner cache
+désactivé ou très vite. Les piles Wi-Fi et lwIP y placent par défaut leurs
+chemins chauds (`CONFIG_ESP_WIFI_IRAM_OPT`, `CONFIG_ESP_WIFI_RX_IRAM_OPT`,
+`CONFIG_LWIP_IRAM_OPTIMIZATION`).
+**Pourquoi dans dengon :** ajouter le Wi-Fi au relais NimBLE a fait échouer
+l'édition de liens (« IRAM0 segment data does not fit », 1,6 Ko de trop).
+Couper ces trois optimisations ramène l'IRAM à 82 % ; le débit perdu est sans
+importance pour quelques Ko de JSON par seconde.
+**Piège / surprise :** l'erreur n'apparaît qu'au link, et `sdkconfig.defaults`
+n'est relu que sans `sdkconfig` existant (piège n°1 de la fiche) : il faut
+un build propre pour voir l'effet.
+**Où c'est utilisé :** `firmware/dengon-relay/sdkconfig.defaults` §8.
+
+### Ancre TLS qui n'est pas une racine : mbedTLS l'accepte, OpenSSL non (par défaut)
+
+**C'est quoi :** mbedTLS (ESP-IDF) considère tout certificat de sa liste de
+confiance comme une ancre, même un intermédiaire. OpenSSL (donc Python
+`ssl`) exige par défaut une chaîne jusqu'à un certificat auto-signé, sauf avec
+`-partial_chain` / `ssl.VERIFY_X509_PARTIAL_CHAIN`.
+**Pourquoi dans dengon :** faute de la racine Caddy, l'essai US-309 a épinglé
+l'intermédiaire envoyé par le serveur. La carte a réussi du premier coup ;
+`register_relay.py` échouait (« unable to get issuer certificate ») jusqu'à
+l'ajout du drapeau.
+**Piège / surprise :** l'intermédiaire Caddy expire en 7 jours : un firmware
+qui l'épingle cesse d'exporter à cette date sans autre symptôme que des
+échecs TLS.
+**Où c'est utilisé :** `firmware/dengon-relay/tools/register_relay.py`,
+`main/certs/README.md`.
+

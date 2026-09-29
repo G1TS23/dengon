@@ -17,17 +17,25 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 
+#include "dengon_ship.h"
 #include "dengon_store.h"
 #include "dengon_transport.h"
+#include "dengon_wifi.h"
 
 static const char *TAG = "dengon-relay";
 
 #define ROUTE_PERIOD_MS      10
 #define INVENTORY_PERIOD_MS  1000
 #define COURIER_PERIOD_MS    30000
+/* relay.health toutes les 60 s (docs/synthese/08 §6) : un tour de courier
+   sur deux. */
+#define HEALTH_EVERY_COURIER 2
+/* Événements du firmware en attente d'écriture au journal. */
+#define RECORD_QUEUE_LEN     8
 #define LEDGER_WAIT_MS       2000
 #define RX_BATCH             8
 /* Une trame BLE tient toujours ici (ATT_MTU 517 - 3) ; au-delà, voir
@@ -43,13 +51,23 @@ static const char *TAG = "dengon-relay";
 #define ROUTE_STACK      16384
 #define COURIER_STACK    16384
 #define INVENTORY_STACK  8192
-#define LEDGER_STACK     8192
+/* ledger : 8 Ko suffisaient à l'US-308 ; depuis l'US-309 elle signe aussi
+   les événements différés (relay.wifi_*, relay.health) : marge mesurée sur
+   carte tombée à 1 308 o, d'où 12 Ko. */
+#define LEDGER_STACK     12288
 
 static DengonRelay      *s_relay;
 static SemaphoreHandle_t s_lock;
 static TaskHandle_t      s_ledger_task;
 static TaskHandle_t      s_route_task;
 static TaskHandle_t      s_inventory_task;
+static QueueHandle_t     s_records;
+static volatile unsigned s_peers;
+
+typedef struct {
+    const char *name;
+    char        payload[DENGON_RECORD_PAYLOAD_MAX];
+} pending_record_t;
 
 // --- Horloges ---------------------------------------------------------------
 
@@ -151,10 +169,14 @@ route_task(void *arg)
             switch (ev->kind) {
             case DENGON_EVT_PEER_CONNECTED:
                 ESP_LOGI(TAG, "lien %" PRIu64 " ouvert", ev->link);
+                s_peers++;
                 dengon_relay_link_up(s_relay, ev->link, now);
                 break;
             case DENGON_EVT_PEER_DISCONNECTED:
                 ESP_LOGI(TAG, "lien %" PRIu64 " fermé", ev->link);
+                if (s_peers > 0) {
+                    s_peers--;
+                }
                 dengon_relay_link_down(s_relay, ev->link);
                 break;
             case DENGON_EVT_FRAME_RECEIVED:
@@ -193,11 +215,32 @@ inventory_task(void *arg)
     }
 }
 
+/* relay.health (contrat : contracts/tools/catalogue.py). `rssi_avg` : RSSI
+   du point d'accès Wi-Fi, -120 hors connexion — le transport ne remonte pas
+   le RSSI des voisins BLE (écart consigné, US-309). */
+static void
+journaliser_sante(const DengonRelayStats *st)
+{
+    char                payload[DENGON_RECORD_PAYLOAD_MAX];
+    dengon_ship_stats_t ship;
+
+    dengon_ship_get_stats(&ship);
+    snprintf(payload, sizeof(payload),
+             "{\"cache_size\":%" PRIu32 ",\"envelope_store\":%" PRIu32 ",\"heap_free\":%" PRIu32
+             ",\"log_buffer_pct\":%u,\"logs_dropped\":%" PRIu64 ",\"peers\":%u,"
+             "\"rssi_avg\":%d,\"uptime_s\":%" PRIu64 "}",
+             st->cache_len, st->envelopes_held, esp_get_free_heap_size(), ship.fill_pct,
+             ship.dropped, s_peers, dengon_wifi_rssi(),
+             (uint64_t)(esp_timer_get_time() / 1000000));
+    dengon_relay_app_record("relay.health", payload);
+}
+
 static void
 courier_task(void *arg)
 {
     static uint8_t   buf[FRAME_BUF];
     DengonRelayStats st;
+    unsigned         tour = 0;
 
     (void)arg;
     for (;;) {
@@ -208,22 +251,30 @@ courier_task(void *arg)
         UBaseType_t pile_inventory = uxTaskGetStackHighWaterMark(s_inventory_task);
         UBaseType_t pile_ledger = uxTaskGetStackHighWaterMark(s_ledger_task);
 
+        dengon_ship_stats_t ship;
+
         vTaskDelay(pdMS_TO_TICKS(COURIER_PERIOD_MS));
+        dengon_ship_get_stats(&ship);
         dengon_relay_app_lock();
         dengon_relay_poll_courier(s_relay, maintenant());
         dengon_relay_stats(s_relay, &st);
         dengon_relay_app_unlock();
         flush_outgoing(buf, sizeof(buf));
+        if (++tour % HEALTH_EVERY_COURIER == 0) {
+            journaliser_sante(&st);
+        }
         notifier_journal();
         ESP_LOGI(TAG,
                  "santé : relayés=%" PRIu64 " enveloppes=%" PRIu32 " (déposées %" PRIu64
                  ", remises %" PRIu64 ") cache=%" PRIu32 " rejets=%" PRIu64 "/%" PRIu64
                  " sans_heure=%" PRIu64 " tas=%" PRIu32
-                 " pile_min route/courier/inventory/ledger=%u/%u/%u/%u",
+                 " tas_min=%" PRIu32
+                 " pile_min route/courier/inventory/ledger/ship=%u/%u/%u/%u/%u",
                  st.relayed, st.envelopes_held, st.envelopes_stored, st.envelopes_handed_off,
                  st.cache_len, st.malformed, st.unauthentic, st.clock_unknown,
-                 esp_get_free_heap_size(), (unsigned)pile_route, (unsigned)pile_courier,
-                 (unsigned)pile_inventory, (unsigned)pile_ledger);
+                 esp_get_free_heap_size(), esp_get_minimum_free_heap_size(),
+                 (unsigned)pile_route, (unsigned)pile_courier, (unsigned)pile_inventory,
+                 (unsigned)pile_ledger, ship.stack_min);
     }
 }
 
@@ -245,9 +296,28 @@ persister_lot(const uint8_t *lot, size_t used, size_t last)
     }
 }
 
+/* Journalise les événements du firmware mis en attente par
+   dengon_relay_app_record(), sur la pile de cette tâche. */
+static void
+vider_evenements_en_attente(void)
+{
+    pending_record_t rec;
+
+    while (xQueueReceive(s_records, &rec, 0) == pdTRUE) {
+        dengon_relay_app_lock();
+        bool ok = dengon_relay_record_event(s_relay, rec.name, rec.payload, maintenant());
+        dengon_relay_app_unlock();
+        if (!ok) {
+            ESP_LOGW(TAG, "%s refusé par le journal", rec.name);
+        }
+    }
+}
+
 /* Écrit dans littlefs toutes les entrées produites, par lots, puis le
    curseur. L'ancre est recalculée depuis la DERNIÈRE entrée écrite du lot :
-   le curseur ne devance jamais le fichier. */
+   le curseur ne devance jamais le fichier. Chaque entrée est aussi copiée
+   dans le buffer ring d'export (US-309) : c'est de là qu'elle partira vers
+   le dashboard. */
 static void
 ledger_task(void *arg)
 {
@@ -258,6 +328,7 @@ ledger_task(void *arg)
         bool encore = false;
 
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(LEDGER_WAIT_MS));
+        vider_evenements_en_attente();
         do {
             size_t       used   = 0;
             size_t       last   = 0;
@@ -271,6 +342,7 @@ ledger_task(void *arg)
                 if (st != DENGON_STATUS_OK) {
                     break;
                 }
+                dengon_ship_push(lot + used, len);
                 last = used;
                 used += len;
             }
@@ -286,6 +358,8 @@ ledger_task(void *arg)
                            != DENGON_STATUS_OK) {
                     free(grande);
                     grande = NULL;
+                } else {
+                    dengon_ship_push(grande, len);
                 }
             }
             dengon_relay_app_unlock();
@@ -303,6 +377,31 @@ ledger_task(void *arg)
                      || (used > 0 && (st == DENGON_STATUS_BUFFER_TOO_SMALL || used == sizeof(lot)));
         } while (encore);
     }
+}
+
+// --- Événements différés -------------------------------------------------------
+
+bool
+dengon_relay_app_record(const char *name, const char *payload_json)
+{
+    pending_record_t rec = { .name = name };
+
+    if (s_records == NULL
+        || strlcpy(rec.payload, payload_json, sizeof(rec.payload)) >= sizeof(rec.payload)) {
+        return false;
+    }
+    if (xQueueSend(s_records, &rec, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "%s perdu : file d'événements pleine", name);
+        return false;
+    }
+    notifier_journal();
+    return true;
+}
+
+unsigned
+dengon_relay_app_peers(void)
+{
+    return s_peers;
 }
 
 // --- Démarrage ---------------------------------------------------------------
@@ -338,11 +437,16 @@ dengon_relay_app_init(uint8_t peer_id[8])
     uint64_t             routing_seed;
     esp_err_t            err;
 
-    s_lock = xSemaphoreCreateMutex();
-    if (s_lock == NULL) {
+    s_lock    = xSemaphoreCreateMutex();
+    s_records = xQueueCreate(RECORD_QUEUE_LEN, sizeof(pending_record_t));
+    if (s_lock == NULL || s_records == NULL) {
         return ESP_ERR_NO_MEM;
     }
-    err = dengon_store_init();
+    /* Ring d'export prêt AVANT relay.boot, première entrée à expédier. */
+    err = dengon_ship_init();
+    if (err == ESP_OK) {
+        err = dengon_store_init();
+    }
     if (err == ESP_OK) {
         err = dengon_store_load_secrets(dh, seed, &created);
     }

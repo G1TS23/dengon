@@ -229,6 +229,65 @@ fn rust_verifie_les_signatures_produites_par_python() {
     }
 }
 
+/// US-309 : la **production** d'un batch par le relais, pas seulement sa
+/// relecture. Chaque fixture est rejouée comme le relais la verrait :
+/// des entrées de journal (`ledger::Entry`, payload en texte JSON), puis
+/// `signed_batch_from_entries` avec la clé de test. Le corps obtenu doit être
+/// **octet pour octet** la forme canonique de la fixture — signature
+/// comprise (Ed25519 est déterministe), donc le serveur, qui a accepté ces
+/// fixtures (`dashboard/api/tests/test_cross_vectors.py`), acceptera ces
+/// batchs.
+#[test]
+fn le_relais_reproduit_chaque_batch_signe_des_fixtures() {
+    use dengon_core::crypto::SigningKey;
+    use dengon_core::ledger::{Entry, GENESIS_HASH, SIG_LEN};
+    use dengon_core::observability::batch::signed_batch_from_entries;
+
+    let cle: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(racine_contrats().join("test-signing-key.json")).unwrap(),
+    )
+    .unwrap();
+    let seed: [u8; 32] = hex_decode(cle["seed_hex"].as_str().unwrap())
+        .try_into()
+        .unwrap();
+    let signer = SigningKey::from_seed(&seed);
+
+    for (nom, batch) in fixtures() {
+        let events = batch["events"].as_array().unwrap();
+        let node_kind = match events[0]["node_kind"].as_str().unwrap() {
+            "relay" => NodeKind::Relay,
+            _ => NodeKind::Client,
+        };
+        let entries: Vec<Entry> = events
+            .iter()
+            .map(|ev| Entry {
+                seq: ev["seq"].as_u64().unwrap(),
+                ts_ms: ev["ts_ms"].as_u64().unwrap(),
+                event_name: ev["name"].as_str().unwrap().to_owned(),
+                // Texte « tel qu'écrit » : `to_string_pretty` (espaces,
+                // retours à la ligne) pour exercer la re-canonicalisation.
+                payload_json: serde_json::to_string_pretty(&ev["payload"]).unwrap(),
+                prev_hash: GENESIS_HASH,
+                entry_hash: GENESIS_HASH,
+                sig: [0u8; SIG_LEN],
+            })
+            .collect();
+        let corps = signed_batch_from_entries(
+            &entries,
+            batch["node_id"].as_str().unwrap(),
+            node_kind,
+            &signer,
+        )
+        .unwrap_or_else(|e| panic!("{nom}: batch non construit ({e})"));
+        let attendu = vers_valeur_dengon(&batch, &nom).to_canonical_bytes();
+        assert_eq!(
+            String::from_utf8(corps).unwrap(),
+            String::from_utf8(attendu).unwrap(),
+            "{nom}: le batch produit par le relais diffère de la fixture"
+        );
+    }
+}
+
 #[test]
 fn une_fixture_alteree_est_refusee() {
     // Sans ce test, rien ne prouve que le précédent détecte quoi que ce soit.

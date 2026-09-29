@@ -1,0 +1,3 @@
+# Application de test : chien de garde coupé (Unity ne rend pas la main entre
+# les cas).
+CONFIG_ESP_TASK_WDT_EN=n

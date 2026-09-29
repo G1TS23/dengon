@@ -10,6 +10,69 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-309 : retours de revue de la PR #120 (Oswin), mesures sur carte
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/components/dengon_ship_core/`,
+`main/{dengon_ship.c,dengon_wifi.c,dengon_relay_app.c,dengon_console.c,CMakeLists.txt,Kconfig.projbuild}`,
+`tools/register_relay.py`, `crates/dengon-core/src/observability/batch.rs`, `docs/suivi/`.
+**Lot :** US-309 (issue #47), PR #120.
+
+### Fait
+- **Politique d'envoi** refaite en machine à états C pure
+  (`dengon_ship_step`, `dengon_ship_policy.c`) : `DROP` limité à 400/413/422 ;
+  3xx, 404 et autres 4xx → `HOLD` (lot gardé, 60 s) ; entrée hors contrat ou
+  5 × 5xx d'affilée → lots d'une entrée pour isoler la fautive, seule
+  retirée ; compteurs remis à zéro après 401/HOLD. 6 tests Unity de plus.
+- `dengon_ship.c` : batch construit une fois (tampon estimé, reprise exacte
+  si trop court) ; compteurs, statut et jeton sous mutex ; message 401 avec
+  ses trois causes ; marge de pile exposée (`dash status`, bilan de santé,
+  qui affiche aussi `tas_min`).
+- `dengon_wifi.c` : SSID journalisé seulement en ASCII imprimable ; une seule
+  voie de reconnexion au changement d'identifiants (plus de
+  `esp_wifi_connect()` concurrent du minuteur).
+- `batch.rs` : événements sérialisés une fois ; `BatchError::NodeMismatch`.
+- CMake : `WARNING` si la racine du dashboard manque. `register_relay.py` : IP
+  unique marquée `NOSONAR` (Sonar S1313), hôtes autorisés, TLS 1.2 minimum
+  (Sonar S4423/S8703, commit précédent).
+- **Mesure sur carte** (point 10 de la revue) : marge de pile de
+  `dengon_ship` = **1 188 o** sur 8 Ko → pile à 12 Ko, marge **5 288 o** ; ring
+  ramené de 12 à 8 Kio pour garder le même tas. Tas minimal ~10,2 Ko.
+- Écart consigné : jeton et mot de passe Wi-Fi en clair sur la console série.
+
+### Pourquoi / décisions
+- `HOLD` plutôt que `RETRY` pour 3xx/404 : une mauvaise configuration ne se
+  répare pas plus vite en réessayant toutes les secondes.
+- Isolement plutôt que plafond d'essais qui jetterait tout le lot.
+- Pile 12 Ko + ring 8 Kio : un débordement de pile plante la carte, un tas
+  court fait seulement échouer un envoi (réessayé).
+
+### Écarts vs conception
+- Ajout : secrets en clair sur la console → `03-ecarts-conception.md`.
+
+### Appris
+- rien de nouveau
+
+### État après cette session
+- Retours de revue traités sauf la racine CA définitive (à poser depuis le
+  VPS avant le 2026-10-05).
+- Fiche(s) module mise(s) à jour : `firmware-relay.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker … dengon_ship_core/test_apps (linux)          → 16 Tests 0 Failures
+$ cargo fmt --check ; cargo clippy --workspace --all-targets --all-features -D warnings → OK
+$ cargo test --workspace --all-features --locked        → 534 passed, 0 failed
+$ cargo llvm-cov -p dengon-core --summary-only          → observability/batch.rs : lignes 90,80 %, régions 92,31 %
+$ idf.py build flash (carte relay-9309e5)               → OK
+carte, 1er flash : « pile_min …/ship=…/1188 », tas_min=11276, 202 ×4
+carte, pile 12 Ko + ring 8 Kio : ship=5288, tas_min=10196 ;
+  coupure hotspot ~45 s → reconnexion, 202 ×4, envoyés 9, perdus 0
+```
+- Non vérifié : chemins `HOLD`/isolement sur carte (couverts en Unity).
+
+---
+
 ## 2026-09-29 — US-311 : rebase de la PR #112 sur `main` (après US-308/US-306)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
@@ -188,6 +251,193 @@ Project build complete — 0xf2960 o, 53 % libre (aucun avertissement de compila
 - **Non vérifié :** le nouveau chemin `ledger_task` n'a pas tourné sur carte
   (pas d'entrée > 4 096 o à produire aujourd'hui, pas de test Unity de
   `dengon_relay_app.c`) ; relu à la main uniquement.
+## 2026-09-29 — US-309 : essais sur carte contre le VPS, coupure réseau, redéploiement du dashboard
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/dengon_relay_app.c` (pile ledger),
+`firmware/dengon-relay/tools/register_relay.py`, `main/certs/README.md`,
+`docs/suivi/` ; branche séparée `fix/deploy-vps-uv-version` (`.github/workflows/deploy-vps.yml`).
+**Lot :** US-309 (issue #47), suite de l'entrée précédente.
+
+### Fait
+- Carte ESP32 (`relay-9309e5`, identité US-308 conservée : flash sans
+  effacement) attachée à WSL (`usbipd attach --busid 1-1`), console pilotée
+  par un script pyserial dans le conteneur ESP-IDF.
+- **Dashboard du VPS redéployé** : il tournait encore sur le squelette US-110
+  (`/healthz` + `/ingest/batch` permissif, pas de `/api/nodes`). Deux échecs
+  de `deploy-vps.yml` avant réussite : (1) secret `VPS_KNOWN_HOSTS` sans la
+  clé ED25519 du VPS → remplacé par la ligne `ssh-keyscan -p 2221 -t ed25519`
+  fournie par Paul ; (2) `COPY .uv-version` introuvable : le workflow
+  n'envoyait pas ce fichier de la racine → correctif d'une ligne sur
+  `fix/deploy-vps-uv-version`, déploiement lancé depuis cette branche (= `main`
+  + ce correctif). Le smoke test `/healthz` du workflow a échoué par course
+  (conteneurs en redémarrage) ; revérifié à la main 20 s plus tard : `/healthz`
+  200, routes US-216→219 présentes, `/ingest/batch` sans jeton → 401.
+- **Ancre TLS pour l'essai** : la racine Caddy n'est pas envoyée par le serveur
+  et l'accès SSH au VPS n'était pas disponible dans la session ; on a épinglé
+  l'**intermédiaire** Caddy (envoyé par le serveur, valide jusqu'au
+  2026-10-05) dans `main/certs/dashboard_root.pem` (non versionné). mbedTLS
+  l'accepte comme ancre ; `register_relay.py` active
+  `VERIFY_X509_PARTIAL_CHAIN` pour faire de même.
+- Enregistrement : `dash id` → `register_relay.py` → **201**, `dash token`.
+  Point d'accès : hotspot mobile Windows du PC (SSID/mot de passe générés,
+  jamais écrits dans le dépôt), piloté par PowerShell pour la coupure.
+- **Bout en bout** : Wi-Fi connecté, `N événements acceptés (202)` ; mbedTLS
+  accepte le certificat au nom d'une IP (`SKIP_CN_CHECK` inutile). Côté VPS
+  (`GET /api/stream`) : les événements de `relay-9309e5` sont là.
+- **Coupure réseau** (hotspot arrêté ~190 s) : `relay.wifi_down`, POST
+  `ESP_ERR_HTTP_CONNECT` → réessai, reconnexions Wi-Fi 1 s → 69 s ; ring
+  0 % → 7 % → 10 % → 12 % (5 en attente), 0 perdu ; au retour : 5 puis 2
+  acceptés (202), ring 0 %, 15 envoyés, 0 perdu/refusé. Côté VPS, `event_id`
+  recalculés : **seq 37 → 52 continus, 16/16**.
+- **Bug trouvé sur carte** : marge de pile de `ledger_task` tombée à 1 308 o
+  (elle signe maintenant les événements différés) → pile 8 → 12 Ko, marge
+  mesurée ensuite 5 404 o.
+
+### Pourquoi / décisions
+- Intermédiaire plutôt que `skip`/pas de vérification : la chaîne reste
+  vérifiée ; à remplacer par la racine avant le 2026-10-05 (le firmware
+  livré en CI n'embarque rien, cf. `main/certs/README.md`).
+- Correctif de `deploy-vps.yml` sur une branche dédiée, pas dans la PR US-309
+  (hors périmètre firmware).
+
+### Écarts vs conception
+- `03-ecarts-conception.md` : horodatage des événements d'avant SNTP en temps
+  d'uptime, délai de reconnexion jusqu'à ~75 s, intermédiaire épinglé pour
+  l'essai.
+
+### Appris
+- `04-apprentissages.md` : ancre TLS non auto-signée (mbedTLS vs OpenSSL).
+
+### État après cette session
+- Critères US-309 démontrés sur carte contre le dashboard déployé : HTTPS,
+  JWT, signature Ed25519 acceptée par US-216, buffer ring (accumulation puis
+  vidage sans perte).
+- **Pas fait** : essai avec deux téléphones faisant traverser un message par
+  le relais (Galaxy A16 non visible par adb) ; débordement réel du ring sur
+  carte (couvert par les tests Unity seulement) ; racine CA définitive.
+- Tas libre : ~31–34 Ko en régime Wi-Fi, **24,8 Ko** relevé pendant une
+  reconnexion + envoi TLS. Serré ; à surveiller avec du trafic BLE réel.
+- Fiche(s) module mise(s) à jour : `firmware-relay.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ usbipd attach --wsl --busid 1-1                 (Paul, PowerShell admin) → /dev/ttyUSB0
+$ openssl s_client -connect 51.255.38.214:8443 -CAfile main/certs/dashboard_root.pem -partial_chain
+  → Verify return code: 0 (ok)
+$ idf.py -B build-us309 build flash                → OK (sans erase-flash)
+$ curl …/openapi.json (avant)                      → ['/healthz', '/ingest/batch'] (squelette US-110)
+$ gh workflow run deploy-vps.yml --ref main        → échec : Host key verification failed
+$ gh secret set VPS_KNOWN_HOSTS --env vps-prod     (ligne ssh-keyscan fournie par Paul)
+$ gh workflow run deploy-vps.yml --ref main        → échec : "/.uv-version": not found
+$ gh workflow run deploy-vps.yml --ref fix/deploy-vps-uv-version
+  → build/up OK, smoke /healthz en échec (course) ; à la main : 200, 7 routes, ingest sans jeton 401
+$ python3 tools/register_relay.py --node-id relay-9309e5 --pub-sign 9182…32c0 → 201
+console : dash token … → enregistré ; wifi … → IP 192.168.137.73 ; « 6 événements acceptés (202) »
+hotspot stop → ring 12 % / 5 en attente, 0 perdu ; hotspot start → 202 ×2, 15 envoyés, 0 perdu
+$ curl -N …/api/stream + recalcul event_id         → seq 37→52 continus, 16/16
+```
+- Non vérifié : trafic BLE entre deux téléphones via le relais.
+
+---
+
+## 2026-09-29 — US-309 : export du relais vers le dashboard (HTTPS, buffer ring, JWT, batchs signés)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/observability/{batch.rs,batch/tests.rs,canonical.rs,catalog.rs,mod.rs}`,
+`crates/dengon-core/src/relay.rs` (+ tests), `crates/dengon-core/tests/event_fixtures.rs`,
+`crates/dengon-core-ffi/{src/relay.rs,include/dengon_core.h,tests/relay_c_api.rs}`,
+`firmware/dengon-relay/{main/*,components/dengon_ship_core/*,sdkconfig.defaults,tools/register_relay.py}`,
+`.github/workflows/firmware.yml`, `docs/suivi/`.
+**Lot :** US-309 (issue #47). Branche `feat/US-309-https-dashboard`, **empilée sur
+`feat/US-308-relay`** (PR #110, pas encore mergée ; elle contient aussi US-307).
+Dépendance US-216 (#30) déjà sur `main`.
+
+### Fait
+- **dengon-core** : `observability::batch` construit le corps de
+  `POST /ingest/batch` depuis des entrées du journal chaîné (`batch_id`,
+  `sig` = base64 d'Ed25519 sur le batch canonique sans `sig`, `node_id` =
+  `relay-` + `peerID[0..3]`). `canonical::parse` relit le JSON texte du
+  journal (payloads écrits en C) pour le re-canonicaliser. `Relay::build_batch`
+  / `Relay::node_id`. `\b`/`\f` sérialisés comme `json.dumps`.
+- **dengon-core-ffi** : `dengon_relay_node_id`, `dengon_relay_build_batch`
+  (signature faite dans le handle, la clé ne sort pas). Header régénéré.
+- **Firmware** : `dengon_wifi.c` (station, identifiants NVS, reconnexion avec
+  backoff, SNTP, `relay.wifi_up`/`wifi_down`), composant C pur
+  `dengon_ship_core` (buffer ring borné + politique de réessai),
+  `dengon_ship.c` (tâche d'envoi HTTPS, racine du dashboard épinglée, JWT en
+  NVS), `relay.health` toutes les 60 s, file d'événements différés
+  (`dengon_relay_app_record`) écrite par `ledger_task`, console `wifi` et
+  `dash id|status|token`, Kconfig « Export vers le dashboard »,
+  `sdkconfig.defaults` §8 (coexistence, tampons Wi-Fi réduits, mbedTLS
+  dynamique, IRAM).
+- `tools/register_relay.py` (enregistrement + jeton), `main/certs/README.md`
+  (récupérer la racine Caddy). CI : tests Unity `dengon_ship_core` sur `linux`,
+  et build `esp32` de la test app.
+
+### Pourquoi / décisions
+- Batch construit **en Rust** : JSON canonique et Ed25519 y existent déjà, et
+  la clé reste dans le handle. Une réécriture en C aurait été une deuxième
+  implémentation à garder identique octet pour octet.
+- Ring **en RAM statique** : borne mémoire par construction, testable sur
+  l'hôte ; le journal complet reste sur littlefs (écart consigné).
+- 400/413 → le lot est **retiré** (il bloquerait la file à jamais) ; 401 → il
+  est **gardé**, on attend un jeton ; réseau/5xx → backoff.
+- Événements Wi-Fi journalisés **via une file** : la tâche d'événements
+  ESP-IDF (~2,3 Ko de pile) ne supporte pas la signature du journal.
+- Première compilation : IRAM dépassée de 1,6 Ko (BLE + Wi-Fi). Optimisations
+  IRAM du Wi-Fi et de lwIP coupées.
+- `DENGON_NODE_ID_LEN` défini côté firmware : cbindgen préfixait la constante
+  Rust en `DengonDENGON_NODE_ID_LEN`.
+
+### Écarts vs conception
+- Ring en RAM au lieu de littlefs + curseur NVS, jeton manuel de 24 h sans
+  renouvellement, `rssi_avg` = RSSI Wi-Fi, signature par batch (doc `09` §9
+  périmée) → `03-ecarts-conception.md`.
+
+### Appris
+- `04-apprentissages.md` : racine Caddy `tls internal` (seule épinglable, non
+  envoyée par le serveur, feuille sans CN), pile de la tâche d'événements
+  ESP-IDF, IRAM BLE + Wi-Fi.
+
+### État après cette session
+- Codé, compilé, testé sur l'hôte ; le batch produit par le code du relais est
+  accepté par le code du dashboard. **Rien n'a tourné sur carte, rien n'a été
+  envoyé au VPS.**
+- Reste pour clore l'US : racine CA du VPS dans `main/certs/`, puis sur carte
+  enregistrement, 202 contre le VPS, coupure réseau (ring qui monte puis se
+  vide), mesure du tas avec TLS, et vérifier que mbedTLS accepte le
+  certificat au nom d'une IP.
+- Fiche(s) module mise(s) à jour : `firmware-relay.md`, `dengon-core.md`,
+  `dengon-core-ffi.md`, `_index.md`.
+- 01-etat-du-code.md mis à jour : non (plus à toucher)
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check                                        → OK
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings → OK
+$ cargo test --workspace --all-features --locked                    → 515 passed, 0 failed
+  (dont le_relais_reproduit_chaque_batch_signe_des_fixtures : 20 fixtures
+   reconstruites depuis des entrées de journal, identiques octet pour octet,
+   signature comprise)
+$ cargo check -p dengon-core --no-default-features --locked           → OK
+$ sh firmware/dengon-relay/tools/build_core.sh                        → libdengon_core.a (xtensa) OK
+$ docker … espressif/idf:v5.5.5 idf.py -B build-us309 build           → 1er essai : IRAM0 dépassée de 1 595 o ;
+                                                                        après sdkconfig §8 : OK, 21 % libre, IRAM 81,7 %
+$ docker … dengon_ship_core/test_apps : set-target linux, build, ./build/test_dengon_ship_core.elf
+  → 10 Tests 0 Failures ; build esp32 de la test app OK
+$ openssl s_client -connect 51.255.38.214:8443 -showcerts            → feuille 12 h (SAN IP seule),
+                                                                        intermédiaire 7 j, racine non envoyée
+```
+- Bout en bout **local** (script jetable, non versionné) : un binaire Rust
+  génère avec `Relay::build_batch` un batch de 3 événements (dont un payload
+  `relay.boot` écrit « à la C », non trié) ; `TestClient` sur
+  `dashboard/api/app/main.py` : `POST /api/nodes` 201, batch **202**
+  (3 nouveaux), rejeu 202 (0 nouveau), sous-lot 202 (0 nouveau), batch
+  altéré **401** (signature), sans JWT 401.
+- `tools/register_relay.py` contre `uvicorn` local : 201 puis jeton affiché,
+  409 expliqué, racine invalide et serveur injoignable → message clair.
+- **Non vérifié** : tout ce qui demande la carte ou le VPS (voir « État »).
 
 ---
 

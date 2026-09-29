@@ -150,6 +150,22 @@ dengon-core-embed/           — racine de workspace SÉPARÉE (voir son Cargo.t
   adapté (il repasse : 8 accept, 5 reject).
 - Tests : `tests/relay_c_api.rs` (5).
 
+## US-309 : le batch signé pour le dashboard
+
+- `dengon_relay_node_id(relay, char out[13])` : `relay-` + `peerID[0..3]` en
+  hex, terminé par `\0`. Pas de constante exportée pour la taille : cbindgen
+  la préfixerait (`DengonDENGON_…`), le firmware définit `DENGON_NODE_ID_LEN`.
+- `dengon_relay_build_batch(relay, entries, len, out, cap, *out_len)` : prend
+  des entrées **déjà retirées** par `pop_ledger`, concaténées telles quelles
+  (`Entry::to_bytes`), et écrit le corps JSON de `POST /ingest/batch`, signé
+  avec la clé du relais. Mêmes conventions que `pop_*` : `BUFFER_TOO_SMALL` +
+  taille requise (le firmware appelle d'abord avec `cap = 0`), `DECODE` si une
+  entrée est tronquée, hors catalogue ou si son payload n'est pas un objet
+  JSON du contrat, `EMPTY` si aucune entrée.
+- Tests : 3 de plus dans `tests/relay_c_api.rs` (8 au total) — signature
+  vérifiée avec `dengon_relay_verifying_key`, tampon trop petit, entrée
+  tronquée, payload flottant refusé, lot vide.
+
 ## Limites connues / TODO
 
 - La CI (`cross-vectors`, `firmware`) n'a jamais tourné sur cette branche ni

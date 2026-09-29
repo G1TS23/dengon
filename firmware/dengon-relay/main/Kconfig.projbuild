@@ -16,4 +16,63 @@ menu "dengon — relais"
         range 100 60000
         depends on DENGON_TRANSPORT_DEMO
 
+    menu "Export vers le dashboard (US-309)"
+        depends on !DENGON_TRANSPORT_DEMO
+
+        config DENGON_DASH_URL
+            string "URL de base du dashboard (sans / final)"
+            default "https://51.255.38.214:8443"
+            help
+                Le relais poste ses batchs sur <URL>/ingest/batch. La racine
+                de l'autorité qui signe ce serveur est embarquée depuis
+                main/certs/dashboard_root.pem (voir main/certs/README.md).
+
+        config DENGON_DASH_SKIP_CN_CHECK
+            bool "Ne pas vérifier le nom du serveur dans son certificat"
+            default n
+            help
+                Le VPS de démo est joint par son IP : son certificat (Caddy
+                `tls internal`) ne porte qu'une SAN de type IP, sans CN. Si
+                mbedTLS refuse ce certificat pour une question de nom,
+                activer cette option : la chaîne reste vérifiée jusqu'à la
+                racine épinglée, seul le nom n'est plus comparé.
+
+        config DENGON_SHIP_RING_BYTES
+            int "Taille du buffer ring d'export (octets)"
+            default 8192
+            range 2048 65536
+            help
+                RAM réservée aux entrées de journal en attente d'envoi. Une
+                entrée pèse ~250 o (préfixe compris) : 8 Kio ≈ 33 entrées.
+                8 Kio et non 12 depuis que la pile de la tâche d'envoi est
+                passée à 12 Ko (TLS) : même tas libre qu'avant (tas minimal
+                mesuré ~11 Ko).
+                Plein, le ring écrase les plus anciennes (comptées dans
+                `logs_dropped`). Sur WROOM (sans PSRAM), BLE + Wi-Fi + TLS
+                laissent peu de tas : surveiller `heap_free`.
+
+        config DENGON_SHIP_BATCH_MAX
+            int "Événements par batch au plus"
+            default 16
+            range 1 100
+
+        config DENGON_SHIP_PERIOD_MS
+            int "Pause entre deux batchs acceptés (ms)"
+            default 1000
+            range 0 60000
+
+        config DENGON_WIFI_SSID
+            string "SSID par défaut (sinon : commande console `wifi`)"
+            default ""
+
+        config DENGON_WIFI_PASSWORD
+            string "Mot de passe Wi-Fi par défaut"
+            default ""
+
+        config DENGON_SNTP_SERVER
+            string "Serveur SNTP"
+            default "pool.ntp.org"
+
+    endmenu
+
 endmenu

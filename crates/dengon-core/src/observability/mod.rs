@@ -34,6 +34,7 @@
 
 extern crate alloc;
 
+pub mod batch;
 pub mod canonical;
 pub mod catalog;
 
@@ -133,6 +134,12 @@ impl Envelope {
     /// couche appelante signe l'ensemble du batch (`CANONICAL.md` §2), pas
     /// un événement isolé.
     pub fn to_canonical_bytes(&self) -> Vec<u8> {
+        self.to_value().to_canonical_bytes()
+    }
+
+    /// L'enveloppe sous forme de [`Value`] — ce qu'un batch range dans son
+    /// tableau `events` (US-309, [`batch`]).
+    pub fn to_value(&self) -> Value {
         let mut obj = BTreeMap::new();
         obj.insert(String::from("event_id"), Value::Str(self.event_id.clone()));
         obj.insert(String::from("node_id"), Value::Str(self.node_id.clone()));
@@ -156,7 +163,7 @@ impl Envelope {
         );
         obj.insert(String::from("name"), Value::Str(String::from(self.name)));
         obj.insert(String::from("payload"), self.payload.clone());
-        Value::Object(obj).to_canonical_bytes()
+        Value::Object(obj)
     }
 }
 
