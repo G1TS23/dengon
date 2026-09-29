@@ -29,6 +29,11 @@
 # après revue de la PR #97 (constat OswinFreyr) : `8443` était répété en dur
 # deux fois ici (les deux smoke tests), sans rien en commun avec le
 # `docker-compose.yml` qui décide réellement quel port est publié.
+#
+# `WEB_HTTPS_PORT` (env du job) : même logique, pour le second conteneur
+# Caddy qui sert `dashboard/web/` (issue #125, `docker-compose.yml` service
+# `web`) — un port distinct de `CADDY_HTTPS_PORT`, les deux instances
+# publient chacune leurs propres ports sur le même hôte.
 
 name: deploy-vps
 
@@ -37,6 +42,7 @@ on:
 
 env:
   CADDY_HTTPS_PORT: 8443
+  WEB_HTTPS_PORT: 8444
 
 jobs:
   deploy:
@@ -76,17 +82,18 @@ jobs:
           } >> ~/.ssh/config
           chmod 600 ~/.ssh/config
 
-      - name: Transférer dashboard/api, contracts, dashboard/deploy
+      - name: Transférer dashboard/api, dashboard/web, contracts, dashboard/deploy
         run: |
           # `.uv-version` (racine du dépôt) : le Dockerfile de l'API le copie
           # (`COPY .uv-version`, contexte = racine) — oublié au premier
           # déploiement réel, le build échouait « "/.uv-version": not found ».
-          # `rm -rf` sur `dashboard/api`/`contracts` avant l'extraction
-          # (corrigé après revue de la PR #97, remarque POWLAIR n°5) : un
+          # `rm -rf` sur `dashboard/api`/`contracts`/`dashboard/web` avant
+          # l'extraction (corrigé après revue de la PR #97, remarque
+          # POWLAIR n°5, `dashboard/web` ajouté pour l'issue #125) : un
           # `tar xzf` par-dessus ~/dengon ne supprime pas les fichiers
           # retirés du dépôt depuis le déploiement précédent — sans
-          # conséquence tant que le Dockerfile ne fait que des COPY
-          # explicites, mais ça garantit un état propre. **PAS**
+          # conséquence tant que le service `web` ne fait que monter le
+          # dossier tel quel, mais ça garantit un état propre. **PAS**
           # `dashboard/deploy` (tel quel dans la suggestion de revue) :
           # `dashboard/deploy/.env` (secret JWT, adresse Caddy) vit sur le
           # disque du VPS, jamais dans l'archive transférée (`.env` n'est
@@ -94,9 +101,9 @@ jobs:
           # que ce workflow s'interdit explicitement (voir commentaire
           # d'en-tête de ce fichier). `tar xzf` écrase les fichiers suivis
           # par git dans `dashboard/deploy/` un par un sans y toucher.
-          ssh vps-deploy "rm -rf ~/dengon/dashboard/api ~/dengon/contracts && mkdir -p ~/dengon/dashboard/deploy"
+          ssh vps-deploy "rm -rf ~/dengon/dashboard/api ~/dengon/dashboard/web ~/dengon/contracts && mkdir -p ~/dengon/dashboard/deploy"
           tar czf - --exclude='.venv' --exclude='__pycache__' --exclude='*.pyc' \
-            dashboard/api contracts dashboard/deploy .uv-version \
+            dashboard/api dashboard/web contracts dashboard/deploy .uv-version \
             | ssh vps-deploy "tar xzf - -C ~/dengon"
 
       - name: docker compose up -d --build
@@ -123,3 +130,9 @@ jobs:
             -H 'Content-Type: application/json' -d '[]')
           cat /tmp/ingest.json
           test "$code" = "401"
+
+      - name: Smoke test — dashboard/web répond en HTTPS depuis l'extérieur (issue #125)
+        run: |
+          curl -fsSk "https://${{ secrets.VPS_HOST }}:${{ env.WEB_HTTPS_PORT }}/" \
+            | grep -q 'dengon' \
+            || { echo "dashboard/web ne semble pas servi (page sans « dengon »)" >&2; exit 1; }

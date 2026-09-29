@@ -297,6 +297,102 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
 
 ### État après cette session
 - Fiche module : `modules/android-app.md` (section US-321) à jour ; `01-etat-du-code.md` : non.
+## 2026-09-29 — Issue #125 : second conteneur Caddy pour servir `dashboard/web` sur le VPS
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `dashboard/deploy/{docker-compose.yml,Caddyfile.web,.env.example}`,
+`dashboard/web/index.html`, `.github/workflows/deploy-vps.yml`,
+`docs/suivi/modules/deploiement-vps.md`.
+**Lot :** issue #125 (area `dashboard-web`/`process`, MoSCoW should).
+
+### Fait
+- Nouveau service `web` dans `docker-compose.yml` (`caddy:2-alpine`),
+  volumes TLS **séparés** de ceux du service `caddy` de l'API
+  (`dengon_web_caddy_data`/`_config` — deux instances Caddy ne peuvent pas
+  partager le même magasin de certificats), ports `WEB_HTTP_PORT`/
+  `WEB_HTTPS_PORT` (défaut 8081/8444, distincts de ceux de l'API).
+- `Caddyfile.web` (nouveau) : sert `dashboard/web/` en statique
+  (`root */srv/web` monté `:ro`), même mécanisme `tls internal` +
+  `default_sni` que l'API — pas de nouveau problème TLS à résoudre.
+- L'entrypoint du service `web` génère `dashboard/web/config.js` à chaque
+  démarrage, depuis `DENGON_WEB_API_BASE` (`.env`, requis, pas de défaut) —
+  jamais écrit dans le montage `:ro` de `dashboard/web/`.
+- `dashboard/web/index.html` : ajoute `<script src="config.js">` avant
+  `api.js` (aucune valeur codée en dur à retirer — vérifié que `main`, au
+  moment de cette session, n'avait déjà plus l'URL en dur trouvée par une
+  première exploration, qui lisait en fait un résidu **non commité** du
+  disque local, écarté avant d'éditer).
+- `.env.example` : `WEB_HTTP_PORT`, `WEB_HTTPS_PORT`, `DENGON_WEB_API_BASE`.
+- `deploy-vps.yml` : `dashboard/web` ajouté au transfert `tar`/`rm -rf`
+  distant, nouveau smoke test HTTPS sur `WEB_HTTPS_PORT` (vérifie que la
+  page contient bien « dengon »).
+- `docs/suivi/modules/deploiement-vps.md` : Structure, Décisions,
+  Limites connues mis à jour.
+- Aucun changement côté `dashboard/api` : CORS déjà `allow_origins=["*"]`,
+  `GET` seulement — couvre déjà la nouvelle origine sans modification.
+
+### Pourquoi / décisions
+- Deuxième instance **Caddy**, pas nginx (confirmé avec l'utilisateur) :
+  réutilise directement `tls internal`/`default_sni`, déjà éprouvés et
+  documentés pour l'API sur ce VPS — nginx aurait demandé de re-résoudre le
+  TLS auto-signé (génération de certificat, SNI) à la main, un risque
+  déjà réglé côté Caddy.
+- `DENGON_WEB_API_BASE` explicite dans `.env`, pas dérivé de
+  `CADDY_SITE_ADDRESS`+`CADDY_HTTPS_PORT` : plus direct à lire, pas de
+  risque de désynchronisation silencieuse si le port de l'API change un
+  jour sans qu'on pense à recalculer.
+- `config.js` généré par l'entrypoint plutôt que commité (même/`.gitignore`)
+  ou templaté par le workflow CI : garde le mécanisme entièrement du côté
+  du VPS, cohérent avec la façon dont `dashboard/deploy/.env` (secret JWT)
+  est déjà géré — rien de nouveau à apprendre pour l'équipe.
+
+### Écarts vs conception
+- Aucun (l'issue elle-même documente déjà l'écart d'origine — dashboard
+  web jamais déployé — que cette session referme).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- Reste hors de portée : la vérification finale sur le **VPS réel** (dernier
+  critère d'acceptation de #125 — les 4 écrans chargent de vraies données
+  dans un navigateur) exige un accès SSH et un run manuel de
+  `deploy-vps.yml` (`workflow_dispatch`, environment `vps-prod`) — à faire
+  par quelqu'un qui a cet accès (voir §Procédure d'accès).
+- Fiche module mise à jour : `modules/deploiement-vps.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker compose --env-file .env.test config
+(valide : services api/caddy/web, ports 8081/8444 distincts de 8080/8443,
+volumes web_caddy_data/config séparés de caddy_data/config)
+
+$ docker compose --env-file .env.test up -d web
+Container deploy-web-1 Started — Caddy obtient son certificat interne
+("certificate obtained successfully", issuer local) sans erreur
+
+$ curl -sk https://localhost:8444/config.js
+window.DENGON_API_BASE = "https://localhost:8443";   (valeur de .env.test)
+
+$ curl -sk -o /dev/null -w '%{http_code}' https://localhost:8444/{,style.css}
+200, 200 (index.html et un asset statique)
+
+$ curl -sI http://localhost:8081/
+301 → https://localhost:8444/   (redirection HTTP→HTTPS correcte)
+
+$ docker exec deploy-web-1 sh -c "touch /srv/web/test"
+Read-only file system   (montage :ro confirmé)
+
+$ docker compose --env-file .env.test down -v
+```
+- Vérifié en local (Docker Desktop) : le service `web` seul, sans builder
+  l'image `api` (pas nécessaire pour cette issue). `.env.test` était un
+  fichier local jetable, jamais commité, supprimé après le test.
+- Pas vérifié : le critère « sur le VPS réel » (voir ci-dessus) — nécessite
+  l'accès SSH réel, hors de portée de cette session.
+
+---
 
 ## 2026-09-29 — US-309 : retours de revue de la PR #120 (Oswin), mesures sur carte
 
