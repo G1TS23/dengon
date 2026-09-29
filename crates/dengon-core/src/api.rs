@@ -2202,13 +2202,32 @@ mod tests {
         alice.record_peer_connected(bob.peer_id(), -58, observability::Role::Peripheral, T0);
 
         let events = alice.take_observability_events();
-        let attendu =
-            observability::peer_connected(bob.peer_id(), -58, observability::Role::Peripheral);
         let trouve = events
             .iter()
             .find(|env| env.name == "peer.connected")
             .expect("record_peer_connected doit émettre peer.connected");
-        assert_eq!(trouve.payload, attendu);
+
+        // Champs littéraux attendus par `docs/powl/08` §5 (`{ peer, rssi,
+        // role }`), pas une comparaison contre `observability::peer_connected`
+        // (revue de PR #119, Oswin : comparer un constructeur à lui-même ne
+        // prouve rien sur la forme réelle du payload).
+        let observability::Value::Object(obj) = &trouve.payload else {
+            panic!("payload pas un objet")
+        };
+        assert_eq!(
+            obj.len(),
+            3,
+            "peer.connected doit avoir exactement 3 champs"
+        );
+        assert_eq!(
+            obj.get("peer"),
+            Some(&observability::Value::Str(hex_string(&bob.peer_id())))
+        );
+        assert_eq!(obj.get("rssi"), Some(&observability::Value::Int(-58)));
+        assert_eq!(
+            obj.get("role"),
+            Some(&observability::Value::Str(String::from("peripheral")))
+        );
         assert_eq!(trouve.node_kind, NodeKind::Client);
         assert_eq!(trouve.node_id, alice.node_id);
     }

@@ -2470,3 +2470,27 @@ _(aucun écart pour l'instant)_
   `pkt.relayed`/`pkt.rejected`/`envelope.expired` côté `relay.rs`) — #22
   (US-208) redeviendra fermable une fois #114/#119/#110 tous mergés.
 - **Doc de conception mise à jour ?** sans objet.
+
+---
+
+### 2026-09-29 — `peer.connected` sans `peer.disconnected` côté client (US-319)
+
+- **Prévu :** `docs/powl/08` §5 : « le dashboard dérive `LINKS` de la
+  corrélation `peer.connected`/`disconnected` entre deux `node_id`
+  connus ». Les deux événements sont donc attendus en paire.
+- **Réel :** `Node::record_peer_connected` (US-319) émet `peer.connected`,
+  mais rien n'émet `peer.disconnected` côté façade client. Pas propre à
+  cette PR : `on_peer_disconnected` existe (`Node::on_peer_disconnected`,
+  US-301) mais n'a jamais construit d'`Envelope` non plus, avant comme
+  après US-318/US-319.
+- **Raison :** `record_peer_connected` n'a de toute façon aucun appelant
+  réel aujourd'hui (voir entrée `dengon-core.md` correspondante, revue de
+  PR #119) — le pendant `disconnected` n'a pas été priorisé avant que le
+  premier événement ait lui-même un site d'appel.
+- **Conséquences :** un lien resterait ouvert indéfiniment dans `LINKS` côté
+  dashboard une fois `peer.connected` réellement câblé, sans un
+  `peer.disconnected` symétrique. À traiter dans le même effort que le
+  câblage réel de `peer.connected` (probablement `dengon-node::session.rs`,
+  PR #116, qui a déjà `Node::on_peer_disconnected` appelé au bon endroit —
+  il suffirait d'y ajouter l'émission).
+- **Doc de conception mise à jour ?** non.

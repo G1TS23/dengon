@@ -936,6 +936,81 @@ $ cargo test --workspace --all-features --locked        474 passed, 2 ignored
   tests de `IdentiteLocaleTest`) et le workflow fusionné ne sont vérifiés que
   par le job CI `android` de la PR. Rien testé sur téléphone, en particulier
   pas la perte réelle de la clé du Keystore.
+## 2026-09-29 — Revue de la PR #119 (Oswin) : `peer.connected` sans site d'appel réel, corrige une affirmation fausse
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/api.rs`, `docs/suivi/`.
+**Lot :** réponse à la revue « changements demandés » d'Oswin sur PR #119
+(US-319), avant merge.
+
+### Fait
+- **Bloquant reconnu, pas « corrigé » par du code** : `record_peer_connected`
+  n'a **aucun appelant réel** (`grep` sur `crates/` ne trouve que sa
+  définition et son test) — code mort en production. C'est exactement le
+  défaut reproché à PR #89/US-208 (« aucun site d'appel réel »), rejoué
+  sous une autre forme par cette session. Les entrées précédentes du
+  journal (« 3 des 4… », « 4/4 constructeurs câblés ») et les bullets de
+  `dengon-core.md`/`02-avancement.md` **surclaimaient** : corrigés pour dire
+  que `record_peer_connected` construit l'événement mais n'est appelé nulle
+  part. Le site naturel (`dengon-node::session.rs::tourner()`, PR #116,
+  US-303, Oswin, non mergée) reçoit déjà `TransportEvent::PeerConnected
+  { rssi, .. }` mais l'ignore — pas touché : ce n'est pas ma branche, en
+  vol chez Oswin le même jour.
+- **Bloquant résolu ailleurs, confirmé ici** : #114 (`seq` non contigu)
+  corrigée et poussée avant la revue d'Oswin sur #119 (mais après son
+  commentaire, qui datait d'avant) ; branche #319 déjà rebasée dessus.
+- **Important corrigé** : bullets de `dengon-core.md`/`02-avancement.md`
+  qui disaient encore « `pkt.relayed` reste à câbler côté firmware »
+  (obsolète depuis la découverte de PR #110) harmonisés avec l'entrée
+  d'écart qui disait déjà le contraire.
+- **Mineur consigné** : `peer.connected` sans `peer.disconnected` côté
+  client — écart ajouté dans `03-ecarts-conception.md`.
+- **Mineur corrigé** : le test `record_peer_connected_emet_peer_connected`
+  comparait `observability::peer_connected(...)` à lui-même (tautologique).
+  Compare maintenant les champs littéraux (`peer`/`rssi`/`role`) attendus
+  par `docs/powl/08` §5.
+
+### Pourquoi / décisions
+- Ne pas câbler `record_peer_connected` dans `session.rs` (PR #116) pour
+  faire disparaître le point bloquant « proprement » : cette branche
+  appartient à Oswin, ouverte et modifiée par lui le même jour — y toucher
+  sans coordination aurait été le genre de risque que le projet évite
+  explicitement (conflits sur du travail en vol, le jour de la soutenance).
+  Corriger l'honnêteté de la doc est la réponse correcte à « la PR affirme
+  quelque chose de faux » ; câbler le vrai site d'appel est un autre
+  travail, pour Oswin ou une session ultérieure coordonnée.
+
+### Écarts vs conception
+- Nouvelle entrée US-319 dans `03-ecarts-conception.md` :
+  `peer.connected` sans `peer.disconnected`.
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- PR #119 mise à jour (titre/corps honnêtes, doc de suivi corrigée), en
+  attente d'une nouvelle revue d'Oswin. `record_peer_connected` reste du
+  code sans appelant tant que #116 n'est pas mergée et câblée dessus.
+- Fiche module mise à jour : `modules/dengon-core.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo test -p dengon-core
+386 passed, 2 ignored (10 suites)
+
+$ cargo test --workspace
+474 passed, 2 ignored (31 suites)
+
+$ cargo fmt --all -- --check
+(rien, après un premier passage cargo fmt)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+```
+
+---
+
 ## 2026-09-29 — Revue de la PR #114 (Oswin) : `seq` non contigu et `msg_log_id` non corrélable, corrigés
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

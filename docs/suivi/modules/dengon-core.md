@@ -535,7 +535,12 @@ encore le codec (US-201).
   `Router::poll_due` (le relais effectif est le rôle du firmware relais
   dédié, US-308), donc ce nœud ne relaie jamais rien à observer. `node_id`
   (`client-<6 hex>`) et `rssi = None` (transport non possédé par cette
-  façade) — écarts consignés dans `03-ecarts-conception.md`.
+  façade) — écarts consignés dans `03-ecarts-conception.md`. **Mise à
+  jour** : `pkt.relayed` est en fait déjà câblé, côté `relay.rs`
+  (`Relay::poll_routing`), dans PR #110 (US-308, pas encore mergée à ce
+  jour) — le paragraphe ci-dessus reste correct sur le principe (`api.rs`
+  n'a jamais à le faire), seule l'affirmation « reste à câbler » était
+  datée.
 - **`seq` des `Envelope` séparé du `seq` de `record_ledger`** (revue de
   PR #114, Oswin) : les deux méthodes partageaient au départ `obs_seq`, or
   `record_ledger` n'émet jamais d'`Envelope` — chaque transition de statut
@@ -558,9 +563,17 @@ encore le codec (US-201).
   et ne connaît ni RSSI ni rôle radio. Changer la signature de la seconde
   aurait cassé la PR #109 (US-302, vrai FFI UniFFI) déjà ouverte et
   l'appelant avec 3 arguments — l'appelant qui possède la radio invoque
-  les deux méthodes séparément. Les 4 constructeurs représentatifs de
-  `observability` ont maintenant un site d'appel côté client, sauf
-  `pkt.relayed` (US-320, firmware).
+  les deux méthodes séparément. **Correction (revue de PR #119, Oswin)** :
+  contrairement à ce qu'affirmait la première version de cette entrée,
+  `record_peer_connected` n'a **aucun appelant réel** — `grep` sur
+  `crates/` ne trouve que sa définition et son test. C'est du code mort en
+  production, le même défaut que celui reproché à PR #89 pour US-208. Le
+  site naturel est `dengon-node::session.rs::tourner()` (PR #116, US-303,
+  Oswin, non mergée) : `TransportEvent::PeerConnected { peer_link_id, rssi
+  }` porte déjà la RSSI, actuellement ignorée (`{ peer_link_id, .. }`) —
+  reste à appeler `record_peer_connected` à cet endroit une fois #116
+  mergée. `pkt.seen`/`msg.queued`, eux, ont un site d'appel réel
+  (`on_bytes_received`/`send_message`).
 - **Couverture `dengon-core` : déjà mesurée en CI, contrairement à ce que
   disait PR #89** (US-319) : `cargo-llvm-cov` tourne dans le job `core`
   depuis US-104 (PR #57), publié en résumé de job + `lcov.info`, sans
