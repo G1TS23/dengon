@@ -122,6 +122,7 @@ use crate::crypto::noise::{self, Handshake, Session};
 use crate::crypto::{CryptoError, SigningKey, VerifyingKey};
 use crate::identity::{self, PublicIdentity};
 use crate::ledger::Ledger;
+use crate::observability::{self, Envelope, NodeKind};
 use crate::protocol::codec::announce::Announce;
 use crate::protocol::codec::app::{self, AckFrame, AppFrame, MessageFrame};
 use crate::protocol::codec::{self, Packet};
@@ -334,9 +335,20 @@ pub struct Node {
     peers: BTreeMap<PeerId, PeerState>,
     conversations: BTreeMap<ConvId, ConversationRecord>,
     messages: BTreeMap<MsgUuid, MessageRecord>,
+    /// `node_id` du catalogue d'événements (US-208, US-318) —
+    /// `client-<6 hex>` d'après `contracts/tools/catalogue.py::NODE_ID`
+    /// (cette façade n'est jamais un relais, voir la doc de module).
+    /// Calculé une fois à la construction, jamais recalculé.
+    node_id: String,
     /// Compteur de `seq` pour le journal d'observabilité (US-208) —
     /// indépendant du `seq` de `ledger` (qui a le sien).
     obs_seq: u64,
+    /// Événements d'observabilité en attente d'envoi (US-318), vidés par
+    /// [`Node::take_observability_events`] — même mécanique que
+    /// [`Node::take_outgoing`]. Cette façade ne sait pas signer/batcher/
+    /// envoyer au VPS : c'est le rôle de l'appelant (voir `docs/powl/08` §1
+    /// pts 1/4, hors périmètre de `dengon-core`).
+    obs_events: Vec<Envelope>,
     outgoing: Vec<(PeerId, Vec<u8>)>,
     events: VecDeque<NodeEvent>,
     store: Option<Store<FixedKeySource>>,
@@ -376,6 +388,7 @@ impl Node {
         // de la crate. Une graine Ed25519 rederivée est exactement la même
         // clé, pas un secret distinct : aucun affaiblissement.
         let ledger_signer = SigningKey::from_seed(&identity.signing_key().to_seed());
+        let node_id = alloc::format!("client-{}", hex_string(&peer_id[..3]));
         Self {
             router: Router::new(RoutingConfig::new(peer_id), routing_seed),
             outbox: Outbox::open(MemoryStore::new())
@@ -387,7 +400,9 @@ impl Node {
             peers: BTreeMap::new(),
             conversations: BTreeMap::new(),
             messages: BTreeMap::new(),
+            node_id,
             obs_seq: 0,
+            obs_events: Vec::new(),
             outgoing: Vec::new(),
             events: VecDeque::new(),
             store: None,
@@ -735,6 +750,15 @@ impl Node {
         if let Some(change) = change {
             self.record_ledger(change.event_name(), &change.msg_uuid, now.wall_ms);
         }
+        // `msg.queued` — `docs/powl/08` §4 (US-318). `conv_id` suit déjà
+        // exactement `SHA-256(min(peerA,peerB) ‖ max(peerA,peerB))[0..8]`
+        // ([`conv_id_of`]) : c'est le `conv_hash` attendu par le catalogue,
+        // pas une valeur à recalculer.
+        self.record_observability(
+            "msg.queued",
+            observability::msg_queued(observability::msg_log_id(&msg_uuid), conv_id),
+            now.wall_ms,
+        );
 
         self.messages.insert(
             msg_uuid,
@@ -796,6 +820,24 @@ impl Node {
             return; // paquet illisible : silencieusement jeté, comme un relais le ferait
         };
         let msg_id = Self::compute_msg_id(&packet);
+        // `pkt.seen` — `docs/powl/08` §2 : « paquet reçu (avant dédup) »,
+        // donc émis ici, avant [`Router::on_packet`] qui décide dédup/rejet
+        // (US-318). `rssi` : cette façade ne possède aucun `Transport` (voir
+        // la doc de module) et ne le reçoit pas en paramètre — `None`,
+        // écart consigné dans `03-ecarts-conception.md` plutôt qu'une valeur
+        // inventée.
+        self.record_observability(
+            "pkt.seen",
+            observability::pkt_seen(
+                observability::msg_log_id(&msg_id),
+                packet.header.packet_type.to_u8(),
+                packet.header.ttl,
+                size_bucket(bytes.len()),
+                from,
+                None,
+            ),
+            now.wall_ms,
+        );
         let decision = self.router.on_packet(from, &packet.header, &msg_id, now);
         match decision {
             Decision::Deliver => self.handle_addressed_packet(from, packet, now),
@@ -1221,6 +1263,36 @@ impl Node {
         self.ledger.append(event_name, &payload_json, ts_ms);
     }
 
+    /// Construit et met en attente un événement du catalogue d'observabilité
+    /// (US-208/US-318) — `docs/powl/08`. `self.obs_seq` est le compteur
+    /// `seq` unique du nœud (`event_id = hex(SHA-256(node_id ‖ seq))`),
+    /// partagé avec [`Node::record_ledger`] : chaque appel des deux méthodes
+    /// consomme un numéro, même celui-ci n'émet aucun `Envelope`.
+    fn record_observability(
+        &mut self,
+        name: &'static str,
+        payload: observability::Value,
+        ts_ms: u64,
+    ) {
+        self.obs_seq += 1;
+        self.obs_events.push(Envelope::new(
+            &self.node_id,
+            NodeKind::Client,
+            self.obs_seq,
+            ts_ms,
+            name,
+            payload,
+        ));
+    }
+
+    /// Vide et renvoie les événements d'observabilité en attente (US-318).
+    /// L'appelant les bat­che, les signe et les envoie au VPS
+    /// (`docs/powl/08` §1 pts 1/4) — hors périmètre de `dengon-core`, voir
+    /// la doc de [`Node::obs_events`].
+    pub fn take_observability_events(&mut self) -> Vec<Envelope> {
+        core::mem::take(&mut self.obs_events)
+    }
+
     /// Un pair vient de se connecter : tout message en outbox à destination
     /// de ce pair et pas encore remis part maintenant (voie enveloppe —
     /// déjà scellée, pas besoin d'attendre une session ; voie session, si
@@ -1324,6 +1396,18 @@ pub fn parse_announce(bytes: &[u8]) -> Result<PublicIdentity, DengonError> {
     let pub_sign = VerifyingKey::from_bytes(&payload.pub_sign)?;
     PublicIdentity::new(&payload.pseudo, payload.pub_static, pub_sign)
         .map_err(|_| DengonError::Internal)
+}
+
+/// `size_bucket` de `pkt.seen`/`envelope.stored` (`docs/powl/08` §2 : « jamais
+/// la taille exacte ») — le plus petit de `{256,512,1024,2048}` qui couvre
+/// `len`, saturé au plus grand palier au-delà (un paquet L3 ne dépasse pas le
+/// MTU fragmenté, très en dessous de 2048 o en pratique).
+fn size_bucket(len: usize) -> u16 {
+    const BUCKETS: [u16; 4] = [256, 512, 1024, 2048];
+    BUCKETS
+        .into_iter()
+        .find(|&b| len <= usize::from(b))
+        .unwrap_or(2048)
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -1847,5 +1931,78 @@ mod tests {
 
         let conv_id = conv_id_of(alice.peer_id(), bob.peer_id());
         assert_eq!(alice.list_messages(conv_id).len(), 1);
+    }
+
+    // --- observabilité (US-318 : câblage de `sync::` vers `observability`) --
+
+    #[test]
+    fn envoyer_un_message_emet_msg_queued() {
+        let mut alice = noeud("alice", 1);
+        let bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+
+        let msg_uuid = alice
+            .send_message(bob.peer_id(), "salut bob", now(T0), rng(3))
+            .expect("bob est un contact connu");
+
+        let events = alice.take_observability_events();
+        let attendu = observability::msg_queued(
+            observability::msg_log_id(&msg_uuid),
+            conv_id_of(alice.peer_id(), bob.peer_id()),
+        );
+        let trouve = events
+            .iter()
+            .find(|env| env.name == "msg.queued")
+            .expect("send_message doit émettre msg.queued");
+        assert_eq!(trouve.payload, attendu);
+        assert_eq!(trouve.node_kind, NodeKind::Client);
+        assert_eq!(trouve.node_id, alice.node_id);
+    }
+
+    #[test]
+    fn recevoir_un_paquet_emet_pkt_seen_meme_rejete_par_le_routeur() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+        bob.add_contact(alice.public_identity());
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(10));
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(11));
+
+        alice
+            .send_message(bob.peer_id(), "hors de portée", now(T0), rng(12))
+            .expect("bob est un contact connu");
+        let enveloppe = alice
+            .take_outgoing()
+            .into_iter()
+            .map(|(_, bytes)| bytes)
+            .find(|bytes| {
+                codec::decode(bytes)
+                    .is_ok_and(|p| p.header.packet_type == PacketType::SealedEnvelope)
+            })
+            .expect("l'enveloppe scellée doit avoir été mise en file de sortie");
+
+        // Un tiers non connecté à alice (aucun `link_up`) : le routeur de
+        // carol va rejeter le paquet (`UnknownLink`) — `pkt.seen` doit tout
+        // de même être émis, avant toute décision du routeur (`docs/powl/08`
+        // §2 : « paquet reçu (avant dédup) »).
+        let mut carol = noeud("carol", 4);
+        carol.on_bytes_received(alice.peer_id(), &enveloppe, now(T0));
+
+        let events = carol.take_observability_events();
+        let vu = events
+            .iter()
+            .find(|env| env.name == "pkt.seen")
+            .expect("on_bytes_received doit émettre pkt.seen même pour un paquet rejeté");
+        assert_eq!(vu.node_kind, NodeKind::Client);
+        assert_eq!(vu.node_id, carol.node_id);
+    }
+
+    #[test]
+    fn size_bucket_prend_le_plus_petit_palier_qui_couvre_la_taille() {
+        assert_eq!(size_bucket(0), 256);
+        assert_eq!(size_bucket(256), 256);
+        assert_eq!(size_bucket(257), 512);
+        assert_eq!(size_bucket(2048), 2048);
+        assert_eq!(size_bucket(9_000), 2048);
     }
 }

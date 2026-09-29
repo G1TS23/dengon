@@ -526,6 +526,16 @@ encore le codec (US-201).
   représentatifs du domaine `pkt`/`msg`/`peer`, mais pas exhaustifs. Chaque
   événement restant suit le même patron mécanique (un `BTreeMap` de champs
   redactés) — écart consigné, pas un blocage technique.
+- **`api::Node` câble `pkt.seen`/`msg.queued`, pas `pkt.relayed`** (US-318,
+  issue #113) : les deux premiers sont des décisions du nœud **client**
+  (paquet reçu, message mis en file) — `api.rs` les émet dans
+  `on_bytes_received`/`send_message` via un `obs_events: Vec<Envelope>` vidé
+  par `take_observability_events()`, symétrique de `take_outgoing()`.
+  `pkt.relayed` resterait un contresens ici : `api.rs` n'appelle jamais
+  `Router::poll_due` (le relais effectif est le rôle du firmware relais
+  dédié, US-308), donc ce nœud ne relaie jamais rien à observer. `node_id`
+  (`client-<6 hex>`) et `rssi = None` (transport non possédé par cette
+  façade) — écarts consignés dans `03-ecarts-conception.md`.
 - **`sync::inventory` (US-210) : push cadencé sous l'anti-inondation.**
   Le routeur du voisin refuse plus de 20 nouveaux `msgID`/min venant de
   nous ; pousser le manquant d'un bloc en ferait rejeter l'excédent. Chaque

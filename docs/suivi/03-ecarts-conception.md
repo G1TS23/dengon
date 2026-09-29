@@ -2353,3 +2353,30 @@ _(aucun écart pour l'instant)_
   hors périmètre de l'US ; volume de démo.
 - **Conséquences :** un relais muet n'est vu que si quelqu'un regarde l'écran.
 - **Doc de conception mise à jour ?** non.
+---
+
+### 2026-09-29 — `pkt.relayed` et `sync::inventory` restent non câblés à `observability` (US-318)
+
+- **Prévu :** US-318 (issue #113) demandait de brancher `sync::routing` et
+  `sync::inventory` sur `observability` pour que « les événements du
+  catalogue sont émis aux bons endroits » (critère resté partiel de #22,
+  US-208, PR #89).
+- **Réel :** seuls `pkt.seen` (`on_bytes_received`) et `msg.queued`
+  (`send_message`) sont câblés, dans `dengon-core::api` (façade client,
+  US-301). `pkt.relayed` et les événements de `sync::inventory` restent
+  **non émis**.
+- **Raison :** `dengon-core::api` documente déjà (doc de module, §« Portée
+  de cette implémentation ») qu'elle n'appelle ni `Router::poll_due` (le
+  relais effectif) ni `sync::inventory` — ce sont des responsabilités du
+  firmware relais dédié (US-308, C/ESP-IDF), pas de la façade côté client
+  (téléphone). Câbler `pkt.relayed`/les événements d'inventaire à cet
+  endroit aurait été un contresens architectural (émettre un événement pour
+  une action que ce nœud n'effectue jamais), pas juste un oubli à corriger.
+- **Conséquences :** #22 (US-208) reste ouverte après cette US : sur les 28
+  événements du catalogue, seuls 2 ont un site d'appel réel démontré (contre
+  4 constructeurs disponibles au total). Le câblage `pkt.relayed`/
+  `sync::inventory` doit être fait côté firmware (US-308, C/ESP-IDF,
+  `crates/dengon-core-embed` ou les tâches FreeRTOS elles-mêmes) — hors
+  périmètre `core-rust`/`skill:rust`, nécessite `skill:c-embarqué`.
+- **Doc de conception mise à jour ?** non — `docs/powl/08` ne précise pas
+  quel composant émet quel événement, seulement le catalogue lui-même.

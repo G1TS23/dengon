@@ -799,6 +799,104 @@ $ cargo test --workspace --all-features --locked        474 passed, 2 ignored
   tests de `IdentiteLocaleTest`) et le workflow fusionné ne sont vérifiés que
   par le job CI `android` de la PR. Rien testé sur téléphone, en particulier
   pas la perte réelle de la clé du Keystore.
+## 2026-09-29 — US-318 : câblage `api` → `observability` (`pkt.seen`, `msg.queued`)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-core/src/api.rs`, `docs/suivi/`.
+**Lot :** US-318 (issue #113), créée en réponse à un écart repéré en
+vérifiant si #22/US-208 (« observability ») et #28/US-214 étaient
+réellement fermables : PR #89 (US-208) et PR #85/#96 (US-209/US-210,
+`sync::routing`/`sync::inventory`) livrent chacun leur brique séparément,
+mais aucun site d'appel réel ne relie observability aux décisions de
+`sync::` — `grep -rln observability crates/dengon-core/src/` ne trouvait le
+mot que dans `lib.rs`.
+
+### Fait
+- `Node` (façade `api`, US-301) gagne `node_id: String` (`client-<6 hex>`
+  des 3 premiers octets de `peer_id`, format imposé par
+  `contracts/tools/catalogue.py::NODE_ID`) et une file `obs_events:
+  Vec<Envelope>`, vidée par `Node::take_observability_events()` (même
+  mécanique que `take_outgoing`).
+- `Node::record_observability` : construit un `Envelope` (`seq` partagé
+  avec `record_ledger`) et l'empile.
+- `on_bytes_received` émet `pkt.seen` **avant** `Router::on_packet` (le
+  catalogue le veut « avant dédup ») : `size_bucket` nouveau (palier
+  256/512/1024/2048), `rssi = None` (cette façade ne reçoit pas la radio,
+  voir écart ci-dessous).
+- `send_message` émet `msg.queued` à l'enqueue dans l'outbox ; `conv_hash`
+  réutilise `conv_id_of` (déjà exactement `SHA-256(min‖max)[0..8]`, pas
+  recalculé).
+- 3 tests ajoutés : `envoyer_un_message_emet_msg_queued`,
+  `recevoir_un_paquet_emet_pkt_seen_meme_rejete_par_le_routeur` (paquet
+  rejeté `UnknownLink` côté receveur — `pkt.seen` sort quand même),
+  `size_bucket_prend_le_plus_petit_palier_qui_couvre_la_taille`.
+
+### Pourquoi / décisions
+- Câblage posé dans `api.rs`, pas dans `sync::routing`/`sync::inventory`
+  eux-mêmes : ces modules sont des machines à états pures et `no_std`
+  (aucune notion de `node_id`/`seq`/`Envelope`, qui sont des concepts
+  côté façade client) ; `api.rs` est déjà le point qui « câble ensemble »
+  tout le reste (voir sa doc de module) et possède déjà `obs_seq`.
+- `rssi = None` plutôt qu'une valeur inventée : `on_bytes_received` ne
+  reçoit pas la RSSI (cette façade ne possède aucun `Transport`, décision
+  déjà documentée dans la doc de module de `api.rs`) — l'ajouter
+  demanderait un changement de signature qui remonte jusqu'au `.udl`
+  UniFFI déjà figé (US-302) et à l'app Android déjà branchée dessus
+  (US-306, en cours) : hors périmètre de cette US, écart consigné.
+
+### Écarts vs conception
+- Décrit + reporté dans `03-ecarts-conception.md` (nouvelle entrée
+  2026-09-29, US-318) : `pkt.relayed` reste **non câblé** ici — le relais
+  effectif (`Router::poll_due`) n'est délibérément pas appelé par cette
+  façade côté client (c'est le rôle du firmware relais dédié, US-308, déjà
+  documenté ainsi dans `api.rs`) ; les événements de `sync::inventory` (US-210)
+  restent aussi non câblés, `sync::inventory` n'étant lui-même pas encore
+  appelé par cette façade (doc de module `api.rs` §« Portée de cette
+  implémentation », toujours vraie après cette session).
+- `peer.connected` reste non câblé pour la même raison que `rssi` ci-dessus
+  (`role: Central|Peripheral` non plus disponible côté façade).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- `dengon-core::api` émet réellement `pkt.seen` et `msg.queued` ; les
+  fixtures golden existantes (US-107) restent la référence octet à octet,
+  non revérifiées ici (pas de nouvelle fixture ajoutée à `contracts/`).
+- Reste à faire pour clore #22 (US-208) : `pkt.relayed` +
+  `sync::inventory` côté firmware relais (US-308, C/ESP-IDF — hors de mes
+  compétences/area dans cette session), et une mesure de couverture
+  outillée (`cargo llvm-cov`, toujours pas posé ce sprint).
+- Fiche module mise à jour : `modules/dengon-core.md`.
+- `01-etat-du-code.md` mis à jour : non (portée trop locale à une façade
+  déjà référencée).
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo build -p dengon-core
+Finished (6.13s)
+
+$ cargo clippy -p dengon-core --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo fmt -p dengon-core -- --check
+(rien)
+
+$ cargo test -p dengon-core
+383 passed, 2 ignored (10 suites)
+
+$ cargo test --workspace
+471 passed, 2 ignored (31 suites)
+
+$ cargo check -p dengon-core --no-default-features
+Finished — sans effet ici : `api.rs` reste entièrement derrière
+`#[cfg(feature = "std")]`, ces changements n'y touchent pas.
+```
+- Pas vérifié : conformité octet à octet d'un `pkt.seen`/`msg.queued` réel
+  contre une fixture golden dédiée (aucune fixture `contracts/` ne couvre
+  encore un événement produit par `api.rs` en conditions réelles,
+  contrairement aux fixtures unitaires déjà testées dans
+  `observability::tests`).
 
 ---
 
