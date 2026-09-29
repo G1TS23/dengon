@@ -705,6 +705,18 @@ redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
   - `Reassembleur` gère le morceau d'abandon (`FragmentationBle.ABANDON`) et ignore la queue d'une trame trop longue ;
   - `MainActivity`, en build debug seulement, accepte une carte par intent (`--es dengon.carte_debug`) et écrit la carte locale dans logcat, pour piloter l'essai par `adb` sans caméra.
 
+## Refonte du design (US-321)
+
+- `ui/theme/Theme.kt` : `DengonTheme` (M3 clair/sombre, `CibleTactileMin` = 48 dp).
+- `ui/composants/` : `EnTeteEcran`, `EtatGuide`, `BandeauAlerte`,
+  `EtatBluetooth.kt` (`rememberBluetoothActif`, `ouvrirReglagesBluetooth`).
+- `LibelleStatut.kt` : + `iconeStatut`, `formaterHorodatage`, `initiale`.
+- Écrans refaits : accueil (`MainActivity`), conversations/fil, « Appareils à
+  proximité » (ex-Réseau), appairage en 3 étapes. Signatures : `ReseauScreen` prend
+  `bluetoothActif`, `MessagerieRoute` prend `onAjouterContact`.
+- Tests : `LibelleStatutTest` ; 110 tests JVM verts. Rendu **non vérifié sur
+  appareil** (voir journal).
+
 ## Pour l'oral
 
 C'est le squelette qui prouve qu'Android peut faire tourner un service qui

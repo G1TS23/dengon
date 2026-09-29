@@ -134,7 +134,7 @@ class ConversationsViewModelTest {
     @Test
     fun `chaque statut a son libelle`() {
         assertEquals(
-            listOf("En attente", "Parti", "Distribué", "Lu", "Échec", "Annulé"),
+            listOf("En attente", "Envoyé", "Distribué", "Lu", "Échec", "Annulé"),
             MessageStatus.values().map(::libelleStatut),
         )
     }

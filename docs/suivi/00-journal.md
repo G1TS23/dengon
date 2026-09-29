@@ -418,6 +418,54 @@ déjà non formatés avant ce changement (non traité).
   `/api/nodes/:id`, sans l'alerte « version obsolète » (pas de version de
   référence), et sans notification webhook/e-mail : voir
   `03-ecarts-conception.md`.
+## 2026-09-29 — US-321 : refonte du design de l'app (Material 3, accessibilité)
+
+**Auteur :** Oswin + Claude (Sonnet 5.5)
+**Périmètre :** `android/app` — `ui/theme/`, `ui/composants/`, `MainActivity.kt`,
+`ConversationsScreen.kt`, `LibelleStatut.kt`, `ReseauScreen.kt`, `AppairageScreen.kt`,
+`strings.xml`, `values-night/themes.xml` + tests
+**Lot :** Lot 3 — app Android
+
+### Fait
+- **Thème** `DengonTheme` (`ui/theme/Theme.kt`) : Material 3, palettes claire **et**
+  sombre, typographie en `sp`, formes ; thème fenêtre `values-night` (pas de flash blanc).
+- **Composants communs** (`ui/composants/`) : `EnTeteEcran` (retour en icône 48 dp),
+  `EtatGuide` (état vide + action), `BandeauAlerte`, `rememberBluetoothActif`
+  (récepteur `ACTION_STATE_CHANGED`) + ouverture des réglages Bluetooth.
+- **Conversations / fil** : pastille d'initiale, horodatage (`formaterHorodatage`),
+  bulles envoyé/reçu distinctes, statut = icône **+** texte (`iconeStatut`), bouton
+  « Envoyer » en icône avec `contentDescription`, état vide « Ajouter un contact ».
+- **Accueil** : cartes d'action en langage courant, bandeaux guidés (permission,
+  permission refusée → réglages de l'app, Bluetooth coupé), outils de debug repliés.
+- **Réseau** → « Appareils à proximité » : carte d'état, « Économie de batterie »
+  (ligne entière cliquable), états vides expliqués.
+- **Appairage** : « Étape N sur 3 », titre + consigne par étape, aide caméra refusée.
+- Libellé `IN_FLIGHT` : « Parti » → « Envoyé » (`libelleStatut`, test adapté).
+- Tests : `LibelleStatutTest` (+6). Aucune logique ViewModel/FFI modifiée.
+
+### Pourquoi / décisions
+- Pas de bibliothèque d'icônes étendue (`material-icons-extended`, lourde) : seules
+  les icônes du jeu « core » sont utilisées.
+- Le QR reste noir sur blanc en thème sombre (lisibilité pour les lecteurs).
+- Activer le Bluetooth passe par les réglages système (aucune permission requise)
+  plutôt que par `ACTION_REQUEST_ENABLE` (demande `BLUETOOTH_CONNECT`).
+
+### Écarts vs conception
+- Statut « Parti » renommé « Envoyé » à l'écran → `03-ecarts-conception.md`.
+
+### Appris
+- Rien de nouveau dans `04-apprentissages.md`.
+
+### État après cette session
+- Fait : `assembleDebug` + `testDebugUnitTest` verts (110 tests, 0 échec),
+  commande `./gradlew.bat --offline assembleDebug testDebugUnitTest`.
+- **Non fait, à faire avant de fermer l'US** : essai sur appareil réel (thème
+  clair/sombre, police 200 %), Accessibility Scanner, captures avant/après jointes à
+  la PR. Aucun appareil ni émulateur n'était utilisé dans cette session : le rendu
+  n'a **pas** été vu, seulement compilé. Contrastes AA calculés à la main, non mesurés.
+- Fiche module mise à jour : `modules/android-app.md`
+- 01-etat-du-code.md mis à jour : non (pas de nouveau module)
+
 ## 2026-09-29 — US-313 : corrections après la revue de la PR #122
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)
