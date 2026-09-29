@@ -2,12 +2,19 @@
 //!
 //! ```text
 //! dengon-sim [--graine N] <scenario.ron>...
+//! dengon-sim --demo
 //! ```
 //!
 //! Une ligne par scénario : `✓`/`✗`, nom, graine, empreinte de trace. Code de
 //! sortie non nul si un scénario est illisible ou si un attendu échoue. Le job
 //! CI `sim` lance la commande deux fois et compare les sorties : c'est la
 //! preuve de déterminisme de bout en bout.
+//!
+//! `--demo` (US-304) rejoue les 5 scénarios réels du DoD
+//! (`direct`/`recipient_offline`/`sender_offline`/`multihop`/
+//! `partition_merge`, le vrai `dengon-core`, pas `Inondation`) avec une
+//! narration lisible — voir [`crate::demo`]. Incompatible avec des fichiers
+//! `.ron` en argument : deux modes distincts, pas un mélange des deux.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -29,6 +36,7 @@ pub fn executer(args: &[String]) -> Sortie {
     let mut graine = None;
     let mut fichiers = Vec::new();
 
+    let mut demande_demo = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if a == "--graine" {
@@ -41,13 +49,25 @@ pub fn executer(args: &[String]) -> Sortie {
                     }
                 }
             }
+        } else if a == "--demo" {
+            demande_demo = true;
         } else {
             fichiers.push(a.clone());
         }
     }
+    if demande_demo {
+        if !fichiers.is_empty() {
+            return Sortie {
+                texte: "--demo ne prend aucun fichier .ron en argument\n".into(),
+                succes: false,
+            };
+        }
+        return crate::demo::executer();
+    }
     if fichiers.is_empty() {
         return Sortie {
-            texte: "usage : dengon-sim [--graine N] <scenario.ron>...\n".into(),
+            texte: "usage : dengon-sim [--graine N] <scenario.ron>...\n       dengon-sim --demo\n"
+                .into(),
             succes: false,
         };
     }
@@ -108,6 +128,16 @@ mod tests {
         assert!(!executer(&args(&["--graine", "zz", "x.ron"])).succes);
         assert_eq!(parse_graine("0x10"), Some(16));
         assert_eq!(parse_graine("10"), Some(10));
+    }
+
+    #[test]
+    fn demo_rejoue_les_5_scenarios_reels() {
+        let s = executer(&args(&["--demo"]));
+        assert!(s.succes, "{}", s.texte);
+        assert!(s.texte.contains("✓ direct"));
+        assert!(s.texte.contains("✓ partition_merge"));
+        // `--demo` ne prend aucun fichier .ron : combiner les deux est refusé.
+        assert!(!executer(&args(&["--demo", "x.ron"])).succes);
     }
 
     #[test]

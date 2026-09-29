@@ -10,6 +10,75 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-304 : mode `--demo`, narration des 5 scénarios réels pour l'oral
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `crates/dengon-sim/src/{lib.rs,demo.rs,cli.rs,main.rs}`,
+`docs/suivi/`.
+**Lot :** US-304 (issue #42), complément demandé par l'utilisateur après
+avoir demandé « pratiquement, il y a un truc à faire pour la démo ? ».
+
+### Fait
+- `dengon-sim --demo` (nouveau, `src/demo.rs`) : rejoue les 5 scénarios
+  réels (mêmes graines, mêmes assertions que `tests/scenarios_reel.rs`/
+  `tests/scenarios_relais.rs` — ces deux fichiers restent la source de
+  vérité pour la correction) avec une narration ligne par ligne (« alice
+  envoie… », « ✓ bob a reçu… »), au lieu du silence habituel de
+  `cargo test`.
+- `--demo` refuse d'être combiné avec des fichiers `.ron` (deux modes
+  distincts).
+- `docs/suivi/modules/dengon-sim.md` : commande exacte pour l'oral ajoutée
+  en tête de « Pour l'oral ».
+
+### Pourquoi / décisions
+- **Constat qui a motivé cette session** : `dengon-sim` ne sait lire que
+  des fichiers `.ron` — les 5 scénarios réels (tests Rust) n'avaient
+  **aucun** affichage narratif, contrairement aux 4 scénarios `.ron`
+  existants (`✓ nom graine=… empreinte=…`). Sans ce complément, la
+  « sécurité de la soutenance si le matériel lâche » (mission déclarée de
+  l'issue #42) se serait résumée à un `cargo test` vert, pas montrable
+  tel quel devant un jury.
+- **Pas de duplication de la logique de correction** : `demo.rs` reconstruit
+  les mêmes simulations avec les mêmes graines que les tests, il n'invente
+  rien — si les tests passent, la démo passe avec le même résultat.
+
+### Écarts vs conception
+- Aucun.
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- `cargo run -p dengon-sim -- --demo` est la commande à lancer devant le
+  jury, vérifiée déterministe sur 3 exécutions indépendantes en dehors de
+  `cargo test` (`diff` identique, code de sortie 0).
+- Fiche module mise à jour : `modules/dengon-sim.md`.
+- `01-etat-du-code.md` mis à jour : non.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo run -p dengon-sim -- --demo
+(narration complète des 5 scénarios, tous ✓, exit 0)
+
+$ ./target/debug/dengon-sim --demo > run1.txt   (×3)
+diff run1.txt run2.txt && diff run2.txt run3.txt
+IDENTIQUE sur 3 runs
+
+$ cargo test --workspace
+572 passed, 2 ignored (36 suites)
+
+$ cargo clippy --workspace --all-targets --all-features -- -D warnings
+No issues found
+
+$ cargo fmt --all -- --check
+(rien)
+
+$ cargo llvm-cov -p dengon-sim --summary-only
+TOTAL 96.59 % régions / 96.94 % lignes ; demo.rs 99.52 % lignes
+```
+
+---
+
 ## 2026-09-29 — US-304 (2/2) : `NoeudRelais`, le vrai `relay::Relay` — les 5 scénarios sont livrés
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)

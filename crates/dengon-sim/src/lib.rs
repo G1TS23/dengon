@@ -34,6 +34,7 @@
 
 pub mod alea;
 pub mod cli;
+pub mod demo;
 pub mod harness;
 pub mod noeud_client;
 pub mod noeud_relais;

@@ -3,7 +3,7 @@
 **Rôle en une phrase :** faire tourner N nœuds dengon sur une seule machine, sans radio, avec un réseau simulé scriptable et **rejouable à l'identique**.
 **Correspond à la conception :** [`docs/synthese/10-benchmarks-mvp-tests.md`](../../synthese/10-benchmarks-mvp-tests.md) §4.3 ; [`docs/synthese/04-architecture.md`](../../synthese/04-architecture.md) §5.
 **Dernière mise à jour :** 2026-09-29
-**État :** harness, réseau simulé, scénarios `.ron` et job CI `sim` livrés (US-221) ; **les 5 scénarios réels du DoD de l'US-304 sont livrés** avec le vrai `dengon-core` : `direct`/`recipient_offline`/`sender_offline` via `NoeudClient` (`api::Node`, `tests/scenarios_reel.rs`), `multihop`/`partition_merge` via `NoeudRelais` (`relay::Relay`, `tests/scenarios_relais.rs`). `Inondation` reste le bouchon des 4 scénarios `.ron` existants (inchangés).
+**État :** harness, réseau simulé, scénarios `.ron` et job CI `sim` livrés (US-221) ; **les 5 scénarios réels du DoD de l'US-304 sont livrés** avec le vrai `dengon-core` : `direct`/`recipient_offline`/`sender_offline` via `NoeudClient` (`api::Node`, `tests/scenarios_reel.rs`), `multihop`/`partition_merge` via `NoeudRelais` (`relay::Relay`, `tests/scenarios_relais.rs`). **Mode démo pour l'oral** (`dengon-sim --demo`, `src/demo.rs`) : rejoue les 5 avec une narration lisible, déterministe (vérifié identique sur 3 exécutions). `Inondation` reste le bouchon des 4 scénarios `.ron` existants (inchangés).
 
 ## À quoi ça sert
 
@@ -28,6 +28,7 @@ dengon-sim/
     harness.rs    — Simulation (N nœuds), trait Comportement, Inondation
     noeud_client.rs — NoeudClient : le vrai api::Node en Comportement (US-304)
     noeud_relais.rs — NoeudRelais : le vrai relay::Relay en Comportement (US-304)
+    demo.rs       — mode `--demo` : les 5 scénarios réels, narrés pour l'oral
     scenario.rs   — scénarios RON : lecture, validation, exécution, attendus
     cli.rs        — logique de la commande dengon-sim (testée)
     main.rs       — point d'entrée, délègue à cli
@@ -212,14 +213,22 @@ dengon-sim/
   réconciliation d'inventaire).
 - Les 5 scénarios réels (`scenarios_reel.rs` + `scenarios_relais.rs`)
   rejoués 3× de suite en local : stables.
-- Commande : `cargo test -p dengon-sim` → **40 passés** (7 suites : lib +
+- `src/demo.rs` — 1 : les 5 scénarios réels réussissent et se narrent
+  (mêmes graines que les tests ci-dessus — même résultat garanti, pas une
+  version parallèle qui pourrait diverger). `cli.rs` — 1 de plus :
+  `--demo` rejoue bien les 5, `--demo` + un fichier `.ron` refusé.
+- **`dengon-sim --demo` lancé 3× de suite en dehors de `cargo test`** :
+  sortie **identique à l'octet près** (`diff` sur les 3 sorties), code de
+  sortie 0 — c'est la commande à lancer devant le jury (voir « Pour
+  l'oral »).
+- Commande : `cargo test -p dengon-sim` → **42 passés** (7 suites : lib +
   `conformite_sim` + `scenarios` + `scenarios_reel` + `scenarios_relais` +
   intégration `dengon-core`), 2026-09-29.
-- Couverture (`cargo llvm-cov -p dengon-sim`, local) : **96,4 %** des lignes
-  de `dengon-sim` ; `noeud_client.rs` 92,7 %, `noeud_relais.rs` 97,5 %
-  (les deux, US-304), `reseau.rs` 97,1 %, `harness.rs` 98,0 %, `scenario.rs`
-  96,8 %, `cli.rs` 99 %, `alea.rs` 100 % ; `main.rs` 0 % (8 lignes, délègue
-  à `cli`).
+- Couverture (`cargo llvm-cov -p dengon-sim`, local) : **96,6 %** des lignes
+  de `dengon-sim` ; `noeud_client.rs` 92,7 %, `noeud_relais.rs` 97,5 %,
+  `demo.rs` 99,5 % (les trois, US-304), `reseau.rs` 97,1 %, `harness.rs`
+  98,0 %, `scenario.rs` 96,8 %, `cli.rs` 99,2 %, `alea.rs` 100 % ;
+  `main.rs` 0 % (8 lignes, délègue à `cli`).
 
 ## Limites connues / TODO
 
@@ -245,6 +254,19 @@ dengon-sim/
   US-221.
 
 ## Pour l'oral
+
+**Commande à lancer devant le jury** (le vrai `dengon-core`, pas
+`Inondation`) :
+
+```
+$ cargo run -p dengon-sim -- --demo
+```
+
+Rejoue les 5 scénarios du DoD (`direct`, `recipient_offline`,
+`sender_offline`, `multihop`, `partition_merge`) avec une narration ligne
+par ligne (qui parle à qui, quand, quel résultat) — pas un `cargo test`
+silencieux. Déterministe : trois lancements donnent la sortie identique à
+l'octet près.
 
 C'est l'outil qui rend le projet démontrable. Un réseau maillé se comporte bien
 avec trois appareils et mal avec cinquante — sauf qu'on n'a pas cinquante
