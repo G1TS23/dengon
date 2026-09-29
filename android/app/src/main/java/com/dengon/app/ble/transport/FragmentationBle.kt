@@ -24,6 +24,13 @@ object FragmentationBle {
     /** Bit « d'autres morceaux suivent ». */
     const val SUITE: Int = 0x80
 
+    /**
+     * Morceau d'abandon (1 octet, sans données) : l'émetteur n'a pas pu finir
+     * la trame en cours ; le partiel est jeté sans erreur (US-312, revue PR
+     * #129 point 2 ; firmware `DENGON_TC_CHUNK_ABORT`).
+     */
+    const val ABANDON: Int = 0x40
+
     /** Octets d'en-tête par morceau. */
     const val EN_TETE: Int = 1
 
@@ -69,6 +76,9 @@ class Reassembleur {
 
     private var attendSuite = false
 
+    /** Trame trop longue rejetée : ses morceaux restants sont ignorés jusqu'au dernier. */
+    private var ignorerJusquALaFin = false
+
     /**
      * Ajoute un morceau. Rend la trame complète si c'était le dernier, `null`
      * sinon.
@@ -84,14 +94,26 @@ class Reassembleur {
             throw TransportException.Backend("morceau BLE vide")
         }
         val entete = morceau[0].toInt() and 0xFF
+        if (morceau.size == FragmentationBle.EN_TETE && entete == FragmentationBle.ABANDON) {
+            abandonner()
+            return null
+        }
         if (entete and FragmentationBle.SUITE.inv() and 0xFF != 0) {
             abandonner()
             throw TransportException.Backend("en-tête de morceau BLE inconnu : 0x%02x".format(entete))
+        }
+        val suite = entete and FragmentationBle.SUITE != 0
+        if (ignorerJusquALaFin) {
+            // Queue d'une trame déjà rejetée (revue PR #129 point 3) : sans
+            // ceci, son dernier morceau passerait pour une trame complète.
+            ignorerJusquALaFin = suite
+            return null
         }
         val donnees = morceau.size - FragmentationBle.EN_TETE
         if (tampon.size() + donnees > FragmentationBle.TRAME_MAX) {
             val taille = tampon.size() + donnees
             abandonner()
+            ignorerJusquALaFin = suite
             throw TransportException.FrameTooLarge(taille, FragmentationBle.TRAME_MAX)
         }
         tampon.write(morceau, FragmentationBle.EN_TETE, donnees)
@@ -108,5 +130,6 @@ class Reassembleur {
     fun abandonner() {
         tampon.reset()
         attendSuite = false
+        ignorerJusquALaFin = false
     }
 }

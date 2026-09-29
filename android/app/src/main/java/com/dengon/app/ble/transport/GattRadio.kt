@@ -22,6 +22,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
+import android.os.DeadObjectException
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
@@ -196,12 +197,14 @@ class GattRadio(context: Context) : BleRadio {
             false
         } catch (e: RuntimeException) {
             // Pile Bluetooth redémarrée sous nos pieds (Bluetooth coupé puis
-            // rallumé) : le serveur/client GATT est mort (`DeadObjectException`
-            // enveloppée). Vu sur Pixel 8 Pro pendant l'US-312 : l'app
-            // plantait sur un envoi depuis l'UI. Ce lien ne reviendra pas ;
-            // on jette sa file au lieu de réessayer à l'infini. Le cœur rejoue
-            // ce qui n'a pas été accusé.
-            Log.w(TAG, "envoi : pile Bluetooth indisponible, file du lien jetée", e)
+            // rallumé) : le serveur/client GATT est mort, et le framework
+            // enveloppe la `DeadObjectException` dans une RuntimeException.
+            // Vu sur Pixel 8 Pro pendant l'US-312 : l'app plantait sur un envoi
+            // depuis l'UI. Seul ce cas est rattrapé (revue PR #129) : ce lien
+            // ne reviendra pas, on jette sa file au lieu de réessayer à
+            // l'infini ; le cœur rejoue ce qui n'a pas été accusé.
+            if (e.cause !is DeadObjectException) throw e
+            Log.w(TAG, "envoi : pile Bluetooth morte, file de ${c.pair} jetée (${c.file.size} morceaux)", e)
             c.file.clear()
             return
         }

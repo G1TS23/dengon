@@ -67,6 +67,9 @@ class FragmentationBleTest {
         }
         assertEquals(FragmentationBle.TRAME_MAX, e.max)
         assertFalse(r.enCours)
+        // Le premier morceau sans SUITE clôt la trame rejetée (revue PR #129) ;
+        // la suivante repart de zéro.
+        assertNull(r.ajouter(byteArrayOf(0, 8)))
         assertArrayEquals(byteArrayOf(9), r.ajouter(byteArrayOf(0, 9)))
     }
 
@@ -114,6 +117,27 @@ class FragmentationBleTest {
         assertTrue(Annonce.doitInitier(petit, Annonce.donnees(grand)))
         assertFalse(Annonce.doitInitier(grand, Annonce.donnees(petit)))
         assertTrue("préfixes égaux : les deux initient", Annonce.doitInitier(petit, Annonce.donnees(petit)))
+    }
+
+    @Test
+    fun `morceau d abandon - partiel jete sans erreur`() {
+        val r = Reassembleur()
+        r.ajouter(byteArrayOf(0x80.toByte(), 1, 2))
+        assertNull(r.ajouter(byteArrayOf(FragmentationBle.ABANDON.toByte())))
+        assertFalse(r.enCours)
+        assertArrayEquals(byteArrayOf(9), r.ajouter(byteArrayOf(0, 9)))
+    }
+
+    @Test
+    fun `queue d une trame trop longue ignoree jusqu a sa fin`() {
+        val r = Reassembleur()
+        val morceau = ByteArray(501).also { it[0] = FragmentationBle.SUITE.toByte() }
+        assertThrows(TransportException.FrameTooLarge::class.java) {
+            repeat(20) { r.ajouter(morceau) }
+        }
+        assertNull(r.ajouter(byteArrayOf(0x80.toByte(), 7)))
+        assertNull("dernier morceau de la trame rejetée", r.ajouter(byteArrayOf(0, 7)))
+        assertArrayEquals(byteArrayOf(42), r.ajouter(byteArrayOf(0, 42)))
     }
 
     @Test
