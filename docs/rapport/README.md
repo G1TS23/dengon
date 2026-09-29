@@ -8,25 +8,38 @@ est **réellement codé** au jour le jour.
 
 ## Pourquoi maintenant (anticipation)
 
-US-223 est planifiée pour la fin du Sprint 2 (jalon **J5**, 21/09) : rédiger tôt
-ce qui ne dépend pas des résultats de développement, puisque le problème, l'état
-de l'art et la conception sont déjà figés dans `docs/synthese/`. Ce brouillon est
-produit **en avance** sur cette échéance, à la demande de l'équipe, pour ne pas
-attendre la fin du sprint. Il ne remplace pas les étapes restantes de la
-Definition of Ready / Definition of Done de
-[l'issue #37](https://github.com/G1TS23/dengon/issues/37) : **le plan n'est pas
-encore validé en équipe**, et **aucune section n'a encore été relue par une
-autre personne** (deux critères d'acceptation explicites de l'US). Statut réel
-de chaque fichier : voir [`00-plan.md`](00-plan.md#état-des-sections).
+US-223 était planifiée pour la fin du Sprint 2 (jalon **J5**, 21/09) : rédiger
+tôt ce qui ne dépend pas des résultats de développement, puisque le problème,
+l'état de l'art et la conception sont déjà figés dans `docs/synthese/`. Les
+sections 2 à 4 ont été produites **en avance** sur cette échéance, à la
+demande de l'équipe. Les sections 5 à 8 (Réalisation, Recette, Difficultés,
+Conclusion), elles, relèvent normalement de l'US-315 — prévue seulement une
+fois le développement terminé — mais ont, elles aussi, été rédigées par
+anticipation, sur demande de l'équipe, alors que le développement se
+poursuivait encore : chaque fait qu'elles avancent est vérifié dans
+`docs/suivi/` à la date de rédaction (voir la garde en tête de chaque
+fichier), pas projeté.
+
+Ce dossier ne remplace pas les étapes restantes de la Definition of Ready /
+Definition of Done des issues
+[US-223 (#37)](https://github.com/G1TS23/dengon/issues/37) et
+[US-315 (#53)](https://github.com/G1TS23/dengon/issues/53) : **le plan n'est
+pas encore validé en équipe**, et **aucune section n'a encore été relue par
+une autre personne** — critères d'acceptation explicites des deux US. Statut
+réel de chaque fichier : voir [`00-plan.md`](00-plan.md#état-des-sections).
 
 ## Contenu
 
 | Fichier | Contenu | Statut |
 | --- | --- | --- |
-| [`00-plan.md`](00-plan.md) | Plan détaillé du rapport complet (toutes les sections prévues, y compris celles qui ne peuvent être écrites qu'après la fin du développement) | brouillon, **à valider en équipe** |
+| [`00-plan.md`](00-plan.md) | Plan détaillé du rapport complet | brouillon, **à valider en équipe** |
 | [`01-probleme.md`](01-probleme.md) | Section « Problème » | rédigé, à relire |
 | [`02-etat-de-lart.md`](02-etat-de-lart.md) | Section « État de l'art » | rédigé, à relire |
 | [`03-conception.md`](03-conception.md) | Section « Conception » | rédigé, à relire |
+| [`04-realisation.md`](04-realisation.md) | Section « Réalisation » | rédigé, à relire |
+| [`05-recette.md`](05-recette.md) | Section « Recette et tests » | protocole + état de préparation ; **résultats réels en attente de US-314** |
+| [`06-difficultes.md`](06-difficultes.md) | Section « Difficultés rencontrées et apprentissages » | rédigé, à relire |
+| [`07-conclusion.md`](07-conclusion.md) | Section « Conclusion et perspectives » | rédigé, à relire |
 
 ## Règle de mise à jour
 

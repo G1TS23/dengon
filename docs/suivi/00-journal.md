@@ -10,6 +10,83 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-223/US-315 : rédaction anticipée des sections Réalisation, Recette, Difficultés, Conclusion (PR #103)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/rapport/{04-realisation,05-recette,06-difficultes,07-conclusion}.md`,
+`docs/rapport/{00-plan,README}.md`.
+**Lot :** suite de US-223 (issue #37, PR #103), sur demande explicite de
+l'équipe : les sections 5 à 8, normalement réservées à l'US-315 (#53, qui ne
+peut démarrer qu'après la fin du développement d'après le plan initial), sont
+rédigées maintenant, le jour de la soutenance, alors que le développement se
+termine tout juste.
+
+### Fait
+- Rebase de la branche `docs/US-223-rapport-ecrit` sur `main` à jour (très en
+  retard : forkée avant tout le sprint 3).
+- `04-realisation.md` : ce qui tourne réellement, sourcé sur l'état de
+  `main` à la date de rédaction (524 tests `cargo test --workspace`,
+  couverture 93 % `cargo llvm-cov`, 48 tests JVM Android, 32+9 tests Unity
+  firmware, 99 tests `pytest` dashboard — chiffres mesurés, pas copiés d'un
+  fichier de suivi possiblement daté), plus les écarts vs conception encore
+  ouverts (négociation `ENVELOPE_OFFER`/`REQUEST`, `RELAY_OK` côté client).
+- `05-recette.md` : **pas de résultats inventés** — US-314 (#52) n'a pas
+  encore eu lieu. Décrit le protocole prévu (9 points) et l'état de
+  préparation déjà vérifié séparément, pièce par pièce.
+- `06-difficultes.md` : sélection de 6 épisodes techniques substantiels
+  depuis `docs/suivi/04-apprentissages.md` (plus de 60 entrées au total) —
+  bug Noise XX initiateur/répondeur, property test sur la fragmentation,
+  réconciliation vs anti-inondation, seuil du losange, contraintes ESP32
+  (annonce 31 o, aléa matériel, `conn_handle` NimBLE), pièges JNA/UniFFI.
+- `07-conclusion.md` : face aux 6 exigences du cahier des charges, limites
+  connues, perspectives v2 (Gossip GCS, Spray-and-Wait, statut Lu, iOS,
+  audit sécurité externe).
+- `00-plan.md`/`README.md` mis à jour (table des matières, état des
+  sections) pour refléter que 5 à 8 existent désormais.
+- Tous les liens internes du dossier vérifiés par script (fichiers cibles +
+  3 ancres spécifiques) : aucun renvoi cassé.
+
+### Pourquoi / décisions
+- Rédiger 5-8 maintenant plutôt qu'attendre US-315 formellement : décision
+  explicite de l'équipe, le jour de la soutenance, le développement étant
+  arrivé à un point où l'essentiel des faits nécessaires existe déjà dans
+  `docs/suivi/`. Chaque section porte une garde explicite rappelant qu'elle
+  est écrite en anticipation, pas encore relue en équipe.
+- `05-recette.md` reste un protocole + état de préparation, pas un résultat :
+  cohérent avec la règle du `README.md` du dossier (« pas d'affirmation sur
+  un résultat qui n'existe pas encore »), qui aurait été violée en
+  fabriquant un rapport de recette qui n'a pas eu lieu.
+
+### Écarts vs conception
+- Aucun nouveau (cette session documente des écarts déjà consignés, n'en
+  introduit pas).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- Les 8 sections principales du rapport (hors Introduction/Bibliographie/
+  Annexes, mécaniques) existent. Restent ouverts, identiques à avant cette
+  session : plan non validé en équipe, aucune section relue par une autre
+  personne (critères d'acceptation de US-223 **et** US-315).
+- PR #103 mise à jour, toujours en brouillon.
+
+### Vérification (commandes réellement exécutées)
+```
+$ git checkout docs/US-223-rapport-ecrit && git rebase origin/main
+Successfully rebased
+
+$ (script bash) vérification des liens internes de docs/rapport/*.md
+aucun fichier manquant (hors 2 liens vers des dossiers, faux positifs)
+
+$ grep -n "^## Sécurité" 03-conception.md
+$ grep -n "^## Blockchain" 02-etat-de-lart.md
+$ grep -n "^## État des sections" 00-plan.md
+les 3 ancres référencées existent
+```
+- Pas vérifié : relecture croisée humaine du contenu (reste un critère
+  d'acceptation ouvert, ne peut pas être satisfait par cette session).
+
 ## 2026-09-29 — US-311 : rebase de la PR #112 sur `main` (après US-308/US-306)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

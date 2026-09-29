@@ -28,25 +28,26 @@ ce rapport s'appuie sur ces deux dossiers comme sources.
 | 4.4 | Cycle de vie des messages et statuts | `synthese/07-cycle-de-vie-et-statuts.md` | inclus dans 03-conception.md |
 | 4.5 | Relais ESP32 | `synthese/08-relais-esp32.md` | inclus dans 03-conception.md |
 | 4.6 | Dashboard d'observabilité | `synthese/09-dashboard-et-donnees.md` | inclus dans 03-conception.md |
-| 5 | Réalisation | `docs/suivi/` (journal, avancement, fiches modules) | **à rédiger après la fin du développement** |
-| 6 | Recette et tests | US-314 (recette E2E, checklist 9 points de `synthese/10-benchmarks-mvp-tests.md` §4.6) | **à rédiger après US-314** |
-| 7 | Difficultés rencontrées et apprentissages | `docs/suivi/04-apprentissages.md`, `docs/suivi/03-ecarts-conception.md` | **à rédiger en fin de projet** |
-| 8 | Conclusion et perspectives (v2) | périmètre hors-MVP de `synthese/02` §6, points ouverts de `synthese/01-sujets-a-trancher.md` | **à rédiger en fin de projet** |
+| 5 | Réalisation | `docs/suivi/` (journal, avancement, fiches modules) | **[`04-realisation.md`](04-realisation.md)** |
+| 6 | Recette et tests | US-314 (recette E2E, checklist 9 points de `synthese/10-benchmarks-mvp-tests.md` §4.6) | **[`05-recette.md`](05-recette.md)** — en attente du résultat réel de US-314, pas encore exécutée |
+| 7 | Difficultés rencontrées et apprentissages | `docs/suivi/04-apprentissages.md`, `docs/suivi/03-ecarts-conception.md` | **[`06-difficultes.md`](06-difficultes.md)** |
+| 8 | Conclusion et perspectives (v2) | périmètre hors-MVP de `synthese/02` §6, points ouverts de `synthese/01-sujets-a-trancher.md` | **[`07-conclusion.md`](07-conclusion.md)** |
 | 9 | Bibliographie | `synthese/11-glossaire-biblio-annexes.md` | à assembler (renvoi direct possible) |
 | 10 | Annexes | glossaire (`synthese/11`), formats abandonnés (annexes A/B de `synthese/11`), captures d'écran de démo | à assembler en fin de projet |
 
 ## État des sections
 
-- **Rédigées maintenant (US-223, en anticipation)** : 2 (Problème), 3 (État de
-  l'art), 4 (Conception). Les trois s'appuient sur des décisions déjà
-  **tranchées** dans `docs/synthese/00-contexte-global.md` — rien dans ces
-  sections ne dépend du résultat du développement, conformément au contexte de
-  l'issue #37.
-- **Ne peuvent pas être rédigées avant la fin du développement** : 5
-  (Réalisation — dépend de ce qui est effectivement codé, voir
-  `docs/suivi/02-avancement.md`), 6 (Recette — dépend de US-314, pas encore
-  faite), 7 et 8 (rétrospective — n'ont de sens qu'une fois le projet terminé).
-  Ce sont les sections que couvrira US-315.
+- **Rédigées en anticipation de la fin du Sprint 2 (US-223)** : 2 (Problème),
+  3 (État de l'art), 4 (Conception). Les trois s'appuient sur des décisions
+  déjà **tranchées** dans `docs/synthese/00-contexte-global.md` — rien dans
+  ces sections ne dépend du résultat du développement.
+- **Rédigées en anticipation de la fin du Sprint 3 (US-315, sur demande de
+  l'équipe, le développement se poursuivant encore)** : 5 (Réalisation), 6
+  (Recette — rédigée comme un **protocole prévu et un état de préparation**,
+  pas un résultat : la recette US-314 elle-même n'a pas encore eu lieu), 7
+  (Difficultés) et 8 (Conclusion). Toutes s'appuient exclusivement sur des
+  faits déjà vérifiés dans `docs/suivi/` à la date de rédaction — voir la
+  garde en tête de chacun de ces fichiers.
 - **Non encore faites, indépendantes du développement** : 1 (Introduction —
   courte, à écrire en dernier une fois le reste stable, pour rester cohérente
   avec le contenu final), 9 et 10 (mécaniques, à assembler depuis
@@ -69,5 +70,6 @@ ce rapport s'appuie sur ces deux dossiers comme sources.
    l'issue soit considérée comme terminée.
 4. **Vérifier tous les liens** avant la clôture de l'US (critère d'acceptation
    « aucun renvoi vers un fichier ou une section inexistante ») : les sections
-   5 à 10 de ce plan ne pointent volontairement vers aucun fichier de rapport
-   qui n'existe pas encore.
+   9 et 10 de ce plan ne pointent volontairement vers aucun fichier de rapport
+   qui n'existe pas encore (5 à 8 existent désormais, voir la table
+   ci-dessus).
