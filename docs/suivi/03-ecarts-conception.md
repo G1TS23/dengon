@@ -38,6 +38,83 @@ et le mentionner dans l'entrée de journal.
 - **Conséquence :** les pairs qui avaient appairé l'ancienne identité doivent
   refaire l'appairage QR. À revoir quand contacts et messages seront persistés
   (la réinitialisation les rendrait alors orphelins).
+### 2026-09-29 — US-309 : jeton et mot de passe Wi-Fi en clair sur la console série (revue PR #120)
+
+- **Prévu :** `docs/synthese/06-securite.md` : secrets protégés sur l'appareil
+  (NVS chiffré, clés hors de portée).
+- **Réel :** le JWT (`dash token <jwt>`) et le mot de passe Wi-Fi
+  (`wifi <ssid> <mdp>`) sont tapés **en clair** sur la console série, et
+  stockés en NVS **non chiffré** (écart NVS déjà consigné à l'US-308).
+  Quiconque branche un câble série lit l'écho de la console ou la NVS.
+- **Raison :** prototype sans provisionnement ; la console est le seul canal
+  d'administration.
+- **Conséquences :** relais de démo seulement. Le jeton ne donne que le droit
+  de poster les événements **de ce relais** (le dashboard vérifie en plus la
+  signature Ed25519, dont la clé ne sort pas du handle Rust). Pistes : NVS
+  chiffré (eFuse), provisionnement par BLE authentifié.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-29 — US-309 sur carte : horodatage avant SNTP, reconnexion lente, intermédiaire TLS épinglé
+
+- **Prévu :** `docs/synthese/08` §6 : NTP au boot, événements horodatés en
+  temps réel ; racine du dashboard embarquée.
+- **Réel :**
+  1. Tant que le Wi-Fi n'a pas donné l'heure (ou qu'aucun `ANNOUNCE` ne l'a
+     apprise), `ts_ms` = uptime en ms : sur le VPS, `relay.boot` et les
+     premiers `relay.health` sont datés de 1970.
+  2. Reconnexion Wi-Fi par backoff 1 s → 60 s (+ 25 % de gigue) : jusqu'à
+     ~75 s d'attente après le retour du réseau (mesuré ~45 s).
+  3. Essai fait avec l'**intermédiaire** Caddy épinglé (valide jusqu'au
+     2026-10-05) faute d'accès à la racine dans la session.
+- **Raison :** (1) pas d'horloge RTC sauvegardée sur WROOM ; (2) le backoff
+  ménage l'antenne partagée avec le BLE ; (3) contrainte d'accès.
+- **Conséquences :** (1) dates fausses au dashboard pour les événements de
+  démarrage — piste : ne pas exporter avant heure connue, ou recaler au
+  moment de l'envoi ; (2) acceptable pour un export différé ; (3) reflasher
+  avec la racine avant le 2026-10-05.
+- **Doc de conception mise à jour ?** non.
+
+---
+
+### 2026-09-29 — Export du relais vers le dashboard (US-309) : ring en RAM, jeton manuel, `rssi_avg` Wi-Fi
+
+- **Prévu :** `docs/synthese/08-relais-esp32.md` §4-5 : une tâche `ship_task`
+  qui envoie un **anneau de logs en littlefs** (~256 Ko) avec un **curseur en
+  NVS** ; §6 : `relay.health` porte `rssi_avg` (RSSI moyen des voisins).
+  `docs/synthese/09` §7 : « enregistrer chaque relais via `POST /api/nodes` et
+  lui remettre un JWT ». `09` §9 décrit une signature **par enveloppe**.
+- **Réel :**
+  1. **Buffer ring en RAM** (8 Kio par défaut depuis la revue #120, `CONFIG_DENGON_SHIP_RING_BYTES`),
+     alimenté par `ledger_task`. Le journal complet reste en littlefs (US-308),
+     mais le ring d'export est perdu à un redémarrage : ce qui n'était pas
+     encore parti n'est pas renvoyé (le journal, lui, reste vérifiable par
+     `dengon-verify`). Hors ligne long, les plus anciens sont écrasés et
+     comptés (`logs_dropped`).
+  2. **Enregistrement manuel** : `dash id` sur la console →
+     `tools/register_relay.py` → `dash token <jwt>`. Le dashboard (US-216)
+     émet des jetons de **24 h**, sans renouvellement, et refuse de
+     réenregistrer un `node_id` connu (409) : il faut réenregistrer après
+     chaque purge de la base de démo, et un relais laissé plus de 24 h
+     s'arrête d'exporter (401, il garde ses événements et attend un jeton).
+  3. **`rssi_avg` = RSSI du point d'accès Wi-Fi** (-120 hors connexion) : le
+     transport NimBLE ne remonte pas le RSSI des voisins BLE.
+  4. Signature **par batch** (`CANONICAL.md` §2, ce que vérifie le
+     dashboard) : `09` §9 est périmé sur ce point.
+- **Raison :** (1) le critère de l'US est « sans dépasser la mémoire » ; un
+  ring statique en RAM le tient par construction et se teste sur l'hôte, sans
+  toucher au format du journal ni ajouter un second curseur à garder
+  cohérent. (2) le dashboard n'offre ni renouvellement ni réémission (hors
+  périmètre firmware). (3) pas d'API RSSI dans le contrat `Transport`.
+- **Conséquences :** perte possible des événements en attente au
+  redémarrage ; démo à préparer par un enregistrement le jour même. Pistes :
+  relire `ledger.bin` depuis un curseur NVS « dernier `seq` accepté » (le
+  format le permet), endpoint de renouvellement côté dashboard.
+- **Doc de conception mise à jour ?** non.
+
+---
+
 ### 2026-09-29 — Relais ESP32 (US-308) : pas de `CryptoResolver`, pas de trait `Store`, heure apprise, client pas prêt
 
 - **Prévu :** l'issue #46 demande un « `CryptoResolver` custom branché sur

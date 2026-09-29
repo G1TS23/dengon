@@ -1213,6 +1213,39 @@ identités qui forgent leurs paquets) ; 5 pour le codec `ANNOUNCE`,
 - Aucun client n'émet encore `ANNOUNCE`/`RELAY_OK`. Voir
   `03-ecarts-conception.md`.
 
+## Sous-module `observability::batch` (US-309)
+
+Rôle : produire le corps de `POST /ingest/batch` à partir d'entrées du journal
+chaîné, exactement comme le dashboard le recalcule (`contracts/events/CANONICAL.md`
+§2-3, `dashboard/api/app/ingest.py`).
+
+- `relay_node_id(&PeerId)` : `relay-` + 3 octets hex (schéma `^relay-[0-9a-f]{6}$`).
+- `Envelope::from_ledger_entry(&Entry, node_id, kind)` : `seq`/`ts_ms` de
+  l'entrée, nom relu au catalogue (`catalog::lookup`, pour le `&'static str`),
+  payload **re-canonicalisé** par `canonical::parse` (le texte du journal
+  peut venir du C, clés non triées, espaces).
+- `signed_batch(&[Envelope], node_id, &SigningKey)` : `batch_id =
+  hex(SHA-256(canonical(events)))`, `sig = base64(Ed25519(canonical(batch
+  sans sig)))` (`data-encoding`, déjà une dépendance). `sig` étant la plus
+  grande clé, elle est **raccrochée** aux octets signés au lieu de
+  re-sérialiser le batch (mémoire comptée sur l'ESP32) ; un test prouve
+  l'égalité avec la sérialisation complète.
+- `Relay::build_batch(&[Entry])` / `Relay::node_id()` : la clé reste dans le
+  handle.
+- `canonical::parse` : parseur JSON récursif borné (profondeur 16, pile
+  ESP32), refuse flottants/`null`/exposants/entiers hors `i64`, clé en double
+  → la dernière gagne (comme `json.loads`). `\b`/`\f` sont maintenant
+  sérialisés comme `json.dumps` (avant : `\u0008`/`\u000c`, divergence
+  jamais exercée par les fixtures).
+
+Tests : 7 dans `observability/batch/tests.rs`, 8 dans `canonical.rs` (dont 2
+property tests : `parse ∘ sérialisation = identité`, aucune panique sur une
+chaîne arbitraire), 2 dans `relay/tests.rs`, et
+`le_relais_reproduit_chaque_batch_signe_des_fixtures`
+(`tests/event_fixtures.rs`) : les **20 fixtures golden** reconstruites depuis
+des entrées de journal (payload en JSON indenté) donnent le fichier **octet
+pour octet, signature comprise**.
+
 ## Pour l'oral
 
 Quatre livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du

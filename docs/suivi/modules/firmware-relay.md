@@ -18,6 +18,10 @@ au contrat `Transport` d'US-105 (US-220), sur le squelette d'US-114.
   vérifié sur **une** carte (Unity, redémarrages, `dengon-verify`,
   téléphone).
 - L'essai sur 2 cartes n'a jamais été fait (ni US-220, ni US-308).
+- Export vers le dashboard (US-309, branche `feat/US-309-https-dashboard`
+  empilée sur US-308) : vérifié sur **une** carte contre le dashboard du VPS
+  (2026-09-29) : 202, coupure réseau sans perte. Ancre TLS de l'essai =
+  intermédiaire Caddy (valide jusqu'au 2026-10-05), voir `main/certs/README.md`.
 
 ---
 
@@ -89,6 +93,11 @@ docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp --device=/dev/ttyUSB0 -v
   -w /repo/firmware/dengon-relay/components/dengon_store/test_apps "$IDF" \
   idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build \
          -p /dev/ttyUSB0 flash monitor
+
+# Tests Unity de l'export (US-309), sur l'HÔTE : buffer ring + politique de réessai
+docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/repo" \
+  -w /repo/firmware/dengon-relay/components/dengon_ship_core/test_apps "$IDF" \
+  sh -ec 'idf.py --preview set-target linux && idf.py build && ./build/test_dengon_ship_core.elf'
 
 # Explorer la configuration (écrit dans sdkconfig, PAS dans sdkconfig.defaults)
 docker run --rm -it -u "$(id -u):$(id -g)" -e HOME=/tmp \
@@ -370,10 +379,53 @@ Deux cartes A (peerID `1a2b…`) et B (peerID `7f00…`) sont allumées :
    porte `seq` + 1 et le `prev_hash` de la dernière. La commande `ledger`
    suivie de `dengon-verify` montre une chaîne intacte.
 
+## Flux US-309 : un événement part au dashboard
+
+Mise en service (une fois par relais et par base de dashboard) :
+
+1. Récupérer la racine Caddy du VPS dans `main/certs/dashboard_root.pem`
+   (fichier non versionné, `main/certs/README.md`), compiler, flasher.
+2. Console : `dash id` → `node_id` (`relay-` + 3 premiers octets du
+   `peerID`) et clé publique Ed25519. `tools/register_relay.py --node-id …
+   --pub-sign …` poste `POST /api/nodes` et affiche `dash token <jwt>` à
+   coller dans la console (jeton en NVS, espace `dengon_net`).
+3. `wifi <ssid> <mdp>` (NVS aussi). Le Wi-Fi se connecte ; SNTP met l'heure.
+
+En fonctionnement :
+
+1. Un événement arrive au journal (`pkt.relayed`, `relay.health`…).
+   `ledger_task` le retire (`dengon_relay_pop_ledger`), l'écrit dans
+   littlefs **et** le copie dans le buffer ring (`dengon_ship_push`).
+   Les événements produits dans un contexte à petite pile (`relay.wifi_up`
+   depuis la tâche d'événements ESP-IDF) passent par une file
+   (`dengon_relay_app_record`) que `ledger_task` vide : la signature du
+   journal n'y tiendrait pas.
+2. La tâche `dengon_ship` attend le Wi-Fi, lit au plus 16 entrées dans le
+   ring (`dengon_ring_peek`, sans les retirer), et demande à dengon-core le
+   corps signé (`dengon_relay_build_batch`, sous le mutex du relais : la clé
+   ne sort jamais du handle).
+3. `POST CONFIG_DENGON_DASH_URL/ingest/batch` en HTTPS, racine épinglée,
+   `Authorization: Bearer`. Une session TLS par batch (keep-alive coupé :
+   les ~40 Ko de TLS sont rendus au tas entre deux envois).
+4. `dengon_ship_step()` (machine à états de `dengon_ship_policy.c`, revue
+   PR #120) : 2xx → `dengon_ring_commit` ; 400/413/422 → retiré et compté ;
+   401/403 → gardé, attente de 60 s ou d'un nouveau jeton ; 3xx, 404, autres
+   4xx → **gardé** (probable mauvaise configuration), attente de 60 s ;
+   réseau/TLS/408/429/5xx → gardé, backoff 1 s → 60 s avec gigue. Lot refusé
+   par dengon-core (entrée hors contrat) ou 5 × 5xx d'affilée → reprise
+   **une entrée par lot** pour isoler la fautive, seule retirée.
+5. Hors ligne, le ring (8 Kio) se remplit puis écrase ses plus anciennes
+   entrées, comptées (`logs_dropped` de `relay.health`). Au retour du
+   réseau il se vide dans l'ordre, 1 batch/s. Un `commit` après écrasement
+   ne retire que les entrées encore présentes (identifiants croissants).
+
 ## Dépendances
 
 - **Internes :** `dengon_transport_core`, `dengon_core_ffi`
-  (`libdengon_core.a` + header), `dengon_store`.
+  (`libdengon_core.a` + header), `dengon_store`, `dengon_ship_core` (US-309 :
+  ring + politique, C pur).
+- **Externes ajoutées par US-309 :** `esp_wifi`, `esp_netif` (+ SNTP),
+  `esp_event`, `esp_http_client` (mbedTLS/esp-tls).
 - **Gérées (registre ESP-IDF) :** `joltwallet/littlefs` 1.22.3 (figée dans
   `dependencies.lock`).
 - **Externes (composants ESP-IDF) :** `bt` (NimBLE), `nvs_flash` (calibration
@@ -428,7 +480,43 @@ Deux cartes A (peerID `1a2b…`) et B (peerID `7f00…`) sont allumées :
 - **US-308 — démo US-220 à `n` par défaut.** Activée, elle **remplace** le
   relais (peerID bouchon, pas de dengon-core).
 
+## Décisions d'implémentation — US-309
+
+- **Source = le journal chaîné.** Le `seq` de l'événement envoyé est celui de
+  l'entrée du journal : monotone, repris après `esp_restart()`, et la dédup
+  du serveur par `event_id = SHA-256(node_id ‖ seq)` rend tout rejeu inoffensif
+  (vérifié : un batch reposté rend 202 avec `new_event_count: 0`).
+- **Ring en RAM, pas en littlefs.** Le critère de l'US est « sans dépasser la
+  mémoire » : tampon statique fixe, jamais d'allocation. Le journal complet
+  reste de toute façon sur littlefs. Conséquence : ce qui est dans le ring au
+  moment d'un redémarrage n'est pas renvoyé. Écart consigné.
+- **8 Kio par défaut** (`CONFIG_DENGON_SHIP_RING_BYTES`) : ~33 entrées (12 Kio à l'origine, réduit quand la pile de la tâche d'envoi est passée de 8 à 12 Ko pour le TLS : marge mesurée 1 188 o → 5 288 o, revue PR #120). Le tas
+  libre mesuré à l'US-308 (128 Ko, avant Wi-Fi) doit encore porter Wi-Fi
+  (~50 Ko) et une session TLS (~35-40 Ko).
+- **Signature en Rust, pas en C.** Le JSON canonique et Ed25519 existent déjà
+  dans dengon-core ; les réécrire en C ferait deux implémentations à garder
+  identiques octet pour octet.
+- **Racine épinglée, pas le certificat feuille.** Caddy `tls internal`
+  renouvelle la feuille toutes les 12 h et l'intermédiaire tous les 7 jours ;
+  seule la racine est stable. Le serveur ne l'envoie pas : il faut la copier
+  depuis le VPS. Le fichier est facultatif au build (sinon la CI casserait) :
+  absent, l'export est coupé et `dash status` le dit.
+- **IRAM** : Wi-Fi + BLE dépassaient l'IRAM de 1,6 Ko. Optimisations IRAM du
+  Wi-Fi et de lwIP coupées (`sdkconfig.defaults` §8) : IRAM à 82 %.
+
 ## Tests
+
+**US-309 — 10 tests Unity** dans `components/dengon_ship_core/test_apps/`
+(cible `linux`, workflow `firmware`), exécutés le 2026-09-29 : **10 Tests 0
+Failures**. Ring : FIFO, `peek` borné en nombre et en place, écrasement des
+plus anciens compté, refus de l'entrée trop grosse, `commit` après
+écrasement, et le scénario de l'US (1000 entrées hors ligne, la mémoire ne
+dépasse jamais le tampon — sentinelles autour —, puis vidage dans l'ordre par
+lots de 3). Politique : codes réels du dashboard, passagers, backoff, gigue.
+Test app aussi compilée pour `esp32`. Firmware complet :
+`idf.py build` propre (binaire 1,58 Mo, 21 % libre, IRAM 82 %, DRAM statique
+66 %). Côté Rust (dengon-core / dengon-core-ffi), voir leurs fiches.
+**Non exécuté** : rien de l'US-309 n'a tourné sur carte.
 
 **Automatisés — 32 tests Unity**, dans `components/dengon_transport_core/test_apps/`,
 exécutés sur l'hôte (cible `linux`) par le workflow `firmware` :
@@ -561,6 +649,21 @@ carte). Noter le peerID de chacune (`dengon-peer` au boot).
 | e | Appuyer sur BOOT de A | A : `motif Locale` ; B : `motif Propre`. Puis reconnexion automatique. |
 
 ## Limites connues / TODO
+
+- **US-309 sur carte (2026-09-29)** : Wi-Fi + BLE en coexistence OK, mbedTLS
+  accepte le certificat au nom d'une IP (pas besoin de
+  `CONFIG_DENGON_DASH_SKIP_CN_CHECK`), 202 contre le VPS, coupure ~190 s sans
+  perte. **Tas serré** : ~31–34 Ko libres en régime Wi-Fi, 24,8 Ko relevé
+  pendant une reconnexion + TLS. Pas encore d'essai avec trafic BLE réel
+  (deux téléphones) ni de débordement du ring sur carte.
+- **Horodatage avant SNTP** : les événements produits avant la première
+  connexion Wi-Fi portent l'uptime en ms (le dashboard les date de 1970).
+- **Reconnexion Wi-Fi** : backoff plafonné à 60 s + gigue, donc jusqu'à ~75 s
+  après le retour du point d'accès (mesuré : ~45 s).
+- **`rssi_avg` de `relay.health` = RSSI Wi-Fi** du point d'accès (-120 hors
+  connexion) : le transport ne remonte pas le RSSI des voisins BLE.
+- **Jeton de 24 h sans renouvellement** (limite du dashboard US-216) : il
+  faut réenregistrer le relais après chaque purge de la base de démo.
 
 - **US-308 exécutée sur une seule carte** : l'essai à 2 cartes reste à faire.
   La branche dépend de la PR #108 (US-307), non mergée, dont la CI n'a jamais

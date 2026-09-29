@@ -501,3 +501,48 @@ fn les_paquets_du_relais_tiennent_en_une_trame() {
     assert_eq!(RELAY_INVENTORY_MAX_IDS, 13);
     assert_eq!(RELAY_OFFER_MAX_TAGS, 26);
 }
+
+// ----- Export vers le dashboard (US-309) -----------------------------------
+
+#[test]
+fn le_journal_du_relais_part_en_batch_signe_par_sa_cle() {
+    let mut r = relais(1);
+    assert!(r.record_event(
+        "relay.boot",
+        r#"{"fw_version":"0.1.0","reset_reason":"power_on","secure_boot":false,"flash_enc":false}"#,
+        now(0),
+    ));
+    assert!(r.record_event("relay.wifi_up", r#"{"ssid":"ap","duration_s":0}"#, now(5)));
+    let entries = r.take_ledger_entries();
+    let corps = r.build_batch(&entries).unwrap();
+    let texte = core::str::from_utf8(&corps).unwrap();
+
+    let node_id = r.node_id();
+    assert_eq!(node_id.len(), 12);
+    assert!(node_id.starts_with("relay-"));
+    assert!(texte.contains(&alloc::format!("\"node_id\":\"{node_id}\"")));
+    assert!(texte.contains("\"seq\":0"));
+    assert!(texte.contains("\"seq\":1"));
+
+    // La signature se vérifie avec la clé publique annoncée par le relais.
+    let Value::Object(mut obj) = crate::observability::canonical::parse(texte).unwrap() else {
+        panic!("objet attendu")
+    };
+    let Some(Value::Str(sig)) = obj.remove("sig") else {
+        panic!("sig absent")
+    };
+    let sig: [u8; 64] = data_encoding::BASE64
+        .decode(sig.as_bytes())
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let pk = VerifyingKey::from_bytes(&r.verifying_key()).unwrap();
+    assert!(pk
+        .verify(&Value::Object(obj).to_canonical_bytes(), &sig)
+        .is_ok());
+}
+
+#[test]
+fn un_batch_vide_n_est_pas_construit() {
+    assert_eq!(relais(1).build_batch(&[]), Err(BatchError::Empty));
+}

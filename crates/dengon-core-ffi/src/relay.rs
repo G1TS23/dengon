@@ -467,6 +467,84 @@ pub unsafe extern "C" fn dengon_relay_record_event(
     ok
 }
 
+/// Écrit le `node_id` du relais côté dashboard (`relay-` + `peerID[0..3]` en
+/// hex, chaîne C de 12 caractères terminée par `\0`) dans `out` (US-309).
+/// Pas de constante exportée pour la taille : cbindgen lui ajouterait
+/// le préfixe `Dengon` ; le firmware définit `DENGON_NODE_ID_LEN` (13).
+///
+/// # Safety
+///
+/// `relay` valide ; `out` valide pour 13 octets écrits.
+#[no_mangle]
+pub unsafe extern "C" fn dengon_relay_node_id(relay: *const Relay, out: *mut c_char) -> Status {
+    // SAFETY : contrat de la fonction.
+    let Some(r) = (unsafe { relay.as_ref() }) else {
+        return Status::NullPointer;
+    };
+    let mut id = r.relay.node_id().into_bytes();
+    id.push(0);
+    // SAFETY : contrat de la fonction, `id.len() == 13`.
+    unsafe { write(out.cast::<u8>(), &id) }
+}
+
+/// Construit le corps signé de `POST /ingest/batch` (US-309) à partir
+/// d'entrées de journal **déjà retirées** par [`dengon_relay_pop_ledger`],
+/// concaténées telles quelles dans `entries` (`entries_len` octets). La
+/// signature Ed25519 est faite ici, avec la clé du relais, qui ne sort pas
+/// du handle.
+///
+/// Écrit le JSON (non terminé par `\0`) dans `out` et sa longueur dans
+/// `*out_len`. [`Status::BufferTooSmall`] : `*out_len` porte la taille
+/// requise. [`Status::Decode`] : une entrée est tronquée, hors catalogue ou
+/// son payload n'est pas un objet JSON — le lot ne partira jamais tel quel.
+/// [`Status::Empty`] : aucune entrée.
+///
+/// # Safety
+///
+/// `relay`, `out_len` valides ; `entries` valide pour `entries_len` octets
+/// lus ; `out` valide pour `out_cap` octets écrits.
+#[no_mangle]
+pub unsafe extern "C" fn dengon_relay_build_batch(
+    relay: *const Relay,
+    entries: *const u8,
+    entries_len: usize,
+    out: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> Status {
+    // SAFETY : contrat de la fonction.
+    let (Some(r), Some(out_len)) = (unsafe { relay.as_ref() }, unsafe { out_len.as_mut() }) else {
+        return Status::NullPointer;
+    };
+    if entries_len == 0 {
+        return Status::Empty;
+    }
+    if entries.is_null() {
+        return Status::NullPointer;
+    }
+    // SAFETY : contrat de la fonction.
+    let mut rest = unsafe { core::slice::from_raw_parts(entries, entries_len) };
+    let mut parsed = Vec::new();
+    while !rest.is_empty() {
+        let Some((entry, tail)) = dengon_core::ledger::Entry::from_bytes(rest) else {
+            return Status::Decode;
+        };
+        parsed.push(entry);
+        rest = tail;
+    }
+    let body = match r.relay.build_batch(&parsed) {
+        Ok(body) => body,
+        Err(dengon_core::observability::batch::BatchError::Empty) => return Status::Empty,
+        Err(_) => return Status::Decode,
+    };
+    *out_len = body.len();
+    if body.len() > out_cap {
+        return Status::BufferTooSmall;
+    }
+    // SAFETY : contrat de la fonction, `body.len() <= out_cap`.
+    unsafe { write(out, &body) }
+}
+
 /// Compteurs du relais dans `*out`.
 ///
 /// # Safety

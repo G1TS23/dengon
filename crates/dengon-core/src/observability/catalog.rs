@@ -53,6 +53,16 @@ pub fn is_known(name: &str) -> bool {
     EVENT_NAMES.binary_search(&name).is_ok()
 }
 
+/// Le nom tel qu'il est rangé au catalogue (`&'static str`, ce qu'attend
+/// [`super::Envelope`]), ou `None` s'il n'y figure pas. Sert à relire les
+/// noms du journal, stockés en `String` (US-309).
+pub fn lookup(name: &str) -> Option<&'static str> {
+    EVENT_NAMES
+        .binary_search(&name)
+        .ok()
+        .map(|i| EVENT_NAMES[i])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
