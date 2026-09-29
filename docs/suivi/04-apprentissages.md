@@ -11,6 +11,28 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### Ancres Markdown GitHub : les espaces consécutives ne collapsent pas
+
+**C'est quoi :** GitHub génère l'ancre d'un titre (`## Mon Titre` →
+`#mon-titre`) avec `github-slugger` : minuscules, ponctuation retirée,
+espaces remplacées par des tirets **une à une**, sans fusionner les espaces
+consécutives en une seule.
+**Pourquoi dans dengon :** la typographie française met une espace **avant**
+un `:` (« Blockchain **:** une analyse critique »). Retirer seulement le
+caractère `:` laisse deux espaces collées, donc **deux** tirets dans
+l'ancre (`blockchain--une-analyse-critique`), pas un — un titre avec un `:`
+précédé d'une espace ne suit donc jamais l'intuition « un mot = un tiret ».
+**Piège / surprise :** une ancre écrite à l'œil (`#blockchain-une-...`,
+un seul tiret) compile, ne lève aucune erreur Markdown, et ne casse qu'au
+clic sur GitHub — invisible en relecture locale. Vérifier avec l'outil réel
+(`npx github-slugger`) plutôt qu'en devinant, dès qu'un titre contient une
+ponctuation entourée d'espaces.
+**Où c'est utilisé :** `docs/rapport/03-conception.md` (lien vers
+`docs/rapport/02-etat-de-lart.md#blockchain--une-analyse-critique`).
+**Pour aller plus loin :** paquet npm [`github-slugger`](https://github.com/Flet/github-slugger) (celui que GitHub utilise).
+
+---
+
 ## Modèle
 
 ### [Titre du concept]

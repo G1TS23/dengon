@@ -10,6 +10,83 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-223/US-315 : rédaction anticipée des sections Réalisation, Recette, Difficultés, Conclusion (PR #103)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/rapport/{04-realisation,05-recette,06-difficultes,07-conclusion}.md`,
+`docs/rapport/{00-plan,README}.md`.
+**Lot :** suite de US-223 (issue #37, PR #103), sur demande explicite de
+l'équipe : les sections 5 à 8, normalement réservées à l'US-315 (#53, qui ne
+peut démarrer qu'après la fin du développement d'après le plan initial), sont
+rédigées maintenant, le jour de la soutenance, alors que le développement se
+termine tout juste.
+
+### Fait
+- Rebase de la branche `docs/US-223-rapport-ecrit` sur `main` à jour (très en
+  retard : forkée avant tout le sprint 3).
+- `04-realisation.md` : ce qui tourne réellement, sourcé sur l'état de
+  `main` à la date de rédaction (524 tests `cargo test --workspace`,
+  couverture 93 % `cargo llvm-cov`, 48 tests JVM Android, 32+9 tests Unity
+  firmware, 99 tests `pytest` dashboard — chiffres mesurés, pas copiés d'un
+  fichier de suivi possiblement daté), plus les écarts vs conception encore
+  ouverts (négociation `ENVELOPE_OFFER`/`REQUEST`, `RELAY_OK` côté client).
+- `05-recette.md` : **pas de résultats inventés** — US-314 (#52) n'a pas
+  encore eu lieu. Décrit le protocole prévu (9 points) et l'état de
+  préparation déjà vérifié séparément, pièce par pièce.
+- `06-difficultes.md` : sélection de 6 épisodes techniques substantiels
+  depuis `docs/suivi/04-apprentissages.md` (plus de 60 entrées au total) —
+  bug Noise XX initiateur/répondeur, property test sur la fragmentation,
+  réconciliation vs anti-inondation, seuil du losange, contraintes ESP32
+  (annonce 31 o, aléa matériel, `conn_handle` NimBLE), pièges JNA/UniFFI.
+- `07-conclusion.md` : face aux 6 exigences du cahier des charges, limites
+  connues, perspectives v2 (Gossip GCS, Spray-and-Wait, statut Lu, iOS,
+  audit sécurité externe).
+- `00-plan.md`/`README.md` mis à jour (table des matières, état des
+  sections) pour refléter que 5 à 8 existent désormais.
+- Tous les liens internes du dossier vérifiés par script (fichiers cibles +
+  3 ancres spécifiques) : aucun renvoi cassé.
+
+### Pourquoi / décisions
+- Rédiger 5-8 maintenant plutôt qu'attendre US-315 formellement : décision
+  explicite de l'équipe, le jour de la soutenance, le développement étant
+  arrivé à un point où l'essentiel des faits nécessaires existe déjà dans
+  `docs/suivi/`. Chaque section porte une garde explicite rappelant qu'elle
+  est écrite en anticipation, pas encore relue en équipe.
+- `05-recette.md` reste un protocole + état de préparation, pas un résultat :
+  cohérent avec la règle du `README.md` du dossier (« pas d'affirmation sur
+  un résultat qui n'existe pas encore »), qui aurait été violée en
+  fabriquant un rapport de recette qui n'a pas eu lieu.
+
+### Écarts vs conception
+- Aucun nouveau (cette session documente des écarts déjà consignés, n'en
+  introduit pas).
+
+### Appris
+- Rien de nouveau pour `05-glossaire.md`.
+
+### État après cette session
+- Les 8 sections principales du rapport (hors Introduction/Bibliographie/
+  Annexes, mécaniques) existent. Restent ouverts, identiques à avant cette
+  session : plan non validé en équipe, aucune section relue par une autre
+  personne (critères d'acceptation de US-223 **et** US-315).
+- PR #103 mise à jour, toujours en brouillon.
+
+### Vérification (commandes réellement exécutées)
+```
+$ git checkout docs/US-223-rapport-ecrit && git rebase origin/main
+Successfully rebased
+
+$ (script bash) vérification des liens internes de docs/rapport/*.md
+aucun fichier manquant (hors 2 liens vers des dossiers, faux positifs)
+
+$ grep -n "^## Sécurité" 03-conception.md
+$ grep -n "^## Blockchain" 02-etat-de-lart.md
+$ grep -n "^## État des sections" 00-plan.md
+les 3 ancres référencées existent
+```
+- Pas vérifié : relecture croisée humaine du contenu (reste un critère
+  d'acceptation ouvert, ne peut pas être satisfait par cette session).
+
 ## 2026-09-29 — US-311 : rebase de la PR #112 sur `main` (après US-308/US-306)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
@@ -2623,6 +2700,35 @@ $ cargo llvm-cov -p dengon-core --summary-only
   `on_mtu`. Le MTU est donc déjà sur le lien quand la découverte démarre.
 - Le second commentaire de la revue (rôle central jamais exercé contre un vrai
   pair) n'appelle pas de correctif de code : c'est l'essai 2 cartes.
+## 2026-09-28 — US-223 : correction d'une ancre cassée dans le rapport (PR #103)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/rapport/03-conception.md`
+**Lot :** US-223 (issue #37), suite de l'entrée précédente
+
+### Fait
+- Corrigé le lien `docs/rapport/03-conception.md` → `02-etat-de-lart.md`
+  vers la section « Blockchain : une analyse critique » : l'ancre écrite
+  (`#blockchain-une-analyse-critique`, un seul tiret) ne correspondait pas
+  au vrai *slug* que GitHub génère pour ce titre.
+
+### Pourquoi / décisions
+- L'entrée précédente affirmait avoir « vérifié à la main que tous les
+  liens internes … résolvent bien » — affirmation **fausse**, trouvée par
+  une revue automatisée lancée sur ce dossier (par erreur de ma part, en
+  visant la PR #105 : le dépôt local était resté sur la branche
+  `docs/US-223-rapport-ecrit`, la revue a donc porté sur son diff plutôt
+  que sur la PR #105). Cause racine : le titre « Blockchain **:** une
+  analyse critique » porte une espace **avant** le `:` (typographie
+  française) — en enlevant seulement le caractère `:`, il reste deux
+  espaces consécutives, que le *slugger* de GitHub traduit en **deux**
+  tirets (`blockchain--une-analyse-critique`), pas un.
+- **Vérifié cette fois avec l'outil réel** plutôt qu'à l'œil :
+  `npx github-slugger` (le paquet que GitHub utilise pour générer ces
+  ancres) appliqué au titre exact confirme `blockchain--une-analyse-critique`.
+  Commande :
+  `node -e "const s=require('github-slugger');console.log(new s.default().slug('Blockchain : une analyse critique'))"`
+  → `blockchain--une-analyse-critique`.
 
 ### Écarts vs conception
 - Aucun.
@@ -5241,6 +5347,71 @@ $ cargo doc -p dengon-core --no-deps
 ```
 
 ---
+- Nouvelle entrée dans `04-apprentissages.md` : les ancres GitHub ne
+  collapsent pas les espaces consécutives, donc un titre avec une espace
+  avant un `:` (convention française) produit un double tiret dans son
+  ancre — à vérifier avec l'outil, pas à l'œil.
+
+### État après cette session
+- Le critère d'acceptation « aucun renvoi vers un fichier ou une section
+  inexistante » de l'US-223 est de nouveau satisfait, cette fois vérifié
+  par un outil plutôt qu'à l'œil.
+- Fiche(s) module mise(s) à jour : aucune (pas de composant logiciel).
+- `01-etat-du-code.md` mis à jour : non.
+
+## 2026-09-28 — US-223 : brouillon du rapport écrit (plan + problème/état de l'art/conception), en anticipation du Sprint 2
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/rapport/` (nouveau dossier)
+**Lot :** US-223 (issue #37), area `docs`
+
+### Fait
+- Créé `docs/rapport/` : `README.md` (contexte, statut de chaque fichier),
+  `00-plan.md` (plan détaillé du rapport complet, y compris les sections qui
+  ne pourront être écrites qu'en fin de projet), `01-probleme.md`,
+  `02-etat-de-lart.md`, `03-conception.md`.
+- Les trois sections rédigées synthétisent, sans les recopier telles quelles,
+  `docs/synthese/02-probleme-et-besoins.md`, `03-etat-de-lart.md` et
+  `04-architecture.md` à `09-dashboard-et-donnees.md` — uniquement des
+  décisions déjà **tranchées** dans `docs/synthese/00-contexte-global.md`,
+  conformément au contexte de l'US (« rédiger tôt ce qui ne dépend pas des
+  résultats »).
+- Vérifié à la main que tous les liens internes (vers les autres fichiers de
+  `docs/rapport/`, vers `docs/synthese/`, et les ancres de section) résolvent
+  bien — critère d'acceptation explicite de l'US.
+
+### Pourquoi / décisions
+- Demande explicite de l'utilisateur : prendre de l'avance sur cette US avant
+  la fin effective du Sprint 2, sans attendre que toutes les issues du sprint
+  soient closes.
+- Dossier `docs/rapport/` distinct de `docs/synthese/` (conception interne) et
+  de `docs/suivi/` (état réel du code) : c'est le texte destiné au lecteur
+  externe (jury/enseignant), pas une note de travail d'équipe.
+- Sections 5 à 8 du plan (réalisation, recette, difficultés, conclusion)
+  explicitement laissées **non rédigées** : elles dépendent de faits qui
+  n'existent pas encore (code réellement livré, recette US-314) — les écrire
+  maintenant serait de la spéculation, contraire à la règle « rester factuel »
+  de ce dépôt.
+
+### Écarts vs conception
+- Aucun — ce travail ne touche pas au code applicatif, uniquement à la
+  documentation destinée au rapport.
+
+### Appris
+- Rien de nouveau côté technique ; confirmation que `docs/synthese/` est
+  suffisamment mûr (toutes les décisions citées y sont déjà marquées
+  « tranché ») pour rédiger ces trois sections sans attendre la fin du
+  développement.
+
+### État après cette session
+- **Deux critères d'acceptation de l'US-223 restent ouverts et ne peuvent pas
+  être satisfaits par une seule personne** : « plan détaillé validé en
+  équipe » et « relu par une autre personne ». Ce brouillon n'est donc **pas**
+  suffisant pour clore l'issue #37 — il l'anticipe, il ne la termine pas.
+- Fiche(s) module mise(s) à jour : pas de fiche `modules/` créée (le dossier
+  `docs/rapport/` n'est pas un composant logiciel) ; ligne ajoutée dans
+  `02-avancement.md` (« Rapport écrit (US-223) », ~60 %).
+- `01-etat-du-code.md` mis à jour : non (pas de changement d'état du code).
 
 ## 2026-09-28 — Nettoyage post-merge : retours de revue arrivés après le merge de #60 et #63
 
