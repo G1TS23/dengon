@@ -12,8 +12,9 @@
 //   - l'intégrité des octets : chaque trame porte un motif déterministe que le
 //     récepteur recalcule (« motif intact »), plus un CRC32 comparable d'une
 //     carte à l'autre ;
-//   - la limite 1 trame = 1 PDU ATT : à chaque nouveau lien, une trame de
-//     taille exacte MTU-3 (acceptée) puis MTU-2 (FRAME_TOO_LARGE) ;
+//   - la limite de trame : à chaque nouveau lien, une trame de
+//     DENGON_TC_FRAME_MAX octets (acceptée, en morceaux L1 depuis l'US-312)
+//     puis un octet de plus (FRAME_TOO_LARGE) ;
 //   - la règle n°4 : un send sur un lien qui vient de tomber rend UNKNOWN_PEER ;
 //   - bouton BOOT (GPIO0) : fermeture propre de tous les liens (Locale ici,
 //     Propre en face).
@@ -113,11 +114,11 @@ demo_probe_mtu(dengon_link_id_t link, uint32_t seq)
     } else {
         max = DENGON_TC_FRAME_MAX;
     }
-    ESP_LOGI(TAG, "sonde link#%llu : trame de %u o (MTU-3) -> %s",
+    ESP_LOGI(TAG, "sonde link#%llu : trame de %u o (max) -> %s",
              (unsigned long long)link, (unsigned)max, dengon_tr_err_str(err));
 
     err = dengon_transport_send(link, s_buf, demo_build(s_buf, max + 1, seq), NULL);
-    ESP_LOGI(TAG, "sonde link#%llu : trame de %u o (MTU-2) -> %s (attendu : trame trop grande)",
+    ESP_LOGI(TAG, "sonde link#%llu : trame de %u o (max + 1) -> %s (attendu : trame trop grande)",
              (unsigned long long)link, (unsigned)(max + 1), dengon_tr_err_str(err));
 }
 

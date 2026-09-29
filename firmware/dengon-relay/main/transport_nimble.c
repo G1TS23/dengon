@@ -98,8 +98,9 @@ typedef struct {
 
 static disc_state_t s_disc[DENGON_TC_MAX_LINKS];
 
-/* Tampon de copie des trames reçues. Tâche host seulement. */
-static uint8_t s_rx_buf[DENGON_TC_FRAME_MAX];
+/* Tampon de copie d'un morceau L1 reçu (une PDU ATT, ≤ MTU - 3 = 514).
+   Tâche host seulement. */
+static uint8_t s_rx_buf[DENGON_TC_ATT_MTU_MAX - DENGON_TC_ATT_OVERHEAD];
 
 static int  gap_event(struct ble_gap_event *event, void *arg);
 static void ensure_advertising(void);
@@ -159,16 +160,18 @@ disc_forget(uint16_t conn_handle)
     }
 }
 
-/* Une trame complète est arrivée sur `conn_handle` : copie hors du mbuf,
-   puis FrameReceived dans la file du cœur. */
+/* Un morceau L1 est arrivé sur `conn_handle` : copie hors du mbuf, puis
+   réassemblage ; la trame complète part en FrameReceived dans la file du
+   cœur (US-312 : format de morceau de l'app Android). */
 static void
 deliver_rx(uint16_t conn_handle, const struct os_mbuf *om)
 {
     uint16_t len = 0;
     dengon_tr_err_t err;
     uint32_t dropped;
+    uint32_t bad;
 
-    /* 1 trame = 1 PDU ATT : une PDU ne dépasse jamais MTU - 3 <= 514. Un
+    /* 1 morceau = 1 PDU ATT : une PDU ne dépasse jamais MTU - 3 <= 514. Un
        mbuf plus long serait une violation de la pile, on le jette. */
     if (OS_MBUF_PKTLEN(om) > sizeof(s_rx_buf) ||
         ble_hs_mbuf_to_flat(om, s_rx_buf, sizeof(s_rx_buf), &len) != 0) {
@@ -178,13 +181,14 @@ deliver_rx(uint16_t conn_handle, const struct os_mbuf *om)
     }
 
     lock();
-    err = dengon_tc_on_rx(&s_tc, conn_handle, s_rx_buf, len);
+    err = dengon_tc_on_chunk(&s_tc, conn_handle, s_rx_buf, len);
     dropped = s_tc.dropped_frames;
+    bad = s_tc.bad_chunks;
     unlock();
 
     if (err == DENGON_TR_BACKEND) {
-        ESP_LOGW(TAG, "RX conn=%u : file pleine, trame de %u o jetée (%lu au total)",
-                 conn_handle, len, (unsigned long)dropped);
+        ESP_LOGW(TAG, "RX conn=%u : morceau de %u o jeté (file pleine : %lu, invalides : %lu)",
+                 conn_handle, len, (unsigned long)dropped, (unsigned long)bad);
     } else if (err != DENGON_TR_OK) {
         ESP_LOGW(TAG, "RX conn=%u : %s", conn_handle, dengon_tr_err_str(err));
     }
@@ -516,7 +520,7 @@ on_mtu(uint16_t conn_handle, const struct ble_gatt_error *error, uint16_t mtu, v
        ble_gap_mtu_event() puis ble_gattc_rx_mtu()) : le lien porte donc déjà
        le bon MTU quand la découverte démarre.
        Un refus d'échange n'est pas fatal : on reste à 23 (20 octets utiles),
-       le cœur fragmentera plus fin. */
+       le transport découpe en morceaux plus fins. */
     if (error->status != 0) {
         ESP_LOGW(TAG, "conn=%u : échange MTU refusé (status=%d), on reste à 23",
                  conn_handle, error->status);
@@ -844,23 +848,41 @@ dengon_transport_event_free(dengon_transport_event_t *ev)
     dengon_tc_event_free(ev);
 }
 
-/* Émission effective sur une route validée par le cœur. Hors verrou. */
+/* Émission d'un morceau L1 : en-tête ‖ données, construit dans le mbuf
+   (pas de tampon sur la pile de l'appelant). */
+static int
+emit_chunk(const dengon_tc_route_t *r, uint8_t hdr, const uint8_t *data, size_t n)
+{
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(&hdr, DENGON_TC_CHUNK_HDR);
+
+    if (om == NULL) {
+        return BLE_HS_ENOMEM; /* plus de mbuf : pile saturée */
+    }
+    if (n > 0 && os_mbuf_append(om, data, (uint16_t)n) != 0) {
+        os_mbuf_free_chain(om);
+        return BLE_HS_ENOMEM;
+    }
+    /* Les deux appels consomment le mbuf, même en cas d'erreur. */
+    if (r->role == DENGON_ROLE_CENTRAL) {
+        return ble_gattc_write_no_rsp(r->conn_handle, r->peer_rx_handle, om);
+    }
+    return ble_gatts_notify_custom(r->conn_handle, dengon_gatt_tx_val_handle(), om);
+}
+
+/* Émission effective sur une route validée par le cœur. Hors verrou. La
+   trame part en morceaux L1 au MTU du lien (US-312). */
 static dengon_tr_err_t
 emit(const dengon_tc_route_t *r, const uint8_t *bytes, size_t len)
 {
-    struct os_mbuf *om;
-    int rc;
+    size_t total = dengon_tc_chunk_count(len, r->mtu);
+    int rc = 0;
 
-    if (r->role == DENGON_ROLE_CENTRAL) {
-        rc = ble_gattc_write_no_rsp_flat(r->conn_handle, r->peer_rx_handle, bytes,
-                                         (uint16_t)len);
-    } else {
-        om = ble_hs_mbuf_from_flat(bytes, (uint16_t)len);
-        if (om == NULL) {
-            return DENGON_TR_BACKEND; /* plus de mbuf : pile saturée */
-        }
-        /* notify_custom consomme le mbuf, même en cas d'erreur. */
-        rc = ble_gatts_notify_custom(r->conn_handle, dengon_gatt_tx_val_handle(), om);
+    for (size_t i = 0; i < total && rc == 0; i++) {
+        size_t off = 0;
+        size_t n = 0;
+        uint8_t hdr = dengon_tc_chunk_at(len, r->mtu, i, &off, &n);
+
+        rc = emit_chunk(r, hdr, bytes + off, n);
     }
 
     if (rc == 0) {

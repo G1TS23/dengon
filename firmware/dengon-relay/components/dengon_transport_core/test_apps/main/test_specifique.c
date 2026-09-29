@@ -25,9 +25,10 @@ ouvrir_sans_annoncer(uint16_t conn, uint16_t mtu)
     return id;
 }
 
-/* 1 trame = 1 PDU ATT : la limite est mtu - 3, et elle est exacte. */
+/* La trame part en morceaux L1 (US-312) : la limite est DENGON_TC_FRAME_MAX,
+   plus mtu - 3, et elle est exacte. */
 static void
-test_trame_limitee_au_mtu_moins_3(void)
+test_trame_limitee_a_frame_max(void)
 {
     dengon_link_id_t lien;
     dengon_tc_route_t route;
@@ -44,7 +45,8 @@ test_trame_limitee_au_mtu_moins_3(void)
     TEST_ASSERT_EQUAL(514, max);
 }
 
-/* Tant que l'échange MTU n'a pas abouti, seul le plancher 23 vaut : 20 octets. */
+/* Tant que l'échange MTU n'a pas abouti, seul le plancher 23 vaut : la route
+   le porte, et la trame entière passe quand même, en morceaux de 19 octets. */
 static void
 test_mtu_par_defaut_est_le_plancher(void)
 {
@@ -56,10 +58,12 @@ test_mtu_par_defaut_est_le_plancher(void)
     lien = ouvrir_sans_annoncer(1, 0 /* ignoré : < 23 */);
     dengon_tc_link_announce(&s_banc.tc, 1);
 
-    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_route_for_send(&s_banc.tc, lien, 20, &route, &max));
+    TEST_ASSERT_EQUAL(DENGON_TR_OK, dengon_tc_route_for_send(&s_banc.tc, lien, 514, &route, &max));
+    TEST_ASSERT_EQUAL(23, route.mtu);
+    TEST_ASSERT_EQUAL(28, dengon_tc_chunk_count(514, route.mtu));
     TEST_ASSERT_EQUAL(DENGON_TR_FRAME_TOO_LARGE,
-                      dengon_tc_route_for_send(&s_banc.tc, lien, 21, &route, &max));
-    TEST_ASSERT_EQUAL(20, max);
+                      dengon_tc_route_for_send(&s_banc.tc, lien, 515, &route, &max));
+    TEST_ASSERT_EQUAL(514, max);
 }
 
 /* Un lien ouvert mais pas encore annoncé n'existe pas pour le cœur. */
@@ -222,10 +226,10 @@ test_trame_vide_remonte(void)
     TEST_ASSERT_EQUAL(0, s_lot.ev[0].u.frame.len);
 }
 
-/* Broadcast : « au mieux ». Trop gros pour tout lien -> erreur ; trop gros
-   pour UN lien -> ce lien est sauté, les autres servis. */
+/* Broadcast : tous les liens annoncés, quel que soit leur MTU (morceaux L1,
+   US-312) ; au-delà de DENGON_TC_FRAME_MAX -> erreur. */
 static void
-test_broadcast_au_mieux(void)
+test_broadcast_tous_les_liens(void)
 {
     dengon_tc_route_t routes[DENGON_TC_MAX_LINKS];
     size_t n = 99;
@@ -242,8 +246,7 @@ test_broadcast_au_mieux(void)
 
     TEST_ASSERT_EQUAL(DENGON_TR_OK,
         dengon_tc_routes_for_broadcast(&s_banc.tc, 100, routes, DENGON_TC_MAX_LINKS, &n));
-    TEST_ASSERT_EQUAL(1, n);
-    TEST_ASSERT_EQUAL(1, routes[0].conn_handle);
+    TEST_ASSERT_EQUAL(2, n);
 
     TEST_ASSERT_EQUAL(DENGON_TR_FRAME_TOO_LARGE,
         banc_broadcast(&s_banc, s_gros, sizeof(s_gros)));
@@ -293,7 +296,7 @@ run_specifique(void)
 {
     /* Sans cela, Unity attribue chaque cas au fichier de UNITY_BEGIN. */
     UnitySetTestFile(__FILE__);
-    RUN_TEST(test_trame_limitee_au_mtu_moins_3);
+    RUN_TEST(test_trame_limitee_a_frame_max);
     RUN_TEST(test_mtu_par_defaut_est_le_plancher);
     RUN_TEST(test_lien_non_annonce_est_inconnu);
     RUN_TEST(test_premiere_trame_annonce_le_lien);
@@ -304,7 +307,7 @@ run_specifique(void)
     RUN_TEST(test_file_saturee_garde_la_fermeture);
     RUN_TEST(test_poll_par_petits_lots);
     RUN_TEST(test_trame_vide_remonte);
-    RUN_TEST(test_broadcast_au_mieux);
+    RUN_TEST(test_broadcast_tous_les_liens);
     RUN_TEST(test_route_porte_role_et_handle);
     RUN_TEST(test_mapping_des_raisons_hci);
     lot_liberer(&s_lot);

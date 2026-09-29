@@ -83,10 +83,13 @@ link_by_id(const dengon_tc_t *tc, dengon_link_id_t id)
     return NULL;
 }
 
-static size_t
-frame_max(const dengon_tc_link_t *l)
+/* Jette un réassemblage L1 partiel (morceau invalide, coupure). */
+static void
+rx_abandon(dengon_tc_link_t *l)
 {
-    return (size_t)l->mtu - DENGON_TC_ATT_OVERHEAD;
+    free(l->rx_part);
+    l->rx_part = NULL;
+    l->rx_len = 0;
 }
 
 static void
@@ -289,6 +292,61 @@ dengon_tc_on_rx(dengon_tc_t *tc, uint16_t conn_handle, const uint8_t *bytes, siz
     return DENGON_TR_OK;
 }
 
+dengon_tr_err_t
+dengon_tc_on_chunk(dengon_tc_t *tc, uint16_t conn_handle, const uint8_t *chunk, size_t len)
+{
+    dengon_tc_link_t *l = link_by_conn(tc, conn_handle);
+    const uint8_t *data;
+    size_t n;
+    bool suite;
+    dengon_tr_err_t err;
+
+    if (l == NULL) {
+        return DENGON_TR_UNKNOWN_PEER;
+    }
+    /* Même règle que le Reassembleur Android : un morceau vide ou aux bits
+       réservés non nuls abandonne la trame en cours. */
+    if (len < DENGON_TC_CHUNK_HDR || (chunk[0] & (uint8_t)~DENGON_TC_CHUNK_SUITE) != 0) {
+        rx_abandon(l);
+        tc->bad_chunks++;
+        return DENGON_TR_BACKEND;
+    }
+    suite = (chunk[0] & DENGON_TC_CHUNK_SUITE) != 0;
+    data = chunk + DENGON_TC_CHUNK_HDR;
+    n = len - DENGON_TC_CHUNK_HDR;
+
+    if (l->rx_len + n > DENGON_TC_FRAME_MAX) {
+        rx_abandon(l);
+        tc->bad_chunks++;
+        return DENGON_TR_FRAME_TOO_LARGE;
+    }
+
+    /* Cas courant au MTU 517 : trame d'un seul morceau, pas de tampon. */
+    if (!suite && l->rx_part == NULL) {
+        return dengon_tc_on_rx(tc, conn_handle, data, n);
+    }
+
+    if (l->rx_part == NULL) {
+        l->rx_part = malloc(DENGON_TC_FRAME_MAX);
+        if (l->rx_part == NULL) {
+            tc->dropped_frames++;
+            return DENGON_TR_BACKEND;
+        }
+        l->rx_len = 0;
+    }
+    if (n > 0) {
+        memcpy(l->rx_part + l->rx_len, data, n);
+        l->rx_len += n;
+    }
+    if (suite) {
+        return DENGON_TR_OK;
+    }
+
+    err = dengon_tc_on_rx(tc, conn_handle, l->rx_part, l->rx_len);
+    rx_abandon(l);
+    return err;
+}
+
 bool
 dengon_tc_link_close(dengon_tc_t *tc, uint16_t conn_handle, uint8_t hci_reason)
 {
@@ -309,6 +367,9 @@ dengon_tc_link_close(dengon_tc_t *tc, uint16_t conn_handle, uint8_t hci_reason)
             tc->dropped_lifecycle++;
         }
     }
+
+    /* Règle n°3 du contrat : un réassemblage partiel meurt avec le lien. */
+    rx_abandon(l);
 
     /* Le conn_handle est libéré : NimBLE peut le redonner à la prochaine
        connexion, qui obtiendra un LinkId neuf. */
@@ -392,13 +453,11 @@ dengon_tc_route_for_send(const dengon_tc_t *tc, dengon_link_id_t link, size_t le
         return DENGON_TR_UNKNOWN_PEER;
     }
 
-    /* 1 trame = 1 PDU ATT. La fragmentation protocole (protocol::fragment,
-       US-202) découpe déjà à ATT_MTU - 3 : le transport n'a pas de
-       fragmentation BLE à lui, donc aucune trame partielle à jeter (règle
-       n°3 du contrat, tenue par construction). */
-    if (len > frame_max(l)) {
+    /* La trame part en morceaux L1 (format Android, US-312) : seul le
+       plafond de réassemblage la borne, plus le MTU du lien. */
+    if (len > DENGON_TC_FRAME_MAX) {
         if (max_out != NULL) {
-            *max_out = frame_max(l);
+            *max_out = DENGON_TC_FRAME_MAX;
         }
         return DENGON_TR_FRAME_TOO_LARGE;
     }
@@ -424,13 +483,46 @@ dengon_tc_routes_for_broadcast(const dengon_tc_t *tc, size_t len, dengon_tc_rout
     for (size_t i = 0; i < DENGON_TC_MAX_LINKS && n < cap; i++) {
         const dengon_tc_link_t *l = &tc->links[i];
 
-        /* « Au mieux » : un lien au MTU trop petit est sauté, pas une erreur. */
-        if (l->used && l->announced && len <= frame_max(l)) {
+        if (l->used && l->announced) {
             route_of(l, &routes[n++]);
         }
     }
     *n_out = n;
     return DENGON_TR_OK;
+}
+
+/* --- Découpage L1 à l'émission ---------------------------------------------- */
+
+size_t
+dengon_tc_chunk_payload(uint16_t mtu)
+{
+    size_t pdu = mtu > DENGON_TC_ATT_OVERHEAD ? (size_t)mtu - DENGON_TC_ATT_OVERHEAD : 0;
+
+    return pdu > DENGON_TC_CHUNK_HDR ? pdu - DENGON_TC_CHUNK_HDR : 1;
+}
+
+size_t
+dengon_tc_chunk_count(size_t len, uint16_t mtu)
+{
+    size_t per = dengon_tc_chunk_payload(mtu);
+
+    return len == 0 ? 1 : (len + per - 1) / per;
+}
+
+uint8_t
+dengon_tc_chunk_at(size_t len, uint16_t mtu, size_t index, size_t *off, size_t *n)
+{
+    size_t per = dengon_tc_chunk_payload(mtu);
+    size_t start = index * per;
+    size_t end;
+
+    if (start > len) {
+        start = len;
+    }
+    end = start + per < len ? start + per : len;
+    *off = start;
+    *n = end - start;
+    return end < len ? DENGON_TC_CHUNK_SUITE : 0;
 }
 
 /* --- Utilitaires ------------------------------------------------------------ */

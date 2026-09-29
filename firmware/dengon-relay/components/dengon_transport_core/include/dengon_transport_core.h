@@ -42,8 +42,25 @@ extern "C" {
 /** MTU ATT maximal visé (docs/powl/03 §6.3). */
 #define DENGON_TC_ATT_MTU_MAX 517
 
-/** Plus grande trame acceptée par broadcast, quel que soit le lien. */
+/**
+ * Plus grande trame acceptée, en émission comme au réassemblage (US-312).
+ * Depuis l'US-312 une trame peut couvrir plusieurs morceaux ; la borne reste
+ * celle d'une trame du relais (`relay::FRAME_MAX`, 514) pour garder le
+ * tampon de réassemblage petit (tas serré, docs/suivi/modules/firmware-relay.md).
+ */
 #define DENGON_TC_FRAME_MAX (DENGON_TC_ATT_MTU_MAX - DENGON_TC_ATT_OVERHEAD)
+
+/**
+ * Fragmentation BLE (L1), format de l'app Android (FragmentationBle.kt) :
+ *
+ *   morceau = en-tête:u8 ‖ données, 1 morceau = 1 PDU ATT (≤ MTU - 3)
+ *   en-tête : bit 7 = SUITE (d'autres morceaux suivent), bits 0-6 = 0
+ *
+ * Une trame vide est un morceau sans données. GATT garantit l'ordre sur une
+ * connexion : ni numéro ni longueur totale.
+ */
+#define DENGON_TC_CHUNK_SUITE 0x80
+#define DENGON_TC_CHUNK_HDR   1
 
 /** Codes HCI de déconnexion utiles (Core Spec Vol 1, Part F). */
 #define DENGON_HCI_CONN_SPVN_TMO      0x08 /* supervision timeout           */
@@ -137,6 +154,10 @@ typedef struct {
     uint16_t           peer_rx_handle;
     bool               has_rssi;
     int16_t            rssi;
+    /* Réassemblage L1 en cours : alloué au premier morceau SUITE, libéré à
+       la fin de la trame ou à la fermeture. NULL hors réassemblage. */
+    uint8_t           *rx_part;
+    size_t             rx_len;
 } dengon_tc_link_t;
 
 /** L'état complet du transport. Allocation statique, aucun malloc hors trames. */
@@ -151,6 +172,7 @@ typedef struct {
     size_t                    q_len;
     uint32_t                  dropped_frames;
     uint32_t                  dropped_lifecycle;
+    uint32_t                  bad_chunks; /* morceaux L1 invalides ou trame trop longue */
 } dengon_tc_t;
 
 /* --- Cycle de vie ---------------------------------------------------------- */
@@ -207,6 +229,21 @@ dengon_tr_err_t dengon_tc_on_rx(dengon_tc_t *tc, uint16_t conn_handle,
                                 const uint8_t *bytes, size_t len);
 
 /**
+ * Un morceau L1 (une PDU ATT) est arrivé : réassemble, puis passe la trame
+ * complète à dengon_tc_on_rx(). C'est ce qu'appelle la glue radio.
+ *
+ * Un morceau vide, un en-tête aux bits réservés non nuls ou une trame qui
+ * dépasserait DENGON_TC_FRAME_MAX abandonnent le réassemblage en cours
+ * (compté dans bad_chunks) ; le morceau suivant repart d'une trame neuve.
+ *
+ * @return OK (trame complète remise ou morceau mis de côté) ; UNKNOWN_PEER ;
+ *         BACKEND (morceau invalide, allocation, file pleine) ;
+ *         FRAME_TOO_LARGE.
+ */
+dengon_tr_err_t dengon_tc_on_chunk(dengon_tc_t *tc, uint16_t conn_handle,
+                                   const uint8_t *chunk, size_t len);
+
+/**
  * Ferme le lien. Émet PeerDisconnected (motif tiré du code HCI) SEULEMENT si
  * le lien avait été annoncé : un lien jamais vu du cœur disparaît en silence.
  *
@@ -238,16 +275,20 @@ void dengon_tc_event_free(dengon_transport_event_t *ev);
 /**
  * Valide un send et rend la route à utiliser. N'émet rien.
  *
+ * La trame est ensuite émise en dengon_tc_chunk_count() morceaux L1 : le MTU
+ * du lien ne borne plus la trame (US-312).
+ *
  * @return OK ; NOT_STARTED ; UNKNOWN_PEER si le lien est fermé ou pas encore
- *         annoncé ; FRAME_TOO_LARGE si len > mtu - 3 (*max_out renseigné).
+ *         annoncé ; FRAME_TOO_LARGE si len > DENGON_TC_FRAME_MAX
+ *         (*max_out renseigné).
  */
 dengon_tr_err_t dengon_tc_route_for_send(const dengon_tc_t *tc, dengon_link_id_t link,
                                          size_t len, dengon_tc_route_t *route,
                                          size_t *max_out);
 
 /**
- * Valide un broadcast et rend les routes des liens annoncés dont le MTU admet
- * la trame (les autres sont sautés : « au mieux »).
+ * Valide un broadcast et rend les routes de tous les liens annoncés (la
+ * trame y part en morceaux L1, quel que soit leur MTU).
  *
  * @return OK (même avec *n_out == 0) ; NOT_STARTED ; FRAME_TOO_LARGE si
  *         len > DENGON_TC_FRAME_MAX.
@@ -255,6 +296,20 @@ dengon_tr_err_t dengon_tc_route_for_send(const dengon_tc_t *tc, dengon_link_id_t
 dengon_tr_err_t dengon_tc_routes_for_broadcast(const dengon_tc_t *tc, size_t len,
                                                dengon_tc_route_t *routes, size_t cap,
                                                size_t *n_out);
+
+/* --- Découpage L1 à l'émission ---------------------------------------------- */
+
+/** Octets de trame portés par un morceau sur un lien de ce MTU (≥ 1). */
+size_t dengon_tc_chunk_payload(uint16_t mtu);
+
+/** Nombre de morceaux d'une trame de `len` octets (une trame vide : 1). */
+size_t dengon_tc_chunk_count(size_t len, uint16_t mtu);
+
+/**
+ * En-tête du morceau `index` (0-based) et position de ses données dans la
+ * trame : la glue émet `header ‖ frame[*off .. *off + *n]`, sans copie.
+ */
+uint8_t dengon_tc_chunk_at(size_t len, uint16_t mtu, size_t index, size_t *off, size_t *n);
 
 /* --- Utilitaires ------------------------------------------------------------ */
 
