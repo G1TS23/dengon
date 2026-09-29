@@ -84,12 +84,22 @@
 //!   routeur, est déposée dans [`Courier`]. La remise de ce que je porte à
 //!   son vrai propriétaire n'est pas câblée, pour la même raison que
 //!   ci-dessus.
-//! - **Envoi d'accusés de réception** : [`Node::on_bytes_received`] sait
-//!   *traiter* un `AppFrame::Ack` reçu ([`Node::apply_ack`]), mais rien dans
-//!   cette façade n'en **émet** — un pair qui reçoit un message ne prévient
-//!   pas son expéditeur. Écart consigné : hors périmètre de cette US, sans
-//!   quoi le statut `Delivered` d'un message sortant n'est jamais atteint
-//!   par cette façade (`InFlight` est le statut final observable ici).
+//! - **Accusés de réception** (US-306) : chaque message livré produit un
+//!   `Ack{Delivered}` vers son auteur, **dans la session Noise** avec lui
+//!   (paquet `ACK`). Sans session établie (message reçu par enveloppe avant
+//!   la fin du handshake), l'accusé attend dans `pending_acks` et part dès
+//!   que la session s'établit. Pas d'accusé par enveloppe scellée : il
+//!   faudrait un `rng` sur le chemin de réception, et un auteur jamais
+//!   connecté en direct (relais, US-312) ne reçoit donc pas son accusé —
+//!   écart consigné.
+//! - **`ANNOUNCE` de lien** (US-306) : [`Node::announce_packet`] rend
+//!   l'`ANNOUNCE` signé de ce nœud (TTL 1 : il présente le nœud à son voisin
+//!   direct, il n'est pas relayé) et [`parse_announce`] vérifie celui d'un
+//!   voisin. C'est ce qui permet à l'appelant de relier un lien radio (qui
+//!   ne connaît qu'un `LinkId`) au `PeerId` attendu par
+//!   [`Node::on_peer_connected`]. Ni l'annonce périodique
+//!   (`ANNOUNCE_*_S`) ni le traitement d'un `ANNOUNCE` par
+//!   [`Node::on_bytes_received`] ne sont câblés.
 //! - **`sync::inventory`** (US-210) : **pas câblé** — la PR qui le livre
 //!   n'est pas encore mergée sur `main` au moment où cette US démarre (voir
 //!   `docs/suivi/00-journal.md`, entrée US-301). Écart consigné.
@@ -109,13 +119,14 @@ use core::fmt;
 use sha2::{Digest, Sha256};
 
 use crate::crypto::noise::{self, Handshake, Session};
-use crate::crypto::{CryptoError, SigningKey};
+use crate::crypto::{CryptoError, SigningKey, VerifyingKey};
 use crate::identity::{self, PublicIdentity};
 use crate::ledger::Ledger;
+use crate::protocol::codec::announce::Announce;
 use crate::protocol::codec::app::{self, AckFrame, AppFrame, MessageFrame};
 use crate::protocol::codec::{self, Packet};
 use crate::protocol::consts::{PEER_ID_LEN, PROTO_VERSION, TTL_DEFAULT};
-use crate::protocol::types::{Flags, Header, PacketType};
+use crate::protocol::types::{AckStatus, Flags, Header, PacketType};
 use crate::protocol::{MsgId, PeerId};
 use crate::sync::courier::{Courier, CourierConfig};
 use crate::sync::routing::{Decision, Now as RoutingNow, Router, RoutingConfig};
@@ -131,6 +142,14 @@ use crate::store::{FixedKeySource, Store};
 /// `Conversation`) ; l'identité **locale**, avec secrets, reste
 /// [`crate::identity::Identity`], passée une seule fois à [`Node::new`].
 pub type Identity = PublicIdentity;
+
+/// TTL d'un `ANNOUNCE` de lien : il présente le nœud à son voisin direct,
+/// pas au maillage (voir la doc de module).
+const ANNOUNCE_LINK_TTL: u8 = 1;
+
+/// Accusés gardés au plus par pair en attendant une session : au-delà, le
+/// plus ancien est oublié (l'expéditeur rejouera, et le doublon sera ré-accusé).
+const PENDING_ACKS_MAX: usize = 64;
 
 /// Statut d'un message émis, tel qu'exposé par la façade (miroir de l'énum
 /// `MessageStatus` du `.udl` — sans `Cancelled`, hors périmètre de cette US
@@ -321,6 +340,9 @@ pub struct Node {
     outgoing: Vec<(PeerId, Vec<u8>)>,
     events: VecDeque<NodeEvent>,
     store: Option<Store<FixedKeySource>>,
+    /// Accusés à envoyer dès qu'une session existe avec l'auteur du message
+    /// (voir la doc de module, « Accusés de réception »).
+    pending_acks: BTreeMap<PeerId, Vec<AckFrame>>,
 }
 
 impl fmt::Debug for Node {
@@ -369,6 +391,7 @@ impl Node {
             outgoing: Vec::new(),
             events: VecDeque::new(),
             store: None,
+            pending_acks: BTreeMap::new(),
         }
     }
 
@@ -382,6 +405,36 @@ impl Node {
     #[must_use]
     pub fn public_identity(&self) -> PublicIdentity {
         self.identity.public()
+    }
+
+    /// `ANNOUNCE` signé de ce nœud, à écrire en **première trame** de chaque
+    /// lien radio qui s'ouvre (`synthese/07` §6, étape 1). Le voisin le
+    /// vérifie avec [`parse_announce`] pour savoir quel `PeerId` est au bout
+    /// du lien.
+    ///
+    /// # Errors
+    ///
+    /// [`DengonError::Internal`] si l'encodage échoue (ne devrait pas
+    /// arriver : le pseudo a été validé à la création de l'identité).
+    pub fn announce_packet(&self, now: RoutingNow) -> Result<Vec<u8>, DengonError> {
+        let public = self.identity.public();
+        let payload = Announce {
+            peer_id: self.peer_id,
+            pub_static: public.pub_static(),
+            pub_sign: public.pub_sign().to_bytes(),
+            pseudo: public.pseudo().to_string(),
+            ledger_height: u64::try_from(self.ledger.len()).unwrap_or(u64::MAX),
+            caps: 0,
+        }
+        .encode()
+        .map_err(|_| DengonError::Internal)?;
+        self.encode_signed_broadcast(
+            PacketType::Announce,
+            ANNOUNCE_LINK_TTL,
+            now.wall_ms,
+            payload,
+        )
+        .ok_or(DengonError::Internal)
     }
 
     /// Fait persister les nouveaux messages/conversations dans `store` en
@@ -399,8 +452,24 @@ impl Node {
     /// permet de lui sceller une enveloppe (Noise `X`) avant même toute
     /// connexion directe (voir [`DengonError::UnknownPeer`], levée quand ni
     /// un contact ni une session ne fournissent cette clé).
+    ///
+    /// Ouvre aussi la conversation avec lui, vide (US-306) : sans elle,
+    /// l'UI, qui ne liste que les conversations, n'offrait aucun moyen
+    /// d'écrire un premier message à un contact tout juste appairé. Le
+    /// pseudo d'une conversation déjà ouverte par un message reçu avant
+    /// l'appairage (pseudo inconnu, donc vide) est complété.
     pub fn add_contact(&mut self, contact: PublicIdentity) {
         let peer_id = contact.peer_id();
+        let conv_id = conv_id_of(self.peer_id, peer_id);
+        let conv_is_new = !self.conversations.contains_key(&conv_id);
+        self.conversations
+            .entry(conv_id)
+            .or_insert_with(|| ConversationRecord {
+                peer_id,
+                ..ConversationRecord::default()
+            })
+            .peer_pseudo = contact.pseudo().to_string();
+        self.persist_conversation(conv_id, peer_id, conv_is_new);
         self.peers.entry(peer_id).or_default().identity = Some(contact);
     }
 
@@ -507,6 +576,7 @@ impl Node {
     fn encode_signed_broadcast(
         &self,
         packet_type: PacketType,
+        ttl: u8,
         wall_ms: u64,
         payload: Vec<u8>,
     ) -> Option<Vec<u8>> {
@@ -515,7 +585,7 @@ impl Node {
             header: Header {
                 version: PROTO_VERSION,
                 packet_type,
-                ttl: TTL_DEFAULT,
+                ttl,
                 flags: Flags::SIGNED,
                 timestamp_ms: wall_ms,
                 sender_id: self.peer_id,
@@ -643,7 +713,12 @@ impl Node {
             sealed_payload.extend_from_slice(&epoch_day.to_be_bytes());
             sealed_payload.extend_from_slice(&ciphertext);
             let bytes = self
-                .encode_signed_broadcast(PacketType::SealedEnvelope, now.wall_ms, sealed_payload)
+                .encode_signed_broadcast(
+                    PacketType::SealedEnvelope,
+                    TTL_DEFAULT,
+                    now.wall_ms,
+                    sealed_payload,
+                )
                 .ok_or(DengonError::Internal)?;
             (DeliveryKind::Envelope, bytes)
         };
@@ -787,6 +862,7 @@ impl Node {
             if let Ok(session) = handshake.into_session() {
                 self.peers.entry(from).or_default().crypto = Some(PeerCrypto::Established(session));
                 self.redeliver_pending_envelopes(from, now.wall_ms);
+                self.flush_pending_acks(from, now.wall_ms);
             }
             return;
         }
@@ -803,6 +879,11 @@ impl Node {
         let vient_de_finir = handshake.is_finished();
         let bytes = self.encode_unsigned(PacketType::NoiseHs, from, now.wall_ms, reply);
 
+        // Le message 3 part AVANT tout ce que la session débloque : le
+        // répondeur doit la finir avant de recevoir un premier ciphertext.
+        if let Some(bytes) = bytes {
+            self.outgoing.push((from, bytes));
+        }
         if vient_de_finir {
             if let Some(PeerCrypto::Handshaking(handshake)) =
                 self.peers.get_mut(&from).and_then(|p| p.crypto.take())
@@ -811,11 +892,9 @@ impl Node {
                     self.peers.entry(from).or_default().crypto =
                         Some(PeerCrypto::Established(session));
                     self.redeliver_pending_envelopes(from, now.wall_ms);
+                    self.flush_pending_acks(from, now.wall_ms);
                 }
             }
-        }
-        if let Some(bytes) = bytes {
-            self.outgoing.push((from, bytes));
         }
     }
 
@@ -934,6 +1013,57 @@ impl Node {
             sent_ms: m.sent_ms,
             status: MessageStatus::Delivered,
         }));
+
+        // Un doublon (rejeu de l'expéditeur) est ré-accusé : c'est souvent
+        // que le premier accusé s'est perdu (`synthese/07` §4).
+        self.queue_ack(
+            from,
+            AckFrame {
+                msg_uuid: m.msg_uuid,
+                status: AckStatus::Delivered,
+                at_ms: wall_ms,
+            },
+            wall_ms,
+        );
+    }
+
+    /// Met un accusé en attente pour `author` et l'envoie tout de suite si
+    /// une session existe déjà avec lui.
+    fn queue_ack(&mut self, author: PeerId, ack: AckFrame, wall_ms: u64) {
+        let pending = self.pending_acks.entry(author).or_default();
+        if pending.len() >= PENDING_ACKS_MAX {
+            pending.remove(0);
+        }
+        pending.push(ack);
+        self.flush_pending_acks(author, wall_ms);
+    }
+
+    /// Chiffre dans la session avec `peer_id` les accusés qui l'attendaient.
+    /// Sans session établie, ils restent en attente.
+    fn flush_pending_acks(&mut self, peer_id: PeerId, wall_ms: u64) {
+        let Some(PeerCrypto::Established(_)) =
+            self.peers.get(&peer_id).and_then(|p| p.crypto.as_ref())
+        else {
+            return;
+        };
+        let Some(acks) = self.pending_acks.remove(&peer_id) else {
+            return;
+        };
+        for ack in acks {
+            let plaintext = app::encode_app_frame(&AppFrame::Ack(ack));
+            let Some(PeerCrypto::Established(session)) =
+                self.peers.get_mut(&peer_id).and_then(|p| p.crypto.as_mut())
+            else {
+                unreachable!("session vérifiée juste au-dessus")
+            };
+            let Ok(ciphertext) = session.encrypt(&plaintext) else {
+                continue; // accusé perdu : le rejeu de l'expéditeur en redemandera un
+            };
+            if let Some(bytes) = self.encode_unsigned(PacketType::Ack, peer_id, wall_ms, ciphertext)
+            {
+                self.outgoing.push((peer_id, bytes));
+            }
+        }
     }
 
     fn apply_ack(&mut self, ack: AckFrame, wall_ms: u64) {
@@ -1148,6 +1278,28 @@ impl Node {
             );
         }
     }
+}
+
+/// Vérifie l'`ANNOUNCE` d'un voisin et rend sa carte de contact.
+///
+/// Refusé si ce n'est pas un `ANNOUNCE`, si la signature Ed25519 ne se
+/// vérifie pas avec le `pub_sign` annoncé, ou si le `peerID` du payload
+/// ne vaut pas à la fois `sender_id` et `SHA-256(pub_static)[0..8]`. Un
+/// voisin ne peut donc pas se faire passer pour un autre `peerID` sans en
+/// avoir la clé statique — que le handshake `XX` qui suit prouvera.
+///
+/// Ni le TTL ni l'horodatage ne sont vérifiés : c'est une annonce de lien,
+/// lue une fois à l'ouverture, pas un paquet relayé.
+///
+/// # Errors
+///
+/// [`DengonError::Internal`] pour tout refus (le détail n'est pas exposé).
+pub fn parse_announce(bytes: &[u8]) -> Result<PublicIdentity, DengonError> {
+    let packet = codec::decode(bytes).map_err(|_| DengonError::Internal)?;
+    let payload = Announce::verify(&packet, bytes).map_err(|_| DengonError::Internal)?;
+    let pub_sign = VerifyingKey::from_bytes(&payload.pub_sign)?;
+    PublicIdentity::new(&payload.pseudo, payload.pub_static, pub_sign)
+        .map_err(|_| DengonError::Internal)
 }
 
 fn hex_string(bytes: &[u8]) -> String {
@@ -1404,10 +1556,199 @@ mod tests {
     }
 
     #[test]
+    fn un_contact_ajoute_a_sa_conversation_vide_nommee() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+
+        // Bob écrit avant d'être appairé : conversation au pseudo inconnu.
+        bob.add_contact(alice.public_identity());
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(70));
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(71));
+        pomper(&mut alice, &mut bob, T0);
+        bob.send_message(alice.peer_id(), "coucou", now(T0), rng(72))
+            .unwrap();
+        pomper(&mut alice, &mut bob, T0);
+        assert_eq!(alice.list_conversations()[0].peer_pseudo, "");
+
+        // L'appairage complète le pseudo, sans dupliquer la conversation.
+        alice.add_contact(bob.public_identity());
+        let conversations = alice.list_conversations();
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(conversations[0].peer_pseudo, "bob");
+        assert_eq!(alice.list_messages(conversations[0].conv_id).len(), 1);
+
+        // Un contact tout juste appairé : conversation vide, prête à écrire.
+        let carol = noeud("carol", 3);
+        alice.add_contact(carol.public_identity());
+        let vide = alice
+            .list_conversations()
+            .into_iter()
+            .find(|c| c.peer_id == carol.peer_id())
+            .expect("conversation ouverte à l'appairage");
+        assert_eq!(vide.peer_pseudo, "carol");
+        assert!(vide.last_message.is_none());
+        assert_eq!(vide.unread_count, 0);
+    }
+
+    #[test]
     fn conversation_sans_message_encore_recu_est_vide_mais_pas_une_erreur() {
         let alice = noeud("alice", 1);
         assert!(alice.list_messages([0u8; 8]).is_empty());
         assert!(alice.list_conversations().is_empty());
+    }
+
+    /// Recopie les trames de chacun vers l'autre jusqu'au silence.
+    fn pomper(a: &mut Node, b: &mut Node, t: u64) {
+        for _ in 0..16 {
+            let de_a = a.take_outgoing();
+            let de_b = b.take_outgoing();
+            if de_a.is_empty() && de_b.is_empty() {
+                return;
+            }
+            for (_, bytes) in de_a {
+                b.on_bytes_received(a.peer_id(), &bytes, now(t));
+            }
+            for (_, bytes) in de_b {
+                a.on_bytes_received(b.peer_id(), &bytes, now(t));
+            }
+        }
+        panic!("les deux nœuds ne se taisent pas");
+    }
+
+    fn statut_de(node: &mut Node, msg_uuid: MsgUuid) -> Option<MessageStatus> {
+        node.poll_events(now(T0))
+            .into_iter()
+            .rev()
+            .find_map(|ev| match ev {
+                NodeEvent::StatusChanged(uuid, s) if uuid == msg_uuid => Some(s),
+                _ => None,
+            })
+    }
+
+    #[test]
+    fn announce_verifie_rend_la_carte_de_l_emetteur() {
+        let alice = noeud("alice", 1);
+        let raw = alice.announce_packet(now(T0)).unwrap();
+        let packet = codec::decode(&raw).unwrap();
+        assert_eq!(packet.header.packet_type, PacketType::Announce);
+        assert_eq!(packet.header.ttl, ANNOUNCE_LINK_TTL);
+        assert_eq!(parse_announce(&raw).unwrap(), alice.public_identity());
+    }
+
+    #[test]
+    fn announce_altere_ou_d_un_autre_type_est_refuse() {
+        let alice = noeud("alice", 1);
+        let raw = alice.announce_packet(now(T0)).unwrap();
+
+        // Un octet du pseudo modifié : la signature ne tient plus.
+        let mut altere = raw.clone();
+        let pseudo_at = crate::protocol::consts::HEADER_LEN_BROADCAST + PEER_ID_LEN + 32 + 32 + 1;
+        altere[pseudo_at] ^= 0x01;
+        assert_eq!(parse_announce(&altere), Err(DengonError::Internal));
+
+        // Signature altérée.
+        let mut signature = raw.clone();
+        let dernier = signature.len() - 1;
+        signature[dernier] ^= 0x01;
+        assert_eq!(parse_announce(&signature), Err(DengonError::Internal));
+
+        // Un TTL remonté reste accepté : il n'est pas signé (codec).
+        let mut ttl = raw;
+        ttl[codec::TTL_OFFSET] = 7;
+        assert!(parse_announce(&ttl).is_ok());
+
+        assert_eq!(parse_announce(&[]), Err(DengonError::Internal));
+        let enveloppe = alice
+            .encode_signed_broadcast(PacketType::SealedEnvelope, 1, T0, vec![0; 40])
+            .unwrap();
+        assert_eq!(parse_announce(&enveloppe), Err(DengonError::Internal));
+    }
+
+    #[test]
+    fn announce_signe_mais_peer_id_usurpe_est_refuse() {
+        // Mallory signe correctement un ANNOUNCE qui porte le `peerID` de
+        // bob : refusé, `peerID` ≠ SHA-256(pub_static)[0..8].
+        let mallory = noeud("mallory", 3);
+        let bob = noeud("bob", 2);
+        let public = mallory.public_identity();
+        let payload = Announce {
+            peer_id: bob.peer_id(),
+            pub_static: public.pub_static(),
+            pub_sign: public.pub_sign().to_bytes(),
+            pseudo: "bob".into(),
+            ledger_height: 0,
+            caps: 0,
+        }
+        .encode()
+        .unwrap();
+        let raw = mallory
+            .encode_signed_broadcast(PacketType::Announce, 1, T0, payload)
+            .unwrap();
+        assert_eq!(parse_announce(&raw), Err(DengonError::Internal));
+    }
+
+    #[test]
+    fn message_en_session_atteint_delivered_par_l_accuse() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(50));
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(51));
+        pomper(&mut alice, &mut bob, T0);
+
+        let msg_uuid = alice
+            .send_message(bob.peer_id(), "ping", now(T0), rng(52))
+            .unwrap();
+        assert_eq!(
+            statut_de(&mut alice, msg_uuid),
+            Some(MessageStatus::InFlight)
+        );
+        pomper(&mut alice, &mut bob, T0);
+        assert_eq!(
+            statut_de(&mut alice, msg_uuid),
+            Some(MessageStatus::Delivered)
+        );
+    }
+
+    #[test]
+    fn message_par_enveloppe_est_accuse_quand_la_session_s_etablit() {
+        let mut alice = noeud("alice", 1);
+        let mut bob = noeud("bob", 2);
+        alice.add_contact(bob.public_identity());
+
+        // Écrit hors ligne : part en enveloppe à la connexion, avant la fin
+        // du handshake. Bob n'a pas encore de session pour accuser.
+        let msg_uuid = alice
+            .send_message(bob.peer_id(), "hors ligne", now(T0), rng(60))
+            .unwrap();
+        alice.on_peer_connected(bob.peer_id(), now(T0), rng(61));
+        bob.on_peer_connected(alice.peer_id(), now(T0), rng(62));
+        pomper(&mut alice, &mut bob, T0);
+
+        assert!(bob.pending_acks.is_empty(), "accusé envoyé à la session");
+        assert_eq!(
+            statut_de(&mut alice, msg_uuid),
+            Some(MessageStatus::Delivered)
+        );
+    }
+
+    #[test]
+    fn accuses_en_attente_sont_bornes() {
+        let mut bob = noeud("bob", 2);
+        let alice = [7u8; PEER_ID_LEN];
+        for i in 0..(PENDING_ACKS_MAX + 5) {
+            let mut msg_uuid = [0u8; 16];
+            msg_uuid[0] = u8::try_from(i).unwrap();
+            let ack = AckFrame {
+                msg_uuid,
+                status: AckStatus::Delivered,
+                at_ms: T0,
+            };
+            bob.queue_ack(alice, ack, T0);
+        }
+        let attente = &bob.pending_acks[&alice];
+        assert_eq!(attente.len(), PENDING_ACKS_MAX);
+        assert_eq!(attente[0].msg_uuid[0], 5, "les plus anciens sont oubliés");
     }
 
     #[test]

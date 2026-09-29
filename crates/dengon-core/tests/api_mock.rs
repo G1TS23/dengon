@@ -252,3 +252,42 @@ fn statut_progresse_vers_in_flight_a_l_envoi() {
     });
     assert_eq!(status, Some(MessageStatus::InFlight));
 }
+
+/// Scénario 1 du DoD (`synthese/10` §3.1) : en attente → parti → distribué,
+/// le dernier pas porté par l'`Ack` que Bob renvoie dans la session (US-306).
+#[test]
+fn statut_atteint_delivered_quand_bob_accuse() {
+    let mut alice = Participant::new("alice", 40);
+    let mut bob = Participant::new("bob", 41);
+    let mut now = T0;
+    alice.node.add_contact(bob.node.public_identity());
+    connecter_et_stabiliser(&mut alice, &mut bob, &mut now, 6);
+    let _ = alice.node.poll_events(Now::new(now, now));
+
+    let msg_uuid = alice
+        .node
+        .send_message(bob.peer_id, "ping", Now::new(now, now), rng(6))
+        .expect("bob connu et connecté");
+
+    for _ in 0..3 {
+        now += 5;
+        alice.pomper_sortie();
+        alice.transmettre_a(&mut bob, now);
+        bob.pomper_sortie();
+        bob.transmettre_a(&mut alice, now);
+    }
+
+    let statuts: Vec<MessageStatus> = alice
+        .node
+        .poll_events(Now::new(now, now))
+        .into_iter()
+        .filter_map(|ev| match ev {
+            NodeEvent::StatusChanged(uuid, status) if uuid == msg_uuid => Some(status),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        statuts,
+        vec![MessageStatus::InFlight, MessageStatus::Delivered]
+    );
+}
