@@ -231,6 +231,32 @@ jobs:
             "${IDF_IMAGE}" \
             idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build
 
+      # --- 2 ter. Tests Unity de l'export vers le dashboard (US-309) --------
+      # components/dengon_ship_core : buffer ring borné (mémoire jamais
+      # dépassée, FIFO, écrasement compté, scénario « hors ligne puis retour
+      # du réseau ») et politique de réessai selon le statut HTTP. C pur.
+      - name: Tests Unity de l'export (cible linux)
+        if: steps.filtre.outputs.firmware == 'true'
+        run: |
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            -w /repo/firmware/dengon-relay/components/dengon_ship_core/test_apps \
+            "${IDF_IMAGE}" \
+            sh -ec 'idf.py --preview set-target linux && idf.py build && ./build/test_dengon_ship_core.elf'
+
+      - name: Compiler les tests Unity de l'export pour la carte (cible esp32)
+        if: steps.filtre.outputs.firmware == 'true'
+        run: |
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            -w /repo/firmware/dengon-relay/components/dengon_ship_core/test_apps \
+            "${IDF_IMAGE}" \
+            idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build
+
       # --- 3. Empreinte mémoire ---------------------------------------------
       # Pas de seuil bloquant : sur un squelette le chiffre n'a pas de sens. Il
       # sert de point de départ au budget mémoire de
