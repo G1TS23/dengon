@@ -2445,3 +2445,28 @@ _(aucun écart pour l'instant)_
   `--fail-under-lines 85` scopé à `dengon-core` dans le workflow `core`
   pour le rendre bloquant.
 - **Doc de conception mise à jour ?** sans objet.
+
+---
+
+### 2026-09-29 — `pkt.relayed` était déjà câblé en parallèle par #110 (US-308), écart précédent corrigé
+
+- **Prévu (entrée précédente, US-318, même jour) :** « `pkt.relayed` reste
+  non émis... doit être fait côté firmware (US-308, C/ESP-IDF) — hors
+  périmètre `core-rust`/`skill:rust` » ; issue #118 créée en conséquence.
+- **Réel :** `crates/dengon-core/src/relay.rs` (Rust, `no_std`, pas C —
+  autre correction : le C ne garde que radio/stockage/ordonnancement) câble
+  déjà `pkt.relayed` dans `Relay::poll_routing`, sur `Router::poll_due`,
+  avec `fanout` = nombre de cibles réellement visées. Livré par Paul dans
+  la PR #110 (US-308, branche `feat/US-308-relay`), en cours au même
+  moment que ma propre session sur US-318/US-319, sans que je le sache.
+- **Raison :** travail concurrent non coordonné en temps réel — chacun
+  travaillait sur sa branche. Pas un problème de conception, juste un
+  besoin de vérifier l'état des PR en cours avant de créer une issue de
+  suivi.
+- **Conséquences :** #118 (US-320) refermée sans travail supplémentaire,
+  référencée vers PR #110. Une fois #110 mergée, il ne restera plus aucun
+  des 4 constructeurs représentatifs de `observability` sans site d'appel
+  réel (`pkt.seen`/`msg.queued`/`peer.connected` côté `api.rs`,
+  `pkt.relayed`/`pkt.rejected`/`envelope.expired` côté `relay.rs`) — #22
+  (US-208) redeviendra fermable une fois #114/#119/#110 tous mergés.
+- **Doc de conception mise à jour ?** sans objet.
