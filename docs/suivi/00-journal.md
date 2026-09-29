@@ -10,6 +10,355 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-308 : rebase de la PR #110 sur `main` + corrections de la revue
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/dengon_relay_app.c`,
+`.github/workflows/firmware.yml` (conflit), `docs/suivi/`
+**Lot :** Lot 3 — relais ESP32
+
+### Fait
+- **Revue de la PR #110 (2 constats mineurs dans `ledger_task`)** :
+  - une entrée de journal plus grande que le lot (`LEDGER_BATCH`, 4 096 o)
+    bloquait la file en silence : `dengon_relay_pop_ledger` rend
+    `BUFFER_TOO_SMALL` sans retirer l'entrée et la boucle sortait avec
+    `used == 0`. Elle est maintenant retirée dans un tampon alloué à sa
+    taille (même repli que `flush_outgoing`) et écrite seule ; un échec
+    d'allocation est journalisé en `ESP_LOGE` (l'entrée reste en file pour
+    le réveil suivant) ;
+  - un lot rempli **exactement** sortait sur la condition du `while` avec
+    `st == OK` et la tâche attendait `LEDGER_WAIT_MS` (2 s) alors qu'il
+    restait des entrées : on relance maintenant un tour dès que le lot est
+    plein (`used == sizeof(lot)`) ou trop petit pour l'entrée suivante.
+  - écriture d'un lot extraite dans `persister_lot()` (commune aux deux
+    chemins).
+- **Rebase** : #108 (US-307) a été mergée en squash (`11ac5b5`) ; branche
+  rejouée avec `git rebase --onto origin/main 14bc99e` pour retirer le
+  commit US-307 hérité.
+  - Conflit dans `.github/workflows/firmware.yml` : `main` garde l'ancien
+    bloc « 4. `libdengon_core.a` » filtré par `core_ffi` ; la PR le fusionne
+    dans le job `firmware` → bloc de `main` supprimé, version de la PR gardée.
+  - Fusion `union` du suivi : 7 lignes anciennes ré-ajoutées en bas de
+    `modules/_index.md` supprimées, lignes `firmware-relay` et
+    `dengon-core-ffi` mises à jour sur place ; les trois entrées US-308 du
+    journal, restées sous celles d'US-302/US-214, remontées en tête.
+- `02-avancement.md` : mentions « empilée sur #108 » et « CI jamais
+  exécutée » corrigées (la revue constate 9 jobs verts, dont `firmware`).
+
+### Pourquoi / décisions
+- Allocation dynamique plutôt qu'un lot statique plus grand : une entrée peut
+  atteindre ~8 Ko (`name` + `payload` à 4 096 o chacun), et agrandir le
+  tampon statique coûterait cette RAM en permanence pour un cas aujourd'hui
+  jamais déclenché (seul `relay.boot`, petit, passe par
+  `dengon_relay_record_event`).
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rien de nouveau (le comportement de `union` est déjà consigné).
+
+### État après cette session
+- Branche à jour de `main`, 9 commits propres à US-308 + ce correctif.
+- Fiche(s) module mise(s) à jour : non (comportement externe inchangé).
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ git rebase --onto origin/main 14bc99e      → 1 conflit (firmware.yml), résolu
+$ cargo fmt --all -- --check ; cargo clippy --workspace --all-targets --all-features -- -D warnings
+(aucune sortie)
+$ cargo test --workspace
+500 passed, 0 failed
+$ firmware/dengon-relay/tools/build_core.sh   (cargo +esp)
+libdengon_core.a 1 580 290 o
+$ docker espressif/idf:v5.5.5 … idf.py -B build-us308 build
+Project build complete — 0xf2960 o, 53 % libre (aucun avertissement de compilation C)
+```
+- **Non vérifié :** le nouveau chemin `ledger_task` n'a pas tourné sur carte
+  (pas d'entrée > 4 096 o à produire aujourd'hui, pas de test Unity de
+  `dengon_relay_app.c`) ; relu à la main uniquement.
+
+---
+
+## 2026-09-29 — US-308 : CI de la PR #110 (espup, SonarCloud)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `.github/workflows/firmware.yml`, `firmware/dengon-relay/tools/dump_ledger.py`, `docs/suivi/`.
+**Lot :** US-308 (issue #46). Branche `feat/US-308-relay`, PR #110.
+
+### Fait
+- Conflits : aucun — `origin/main` (`e3efa95`) est déjà l'ancêtre de la
+  branche, GitHub la déclare `MERGEABLE`. Rien à rebaser.
+- Job `firmware` : premier passage réel, échec à l'étape espup sur
+  `rustup component add rust-src --toolchain esp` (« invalid value 'esp' for
+  '--toolchain': invalid toolchain name »). Ligne retirée : `espup install`
+  pose déjà `rust-src` (visible dans le log CI) ; remplacée par une
+  vérification `test -d "$(rustc +esp --print sysroot)/lib/rustlib/src/rust"`.
+- SonarCloud : note sécurité C sur le nouveau code, 2 issues
+  `pythonsecurity:S8707` (path traversal) dans `tools/dump_ledger.py` (lignes
+  `open()` de la capture et du `.bin`). Les deux chemins sont maintenant
+  résolus et refusés s'ils sortent du répertoire courant (`chemin_sur`).
+
+### Pourquoi / décisions
+- Confinement au répertoire courant plutôt qu'un « won't fix » Sonar :
+  l'outil est lancé depuis `firmware/dengon-relay/`, la capture y est écrite
+  (`tee capture.log`) ; la contrainte ne gêne pas l'usage documenté.
+
+### Écarts vs conception
+- aucun
+
+### Appris
+- rustup ≥ 1.28 refuse un nom de toolchain custom (`esp`, créée par espup)
+  pour `component add --toolchain` ; `cargo +esp` fonctionne toujours.
+
+### État après cette session
+- Correctifs locaux, pas encore poussés : le reste du job `firmware`
+  (`idf.py build`, tests Unity) n'a encore jamais tourné en CI.
+- Fiche(s) module mise(s) à jour : non
+- 01-etat-du-code.md mis à jour : non
+
+### Vérification (commandes réellement exécutées)
+```
+$ rustup component add rust-src --toolchain esp   # rustup 1.29.1, local
+error: invalid value 'esp' for '--toolchain <TOOLCHAIN>' (erreur CI reproduite)
+$ test -d "$(rustc +esp --print sysroot)/lib/rustlib/src/rust" && echo OK-src
+OK-src
+$ cargo +esp build --release --target xtensa-esp32-none-elf --locked  # dengon-core-embed
+Finished release
+$ python3 tools/dump_ledger.py cap.log -o out.bin   → 4 octets, contenu correct
+$ python3 tools/dump_ledger.py cap.log -o ../x.bin  → refusé
+$ cat cap.log | python3 tools/dump_ledger.py - -o o2.bin → 4 octets
+```
+- Quality gate SonarCloud non revérifiée (nécessite le push).
+
+---
+
+## 2026-09-29 — US-308 : essais sur carte réelle, débordement de pile corrigé
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `firmware/dengon-relay/main/dengon_relay_app.c`, `docs/suivi/`.
+**Lot :** US-308 (issue #46), suite de l'entrée précédente. Branche `feat/US-308-relay`.
+
+### Fait
+- Carte ESP32-D0WD-V3 (CH340, `48:9d:31:00:83:de`) rattachée à WSL (`usbipd
+  attach --busid 2-1`). Pixel 8 Pro piloté par l'`adb.exe` de Windows depuis
+  WSL (`usbipd bind` du téléphone demande les droits administrateur), avec
+  nRF Connect via `uiautomator` + `input tap`. Lecture série par un script
+  pyserial dans le conteneur ESP-IDF, qui envoie aussi les commandes console.
+- **Tests Unity du Store sur la carte** (`erase-flash`, puis flash de
+  `dengon_store/test_apps`) : **9 Tests 0 Failures**, dont les 4 cas
+  NVS/littlefs réels. Le « Corrupted dir pair » de littlefs au premier
+  montage suit l'effacement ; le formatage automatique le résout.
+- **Relais flashé** (`erase-flash flash`) : `relais-9309 peerID=9309e55ed9e33b46
+  (nouvelle identité)`, auto-test Noise XX sur `esp_fill_random` **OK** à
+  chaque boot. Trois `restart` par la console : `identité relue`, reprise à
+  `seq=1`, `2`, `3`. Export `ledger` → `tools/dump_ledger.py` →
+  `dengon-verify --pubkey 9182…32c0` : `{"verdict":"ok","entries":4,…,"signatures":"verified"}`.
+- **Bug trouvé sur carte** : au premier abonnement du téléphone,
+  `link_up` → signature Ed25519 de l'`ANNOUNCE` → **`stack overflow in task
+  dengon_route`** puis redémarrage. Pile de 6 Ko trop petite. Correctif : route
+  et courier (qui signe les entrées d'expiration) à 16 Ko, inventory et ledger
+  à 8 Ko ; marge minimale de chaque tâche ajoutée au bilan de santé.
+  Mesuré après correctif, marge minimale en octets : route 8 596 (≈ 7,8 Ko
+  utilisés au pic : 6 Ko ne pouvaient pas suffire), courier 14 068,
+  inventory 7 448, ledger 6 072. Tas libre : 128 Ko.
+- **Téléphone après correctif** : connexion, abonnement à `…0002` →
+  `PeerConnected`, `lien 1 ouvert`, pas de crash ; écriture `DE-AD-BE-EF` sur
+  `…0001` → compteur `illisibles=1` et entrée `pkt.rejected
+  {"reason":"malformed"}` ; déconnexion `HCI 0x13 -> Propre`, `lien 1 fermé`.
+- **Journal à travers le crash et le reflash sans effacement** : 10 entrées
+  (7 `relay.boot`, dont une avec `reset_reason:"panic"`, et le `pkt.rejected`),
+  verdict `ok`, signatures vérifiées. La chaîne a survécu au panic.
+
+### Pourquoi / décisions
+- 16 Ko plutôt qu'un réglage au plus juste : Noise/Ed25519 en Rust sur la pile
+  ; la marge se lit désormais dans le bilan de santé toutes les 30 s.
+
+### Écarts vs conception
+- Aucun nouveau. Constat : nRF Connect reste en MTU 23 (pas d'option « Request
+  MTU » dans son menu ici). L'`ANNOUNCE` du relais (174 o) n'est donc pas émis
+  vers ce pair (`trame trop grande (max 20)`) : un client doit négocier 517,
+  déjà noté en US-220 pour l'app Android.
+
+### Appris
+- `04-apprentissages.md` : pile des tâches FreeRTOS qui appellent de la
+  crypto Rust.
+
+### État après cette session
+- Critères US-308 démontrés sur carte : tâches, Store NVS + littlefs, survie à
+  `esp_restart()` (et à un panic) vérifiée par `dengon-verify`, tests Unity
+  cible verts, `CryptoResolver` / aléa matériel.
+- **Reste non démontré : 2 cartes réelles** (une seule carte disponible) et
+  un message qui traverse le relais depuis un téléphone (client pas prêt).
+
+### Vérification (commandes réellement exécutées)
+```
+$ usbipd.exe attach --wsl --busid 2-1        → /dev/ttyUSB0
+$ idf.py -p /dev/ttyUSB0 -B build-esp32 erase-flash flash   (dengon_store/test_apps)
+9 Tests 0 Failures 0 Ignored — OK
+$ idf.py -p /dev/ttyUSB0 -B build-us308 erase-flash flash ; console : relay, restart ×3, ledger
+reprise seq=0,1,2,3 ; dengon-verify → ok, 4 entrées, signatures verified
+$ (téléphone, avant correctif) → stack overflow in task dengon_route, Rebooting
+$ idf.py … build flash (sans effacement) ; téléphone : connect, notify, write DEADBEEF, disconnect
+illisibles=1 ; dengon-verify → ok, 10 entrées, signatures verified
+```
+- Pas vérifié : essai sur 2 cartes, coupure d'alimentation pendant une écriture
+  du journal (seuls des resets EN/RTS et un panic ont été subis).
+
+---
+
+## 2026-09-29 — US-308 : relais dengon sur ESP32 (tâches route/inventory/courier/ledger, Store NVS + littlefs)
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `crates/dengon-core/src/{relay.rs,relay/tests.rs,ledger.rs,protocol/codec/{announce.rs,mod.rs},sync/courier.rs,observability/mod.rs,api.rs}`,
+`crates/dengon-core-ffi/{src/relay.rs,src/rng.rs,tests/relay_c_api.rs,include/dengon_core.h,cbindgen.toml}`,
+`crates/dengon-core-embed/tests/c/host_test.c`,
+`firmware/dengon-relay/{main/,components/dengon_core_ffi/,components/dengon_store/,partitions.csv,sdkconfig.defaults,tools/}`,
+`.github/workflows/firmware.yml`, `.gitignore`, `docs/suivi/`.
+**Lot :** US-308 (issue #46). Branche `feat/US-308-relay`, **empilée sur la PR
+#108 (US-307, pas encore mergée)** et rebasée localement sur `main` (e3efa95).
+
+### Fait
+- **Vérification préalable « main peut-il accueillir US-308 ? » : non, pas
+  seul.** US-307 (#45) n'est pas mergée : la PR #108 est marquée
+  `CONFLICTING` par GitHub (un `git merge-tree` local est pourtant propre), n'a
+  aucune revue et ses jobs Actions n'ont jamais tourné. Elle n'exportait que
+  2 fonctions C et ne liait pas le `.a` au firmware. US-220 (#34) est codée
+  mais l'essai sur 2 cartes n'a pas été fait. Choix : empiler la branche sur
+  #108.
+- **`ledger` : reprise par l'ancre.** Ajout de `Ledger::resume(Anchor, signer)`,
+  `anchor()` et `take_entries()` (`crates/dengon-core/src/ledger.rs`). Le
+  journal ne garde en RAM que les entrées pas encore persistées ; après un
+  redémarrage, seule l'ancre (`seq` suivante + hash de la dernière) est
+  relue. `verify_chain` s'ancre sur la base de reprise.
+- **Codec `ANNOUNCE`** (`protocol/codec/announce.rs`, nouveau) : encode/decode
+  du payload de `synthese/05` §4, et `Announce::verify` (peerID =
+  `SHA-256(pub_static)[0..8]` = `sender_id`, signature Ed25519). Aucun code ne
+  décodait `ANNOUNCE` jusqu'ici.
+- `protocol::codec::msg_id` extrait de `api.rs` (qui l'appelle désormais) ;
+  `sync::courier::{encode,decode}_tag_list` pour `ENVELOPE_OFFER/REQUEST`.
+- **Module `dengon_core::relay`** (`no_std`, nouveau) : `Relay<L>` câble
+  `Router` + `Inventory` + `Courier` + `Ledger<SigningKey>` pour un nœud qui
+  transporte sans lire. Il s'annonce à chaque lien, lie un lien au premier
+  `ANNOUNCE` authentique, puis envoie `INVENTORY` + `ENVELOPE_OFFER`. Il
+  relaie les paquets `RELAY_OK` (TTL réécrit), dépose les
+  `SEALED_ENVELOPE` et les remet sur `ENVELOPE_REQUEST` signé. Il journalise
+  `peer.announce_seen`, `pkt.relayed`, `pkt.rejected`, `envelope.*` et
+  `relay.overloaded`. Il apprend l'heure murale d'un `ANNOUNCE` quand la
+  sienne est inconnue. Ses propres paquets tiennent en une trame BLE
+  (≤ 514 o : 13 msgID par `INVENTORY`, 26 tags par offre). `poll` est
+  découpé en `poll_routing` / `poll_inventory` / `poll_courier`.
+- **FFI** (`dengon-core-ffi/src/relay.rs`) : handle opaque `DengonRelay`,
+  sorties retirées une à une (`dengon_relay_pop_outgoing`/`_pop_ledger`,
+  `BUFFER_TOO_SMALL` sans perte), curseur, événements du firmware, compteurs.
+  **Aléa Noise** (`src/rng.rs`) : `PlatformRng` (`RngCore + CryptoRng` sur une
+  fonction C) et `dengon_noise_selftest(fill)` qui fait un handshake `XX`
+  complet et un aller-retour chiffré.
+- `cbindgen` : variantes d'énumération **préfixées** (`DENGON_STATUS_OK`…),
+  car `OK` nu entre en collision avec `rom/ets_sys.h` d'ESP-IDF (erreur trouvée
+  au premier lien). `host_test.c` de #108 est adapté.
+- **Firmware** :
+  - `components/dengon_core_ffi` lie `libdengon_core.a` (`add_prebuilt_library`) ;
+  - `components/dengon_store` : `dengon_ledger_file.c` (C pur : reprise après
+    écriture interrompue, append + fsync, anneau de 2 fichiers) et
+    `dengon_store.c` (montage littlefs, secrets et curseur en NVS,
+    réconciliation de l'ancre au boot) ;
+  - `main/dengon_relay_app.c` : tâches `route` (10 ms), `inventory` (1 s),
+    `courier` (30 s, avec un bilan de santé) et `ledger` (notifiée) autour du
+    handle sous mutex ; `relay.boot` journalisé ; auto-test Noise sur
+    `esp_fill_random` au démarrage ;
+  - `main/dengon_console.c` : commandes `ledger` (export hex), `restart` et
+    `relay` ;
+  - `partitions.csv` (factory 2 Mo, littlefs 256 Ko). La démo US-220 passe à
+    `n` par défaut et remplace le relais quand elle est activée.
+- `tools/build_core.sh` (produit le `.a`) et `tools/dump_ledger.py` (capture
+  série → `.bin` pour `dengon-verify`).
+- **CI `firmware.yml`** :
+  - la compilation xtensa passe avant `idf.py build` ;
+  - le filtre `core_ffi` est fusionné dans `firmware` ;
+  - tests Unity du Store sur `linux` et build `esp32` ;
+  - timeout porté à 45 min.
+- `.gitignore` : `firmware/**/managed_components/`, `firmware/*/build-*/`.
+  Les `dependencies.lock` sont versionnés, comme l'annonçait le commentaire.
+
+### Pourquoi / décisions
+- Logique en Rust (`relay`, testable avec `cargo test`), le C ne garde que la
+  radio, le stockage et les tâches. Le module `api` (client, `std`) n'était
+  pas réutilisable, comme le disait déjà sa propre doc.
+- Pas de nouveau `CryptoResolver` : `crypto::rng::CallerResolver` accepte déjà
+  n'importe quel `RngCore + CryptoRng` ; un pointeur de fonction C suffit.
+- Pas de trait `Store` générique : la persistance reste au firmware, fidèle à
+  la doc de `ledger.rs`. Le fichier fait foi, écrit **avant** le curseur NVS.
+- Les 4 tâches ont des cadences différentes ; un seul handle, donc un mutex.
+  La file d'entrée bornée est celle du transport (`DENGON_TC_EVQ_CAP`).
+
+### Écarts vs conception
+- Consignés dans `03-ecarts-conception.md` (entrée US-308) :
+  - lien lié au premier `ANNOUNCE` ;
+  - heure apprise ;
+  - pas de réassemblage ni de fragmentation côté relais ;
+  - remise d'enveloppe considérée faite dès la mise en file ;
+  - `peer.connected`/`peer.disconnected` non journalisés (peer inconnu à la
+    connexion) ;
+  - `copy_budget`/`budget_after` à 0 ;
+  - NVS non chiffré ;
+  - `msg_log_id` du relais = `SHA-256(msgID)[0..8]`.
+- **Côté client (hors périmètre, décidé avec Paul)** : `api.rs` ne pose jamais
+  `RELAY_OK` et n'émet ni `ANNOUNCE`, ni `INVENTORY`, ni `ENVELOPE_REQUEST`.
+  Tant que le client ne suit pas, un téléphone ne peut rien faire relayer par
+  ce relais.
+
+### Appris
+- `04-apprentissages.md` :
+  - collision `OK` de `ets_sys.h` ;
+  - `bootloader_random_enable()` avant la radio ;
+  - ordre fichier → curseur pour une reprise sans rupture.
+
+### État après cette session
+- Côté hôte, tout est vert. Le firmware complet compile et se lie avec
+  `libdengon_core.a` (première compilation xtensa effective du projet).
+- **Rien n'a encore tourné sur une carte.**
+- Fiches mises à jour : `modules/firmware-relay.md`, `modules/dengon-core.md`,
+  `modules/dengon-core-ffi.md`, `modules/_index.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ cargo fmt --all -- --check ; cargo clippy --workspace --all-targets --all-features -- -D warnings
+(aucune sortie)
+$ cargo test --workspace
+dengon-core lib : 357 passed (dont relay:: 12, ledger 18, announce 5, courier tag_list 2) ; tout le workspace vert
+$ cargo test -p dengon-core-ffi
+decode_reencode 6 passed ; relay_c_api 5 passed
+$ cargo check -p dengon-core --no-default-features      → OK
+$ tools/build_core.sh   (espup 0.17.1, cargo +esp … --target xtensa-esp32-none-elf)
+libdengon_core.a 1 580 290 o
+$ RUSTUP_TOOLCHAIN=esp bash crates/dengon-core-embed/tests/c/run.sh
+vecteurs : 8 accept, 5 reject — OK
+$ docker … components/dengon_store/test_apps : set-target linux && build && ./build/test_dengon_store.elf
+5 Tests 0 Failures
+$ docker … idf.py -B build-us308 build ; idf.py size
+Project build complete — dengon-relay.bin 0xf27b0 (53 % libre sur 2 Mo), IRAM 78 %, DRAM 34 %
+$ docker … dengon_store/test_apps : set-target esp32 build → build OK (non exécuté)
+$ essai hôte jetable : journal via l'API C, redémarrage par l'ancre, export
+  au format console → tools/dump_ledger.py → cargo run -p dengon-verify -- --pubkey …
+{"verdict":"ok","entries":5,"first_seq":0,"last_seq":4,"signatures":"verified"}
+(fichier tronqué à 300 o : dengon-verify refuse, exit 65)
+```
+- **Pas vérifié (pas de carte pendant la session)** :
+  - tests Unity sur cible (`test_store_cible.c`) ;
+  - `esp_restart()` réel suivi de `dengon-verify` ;
+  - auto-test Noise sur `esp_fill_random` ;
+  - essai 2 cartes (US-220 et US-308).
+- `test_alea_materiel_non_constant` compare seulement deux tirages : c'est
+  une sonde, pas un test statistique d'entropie.
+- **CI jamais exécutée** sur cette branche ni sur #108 : l'étape `espup` en CI
+  reste non prouvée.
+- L'essai « un message traverse le relais » n'est démontré qu'en Rust
+  (`relay::tests::un_message_traverse_deux_relais`, téléphones simulés).
+
+---
+
 ## 2026-09-29 — US-302 : correctif SonarCloud sur la PR #109
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)

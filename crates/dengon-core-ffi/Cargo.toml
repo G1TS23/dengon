@@ -1,6 +1,6 @@
 [package]
 name        = "dengon-core-ffi"
-description = "Fonctions C exportées de dengon-core : décodage/ré-encodage L3 (US-307)"
+description = "Fonctions C exportées de dengon-core : décodage L3 (US-307), relais (US-308)"
 
 version.workspace      = true
 edition.workspace      = true
@@ -28,6 +28,10 @@ publish.workspace      = true
 # chemin ici est le seul moyen de ne priver QUE cette crate de `std`.
 [dependencies]
 dengon-core = { path = "../dengon-core", version = "0.1.0", default-features = false }
+# `RngCore` / `CryptoRng` pour brancher l'aléa de la plateforme
+# (`esp_fill_random`) sur Noise (US-308, `src/rng.rs`). Déjà sans `std` au
+# niveau du workspace.
+rand_core = { workspace = true }
 
 # cbindgen ne compile PAS la crate : il reparse son code source (`syn`) pour
 # produire le header. Le build script tourne donc toujours sur l'hôte, y

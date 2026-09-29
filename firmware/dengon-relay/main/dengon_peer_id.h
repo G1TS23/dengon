@@ -30,6 +30,13 @@
 esp_err_t dengon_peer_id_init(void);
 
 /**
+ * Remplace le peerID mis en cache par le vrai, dérivé de la clé statique du
+ * relais par dengon-core (US-308). dengon_peer_id_init() n'est alors plus
+ * qu'un bouchon pour la démo du transport.
+ */
+void dengon_peer_id_set(const uint8_t id[DENGON_PEER_ID_LEN]);
+
+/**
  * Recopie le peerID mis en cache. Renvoie des zéros si dengon_peer_id_init()
  * n'a pas encore réussi.
  */

@@ -15,6 +15,9 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **Déduplication / seen-set** | Mémoire des messages déjà vus (par leur `msgID`) pour ne pas les relayer en boucle. |
 | **Jitter de relais** | Petit délai aléatoire avant de relayer, pour que les doublons s'annulent. |
 | **Flood contrôlé** | Diffusion à tous les voisins, mais bornée par TTL + dedup + budget. |
+| **littlefs** | Système de fichiers pour flash, résistant aux coupures (copie sur écriture). Porte le journal chaîné du relais ESP32 (`/lfs/ledger.bin`, US-308). |
+| **Curseur (du journal)** | `seq` de la prochaine entrée + hash de la dernière, gardé en NVS. Permet au relais de reprendre sa chaîne après un redémarrage sans relire le fichier. Synonyme d'**ancre** (`ledger::Anchor`). |
+| **NVS** | *Non-Volatile Storage* d'ESP-IDF : petit magasin clé → valeur en flash. Le relais y garde ses secrets et le curseur du journal. |
 | **Sans-IO** (*sans-IO*) | Code qui décide sans faire lui-même d'entrée/sortie : l'appelant lui passe l'heure, les paquets, la graine, et exécute ses décisions. Cas de `sync::routing`. |
 | **Anti-inondation** | Plafond de nouveaux `msgID` acceptés par voisin et par minute (`FLOOD_MAX_PER_MIN_PEER = 20`) : un voisin qui inonde est ignoré jusqu'à ce que son débit retombe. |
 | **Clamp de densité** | Avec 6 voisins ou plus, le TTL relayé est plafonné à 5 : en zone dense, pas besoin d'aller loin. |

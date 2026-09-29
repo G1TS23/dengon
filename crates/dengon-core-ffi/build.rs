@@ -33,6 +33,6 @@ fn main() {
     };
     bindings.write_to_file(&out_header);
 
-    println!("cargo:rerun-if-changed=src/lib.rs");
+    println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=cbindgen.toml");
 }

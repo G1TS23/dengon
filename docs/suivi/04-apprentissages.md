@@ -49,6 +49,39 @@ Kotlin ↔ Rust (US-302) de tourner en `testDebugUnitTest`, sans téléphone ni
 **Pour aller plus loin :** <https://mozilla.github.io/uniffi-rs/latest/kotlin/gradle.html>
 
 ---
+### Pile FreeRTOS et crypto Rust : mesurer, pas deviner (US-308)
+
+Une tâche FreeRTOS a une pile **fixe**, choisie à sa création. Le code Rust
+appelé par FFI met ses variables sur cette pile. Une signature Ed25519
+(`ed25519-dalek`) plus les cadres du routeur ont pris ≈ 7,8 Ko dans
+`dengon_route`, créée avec 6 Ko : `stack overflow in task dengon_route` à la
+première ouverture de lien, invisible sur PC où les piles font des Mo. ESP-IDF
+le détecte (canari de fin de pile) et redémarre. Le correctif est double :
+plus de pile (16 Ko), et une **mesure** permanente,
+`uxTaskGetStackHighWaterMark()` (plus petite marge jamais vue, en octets sur
+ESP-IDF), imprimée dans le bilan de santé.
+
+### ESP-IDF : `OK` est déjà pris, et `esp_fill_random` n'est pas toujours aléatoire (US-308)
+
+- **Collision de noms C.** `rom/ets_sys.h`, inclus par la plupart des en-têtes
+  système d'ESP-IDF, déclare un énumérateur `OK`. Un header généré par
+  `cbindgen` avec `prefix_with_name = false` déclarait lui aussi `OK`,
+  d'où `redeclaration of enumerator 'OK'` au premier `#include` côté
+  firmware. En C, les énumérateurs partagent l'espace de noms global : un
+  header de bibliothèque doit **toujours** préfixer (`DENGON_STATUS_OK`).
+  Le test hôte (C sur PC) ne pouvait pas le voir.
+- **Aléa.** `esp_fill_random()` n'est un vrai générateur matériel que si le
+  Wi-Fi ou le Bluetooth est allumé, ou si `bootloader_random_enable()` a été
+  appelé (bruit du SAR ADC). Sinon c'est un PRNG. `bootloader_random_enable()`
+  doit être **coupé** avant d'allumer la radio. D'où l'ordre du relais :
+  secrets tirés au tout début (source ADC), puis radio, puis auto-test Noise.
+- **Reprise d'un journal chaîné après coupure.** Deux écritures (le fichier
+  et le curseur) ne sont jamais atomiques ensemble. L'ordre choisi rend
+  chaque coupure réparable : fichier fsync-é **d'abord**, curseur **ensuite**.
+  Au boot, le fichier fait foi, sa fin incomplète est tronquée, et le curseur
+  ne sert que quand le fichier est vide (après une rotation).
+  `dengon-verify` refuse un fichier tronqué (code 65) : la réparation est
+  indispensable, pas cosmétique.
 
 ### Noise `XX` : c'est l'**écriture**, pas la lecture, qui termine le handshake côté initiateur
 

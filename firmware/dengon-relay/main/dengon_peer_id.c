@@ -47,3 +47,9 @@ dengon_peer_id_get(uint8_t out[DENGON_PEER_ID_LEN])
 {
     memcpy(out, s_peer_id, DENGON_PEER_ID_LEN);
 }
+
+void
+dengon_peer_id_set(const uint8_t id[DENGON_PEER_ID_LEN])
+{
+    memcpy(s_peer_id, id, DENGON_PEER_ID_LEN);
+}

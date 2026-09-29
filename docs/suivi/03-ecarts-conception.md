@@ -38,6 +38,55 @@ et le mentionner dans l'entrée de journal.
 - **Conséquence :** les pairs qui avaient appairé l'ancienne identité doivent
   refaire l'appairage QR. À revoir quand contacts et messages seront persistés
   (la réinitialisation les rendrait alors orphelins).
+### 2026-09-29 — Relais ESP32 (US-308) : pas de `CryptoResolver`, pas de trait `Store`, heure apprise, client pas prêt
+
+- **Prévu :** l'issue #46 demande un « `CryptoResolver` custom branché sur
+  `esp_fill_random()` » et un « `Store` implémenté sur NVS + littlefs ».
+  `docs/synthese/08-relais-esp32.md` §3 prévoit un NVS **chiffré par eFuse**,
+  le journal en littlefs, et le Wi-Fi/SNTP pour l'heure. §4 prévoit un relais
+  qui dialogue avec les téléphones (`INVENTORY`, `ENVELOPE_OFFER/REQUEST`).
+- **Réel :**
+  1. **Pas de second `CryptoResolver`.** `crypto::rng::CallerResolver`
+     (US-204) remet déjà à `snow` n'importe quel `RngCore + CryptoRng`.
+     `dengon-core-ffi` fournit `PlatformRng` (au-dessus d'un pointeur de
+     fonction C) et `dengon_noise_selftest`, que le firmware appelle au boot
+     avec `esp_fill_random`, radio allumée. Les secrets du premier boot sont
+     tirés sous `bootloader_random_enable()`, avant la radio.
+  2. **Pas de trait `Store` générique.** La persistance reste au firmware,
+     comme le prévoyait la doc de `ledger.rs`. Le composant C `dengon_store`
+     met les secrets et le curseur en NVS, et le journal (anneau de 2 × 96 Ko)
+     en littlefs. `ledger::Ledger::resume` permet de reprendre depuis la seule
+     ancre.
+  3. **NVS non chiffré** (pas d'eFuse brûlé) : irréversible sur la carte,
+     trop tôt pour un prototype.
+  4. **Heure apprise d'un `ANNOUNCE` authentique** tant que celle de l'ESP32
+     est antérieure à 2024 (pas de SNTP avant US-309). Sans heure, le relais
+     ignore les paquets : le routeur les rejetterait tous en `ClockSkew`.
+     Risque : un pair légitime qui annonce une heure future peut faire
+     avancer l'horloge du relais.
+  5. **Voisin identifié par le premier `ANNOUNCE` authentique reçu sur un
+     lien** : le transport ne donne pas le `peerID`. Un `ANNOUNCE` relayé
+     arrivé en premier lierait le lien au mauvais pair.
+  6. **Pas de fragmentation ni de réassemblage côté relais** : les fragments
+     sont relayés comme des paquets ordinaires, et les paquets du relais
+     sont bornés à une trame (13 `msgID` par `INVENTORY`, 26 tags par offre).
+  7. Remise d'enveloppe **considérée faite dès la mise en file d'émission**
+     (le transport ne confirme pas la réception).
+  8. `copy_budget` / `budget_after` journalisés à 0 (Spray-and-Wait = v2).
+  9. `peer.connected` / `peer.disconnected` non journalisés : le `peerID` est
+     inconnu à la connexion. `peer.announce_seen` en tient lieu.
+  10. `msg_log_id` du relais = `SHA-256(msgID)[0..8]` : il ne voit jamais le
+      `msg_uuid`, qui est chiffré.
+  11. **Côté client (hors périmètre, décidé avec Paul)** : `api.rs` ne pose
+      jamais `RELAY_OK` et n'émet ni `ANNOUNCE`, ni `INVENTORY`, ni
+      `ENVELOPE_REQUEST`. Un téléphone ne peut donc pas encore faire relayer
+      un message par ce relais. Le critère « un message traverse le relais »
+      n'est démontré qu'en Rust, avec des téléphones simulés.
+- **Pourquoi :** tenir la logique dans `dengon-core` (testable sous
+  `cargo test`) plutôt que dans le C, et ne pas élargir US-308 à la couche
+  client.
+- **Conséquence :** une US client doit poser `RELAY_OK`, émettre `ANNOUNCE`
+  et traiter `ENVELOPE_OFFER`. US-309 doit ajouter SNTP.
 
 ---
 

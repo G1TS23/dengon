@@ -264,6 +264,9 @@ CMakeCache.txt
 # `build/` est déjà avalé par la règle générique du même nom plus haut, mais on
 # l'ancre ici pour que la règle reste lisible depuis le firmware.
 firmware/*/build/
+# Dossiers de build nommés (`idf.py -B build-xxx`), p. ex. un build carte
+# séparé d'un sdkconfig local qu'on ne veut pas écraser.
+firmware/*/build-*/
 
 # `sdkconfig` est GÉNÉRÉ à partir de sdkconfig.defaults et des réglages faits en
 # `idf.py menuconfig`. Le versionner produirait un diff illisible de ~1500
@@ -283,17 +286,18 @@ firmware/**/test_apps/sdkconfig.old
 firmware/**/test_apps/build-*/
 
 # Dépendances tirées par le gestionnaire de composants d'ESP-IDF : l'équivalent
-# de node_modules/, reconstruit et jamais édité à la main.
-firmware/*/managed_components/
+# de node_modules/, reconstruit et jamais édité à la main. `**` : les test apps
+# (US-308, dengon_store tire joltwallet/littlefs) ont les leurs.
+firmware/**/managed_components/
 
-# En revanche `dependencies.lock` DEVRA être versionné le jour où un
-# idf_component.yml apparaîtra — même raisonnement que Cargo.lock (US-104) : un
-# build embarqué non reproductible n'est pas auditable. Ne pas l'ajouter ici.
+# En revanche `dependencies.lock` EST versionné (US-308, premier
+# idf_component.yml : joltwallet/littlefs) — même raisonnement que Cargo.lock
+# (US-104) : un build embarqué non reproductible n'est pas auditable. Ne pas
+# l'ajouter ici.
 #
-# ⚠ Piège pour l'US-307 : la règle `*.a` de la section C / C++ ci-dessus
-# ignorerait silencieusement components/dengon_core_ffi/libdengon_core.a. Si
-# cette archive doit être versionnée, il faudra la ré-autoriser explicitement
-# (`!firmware/*/components/**/*.a`).
+# libdengon_core.a n'est PAS versionnée (US-308) : artefact de build de
+# crates/dengon-core-embed, lue en place par components/dengon_core_ffi
+# (voir son CMakeLists.txt). La règle `*.a` ci-dessus la couvre déjà.
 
 # ===== Bases de données / data locale =====
 *.sqlite
