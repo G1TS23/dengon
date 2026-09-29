@@ -1,9 +1,9 @@
 # ---------------------------------------------------------------------------
 # Workflow `firmware` — compilation du relais ESP32 (firmware/dengon-relay)
-# ET, depuis l'US-307, cross-compilation de `libdengon_core.a` (crate
-# `dengon-core-embed`) pour `xtensa-esp32-none-elf` — voir la section dédiée
-# en bas de ce fichier et le filtre `core_ffi`.
-# Référence : US-114 / US-307, docs/synthese/08-relais-esp32.md §3.
+# ET cross-compilation de `libdengon_core.a` (crate `dengon-core-embed`,
+# US-307) pour `xtensa-esp32-none-elf`, LIÉE au firmware depuis l'US-308 —
+# voir la section 0, qui précède donc le build ESP-IDF.
+# Référence : US-114 / US-307 / US-308, docs/synthese/08-relais-esp32.md §3.
 #
 # Le build ESP-IDF passe par l'image Docker officielle `espressif/idf`,
 # ÉPINGLÉE PAR DIGEST — exactement la même commande qu'en local (voir
@@ -66,7 +66,10 @@ jobs:
   firmware:
     name: firmware
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45 : l'installation d'espup + de la toolchain `esp` (~2 Go, ~7 min,
+    # Spike A §3) s'ajoute aux builds ESP-IDF depuis que le firmware lie
+    # libdengon_core.a (US-308).
+    timeout-minutes: 45
     steps:
       - name: Récupérer le dépôt
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,16 +83,12 @@ jobs:
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         with:
           filters: |
+            # Depuis l'US-308 le firmware LIE libdengon_core.a : un changement
+            # de dengon-core (ou de sa façade C) change le binaire flashé, il
+            # relance donc tout le job — l'ancien filtre séparé `core_ffi`
+            # (US-307) n'a plus lieu d'être.
             firmware:
               - 'firmware/**'
-              - '.github/workflows/firmware.yml'
-            # Filtre séparé (US-307) : `dengon-core-embed` n'est pas sous
-            # firmware/, et une PR qui ne touche que dengon-core (dont
-            # dépend `libdengon_core.a`) doit aussi redéclencher la
-            # cross-compilation xtensa, sans pour autant relancer les
-            # étapes ESP-IDF ci-dessus (`idf.py build`), gardées gate par
-            # `firmware` seul.
-            core_ffi:
               - 'crates/dengon-core/**'
               - 'crates/dengon-core-ffi/**'
               - 'crates/dengon-core-embed/**'
@@ -104,6 +103,47 @@ jobs:
             echo "Aucun fichier de firmware/ modifié : le build ESP-IDF est sauté."
             echo "Le check est tout de même rapporté, pour ne pas bloquer la PR."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- 0. `libdengon_core.a` pour xtensa (US-307, lié depuis US-308) ----
+      # AVANT `idf.py build` : components/dengon_core_ffi lit l'archive en
+      # place (crates/dengon-core-embed/target/…) et échoue au configure si
+      # elle manque. Compilée sur le runner (pas dans le conteneur ESP-IDF),
+      # qui la voit par le montage du dépôt entier.
+      #
+      # `espup` (~2 Go, Spike A §3, `docs/suivi/spikes/US-101-*.md`) installe
+      # la toolchain nightly forkée `esp`, seule à connaître la cible
+      # `xtensa-esp32-none-elf` (tier 3, sans std précompilée). `dengon-core-
+      # embed` est une racine de workspace séparée du reste (voir son
+      # Cargo.toml) : son propre `Cargo.lock`, sa propre toolchain déclarée
+      # par son `rust-toolchain.toml` (nightly amont, PAS `esp` — trop lourd
+      # pour la vérification hôte du job `cross-vectors`) — d'où `cargo +esp`
+      # explicite ci-dessous, qui l'emporte sur ce fichier pour cette seule
+      # invocation.
+      #
+      - name: Installer espup (toolchain xtensa)
+        if: steps.filtre.outputs.firmware == 'true'
+        run: |
+          cargo install espup --locked
+          espup install --targets esp32
+          rustup component add rust-src --toolchain esp
+
+      - name: Compiler libdengon_core.a pour xtensa-esp32-none-elf
+        if: steps.filtre.outputs.firmware == 'true'
+        working-directory: crates/dengon-core-embed
+        run: |
+          cargo +esp build --release --target xtensa-esp32-none-elf --locked
+          ls -la target/xtensa-esp32-none-elf/release/libdengon_core.a
+
+      - name: Publier libdengon_core.a (xtensa)
+        if: steps.filtre.outputs.firmware == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: libdengon_core-xtensa
+          path: |
+            crates/dengon-core-embed/target/xtensa-esp32-none-elf/release/libdengon_core.a
+            crates/dengon-core-ffi/include/dengon_core.h
+          retention-days: 14
+          if-no-files-found: error
 
       # --- 1. Compilation ---------------------------------------------------
       # -u $(id -u):$(id -g) : sans cela, build/ appartient à root et les étapes
@@ -159,6 +199,34 @@ jobs:
             "${IDF_IMAGE}" \
             idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build
 
+      # --- 2 bis. Tests Unity du Store du relais (US-308) --------------------
+      # components/dengon_store : le journal sur fichier (dengon_ledger_file.c,
+      # reprise après écriture interrompue, rotation) est du C pur testé sur
+      # `linux` ; la moitié NVS + littlefs n'existe que sur carte, ses cas
+      # (test_store_cible.c) sont compilés ici et exécutés à la main sur une
+      # carte de test (voir docs/suivi/modules/firmware-relay.md).
+      - name: Tests Unity du Store (cible linux)
+        if: steps.filtre.outputs.firmware == 'true'
+        run: |
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            -w /repo/firmware/dengon-relay/components/dengon_store/test_apps \
+            "${IDF_IMAGE}" \
+            sh -ec 'idf.py --preview set-target linux && idf.py build && ./build/test_dengon_store.elf'
+
+      - name: Compiler les tests Unity du Store pour la carte (cible esp32)
+        if: steps.filtre.outputs.firmware == 'true'
+        run: |
+          docker run --rm \
+            -u "$(id -u):$(id -g)" \
+            -e HOME=/tmp \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            -w /repo/firmware/dengon-relay/components/dengon_store/test_apps \
+            "${IDF_IMAGE}" \
+            idf.py -B build-esp32 -D SDKCONFIG=build-esp32/sdkconfig set-target esp32 build
+
       # --- 3. Empreinte mémoire ---------------------------------------------
       # Pas de seuil bloquant : sur un squelette le chiffre n'a pas de sens. Il
       # sert de point de départ au budget mémoire de
@@ -193,52 +261,5 @@ jobs:
             firmware/dengon-relay/build/bootloader/bootloader.bin
             firmware/dengon-relay/build/partition_table/partition-table.bin
             firmware/dengon-relay/build/flash_args
-          retention-days: 14
-          if-no-files-found: error
-
-      # --- 4. `libdengon_core.a` pour xtensa (US-307) ------------------------
-      # Gate séparé de `firmware` (voir le filtre `core_ffi` plus haut) : ne
-      # tourne PAS sur un simple changement de `firmware/**` qui ne touche
-      # pas dengon-core.
-      #
-      # `espup` (~2 Go, Spike A §3, `docs/suivi/spikes/US-101-*.md`) installe
-      # la toolchain nightly forkée `esp`, seule à connaître la cible
-      # `xtensa-esp32-none-elf` (tier 3, sans std précompilée). `dengon-core-
-      # embed` est une racine de workspace séparée du reste (voir son
-      # Cargo.toml) : son propre `Cargo.lock`, sa propre toolchain déclarée
-      # par son `rust-toolchain.toml` (nightly amont, PAS `esp` — trop lourd
-      # pour la vérification hôte du job `cross-vectors`) — d'où `cargo +esp`
-      # explicite ci-dessous, qui l'emporte sur ce fichier pour cette seule
-      # invocation.
-      #
-      # Ne produit PAS encore de composant ESP-IDF lié (US-308/309) : cette
-      # US prouve que l'archive compile pour la cible réelle, pas encore son
-      # intégration dans `firmware/dengon-relay`.
-      - name: Installer espup (toolchain xtensa)
-        if: steps.filtre.outputs.core_ffi == 'true'
-        run: |
-          cargo install espup --locked
-          espup install --targets esp32
-          # Pas de `rustup component add --toolchain esp` : rustup ≥ 1.28
-          # rejette ce nom de toolchain custom (« invalid toolchain name »),
-          # et espup installe déjà `rust-src` — on se contente de le vérifier.
-          test -d "$(rustc +esp --print sysroot)/lib/rustlib/src/rust"
-          cargo +esp --version
-
-      - name: Compiler libdengon_core.a pour xtensa-esp32-none-elf
-        if: steps.filtre.outputs.core_ffi == 'true'
-        working-directory: crates/dengon-core-embed
-        run: |
-          cargo +esp build --release --target xtensa-esp32-none-elf --locked
-          ls -la target/xtensa-esp32-none-elf/release/libdengon_core.a
-
-      - name: Publier libdengon_core.a (xtensa)
-        if: steps.filtre.outputs.core_ffi == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: libdengon_core-xtensa
-          path: |
-            crates/dengon-core-embed/target/xtensa-esp32-none-elf/release/libdengon_core.a
-            crates/dengon-core-ffi/include/dengon_core.h
           retention-days: 14
           if-no-files-found: error
