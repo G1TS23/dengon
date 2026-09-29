@@ -10,6 +10,21 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-29 — US-302 : correctif SonarCloud sur la PR #109
+
+**Auteur :** Paul Claverie + Claude (Opus 5.5)
+**Périmètre :** `android/app/src/main/.../identite/IdentiteLocale.kt`.
+**Lot :** US-302, PR #109.
+
+- Quality Gate en échec (« B Reliability Rating on New Code ») : deux
+  `kotlin:S899`, résultat de `File.delete()` ignoré dans `cleDuCoffre`.
+  Remplacé par `supprimerCoffre`, qui lève `IOException` si le coffre
+  illisible ne peut pas être supprimé (sinon `DengonNode.open` échouerait
+  juste après, sans cause claire).
+- **Non vérifié en local** (ni JDK ni SDK Android) : job CI `android` seul.
+
+---
+
 ## 2026-09-29 — US-214 : rendu vérifié sur appareil réel (dernier critère)
 
 **Auteur :** Oswin + Claude (Sonnet 5.5)
