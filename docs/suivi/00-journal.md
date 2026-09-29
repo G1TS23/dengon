@@ -258,6 +258,37 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
 ### Pas vu
 - Non essayé sur le OnePlus 7 Pro (Android 12) : seul le Samsung a été utilisé pour ce point.
 - Le badge « non lu » resté à 1 (entrée précédente) n'a pas été réexaminé.
+## 2026-09-29 — Issue #125/#322 : les 4 écrans de `dashboard/web` capturés avec de vraies données (PR #128)
+
+**Auteur :** Olivier Falahi + Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/assets/us-322/` (captures d'écran).
+**Lot :** suite de la PR #128, à la demande de l'utilisateur (captures pour
+la revue).
+
+### Fait
+- Pile complète (`api`+`caddy`+`web`) démarrée en local avec Docker, les 20
+  fixtures golden de `contracts/events/fixtures/` ingérées via le vrai
+  pipeline HTTP (`/api/nodes` puis `/ingest/batch`, script jetable non
+  commité, même logique que `dashboard/api/tests/conftest.py`).
+- Certificat auto-signé de l'instance Caddy `web` (et de `api`) approuvé
+  une fois manuellement dans Chrome (Claude in Chrome ne peut pas
+  interagir avec la page d'avertissement TLS — restriction volontaire de
+  Chrome sur l'automatisation CDP des interstitiels de sécurité).
+- 4 captures prises et commitées dans `docs/suivi/assets/us-322/` :
+  [`messages.jpg`](assets/us-322/messages.jpg),
+  [`reseau.jpg`](assets/us-322/reseau.jpg),
+  [`flotte.jpg`](assets/us-322/flotte.jpg),
+  [`integrite.jpg`](assets/us-322/integrite.jpg) — les 4 écrans chargent
+  bien de vraies données depuis le navigateur, via le second conteneur
+  Caddy, en HTTPS.
+- Environnement nettoyé après coup : conteneurs/volumes de test supprimés
+  (`down -v`), certificat de test retiré du trousseau macOS.
+
+### Pourquoi / décisions
+- Fixtures golden plutôt que des données inventées à la main : mêmes
+  octets que ceux déjà vérifiés ailleurs dans le projet (US-107/US-208),
+  pas de nouvelle source de vérité à maintenir juste pour une capture
+  d'écran.
 
 ### Écarts vs conception
 - Aucun.
@@ -291,6 +322,39 @@ $ android/scripts/build-ffi.sh bindings hote                → dengon.kt régé
 - Contacts perdus à chaque réinstallation / arrêt de l'app (limite déjà consignée).
 - Toujours jamais vus sur appareil : statut « Échec » + « Renvoyer » (TTL de 24 h), « Bluetooth
   coupé », permission refusée sur appareil. Accessibility Scanner non lancé.
+### Appris
+- `docker compose down -v` supprime **tous** les volumes, y compris
+  `dengon_api_db` — un oubli en plein milieu d'une session de test a fait
+  perdre les données seedées une première fois, sans erreur visible avant
+  de recharger la page (juste « Aucun message suivi »). Sans conséquence
+  ici (données de test), mais bon réflexe : reseeder après tout `down -v`.
+
+### État après cette session
+- **Fait avancer un critère d'acceptation de l'issue #125** au-delà de ce
+  que la PR #128 couvrait seule : « les 4 écrans chargent de vraies
+  données depuis un navigateur » est maintenant démontré **en local**
+  (captures à l'appui). Le critère complet de l'issue exige encore la
+  même vérification **sur le VPS réel** — toujours hors de portée sans
+  accès SSH.
+- Fiche module : pas de changement (captures seules, pas de code).
+
+### Vérification (commandes réellement exécutées)
+```
+$ docker compose --env-file .env.test up -d
+tous les services healthy
+
+$ python3 seed_demo.py   (script jetable, non commité)
+4 nœuds enregistrés, 20 batches ingérés (202)
+
+$ (Claude in Chrome) 4 captures sur https://localhost:8444/#/{,reseau,flotte,integrite}
+données réelles visibles dans chaque écran (3 messages, graphe à 5 nœuds,
+2 relais muets avec alertes, 4 nœuds en intégrité non vérifiée)
+
+$ docker compose --env-file .env.test down -v && rm .env.test
+$ security delete-certificate -c "Caddy Local Authority — 2026 ECC Root" ...
+nettoyage confirmé
+```
+
 ## 2026-09-29 — Issue #125/#322 : revue de la PR #128 (POWLAIR), bug de redéploiement corrigé
 
 **Auteur :** Olivier Falahi + Claude (Sonnet 5)
