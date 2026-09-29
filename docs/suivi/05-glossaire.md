@@ -161,3 +161,6 @@ Si un terme apparaît dans une fiche module ou le journal sans être ici, on l'a
 | **ANNOUNCE (de lien)** | Paquet `0x01`, signé : `peerID`, clés publiques, pseudo, hauteur de journal. À l'US-306, chaque côté l'écrit en première trame d'un lien BLE qui s'ouvre ; l'autre le vérifie pour savoir quel `peerID` est au bout du lien (le transport ne connaît que des `LinkId`). |
 | **Maillage (classe Android)** | `ble/Maillage.kt` (US-306) : le pont entre le transport BLE et le nœud Rust — relie chaque lien à un `peerID` par l'ANNOUNCE, pousse les trames reçues au nœud, écrit sur la radio ce qu'il produit. À ne pas confondre avec le maillage au sens réseau. |
 | **Accusé (Ack) de réception** | `AppFrame::Ack{Delivered}` renvoyé par le destinataire dans la session Noise ; c'est lui qui fait passer un message envoyé de « parti » (`InFlight`) à « distribué » (`Delivered`), US-306. |
+| **Central / Peripheral (BLE)** | Les deux rôles d'une connexion GATT : le *central* scanne et initie ; le *peripheral* annonce et sert les caractéristiques. `btleplug` ne fait que central (Spike B), d'où `dengon-node` qui ne peut pas être découvert (US-303). |
+| **`CentralRadio`** | Trait de `dengon-ble` : la radio en rôle central (scan/connexion, événements, écriture). `CentralTransport<R>` le transforme en `Transport`. |
+

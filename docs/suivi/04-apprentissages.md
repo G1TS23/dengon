@@ -1537,3 +1537,28 @@ propre callback lié à une connexion précise).
 **Où c'est utilisé :** `android/app/src/main/java/com/dengon/app/ble/transport/GattRadio.kt`
 (`RadioPeer.generation`, `pairActuel()`), corrigé en revue de la PR #98
 (US-213).
+
+### Un petit trait sous `Transport` rend la logique de liens testable sans radio (US-303)
+
+**Ce que c'est :** `btleplug` est asynchrone et demande un adaptateur ; le contrat
+`Transport` est synchrone et non bloquant. Plutôt que d'écrire `Transport`
+directement sur `btleplug`, on met dessous un trait `CentralRadio` (4 méthodes)
+et une implémentation générique `CentralTransport<R>` qui porte tout ce que le
+contrat exige (identifiants de lien, quota, ordre des événements, coupure).
+**Pourquoi dans dengon :** la suite de conformité peut ainsi tourner en CI sur
+une fausse radio ; seule la fine couche de traduction `btleplug` reste sans test
+automatique.
+**Piège / surprise :** la suite lit l'événement `PeerConnected` avec `poll` *après*
+`connecter_un_pair` : le banc ne doit pas consommer l'événement lui-même. Il
+s'appuie sur le fait que le premier `LinkId` attribué vaut 0 (compteur monotone).
+**Où c'est utilisé :** `crates/dengon-ble/src/central.rs`,
+`crates/dengon-ble/tests/conformite_central.rs`.
+
+### Windows refuse de supprimer une base SQLite encore ouverte (US-303)
+
+**Ce que c'est :** `remove_dir_all` échoue (erreur 32) tant qu'une connexion
+SQLite vit dans le même processus ; Linux l'aurait accepté.
+**Pourquoi dans dengon :** le test `etat::tests::le_peer_id_survit_a_un_redemarrage`
+doit `drop` le nœud (donc son `Store`) avant de nettoyer le dossier.
+**Où c'est utilisé :** `crates/dengon-node/src/etat.rs`.
+
