@@ -22,6 +22,7 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
+import android.os.DeadObjectException
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
@@ -194,6 +195,18 @@ class GattRadio(context: Context) : BleRadio {
         } catch (e: SecurityException) {
             Log.w(TAG, "envoi : permission retirée", e)
             false
+        } catch (e: RuntimeException) {
+            // Pile Bluetooth redémarrée sous nos pieds (Bluetooth coupé puis
+            // rallumé) : le serveur/client GATT est mort, et le framework
+            // enveloppe la `DeadObjectException` dans une RuntimeException.
+            // Vu sur Pixel 8 Pro pendant l'US-312 : l'app plantait sur un envoi
+            // depuis l'UI. Seul ce cas est rattrapé (revue PR #129) : ce lien
+            // ne reviendra pas, on jette sa file au lieu de réessayer à
+            // l'infini ; le cœur rejoue ce qui n'a pas été accusé.
+            if (e.cause !is DeadObjectException) throw e
+            Log.w(TAG, "envoi : pile Bluetooth morte, file de ${c.pair} jetée (${c.file.size} morceaux)", e)
+            c.file.clear()
+            return
         }
         if (lance) {
             c.file.removeFirst()
@@ -449,13 +462,17 @@ class GattRadio(context: Context) : BleRadio {
 
     private val rappelScan = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            val prefixe = Annonce.prefixeDistant(result.scanRecord?.getManufacturerSpecificData(Annonce.ID_FABRICANT))
-                ?: return
+            val donnees = result.scanRecord?.getManufacturerSpecificData(Annonce.ID_FABRICANT)
+            val prefixe = Annonce.prefixeDistant(donnees) ?: return
             val adresse = result.device.address
             synchronized(verrou) {
                 val c = cfg ?: return
                 if (!actif) return
-                if (!Annonce.doitInitier(c.localPeerId, prefixe)) return
+                // Vers un relais, le téléphone initie toujours (US-312) : sur
+                // carte, le relais cessait parfois de scanner et ne
+                // rappelait jamais un téléphone de préfixe plus grand. Un
+                // lien en double est ignoré par `Maillage`.
+                if (!Annonce.estRelais(donnees) && !Annonce.doitInitier(c.localPeerId, prefixe)) return
                 if (connexions.keys.any { it.adresse == adresse }) return
                 val maintenant = System.currentTimeMillis()
                 // Les adresses BLE tournent (adresses privées résolubles) : on oublie les vieilles.

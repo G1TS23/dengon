@@ -3,6 +3,7 @@ idf_component_register(
                     "test_conformite.c"
                     "test_specifique.c"
                     "test_adv.c"
+                    "test_morceaux.c"
                     "banc.c"
     INCLUDE_DIRS    "."
     REQUIRES        unity dengon_transport_core

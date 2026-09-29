@@ -24,6 +24,7 @@ app_main(void)
     run_conformite();
     run_specifique();
     run_adv();
+    run_morceaux();
     echecs = UNITY_END();
 
 #if CONFIG_IDF_TARGET_LINUX

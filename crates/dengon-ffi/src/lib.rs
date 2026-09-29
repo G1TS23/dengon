@@ -248,6 +248,17 @@ impl DengonNode {
         Ok(())
     }
 
+    /// Voir [`api::Node::on_neighbor_announced`].
+    ///
+    /// # Errors
+    ///
+    /// [`DengonError::Internal`] si `frame` n'est pas un `ANNOUNCE` valide.
+    pub fn on_neighbor_announced(&self, frame: Vec<u8>) -> Result<String, DengonError> {
+        let now = self.now();
+        let peer_id = self.lock().on_neighbor_announced(&frame, now, OsRng)?;
+        Ok(convert::peer_id_to_string(&peer_id))
+    }
+
     pub fn on_peer_disconnected(&self, peer_id: String) -> Result<(), DengonError> {
         let peer_id = convert::peer_id_from_str(&peer_id)?;
         self.lock().on_peer_disconnected(peer_id);
@@ -364,6 +375,13 @@ pub fn verification_code(local: Identity, remote: Identity) -> Result<String, De
 /// correctement signé.
 pub fn identity_from_announce(frame: Vec<u8>) -> Result<Identity, DengonError> {
     Ok(convert::identity_to_ffi(&api::parse_announce(&frame)?))
+}
+
+/// `true` si `frame` est un `ANNOUNCE` valide d'un relais
+/// ([`api::announce_is_relay`], US-312).
+#[must_use]
+pub fn announce_is_relay(frame: Vec<u8>) -> bool {
+    api::announce_is_relay(&frame)
 }
 
 #[cfg(test)]
@@ -524,6 +542,42 @@ mod tests {
             .remove(0)
             .frame;
         assert_eq!(identity_from_announce(autre), Err(DengonError::Internal));
+    }
+
+    /// US-312 : un relais se reconnaît à son ANNOUNCE (CAP_RELAY), et
+    /// `on_neighbor_announced` le lie sans handshake.
+    #[test]
+    fn announce_d_un_relais_est_reconnu_et_lie_sans_session() {
+        use dengon_core::ledger::Anchor;
+        use dengon_core::relay::{Relay, RelayConfig, RelaySecrets};
+
+        let da = Dossier::nouveau();
+        let alice = ouvrir(&da, "alice");
+        let mut relais: Relay<u64> = Relay::new(
+            &RelaySecrets {
+                dh_secret: [5; 32],
+                sign_seed: [105; 32],
+            },
+            Anchor::GENESIS,
+            RelayConfig::new("relais", 5),
+        );
+        relais.link_up(1, Now::new(1_800_000_000_000, 0));
+        let annonce_relais = relais.take_outgoing().remove(0).1;
+
+        assert!(announce_is_relay(annonce_relais.clone()));
+        assert!(!announce_is_relay(alice.announce_frame().unwrap()));
+        assert!(!announce_is_relay(vec![0; 8]));
+
+        let pair = alice.on_neighbor_announced(annonce_relais).unwrap();
+        assert_eq!(pair, convert::peer_id_to_string(&relais.peer_id()));
+        assert!(
+            alice.take_outgoing().is_empty(),
+            "aucun NOISE_HS vers un relais"
+        );
+        assert_eq!(
+            alice.poll_events(),
+            vec![NodeEvent::PeerConnected { peer_id: pair }]
+        );
     }
 
     #[test]

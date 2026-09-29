@@ -23,6 +23,50 @@ Format libre mais court. Une note = un concept. Toujours répondre à : *c'est q
 
 ---
 
+### Une règle anti-boucle symétrique suppose que les deux côtés scannent (US-312)
+
+**C'est quoi :** « le plus petit `peerID` initie » évite que deux nœuds se
+connectent l'un à l'autre en même temps. La règle ne tient que si **chaque**
+côté scanne en permanence et sait lire l'annonce de l'autre.
+**Piège / surprise :** sur carte, un Pixel de préfixe `f1d6…` n'initiait pas
+vers le relais (`9309…`), puisque c'était au relais de le faire. Or le relais :
+- ne savait pas lire l'annonce du téléphone : 6 octets au lieu de 7 ;
+- cessait de scanner quand ses 3 liens étaient pris, souvent par une liaison
+  fantôme laissée par un service Android arrêté.
+
+Résultat : A ne se reliait plus jamais, et l'accusé du scénario 3 restait sur
+le relais. Rien ne l'annonçait dans les logs : `ensure_scanning` sort en
+silence.
+**Parade :** asymétrie assumée. Le téléphone, qui scanne activement, initie
+vers le relais ; le relais n'initie que vers un autre relais.
+**Où c'est utilisé :** `Annonce.estRelais` (Android),
+`dengon_adv_relay_should_connect` (firmware).
+
+---
+
+### Deux implémentations d'un même transport doivent partager des vecteurs (US-312)
+
+**C'est quoi :** l'app Android (Kotlin, US-213) et le relais (C, US-220) ont
+chacun leur transport BLE, qui suit le même contrat `Transport` (US-105).
+Chacun passait ses propres tests, dont la suite de conformité portée 1:1. Ils
+ne pouvaient pourtant pas se parler. Android découpe chaque trame en morceaux
+avec **1 octet d'en-tête** (bit 7 = suite) ; le relais prenait chaque PDU ATT
+pour une trame entière. Le relais lisait donc l'en-tête `0x00` comme premier
+octet d'un paquet, et le téléphone rejetait les trames du relais
+(« en-tête inconnu »).
+**Piège / surprise :** la suite de conformité décrit le **comportement** (ordre,
+déconnexion, erreurs), pas le **format sur le fil**. Deux implémentations
+conformes peuvent être incompatibles. Le trou ne se voit qu'en mettant les
+deux bouts face à face, sur matériel ou en lisant les deux codes.
+**Parade :** des vecteurs partagés. `test_morceaux.c` rejoue les cas de
+`FragmentationBleTest.kt` : 50 octets découpés à 20 donnent 3 morceaux
+d'en-têtes `80 80 00`, et la trame vide donne `[00]`.
+**Où c'est utilisé :** `firmware/dengon-relay/components/dengon_transport_core/dengon_transport_core.c`
+(`dengon_tc_on_chunk`, `dengon_tc_chunk_at`),
+`android/app/src/main/java/com/dengon/app/ble/transport/FragmentationBle.kt`.
+
+---
+
 ### Relier un lien radio à un pair : l'`ANNOUNCE` signé en tête de lien
 
 **C'est quoi :** une connexion BLE ne dit pas **qui** est en face : le

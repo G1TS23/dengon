@@ -678,6 +678,33 @@ redémarrage de l'app (réappairer) — voir `03-ecarts-conception.md`.
 - Tests : `VueReseauTest`, `ConversationsViewModelTest` (+4),
   `MaillageTest` (+1). Mode éco non testable en JVM.
 
+## Relais ESP32 (US-312)
+
+- `Maillage.recevoir` (`ble/Maillage.kt`) : sur la première trame d'un lien,
+  toujours `lireAnnonce` pour le `peerID`, puis
+  **`noeud.onNeighborAnnounced(octets)`**. C'est le cœur qui décide
+  « relais » (pas de session, les enveloppes lui sont confiées) ou « pair ».
+  Le journal note `(relais)`.
+- **Option « Relais seulement »** : un interrupteur de `TransportDebugScreen`
+  (`TransportActif.ignorerLiensDirects`), lu à chaque nouveau lien. Un
+  `ANNOUNCE` qui n'est pas celui d'un relais (`announceIsRelay`) est ignoré.
+  Deux téléphones sur une table se comportent alors comme s'ils étaient hors
+  de portée l'un de l'autre. Désactivée par défaut, perdue au redémarrage.
+- Le format des morceaux BLE ne change pas côté Android : c'est le relais qui
+  s'y est aligné (`FragmentationBle.kt` fait foi).
+- Tests JVM ajoutés à `MaillageTest` :
+  - l'`ANNOUNCE` d'un relais part au nœud ;
+  - avec l'option, le lien direct est ignoré et le relais accepté.
+
+  `FauxNoeud.onNeighborAnnounced` renvoie vers `onPeerConnected`.
+  **Pas relancés sur ce poste** (pas de JDK) : la CI `android` fait foi.
+- Procédure d'essai : [`../e2e/US-312-scenarios-2-3.md`](../e2e/US-312-scenarios-2-3.md).
+- **Après l'essai sur matériel et la revue (PR #129) :**
+  - `GattRadio` initie **toujours** vers un relais (`Annonce.estRelais` : drapeau `RELAY` après le préfixe) ;
+  - `DeadObjectException` rattrapée à l'envoi, ciblée : l'app plantait après un redémarrage du Bluetooth ;
+  - `Reassembleur` gère le morceau d'abandon (`FragmentationBle.ABANDON`) et ignore la queue d'une trame trop longue ;
+  - `MainActivity`, en build debug seulement, accepte une carte par intent (`--es dengon.carte_debug`) et écrit la carte locale dans logcat, pour piloter l'essai par `adb` sans caméra.
+
 ## Pour l'oral
 
 C'est le squelette qui prouve qu'Android peut faire tourner un service qui

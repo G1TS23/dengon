@@ -1,6 +1,7 @@
 //! Tests du relais (US-308) : deux relais et des « téléphones » simulés
-//! (identités qui forgent leurs paquets à la main, faute de client qui émet
-//! `ANNOUNCE` / `ENVELOPE_REQUEST` aujourd'hui — voir la doc de module).
+//! (identités qui forgent leurs paquets à la main). Le vrai client
+//! (`api::Node`) face au relais est testé depuis l'US-312 dans
+//! `tests/relais_client.rs`.
 
 use alloc::string::ToString;
 use alloc::vec;

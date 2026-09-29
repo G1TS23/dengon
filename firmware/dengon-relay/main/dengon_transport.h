@@ -7,9 +7,11 @@
 // déconnexion brutale. C'est la surface que l'adaptateur Rust d'US-307
 // enveloppera pour faire tourner la suite de conformité contre la radio.
 //
-// Le transport ne comprend RIEN à ce qu'il transporte : octets opaques, 1 trame
-// = 1 PDU ATT (au plus ATT_MTU - 3 octets). La fragmentation protocole est
-// faite en amont par dengon-core (protocol::fragment, US-202).
+// Le transport ne comprend RIEN à ce qu'il transporte : octets opaques. Une
+// trame (≤ DENGON_TC_FRAME_MAX) part en morceaux L1 d'une PDU ATT chacun,
+// au format de l'app Android (en-tête d'un octet, bit 7 = suite ; voir
+// dengon_transport_core.h). US-220 posait 1 trame = 1 PDU ATT ; l'US-312 a
+// aligné le relais sur le format des téléphones.
 //
 // Thread-safety : toutes les fonctions sont appelables depuis n'importe quelle
 // tâche ; les callbacks NimBLE tournent dans la tâche host.

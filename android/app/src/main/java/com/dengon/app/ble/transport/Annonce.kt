@@ -47,6 +47,17 @@ object Annonce {
         return localPeerId.copyOfRange(0, PREFIXE)
     }
 
+    /** Bit « relais » de l'octet de flags qui suit le préfixe (firmware `DENGON_ADV_F_RELAY`). */
+    const val DRAPEAU_RELAIS: Int = 0x01
+
+    /**
+     * `true` si l'annonce est celle d'un relais ESP32 : préfixe puis octet de
+     * flags avec [DRAPEAU_RELAIS] (`dengon_adv_build_mfg`). Un téléphone
+     * n'annonce pas d'octet de flags (US-312).
+     */
+    fun estRelais(donnees: ByteArray?): Boolean =
+        donnees != null && donnees.size > PREFIXE && (donnees[PREFIXE].toInt() and DRAPEAU_RELAIS) != 0
+
     /** Préfixe annoncé par un pair, ou `null` si l'annonce n'est pas lisible. */
     fun prefixeDistant(donnees: ByteArray?): ByteArray? =
         donnees?.takeIf { it.size >= PREFIXE }?.copyOfRange(0, PREFIXE)

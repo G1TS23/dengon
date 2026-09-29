@@ -6,6 +6,7 @@ import com.dengon.app.ble.transport.TransportEvent
 import com.dengon.app.ble.transport.TransportException
 import com.dengon.app.ffi.DengonException
 import com.dengon.app.ffi.DengonNodeInterface
+import com.dengon.app.ffi.announceIsRelay
 import com.dengon.app.ffi.identityFromAnnounce
 
 /**
@@ -19,8 +20,10 @@ import com.dengon.app.ffi.identityFromAnnounce
  *
  * 1. `PeerConnected(lien)` → on écrit notre `ANNOUNCE` sur ce lien ;
  * 2. première trame reçue sur un lien **non identifié** → [lireAnnonce] ;
- *    valide → lien ↔ `peerID`, puis `onPeerConnected` (qui lance le
- *    handshake Noise `XX`) ; sinon la trame est jetée ;
+ *    valide → lien ↔ `peerID`, puis `onNeighborAnnounced` : le nœud lance le
+ *    handshake Noise `XX` avec un pair, ou lie un **relais ESP32** sans
+ *    session et lui confie ses enveloppes (US-312) ; sinon la trame est
+ *    jetée ;
  * 3. trame sur un lien identifié → `onBytesReceived` ;
  * 4. `PeerDisconnected(lien)` identifié → `onPeerDisconnected`.
  *
@@ -30,6 +33,11 @@ import com.dengon.app.ffi.identityFromAnnounce
  * Après chaque lot d'événements, et après chaque envoi de l'UI ([vider]),
  * `takeOutgoing` est écrit sur le lien du pair destinataire. Un pair sans
  * lien : la trame est jetée, l'outbox du cœur la rejouera à la reconnexion.
+ *
+ * Option de démonstration (US-312) : si [ignorerLiensDirects] rend `true`,
+ * un lien dont l'`ANNOUNCE` n'est pas celui d'un relais est ignoré. Deux
+ * téléphones posés côte à côte se comportent alors comme s'ils étaient hors
+ * de portée l'un de l'autre, et ne communiquent que par le relais.
  *
  * Ne consomme **pas** `pollEvents` : l'UI en reste la seule lectrice.
  *
@@ -41,6 +49,10 @@ class Maillage(
     /** Lecture de l'`ANNOUNCE` : `null` si `trame` n'en est pas un valide. */
     private val lireAnnonce: (ByteArray) -> AnnonceLue? = ::annonceLue,
     private val journal: (String) -> Unit = {},
+    /** `true` si `trame` est l'`ANNOUNCE` d'un relais (US-312). */
+    private val estRelais: (ByteArray) -> Boolean = ::announceIsRelay,
+    /** Option de démonstration, lue à chaque nouveau lien (voir la doc de classe). */
+    private val ignorerLiensDirects: () -> Boolean = { false },
 ) {
     private val pairParLien = HashMap<LinkId, String>()
     private val lienParPair = HashMap<String, LinkId>()
@@ -102,6 +114,11 @@ class Maillage(
             return
         }
         val annonce = lue.peerId
+        val relais = estRelais(octets)
+        if (!relais && ignorerLiensDirects()) {
+            journal("$lien : $annonce n'est pas un relais, lien direct ignoré (option debug)")
+            return
+        }
         if (annonce in lienParPair) {
             // Deux liens vers le même pair (course des deux rôles GATT) : le
             // premier reste le seul, le cœur n'en gère qu'un par pair.
@@ -111,8 +128,8 @@ class Maillage(
         pairParLien[lien] = annonce
         lienParPair[annonce] = lien
         lue.pseudo?.let { pseudoParPair[annonce] = it }
-        journal("$lien ↔ $annonce")
-        appelerNoeud("connexion de $annonce") { noeud.onPeerConnected(annonce) }
+        journal("$lien ↔ $annonce${if (relais) " (relais)" else ""}")
+        appelerNoeud("connexion de $annonce") { noeud.onNeighborAnnounced(octets) }
     }
 
     private fun fermer(lien: LinkId) {

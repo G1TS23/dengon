@@ -21,6 +21,11 @@ extern "C" {
 #define DENGON_ADV_COMPANY_ID 0xFFFFu
 
 #define DENGON_ADV_MFG_LEN         7
+/** Plus courte annonce lisible : Company ID + préfixe, sans octet de flags.
+    C'est le format de l'app Android (`Annonce.donnees`, 4 octets après le
+    Company ID) : sans lui, le relais ne voyait jamais un téléphone de
+    préfixe plus grand que le sien et ne l'initiait pas (US-312). */
+#define DENGON_ADV_MFG_MIN_LEN     6
 #define DENGON_ADV_PEER_PREFIX_LEN 4
 
 /* Bitfield de l'octet `flags` de l'annonce — sans rapport avec les `flags` du
@@ -63,6 +68,18 @@ bool dengon_adv_parse_mfg(const uint8_t *data, size_t len, dengon_adv_info_t *ou
 bool dengon_adv_should_initiate(const uint8_t local_peer_id[8],
                                 const uint8_t remote_prefix[DENGON_ADV_PEER_PREFIX_LEN],
                                 const uint8_t local_addr[6], const uint8_t remote_addr[6]);
+
+/**
+ * Le relais doit-il ouvrir lui-même la connexion vers ce pair ? Seulement
+ * vers un autre **relais** (flag DENGON_ADV_F_RELAY), avec la règle
+ * anti-boucle. Un téléphone initie toujours vers un relais (US-312) : si le
+ * relais l'initiait aussi, chaque téléphone occuperait deux des trois liens
+ * du relais, et un relais qui ne scanne plus (quota) ne le rappellerait
+ * jamais.
+ */
+bool dengon_adv_relay_should_connect(const uint8_t local_peer_id[8],
+                                     const dengon_adv_info_t *remote,
+                                     const uint8_t local_addr[6], const uint8_t remote_addr[6]);
 
 #ifdef __cplusplus
 }

@@ -16,6 +16,9 @@
 // `identity_from_announce`. Un lien radio ne connaît que son LinkId ; la
 // première trame de chaque côté est l'ANNOUNCE signé du nœud, qui dit à
 // l'appelant quel `peer_id` passer à `on_peer_connected`.
+// v1 complété par l'US-312 (même écart, même annonce) : `announce_is_relay`
+// et `on_neighbor_announced`. Un voisin qui annonce CAP_RELAY (relais ESP32)
+// ne doit pas recevoir de handshake XX : c'est le nœud qui trie.
 // Les types v0 (Identity, Message, Conversation, NodeEvent, MessageStatus,
 // DengonError) sont inchangés. Les fonctions libres gardent leur nom et leurs
 // arguments mais deviennent `[Throws]` : une carte `Identity` reçue de
@@ -60,6 +63,10 @@ namespace dengon {
     // son émetteur. Toute autre trame est refusée (`Internal`).
     [Throws=DengonError]
     Identity identity_from_announce(bytes frame);
+
+    // v1 (US-312) : `true` si `frame` est un ANNOUNCE valide qui porte
+    // CAP_RELAY (relais ESP32). `false` pour toute autre trame.
+    boolean announce_is_relay(bytes frame);
 };
 
 dictionary Identity {
@@ -145,6 +152,13 @@ interface DengonNode {
     // v1 : `[Throws]` ajouté, un `peer_id` mal formé est refusé.
     [Throws=DengonError]
     void on_peer_connected(string peer_id);
+
+    // v1 (US-312) : premier ANNOUNCE reçu sur un lien. Le nœud le vérifie,
+    // puis lie l'émetteur comme relais (CAP_RELAY : pas de session, les
+    // enveloppes lui sont confiées) ou comme pair (on_peer_connected). Rend
+    // le peer_id à associer au lien.
+    [Throws=DengonError]
+    string on_neighbor_announced(bytes frame);
 
     // v1 : le lien radio vers `peer_id` est tombé.
     [Throws=DengonError]

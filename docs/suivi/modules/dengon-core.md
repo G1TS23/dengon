@@ -1246,6 +1246,66 @@ chaîne arbitraire), 2 dans `relay/tests.rs`, et
 des entrées de journal (payload en JSON indenté) donnent le fichier **octet
 pour octet, signature comprise**.
 
+## Client du relais dans `api` (US-312)
+
+Avant l'US-312, un téléphone ne savait pas se servir du relais ESP32 :
+- il ouvrait une session `XX` avec lui, que le relais rejetait (`bad_sig`) ;
+- il ne lui confiait jamais d'enveloppe ;
+- il ne lui demandait pas les siennes ;
+- son accusé ne partait que par une session directe.
+
+Ce qui a changé dans `crates/dengon-core/src/api.rs` :
+- **`Node::on_neighbor_announced(annonce, now, rng)`** : vérifie l'`ANNOUNCE`
+  reçu en première trame d'un lien, puis aiguille. Avec `CAP_RELAY`, c'est
+  `on_relay_connected` ; sinon `on_peer_connected`, comme avant.
+- **`Node::on_relay_connected(relay_id, key, now)`** :
+  - `router.link_up` puis `bind_peer`, sans handshake ;
+  - `PeerState::relay_key` garde la clé de l'`ANNOUNCE` ;
+  - `hand_envelopes_to_relay` confie les enveloppes en attente, quel que soit
+    leur destinataire (`replay_candidates`, qui borne le nombre de remises
+    par pair) ;
+  - enfin, les accusés en attente sont vidés.
+- **`send_message`** : une enveloppe part aussi à chaque relais lié
+  (`hand_off` passe le message « Parti »). Une enveloppe de plus de 514 o
+  (`relay::FRAME_MAX`) n'est pas confiée au relais.
+- **`handle_envelope_offer`** : offre d'un relais lié, signature vérifiée avec
+  `relay_key`. On garde les tags qui sont les nôtres (J-1/J/J+1) et on
+  répond par un `ENVELOPE_REQUEST` signé et adressé (TTL 1,
+  `encode_signed_addressed`). Le relais remet alors l'enveloppe, qui passe
+  par `handle_sealed_envelope` comme toute autre.
+- **Accusé par enveloppe** (`flush_acks_by_envelope`) : sans session avec
+  l'auteur, l'accusé est scellé (`seal_envelope`, Noise `X`) vers sa clé
+  statique et confié aux relais liés. Cette clé vient du contact, ou de son
+  enveloppe (`PeerState::static_key`, retenue dans `handle_sealed_envelope`).
+  Aléa : `OsRng`, faute de RNG sur le chemin de réception.
+- **`announce_is_relay(bytes)`** (fonction libre) : pour l'appelant qui doit
+  savoir, sans lier, si un lien mène à un relais (option debug Android).
+
+Tests : `crates/dengon-core/tests/relais_client.rs` relie deux vrais `Node`
+à un `relay::Relay`, sans jamais de lien direct entre les deux téléphones.
+Cinq cas :
+- scénario 2, message et accusé via le relais ;
+- scénario 3, destinataire éteint puis expéditeur parti ;
+- message écrit hors de tout lien, qui part à la liaison ;
+- aucune trame rejetée par le relais ;
+- texte trop long pour une trame du relais.
+
+Contre-épreuve faite : avec l'accusé par enveloppe coupé, 3 cas sur 5
+échouent.
+
+**Après la revue de la PR #129 :**
+- **Relais lié en deux temps.** `on_relay_connected` ne fait qu'enregistrer
+  la clé. `prove_relay` promeut le relais au premier paquet signé, adressé à
+  nous et daté à ±2 min (`RELAY_PROOF_MAX_SKEW_MS`), en pratique son
+  `INVENTORY`. Seuls les relais prouvés reçoivent enveloppes et accusés
+  (`linked_relays`).
+- **Accusés conservés.** `pending_acks` contient des `PendingAck`. Un accusé
+  confié à un relais reste en attente pour la session et repart au relais
+  suivant, jusqu'à `ACK_ENVELOPE_SENDS_MAX` (3) fois.
+- `hand_off` rend un `Result`, propagé par `send_message`.
+- 3 tests de plus dans `relais_client.rs` (8 au total) : `ANNOUNCE` rejoué,
+  preuve périmée, accusé perdu en route.
+
 ## Pour l'oral
 
 Quatre livrables dans cette crate à ce stade. US-108 fige le **vocabulaire du

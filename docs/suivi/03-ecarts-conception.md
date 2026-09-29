@@ -18,6 +18,29 @@ et le mentionner dans l'entrée de journal.
 
 ---
 
+### 2026-09-29 — Relais : preuve de possession légère, initiation par le téléphone, liaisons fantômes (US-312, essai sur carte et revue PR #129)
+
+- **Prévu :**
+  - `docs/powl/03` §6.1 : règle anti-boucle symétrique, le plus petit `peerID` initie, quel que soit le type de nœud ;
+  - `synthese/06` : les pairs s'authentifient par un handshake `XX`. Rien ne dit comment un client authentifie un relais, qui n'ouvre pas de session.
+- **Réel :**
+  1. **Relais lié en deux temps** (`api::Node::prove_relay`). L'`ANNOUNCE` ne sert qu'à enregistrer la clé. Rien n'est confié au relais avant un paquet signé par cette clé, adressé à nous et daté à ±2 min de notre horloge : en pratique, l'`INVENTORY` qu'il envoie à la liaison.
+     - **Risque restant, accepté pour le prototype :** un attaquant présent qui **retransmet en direct** l'`ANNOUNCE` puis l'`INVENTORY` du vrai relais passe cette preuve. Il reçoit alors des enveloppes, toujours chiffrées : il apprend qui écrit, et peut les jeter.
+     - Même risque si un faux relais se lie avant le vrai : `Maillage` ne garde que le premier lien vers ce `peerID`, ce qui masque le vrai relais.
+     - Parade complète, non faite : un défi signé à la liaison (nonce du client, repris dans un paquet signé du relais), ou des clés de relais épinglées dans la configuration.
+  2. **Asymétrie d'initiation.** Un téléphone initie toujours vers un relais (drapeau `RELAY` de l'annonce). Un relais n'initie que vers un relais, avec la règle anti-boucle. Deux raisons :
+     - sur carte, le relais cessait de scanner et ne rappelait jamais un téléphone de préfixe plus grand ;
+     - sinon, chaque téléphone occupait deux des trois liens du relais.
+  3. **Annonce du téléphone sans octet de flags** (6 octets). Le relais l'accepte, flags à 0. Le format de `docs/powl/03` §6.1 (7 octets) n'est tenu que par le relais.
+  4. **Liaison fantôme** : à l'arrêt du service Android, le serveur GATT est fermé mais la liaison BLE reste ouverte côté relais jusqu'à la coupure du Bluetooth du téléphone. Elle occupe un lien du relais. Non corrigé : c'est la pile Android qui la tient.
+  5. **Morceau d'abandon L1** (`0x40`, 1 octet) ajouté au format de morceau, pour qu'un échec d'émission au milieu d'une trame ne corrompe pas la suivante.
+  6. **Carte de contact par intent**, en build debug seulement (`--es dengon.carte_debug`). La carte publique locale est écrite dans logcat. Cela sert à piloter l'essai par `adb` sans caméra. Ignoré hors build debuggable.
+  7. Après un redémarrage du Bluetooth, le transport Android n'est pas reconstruit (il faut arrêter puis relancer le service). L'app ne plante plus, elle jette la file du lien.
+- **Pourquoi :** trouvé pendant l'essai sur matériel et la revue de la PR #129 (Oswin).
+- **Impact :** `crates/dengon-core/src/api.rs`, `firmware/dengon-relay/components/dengon_transport_core/`, `main/transport_nimble.c`, `android/.../ble/transport/{GattRadio,Annonce,FragmentationBle}.kt`, `MainActivity.kt`.
+
+---
+
 ### 2026-09-29 — « Renvoyer » crée un nouveau message, relais reconnu par son pseudo (US-313)
 
 - **Prévu :** US-313 — bouton « Renvoyer » sur un message en échec ; écran
@@ -31,6 +54,63 @@ et le mentionner dans l'entrée de journal.
 - **Conséquence :** un pair qui choisit le pseudo `relay-x` apparaît comme
   relais (affichage seulement, aucun effet de sécurité). À remplacer par le
   champ `caps` de l'`ANNOUNCE` (synthese/09) quand il sera lu.
+### 2026-09-29 — Le téléphone se sert du relais : ce qui diffère de la conception (US-312)
+
+- **Prévu :** `synthese/07` §5 et `synthese/10` §3.1 (DoD 2 et 3). Un 3ᵉ
+  téléphone hors de portée est joint via un relais. L'enveloppe scellée est
+  déposée, offerte (`ENVELOPE_OFFER`), demandée (`ENVELOPE_REQUEST`), remise.
+  L'accusé revient « par session si possible, sinon par enveloppe »
+  (`synthese/07` §4).
+- **Réel :**
+  1. **Découpage L1 du relais aligné sur Android.** L'US-220 posait
+     « 1 trame = 1 PDU ATT, pas d'en-tête » (entrée du 2026-09-28 ci-dessous),
+     ce qui la rendait incompatible avec `FragmentationBle.kt` de l'app.
+     `dengon_transport_core` réassemble désormais les morceaux Android
+     (1 octet d'en-tête, bit 7 = suite) et découpe à l'émission. Une trame
+     vaut au plus 514 o, quel que soit le MTU. Le réassemblage est borné à
+     514 o, contre 8 192 côté Android, pour préserver le tas.
+  2. **Messages courts seulement via le relais.** Une enveloppe au palier de
+     padding 256 fait ≈ 456 o. Au palier 512, soit un texte d'environ
+     220 octets UTF-8 ou plus, elle dépasse une trame du relais : elle ne lui
+     est pas confiée et reste « En attente » tant que le destinataire n'est
+     pas lié en direct. Aucune erreur n'est levée à l'envoi
+     (`texte_trop_long_pour_une_trame_du_relais_reste_en_attente`).
+  3. **Rôle client seulement.** Le téléphone demande (`REQUEST`) ce qu'un
+     relais lui offre. Il n'offre pas lui-même les enveloppes qu'il porte pour
+     un tiers, et n'échange pas d'`INVENTORY` : l'INVENTORY du relais est
+     ignoré.
+  4. **Aléa de l'accusé par enveloppe : `OsRng`.** `on_bytes_received` ne
+     reçoit pas de RNG de l'appelant. Plutôt que de changer sa signature, et
+     donc le FFI, `dengon-node` et les tests, `api` (en `std` seulement) tire
+     `rand_core::OsRng`, comme `store` pour ses nonces. Feature `std` →
+     `rand_core/getrandom`.
+  5. **Pas de session XX avec un relais.** Un voisin `CAP_RELAY` est lié sur
+     la foi de son `ANNOUNCE` signé (`Node::on_relay_connected`), sans preuve
+     de possession de clé par handshake. Ce que le relais nous adresse est
+     vérifié avec la clé de cet `ANNOUNCE`. Un faux « relais » ne reçoit que
+     des enveloppes chiffrées, qu'un porteur tiers voit de toute façon.
+  6. **`.udl` v1 étendu** : `announce_is_relay`, `on_neighbor_announced`.
+     À annoncer en point d'équipe, comme les extensions de l'US-302 et de
+     l'US-306.
+  7. **Démo à 2 téléphones + 1 ESP32.** L'ESP32 compte comme 3ᵉ appareil du
+     scénario 2. Pour garantir « hors de portée » sur une table, une option
+     debug « Relais seulement » (écran debug transport) ignore les liens
+     vers un téléphone. Elle est désactivée par défaut et perdue au
+     redémarrage de l'app.
+  8. **Les événements des téléphones ne remontent pas au dashboard.** L'app
+     n'a pas de client HTTP : seuls les événements du relais (US-309)
+     prouvent le parcours côté dashboard.
+- **Pourquoi :** l'US-312 est le premier moment où l'app et le relais se
+  parlent. Les trous ci-dessus n'avaient été visibles qu'en lisant les deux
+  côtés ensemble. On a choisi de les combler dans l'US plutôt que d'ouvrir
+  une US du même sprint, ce qu'interdit la règle « une US ne dépend jamais
+  d'une US du même sprint ». L'estimation de 5 points est dépassée.
+- **Impact :** code dans `crates/dengon-core/src/api.rs`,
+  `firmware/dengon-relay/components/dengon_transport_core/`,
+  `android/app/src/main/java/com/dengon/app/ble/Maillage.kt`. Procédure
+  d'essai : [`e2e/US-312-scenarios-2-3.md`](e2e/US-312-scenarios-2-3.md).
+
+---
 
 ### 2026-09-29 — Clé du coffre perdue : l'identité est réinitialisée, sans écran dédié (US-302, revue PR #109)
 

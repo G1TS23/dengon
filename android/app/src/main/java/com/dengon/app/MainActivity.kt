@@ -1,8 +1,10 @@
 package com.dengon.app
 
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
@@ -42,6 +44,9 @@ class MainActivity : ComponentActivity() {
 
     private var permissionsGranted = mutableStateOf(false)
 
+    // Écran d'appairage ouvert : aussi piloté par la carte de debug (US-312).
+    private val afficherAppairage = mutableStateOf(false)
+
     // Le vrai nœud `dengon-core` (US-302), unique pour le processus.
     private val noeud get() = (application as DengonApplication).noeud
 
@@ -65,17 +70,50 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         permissionsGranted.value = BlePermissions.allGranted(this)
+        if (debuggable) {
+            Log.i(TAG_DEBUG, "carte locale : ${appairage.etat.value.monQr}")
+        }
+        traiterCarteDebug(intent)
 
         setContent {
             DengonApp(
                 conversationsViewModel = conversationsViewModel,
                 appairage = appairage,
+                afficherAppairage = afficherAppairage,
                 permissionsGranted = permissionsGranted,
                 onRequestPermissions = { requestPermissions.launch(BlePermissions.required()) },
                 onStartService = ::startMeshService,
                 onStopService = ::stopMeshService,
             )
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        traiterCarteDebug(intent)
+    }
+
+    private val debuggable: Boolean
+        get() = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    /**
+     * Essai sur matériel sans caméra (US-312), **build debug seulement** :
+     * `adb shell am start -n com.dengon.app/.MainActivity --es dengon.carte_debug
+     * 'dengon:v1:…'` fait comme si ce QR venait d'être scanné. Le code à
+     * 60 chiffres s'affiche et la confirmation reste manuelle. Ignoré sur un
+     * build de release (écart consigné).
+     */
+    private fun traiterCarteDebug(intent: Intent?) {
+        if (!debuggable) return
+        val carte = intent?.getStringExtra(EXTRA_CARTE_DEBUG) ?: return
+        Log.i(TAG_DEBUG, "carte reçue par intent (debug)")
+        appairage.onQrScanne(carte)
+        afficherAppairage.value = true
+    }
+
+    private companion object {
+        const val EXTRA_CARTE_DEBUG = "dengon.carte_debug"
+        const val TAG_DEBUG = "dengon-appairage"
     }
 
     private fun startMeshService() {
@@ -96,6 +134,7 @@ class MainActivity : ComponentActivity() {
 private fun DengonApp(
     conversationsViewModel: ConversationsViewModel,
     appairage: AppairageViewModel,
+    afficherAppairage: MutableState<Boolean>,
     permissionsGranted: MutableState<Boolean>,
     onRequestPermissions: () -> Unit,
     onStartService: () -> Unit,
@@ -105,7 +144,7 @@ private fun DengonApp(
     var serviceRunning by remember { mutableStateOf(false) }
     var showSpike by remember { mutableStateOf(false) }
     var showMessagerie by remember { mutableStateOf(false) }
-    var showAppairage by remember { mutableStateOf(false) }
+    var showAppairage by afficherAppairage
     var showTransport by remember { mutableStateOf(false) }
     var showReseau by remember { mutableStateOf(false) }
 

@@ -748,6 +748,10 @@ internal interface UniffiForeignFutureCompleteVoid : com.sun.jna.Callback {
 
 
 
+
+
+
+
 // A JNA Library to expose the extern-C FFI definitions.
 // This is an implementation detail which will be called internally by the public API.
 
@@ -785,6 +789,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_dengon_ffi_fn_method_dengonnode_on_bytes_received(`ptr`: Pointer,`peerId`: RustBuffer.ByValue,`frame`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_dengon_ffi_fn_method_dengonnode_on_neighbor_announced(`ptr`: Pointer,`frame`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     fun uniffi_dengon_ffi_fn_method_dengonnode_on_peer_connected(`ptr`: Pointer,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
     fun uniffi_dengon_ffi_fn_method_dengonnode_on_peer_disconnected(`ptr`: Pointer,`peerId`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -795,6 +801,8 @@ internal interface UniffiLib : Library {
     ): RustBuffer.ByValue
     fun uniffi_dengon_ffi_fn_method_dengonnode_take_outgoing(`ptr`: Pointer,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    fun uniffi_dengon_ffi_fn_func_announce_is_relay(`frame`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     fun uniffi_dengon_ffi_fn_func_generate_identity(`pseudo`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     fun uniffi_dengon_ffi_fn_func_identity_from_announce(`frame`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -917,6 +925,8 @@ internal interface UniffiLib : Library {
     ): Unit
     fun ffi_dengon_ffi_rust_future_complete_void(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    fun uniffi_dengon_ffi_checksum_func_announce_is_relay(
+    ): Short
     fun uniffi_dengon_ffi_checksum_func_generate_identity(
     ): Short
     fun uniffi_dengon_ffi_checksum_func_identity_from_announce(
@@ -938,6 +948,8 @@ internal interface UniffiLib : Library {
     fun uniffi_dengon_ffi_checksum_method_dengonnode_local_identity(
     ): Short
     fun uniffi_dengon_ffi_checksum_method_dengonnode_on_bytes_received(
+    ): Short
+    fun uniffi_dengon_ffi_checksum_method_dengonnode_on_neighbor_announced(
     ): Short
     fun uniffi_dengon_ffi_checksum_method_dengonnode_on_peer_connected(
     ): Short
@@ -968,6 +980,9 @@ private fun uniffiCheckContractApiVersion(lib: UniffiLib) {
 
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: UniffiLib) {
+    if (lib.uniffi_dengon_ffi_checksum_func_announce_is_relay() != 38820.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_dengon_ffi_checksum_func_generate_identity() != 44488.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
@@ -999,6 +1014,9 @@ private fun uniffiCheckApiChecksums(lib: UniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_dengon_ffi_checksum_method_dengonnode_on_bytes_received() != 41877.toShort()) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_dengon_ffi_checksum_method_dengonnode_on_neighbor_announced() != 39720.toShort()) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_dengon_ffi_checksum_method_dengonnode_on_peer_connected() != 57487.toShort()) {
@@ -1387,6 +1405,8 @@ public interface DengonNodeInterface {
     
     fun `onBytesReceived`(`peerId`: kotlin.String, `frame`: kotlin.ByteArray)
     
+    fun `onNeighborAnnounced`(`frame`: kotlin.ByteArray): kotlin.String
+    
     fun `onPeerConnected`(`peerId`: kotlin.String)
     
     fun `onPeerDisconnected`(`peerId`: kotlin.String)
@@ -1552,6 +1572,19 @@ open class DengonNode: Disposable, AutoCloseable, DengonNodeInterface {
 }
     }
     
+    
+
+    
+    @Throws(DengonException::class)override fun `onNeighborAnnounced`(`frame`: kotlin.ByteArray): kotlin.String {
+            return FfiConverterString.lift(
+    callWithPointer {
+    uniffiRustCallWithError(DengonException) { _status ->
+    UniffiLib.INSTANCE.uniffi_dengon_ffi_fn_method_dengonnode_on_neighbor_announced(
+        it, FfiConverterByteArray.lower(`frame`),_status)
+}
+    }
+    )
+    }
     
 
     
@@ -2177,7 +2210,16 @@ public object FfiConverterSequenceTypeNodeEvent: FfiConverterRustBuffer<List<Nod
             FfiConverterTypeNodeEvent.write(it, buf)
         }
     }
+} fun `announceIsRelay`(`frame`: kotlin.ByteArray): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.INSTANCE.uniffi_dengon_ffi_fn_func_announce_is_relay(
+        FfiConverterByteArray.lower(`frame`),_status)
 }
+    )
+    }
+    
+
     @Throws(DengonException::class) fun `generateIdentity`(`pseudo`: kotlin.String): Identity {
             return FfiConverterTypeIdentity.lift(
     uniffiRustCallWithError(DengonException) { _status ->
