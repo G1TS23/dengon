@@ -1672,3 +1672,20 @@ qui l'épingle cesse d'exporter à cette date sans autre symptôme que des
 **Où c'est utilisé :** `firmware/dengon-relay/tools/register_relay.py`,
 `main/certs/README.md`.
 
+
+### « Arrêter » des applis actives (Android 13+) : tout le processus meurt
+
+**C'est quoi :** le bouton « Arrêter » du panneau « Applis actives » (réglages
+rapides, gestionnaire de tâches des services de premier plan) arrête l'app
+entière : processus tué, pile d'activités retirée. Ce n'est pas un simple
+`stopService`.
+**Pourquoi dans dengon :** l'hypothèse de l'US-324 était que ce bouton
+arrêtait seulement `MeshForegroundService` en laissant l'`Activity` vivante.
+L'essai du 2026-09-30 (Pixel 8 Pro Android 17, émulateur API 35) montre le
+contraire (`Got obituary of <pid>:com.dengon.app`, relance `COLD`).
+**Piège / surprise :** un service `exported="false"` ne peut pas être arrêté
+par `adb shell am stopservice` sur un téléphone de série (« Error stopping
+service ») : pour simuler un arrêt « processus vivant », il faut un émulateur
+`userdebug` et `adb root`.
+**Où c'est utilisé :** `MainActivity.kt` (switch « Recevoir en
+arrière-plan »), `ble/MeshForegroundService.kt`.

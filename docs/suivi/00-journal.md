@@ -10,6 +10,220 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-30 — US-324 : essai sur appareil des points de revue de la PR #133
+
+**Auteur :** Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/` seulement (aucun changement de code). Essais sur
+Pixel 8 Pro (Android 17, API 37) et émulateur `Medium_Phone` (API 35).
+**Lot :** US-324 (issue #132), PR #133.
+
+### Fait
+- **Point 1 (cause racine), vérifié : l'hypothèse de l'entrée précédente est
+  fausse.** Le bouton « Arrêter » des applis actives tue le processus entier,
+  sur le Pixel (build de `main` déjà installé) comme sur l'émulateur (PR).
+  Au retour, relance à froid, transport redémarré par `LaunchedEffect`,
+  switch « Activé » cohérent, **sur `main` aussi**. Le bug de #132 ne se
+  reproduit donc pas par ce geste ; le symptôme de démo relève plus
+  probablement de #131 (état du nœud perdu au kill).
+- **Scénario ciblé par la PR (service arrêté, processus vivant)**, reproduit
+  sur émulateur avec `adb root` + `am stopservice` : sur `main`, le switch
+  reste « Activé » et le 1ᵉʳ tap ne fait rien (mécanisme décrit dans #132
+  confirmé) ; avec la PR, le switch passe à « Désactivé » et 1 tap relance
+  le transport.
+- **Point 2** confirmé : Bluetooth coupé, un tap « Activer » laisse le service
+  au premier plan (notification présente) et le switch sur « Désactivé » ;
+  l'erreur `Bluetooth désactivé` n'apparaît que dans le journal transport.
+  La carte « Bluetooth coupé » de l'accueil explique néanmoins ce cas. Après
+  rallumage, rien ne redémarre seul ; 1 tap suffit.
+- **Point 3** : délai tap → changement d'état ~45–50 ms (émulateur), pas de
+  décalage perceptible.
+- Fiche `modules/android-app.md` corrigée (tableau des essais, cause racine) ;
+  apprentissage ajouté à `04-apprentissages.md`.
+
+### Pourquoi / décisions
+- Pas d'installation de la PR sur le Pixel : l'app installée est signée par
+  une autre clé debug, la désinstallation effacerait la clé Keystore du coffre
+  (`CleCoffre`) donc l'identité ; une copie `run-as` ne la sauverait pas.
+  Build de `main` déjà installé réutilisé pour le point 1, émulateur pour le
+  reste.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- « Arrêter » (applis actives) = processus tué ; `am stopservice` refusé sur
+  un service non exporté hors `adb root` (ajouté à `04-apprentissages.md`).
+
+### État après cette session
+- PR #133 : correctif valide et sans régression constatée, mais il ne traite
+  pas le symptôme de démo. Envoi de message après relance **non vérifié**
+  (un seul téléphone).
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ android/scripts/build-ffi.sh android hote   # .so antérieures à l'US-312
+$ ./gradlew :app:testDebugUnitTest            # 120 tests, 0 échec
+$ ./gradlew :app:lintDebug                    # 4 erreurs préexistantes, hors PR
+                                              # (dengon.kt généré NewApi, manifest CoarseFineLocation)
+$ ./gradlew :app:assembleDebug                # OK (PR et main)
+$ adb shell am stopservice -n com.dengon.app/.ble.MeshForegroundService
+  Pixel : « Error stopping service » ; émulateur + adb root : « Service stopped »
+$ adb logcat -d -s dengon-transport:I         # arrêté / démarré / échec du démarrage
+```
+- 1ʳᵉ exécution des tests : 1 échec (`MaillageTest`, `UnsatisfiedLinkError`
+  sur `announce_is_relay`) dû à une `target/debug/libdengon_ffi.so` périmée,
+  résolu par `build-ffi.sh hote`.
+- Non vérifié : envoi réel après relance (2ᵉ appareil absent).
+
+---
+
+## 2026-09-30 — US-324 : retours de revue d'Oswin sur la PR #133
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `docs/suivi/` seulement (pas de changement de code).
+**Lot :** US-324 (issue #132), PR #133.
+
+### Fait
+- Revue d'Oswin traitée point par point.
+- **Cohérence du suivi (4 points), corrigée** : l'entrée du 2026-09-29
+  disait « Écarts vs conception : Aucun » alors qu'une entrée avait bien
+  été ajoutée à `03-ecarts-conception.md` — contradiction corrigée. La
+  phrase « pas de fiche dédiée dans `docs/suivi/modules/` pour `android/` »
+  était fausse (`modules/android-app.md` existe et a été mis à jour par
+  cette PR) — retirée. Section « Fait » raccourcie (le détail de #131 vit
+  déjà dans son issue). Les doublons de lignes dans `02-avancement.md` /
+  `modules/_index.md` sont préexistants (pas introduits par cette PR) —
+  laissés pour un nettoyage séparé, comme suggéré par Oswin.
+- **Cause racine (point 1, pas encore vérifié empiriquement)** : réponse
+  postée sur la revue. Le bouton « Arrêter » de la section « Actif »
+  d'Android 13+ (celui que l'utilisateur a utilisé pendant la démo) est
+  documenté par Android comme arrêtant le **service de premier plan** de
+  l'app, pas le processus entier — mécanisme différent d'un swipe de l'app
+  hors des tâches récentes ou d'un « Forcer l'arrêt ». Si l'`Activity` est
+  encore résumée/en pause (l'utilisateur revient sur l'app après avoir
+  tiré le volet de notifications), le processus survit et
+  `DengonApplication`/`TransportActif` restent en mémoire — c'est le
+  scénario que corrige cette PR, distinct de #131 (kill total du
+  processus, tâche balayée + service arrêté). Cette distinction reste
+  **du raisonnement, pas une vérification sur appareil** : le test manuel
+  demandé (couper depuis le centre de notifications, revenir sur l'app,
+  vérifier switch + envoi) n'a toujours pas pu être fait dans cette session
+  (aucun téléphone connecté, `adb devices` vide). Reste bloquant avant
+  merge, comme demandé par Oswin.
+- **Point 2 (`erreur` non affiché si `demarrer()` échoue)** : noté dans
+  `modules/android-app.md` comme limite connue plutôt que corrigé — hors
+  périmètre du correctif minimal de #132 (afficher `etatTransport.erreur`
+  près de `LigneService` est une amélioration UI distincte, pas une
+  régression introduite par cette PR).
+
+### Pourquoi / décisions
+- Corrections en place plutôt qu'une nouvelle entrée qui contredit
+  l'ancienne : la branche `fix/US-324-switch-service-sync` n'est pas
+  encore mergée sur `main`, donc pas de risque de conflit avec une autre
+  PR — la règle « on ne modifie jamais une entrée passée » vise à éviter ce
+  conflit sur `main`, elle ne s'applique pas à sa propre branche non
+  fusionnée.
+
+### Écarts vs conception
+- Aucun nouveau (déjà consigné le 2026-09-29).
+
+### Appris
+- Le bouton « Arrêter » du panneau « Actif » (Android 13+) est un
+  mécanisme système distinct du swipe des tâches récentes / « Forcer
+  l'arrêt » : il vise spécifiquement le service de premier plan, pas
+  le processus. Pertinent pour différencier #131 et #132.
+
+### État après cette session
+- PR #133 : documentation corrigée, poussée. **Toujours en attente** du
+  test manuel sur appareil avant merge (bloquant, demandé par la revue).
+
+### Vérification (commandes réellement exécutées)
+```
+$ ~/Library/Android/sdk/platform-tools/adb devices -l
+List of devices attached
+(vide — aucun téléphone connecté dans cette session)
+```
+- Test manuel sur device toujours **non exécuté**.
+
+## 2026-09-29 — US-324 : réconcilier le switch « Recevoir en arrière-plan » avec l'état réel du service (issue #132)
+
+**Auteur :** Claude (Sonnet 5)
+**Périmètre :** `android/app/src/main/java/com/dengon/app/MainActivity.kt`, `docs/suivi/`.
+**Lot :** US-324 (issue #132), bug trouvé en démo.
+
+### Fait
+- Bug remonté en démo : couper le service Bluetooth `dengon` depuis les
+  notifications puis le réactiver laissait l'envoi de message cassé.
+- Analyse (2 agents d'exploration lecture-seule en parallèle) : cause
+  racine identifiée dans `MainActivity.kt` — le switch « Recevoir en
+  arrière-plan » lisait un booléen Compose purement local
+  (`var serviceRunning by remember { mutableStateOf(false) } `), jamais
+  réconcilié avec l'état réel de `MeshForegroundService`. Un arrêt externe
+  (action système sur la notification) laissait l'UI croire que le service
+  tournait encore ; le tap suivant de l'utilisateur faisait donc l'inverse
+  de ce qu'il pensait faire et ne relançait jamais `TransportActif`.
+- Deuxième bug analysé dans la même session (conversations perdues au kill
+  du process) : consigné séparément dans l'issue #131 (US-323), **non
+  traité ici**.
+- Correctif US-324 : `DengonApp` (`MainActivity.kt`) lit désormais
+  `TransportActif.etat.collectAsState().value.demarre` — un `StateFlow`
+  déjà exposé par `TransportActif` (déjà utilisé ailleurs, ex.
+  `ReseauScreen.kt`, `TransportDebugScreen.kt`) — au lieu d'un état local.
+  Le toggle du switch ne fait plus qu'appeler `onStartService`/
+  `onStopService` ; l'affichage suit désormais la vraie valeur, mise à jour
+  par `TransportActif.demarrer()`/`arreter()` (appelés depuis
+  `MeshForegroundService.onStartCommand`/`onDestroy`), quel que soit ce qui
+  a déclenché l'arrêt.
+
+### Pourquoi / décisions
+- Pas de nouveau mécanisme de synchronisation (`bindService`,
+  `ServiceConnection`, broadcast) : `TransportActif` exposait déjà un
+  `StateFlow<Etat>` avec un champ `demarre` fidèle à l'état réel du
+  transport — il suffisait que l'UI le lise au lieu de dupliquer l'état
+  dans un `remember` local. Solution la plus petite, cohérente avec le
+  reste de l'app (même pattern que les autres écrans).
+
+### Écarts vs conception
+- Entrée ajoutée à `03-ecarts-conception.md` (2026-09-29, « Android :
+  conversations non persistées, service de fond non observable ») —
+  couvre les deux bugs de démo (#131 non traité, #132 traité ici).
+
+### Appris
+- Rien de nouveau (pattern `collectAsState()` déjà établi dans le code).
+
+### État après cette session
+- US-324 / issue #132 : correctif appliqué et compilé
+  (`./gradlew :app:compileDebugKotlin`). Non testé sur matériel physique
+  dans cette session (pas d'accès au téléphone connecté au moment du
+  correctif) — à valider manuellement : couper le service depuis la
+  notification, revenir sur l'app, vérifier que le switch affiche
+  « Désactivé », le réactiver, vérifier qu'un message part.
+- US-323 / issue #131 (persistance SQLite non branchée côté Android) reste
+  ouverte, non commencée.
+- `./gradlew :app:testDebugUnitTest` : 1 échec préexistant, **non lié à ce
+  changement** — `MaillageTest > le pseudo de l'ANNOUNCE est retenu tant
+  que le lien vit` échoue avec `UnsatisfiedLinkError:
+  uniffi_dengon_ffi_checksum_func_announce_is_relay symbol not found`
+  (reproduit à l'identique avec `git stash`, donc bibliothèque native hôte
+  désynchronisée du binding Kotlin généré, indépendant du correctif
+  US-324). À investiguer séparément (rebuild de `libdengon_ffi` côté hôte).
+- Fiche module `android-app` (`modules/android-app.md`) mise à jour, nouvelle
+  section « Bugs trouvés en démo (2026-09-29) : #131/#132 ».
+
+### Vérification (commandes réellement exécutées)
+```
+$ ./gradlew :app:compileDebugKotlin -q
+(warning SDK XML sans rapport, aucune erreur)
+
+$ ./gradlew :app:testDebugUnitTest -q
+120 tests, 1 échec (MaillageTest, préexistant — confirmé par git stash)
+```
+- Test manuel sur device (couper/réactiver le service depuis la
+  notification, vérifier l'envoi de message) **non exécuté** dans cette
+  session — pas de build/installation sur le téléphone connecté effectuée
+  ici.
+
 ## 2026-09-29 — US-312 : essai sur carte et 2 téléphones, bugs trouvés, retours de revue (PR #129)
 
 **Auteur :** Paul Claverie + Claude (Opus 5.5)
