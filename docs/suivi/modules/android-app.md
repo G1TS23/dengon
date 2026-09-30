@@ -763,6 +763,29 @@ connecté au moment du correctif) — à rejouer : couper le service depuis la
 notification système, revenir sur l'app, vérifier « Désactivé », réactiver,
 vérifier l'envoi.
 
+**Limite connue signalée en revue (PR #133, Oswin)** : si
+`TransportActif.demarrer()` échoue (`TransportException`, Bluetooth coupé
+au moment du tap, etc.), seul `etatTransport.erreur` est mis à jour — le
+switch retombe silencieusement sur « Désactivé » sans qu'aucun message
+n'explique pourquoi à l'écran d'accueil (`etatTransport.erreur` n'est lu
+que par l'écran de debug transport). Comportement pas pire qu'avant ce
+correctif (un tap relance `onStartService`), mais pas amélioré non plus.
+Non corrigé ici (hors périmètre du correctif minimal de #132) : à traiter
+dans une US dédiée UX si jugé prioritaire.
+
+**Cause racine, distinction avec #131** : le bouton « Arrêter » de la
+section « Actif » du centre de notifications (Android 13+, ce que
+l'utilisateur a utilisé pendant la démo) est documenté par Android comme
+arrêtant le **service de premier plan**, pas le processus entier — à
+distinguer d'un swipe des tâches récentes ou d'un « Forcer l'arrêt » (qui,
+eux, tuent le processus et correspondent au scénario de #131). Si
+l'`Activity` est encore résumée/en pause quand l'utilisateur revient sur
+l'app, le processus (et `TransportActif`) survivent — c'est le scénario que
+corrige ce ticket. Cette distinction reste un raisonnement sur le
+comportement documenté de la plateforme, **pas une vérification empirique**
+(aucun téléphone connecté au moment de la revue) : reste à confirmer par le
+test manuel ci-dessus avant de considérer le correctif validé.
+
 ### #131 (US-323) — persistance des conversations non branchée — pas corrigé
 
 **Symptôme :** fermer totalement l'app (tâche balayée + service arrêté)
