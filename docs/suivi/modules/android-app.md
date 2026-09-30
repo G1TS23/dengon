@@ -758,10 +758,17 @@ suit la vraie valeur, mise à jour par `TransportActif.demarrer()`/
 mécanisme introduit — seule source de vérité déjà existante, juste pas lue
 par cet écran.
 
-**Non vérifié sur matériel** dans cette session (pas d'accès au téléphone
-connecté au moment du correctif) — à rejouer : couper le service depuis la
-notification système, revenir sur l'app, vérifier « Désactivé », réactiver,
-vérifier l'envoi.
+**Vérifié le 2026-09-30** (Pixel 8 Pro Android 17 + émulateur API 35,
+détail dans le journal) :
+
+| Scénario | `main` | PR #133 |
+|---|---|---|
+| Service arrêté de l'extérieur, **processus vivant** (`am stopservice` en root, émulateur) | switch reste « Activé », 1ᵉʳ tap sans effet, 2ᵉ tap relance | switch passe à « Désactivé », 1 tap relance |
+| Bouton « Arrêter » des applis actives puis retour sur l'app | processus tué, relance à froid, transport redémarré, switch cohérent | idem |
+| `demarrer()` en échec (Bluetooth coupé) | *non rejoué* | switch « Désactivé », service au premier plan, erreur seulement dans le journal ; carte « Bluetooth coupé » affichée ; 1 tap relance après rallumage |
+| Délai tap → état affiché | — | ~50 ms (émulateur) |
+
+Envoi de message après relance non vérifié : un seul téléphone disponible.
 
 **Limite connue signalée en revue (PR #133, Oswin)** : si
 `TransportActif.demarrer()` échoue (`TransportException`, Bluetooth coupé
@@ -773,18 +780,17 @@ correctif (un tap relance `onStartService`), mais pas amélioré non plus.
 Non corrigé ici (hors périmètre du correctif minimal de #132) : à traiter
 dans une US dédiée UX si jugé prioritaire.
 
-**Cause racine, distinction avec #131** : le bouton « Arrêter » de la
-section « Actif » du centre de notifications (Android 13+, ce que
-l'utilisateur a utilisé pendant la démo) est documenté par Android comme
-arrêtant le **service de premier plan**, pas le processus entier — à
-distinguer d'un swipe des tâches récentes ou d'un « Forcer l'arrêt » (qui,
-eux, tuent le processus et correspondent au scénario de #131). Si
-l'`Activity` est encore résumée/en pause quand l'utilisateur revient sur
-l'app, le processus (et `TransportActif`) survivent — c'est le scénario que
-corrige ce ticket. Cette distinction reste un raisonnement sur le
-comportement documenté de la plateforme, **pas une vérification empirique**
-(aucun téléphone connecté au moment de la revue) : reste à confirmer par le
-test manuel ci-dessus avant de considérer le correctif validé.
+**Cause racine, distinction avec #131 (vérifiée, contredit l'hypothèse
+initiale)** : le bouton « Arrêter » des applis actives (réglages rapides,
+Android 13+) **tue le processus entier**, pas seulement le service
+(`Got obituary of <pid>:com.dengon.app`, `Force removing ActivityRecord …
+app died, no saved state`), sur Android 17 comme sur l'API 35. Au retour,
+`main` repart à froid et le switch est déjà cohérent. Le symptôme vu en démo
+(« l'envoi ne marche plus ») ne vient donc **pas** de ce switch : il
+s'explique plus probablement par la perte de l'état du nœud au kill (#131).
+Le correctif reste valable pour tout arrêt du service où le processus
+survit (reproduit en root sur émulateur), mais aucun geste utilisateur
+connu ne produit ce cas.
 
 ### #131 (US-323) — persistance des conversations non branchée — pas corrigé
 

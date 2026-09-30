@@ -10,6 +10,74 @@ travail sur le code. Modèle : [`templates/entree-journal.md`](templates/entree-
 
 <!-- NOUVELLES ENTRÉES ICI (juste en dessous de cette ligne) -->
 
+## 2026-09-30 — US-324 : essai sur appareil des points de revue de la PR #133
+
+**Auteur :** Claude (Opus 5.5)
+**Périmètre :** `docs/suivi/` seulement (aucun changement de code). Essais sur
+Pixel 8 Pro (Android 17, API 37) et émulateur `Medium_Phone` (API 35).
+**Lot :** US-324 (issue #132), PR #133.
+
+### Fait
+- **Point 1 (cause racine), vérifié : l'hypothèse de l'entrée précédente est
+  fausse.** Le bouton « Arrêter » des applis actives tue le processus entier,
+  sur le Pixel (build de `main` déjà installé) comme sur l'émulateur (PR).
+  Au retour, relance à froid, transport redémarré par `LaunchedEffect`,
+  switch « Activé » cohérent, **sur `main` aussi**. Le bug de #132 ne se
+  reproduit donc pas par ce geste ; le symptôme de démo relève plus
+  probablement de #131 (état du nœud perdu au kill).
+- **Scénario ciblé par la PR (service arrêté, processus vivant)**, reproduit
+  sur émulateur avec `adb root` + `am stopservice` : sur `main`, le switch
+  reste « Activé » et le 1ᵉʳ tap ne fait rien (mécanisme décrit dans #132
+  confirmé) ; avec la PR, le switch passe à « Désactivé » et 1 tap relance
+  le transport.
+- **Point 2** confirmé : Bluetooth coupé, un tap « Activer » laisse le service
+  au premier plan (notification présente) et le switch sur « Désactivé » ;
+  l'erreur `Bluetooth désactivé` n'apparaît que dans le journal transport.
+  La carte « Bluetooth coupé » de l'accueil explique néanmoins ce cas. Après
+  rallumage, rien ne redémarre seul ; 1 tap suffit.
+- **Point 3** : délai tap → changement d'état ~45–50 ms (émulateur), pas de
+  décalage perceptible.
+- Fiche `modules/android-app.md` corrigée (tableau des essais, cause racine) ;
+  apprentissage ajouté à `04-apprentissages.md`.
+
+### Pourquoi / décisions
+- Pas d'installation de la PR sur le Pixel : l'app installée est signée par
+  une autre clé debug, la désinstallation effacerait la clé Keystore du coffre
+  (`CleCoffre`) donc l'identité ; une copie `run-as` ne la sauverait pas.
+  Build de `main` déjà installé réutilisé pour le point 1, émulateur pour le
+  reste.
+
+### Écarts vs conception
+- Aucun nouveau.
+
+### Appris
+- « Arrêter » (applis actives) = processus tué ; `am stopservice` refusé sur
+  un service non exporté hors `adb root` (ajouté à `04-apprentissages.md`).
+
+### État après cette session
+- PR #133 : correctif valide et sans régression constatée, mais il ne traite
+  pas le symptôme de démo. Envoi de message après relance **non vérifié**
+  (un seul téléphone).
+- Fiche(s) module mise(s) à jour : `modules/android-app.md`.
+
+### Vérification (commandes réellement exécutées)
+```
+$ android/scripts/build-ffi.sh android hote   # .so antérieures à l'US-312
+$ ./gradlew :app:testDebugUnitTest            # 120 tests, 0 échec
+$ ./gradlew :app:lintDebug                    # 4 erreurs préexistantes, hors PR
+                                              # (dengon.kt généré NewApi, manifest CoarseFineLocation)
+$ ./gradlew :app:assembleDebug                # OK (PR et main)
+$ adb shell am stopservice -n com.dengon.app/.ble.MeshForegroundService
+  Pixel : « Error stopping service » ; émulateur + adb root : « Service stopped »
+$ adb logcat -d -s dengon-transport:I         # arrêté / démarré / échec du démarrage
+```
+- 1ʳᵉ exécution des tests : 1 échec (`MaillageTest`, `UnsatisfiedLinkError`
+  sur `announce_is_relay`) dû à une `target/debug/libdengon_ffi.so` périmée,
+  résolu par `build-ffi.sh hote`.
+- Non vérifié : envoi réel après relance (2ᵉ appareil absent).
+
+---
+
 ## 2026-09-30 — US-324 : retours de revue d'Oswin sur la PR #133
 
 **Auteur :** Claude (Sonnet 5)
